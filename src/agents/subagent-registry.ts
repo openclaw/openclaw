@@ -8,7 +8,7 @@ export type SubagentRunRecord = {
   runId: string;
   childSessionKey: string;
   requesterSessionKey: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -105,7 +105,7 @@ function ensureListener() {
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
-      requesterProvider: entry.requesterProvider,
+      requesterChannel: entry.requesterChannel,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,
@@ -133,7 +133,7 @@ export function registerSubagentRun(params: {
   runId: string;
   childSessionKey: string;
   requesterSessionKey: string;
-  requesterProvider?: string;
+  requesterChannel?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -152,7 +152,7 @@ export function registerSubagentRun(params: {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
-    requesterProvider: params.requesterProvider,
+    requesterChannel: params.requesterChannel,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
@@ -191,7 +191,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
-      requesterProvider: entry.requesterProvider,
+      requesterChannel: entry.requesterChannel,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,

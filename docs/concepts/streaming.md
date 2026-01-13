@@ -37,8 +37,8 @@ Legend:
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"`.
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
 - `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (merge streamed blocks before send).
-- Provider hard cap: `*.textChunkLimit` (e.g., `whatsapp.textChunkLimit`).
-- Discord soft cap: `discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
+- Provider hard cap: `*.textChunkLimit` (e.g., `channels.whatsapp.textChunkLimit`).
+- Discord soft cap: `channels.discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
 **Boundary semantics:**
 - `text_end`: stream blocks as soon as chunker emits; flush on each `text_end`.
@@ -90,7 +90,7 @@ This maps to:
 
 **Provider note:** For non-Telegram providers, block streaming is **off unless**
 `*.blockStreaming` is explicitly set to `true`. Telegram can stream drafts
-(`telegram.streamMode`) without block replies.
+(`channels.telegram.streamMode`) without block replies.
 
 Config location reminder: the `blockStreaming*` defaults live under
 `agents.defaults`, not the root config.
@@ -99,11 +99,11 @@ Config location reminder: the `blockStreaming*` defaults live under
 
 Telegram is the only provider with draft streaming:
 - Uses Bot API `sendMessageDraft` in **private chats with topics**.
-- `telegram.streamMode: "partial" | "block" | "off"`.
+- `channels.telegram.streamMode: "partial" | "block" | "off"`.
   - `partial`: draft updates with the latest stream text.
   - `block`: draft updates in chunked blocks (same chunker rules).
   - `off`: no draft streaming.
-- Draft chunk config (only for `streamMode: "block"`): `telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
+- Draft chunk config (only for `streamMode: "block"`): `channels.telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
 - Draft streaming is separate from block streaming; block replies are off by default and only enabled by `*.blockStreaming: true` on non-Telegram providers.
 - Final reply is still a normal message.
 - `/reasoning stream` writes reasoning into the draft bubble (Telegram only).

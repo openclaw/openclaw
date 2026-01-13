@@ -73,7 +73,7 @@ See [/web/control-ui](/web/control-ui) for how to open it.
 To filter provider activity (WhatsApp/Telegram/etc), use:
 
 ```bash
-clawdbot providers logs --provider whatsapp
+clawdbot channels logs --channel whatsapp
 ```
 
 ## Log formats
@@ -87,7 +87,7 @@ entries to render structured output (time, level, subsystem, message).
 
 Console logs are **TTY-aware** and formatted for readability:
 
-- Subsystem prefixes (e.g. `gateway/providers/whatsapp`)
+- Subsystem prefixes (e.g. `gateway/channels/whatsapp`)
 - Level coloring (info/warn/error)
 - Optional compact or JSON mode
 

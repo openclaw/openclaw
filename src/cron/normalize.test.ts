@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate } from "./normalize.js";
 
 describe("normalizeCronJobCreate", () => {
-  it("maps legacy payload.channel to payload.provider and strips channel", () => {
+  it("maps legacy payload.provider to payload.channel and strips provider", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy",
       enabled: true,
@@ -14,14 +14,14 @@ describe("normalizeCronJobCreate", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        channel: " TeLeGrAm ",
+        provider: " TeLeGrAm ",
         to: "7200373102",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
-    expect("channel" in payload).toBe(false);
+    expect(payload.channel).toBe("telegram");
+    expect("provider" in payload).toBe(false);
   });
 
   it("normalizes agentId and drops null", () => {
@@ -56,7 +56,7 @@ describe("normalizeCronJobCreate", () => {
     expect(cleared.agentId).toBeNull();
   });
 
-  it("canonicalizes payload.provider casing", () => {
+  it("canonicalizes payload.channel casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy provider",
       enabled: true,
@@ -67,13 +67,13 @@ describe("normalizeCronJobCreate", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        provider: "Telegram",
+        channel: "Telegram",
         to: "7200373102",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
+    expect(payload.channel).toBe("telegram");
   });
 
   it("coerces ISO schedule.at to atMs (UTC)", () => {

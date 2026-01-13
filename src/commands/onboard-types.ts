@@ -1,4 +1,4 @@
-import type { ChatProviderId } from "../providers/registry.js";
+import type { ChatChannelId } from "../channels/registry.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type OnboardMode = "local" | "remote";
@@ -31,7 +31,9 @@ export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom";
 export type TailscaleMode = "off" | "serve" | "funnel";
 export type NodeManagerChoice = "npm" | "pnpm" | "bun";
-export type ProviderChoice = ChatProviderId;
+export type ChannelChoice = ChatChannelId;
+// Legacy alias (pre-rename).
+export type ProviderChoice = ChannelChoice;
 
 export type OnboardOptions = {
   mode?: OnboardMode;
@@ -66,6 +68,8 @@ export type OnboardOptions = {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  skipChannels?: boolean;
+  /** @deprecated Legacy alias for `skipChannels`. */
   skipProviders?: boolean;
   skipSkills?: boolean;
   skipHealth?: boolean;

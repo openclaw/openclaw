@@ -403,5 +403,5 @@ Planned features:
 ## See Also
 
 - [Multi-Agent Configuration](/multi-agent-sandbox-tools)
-- [Routing Configuration](/concepts/provider-routing)
+- [Routing Configuration](/concepts/channel-routing)
 - [Session Management](/concepts/sessions)

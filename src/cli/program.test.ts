@@ -8,8 +8,8 @@ const configureCommandWithSections = vi.fn();
 const setupCommand = vi.fn();
 const onboardCommand = vi.fn();
 const callGateway = vi.fn();
-const runProviderLogin = vi.fn();
-const runProviderLogout = vi.fn();
+const runChannelLogin = vi.fn();
+const runChannelLogout = vi.fn();
 const runTui = vi.fn();
 
 const runtime = {
@@ -30,7 +30,7 @@ vi.mock("../commands/configure.js", () => ({
     "model",
     "gateway",
     "daemon",
-    "providers",
+    "channels",
     "skills",
     "health",
   ],
@@ -40,9 +40,9 @@ vi.mock("../commands/configure.js", () => ({
 vi.mock("../commands/setup.js", () => ({ setupCommand }));
 vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-vi.mock("./provider-auth.js", () => ({
-  runProviderLogin,
-  runProviderLogout,
+vi.mock("./channel-auth.js", () => ({
+  runChannelLogin,
+  runChannelLogout,
 }));
 vi.mock("../tui/tui.js", () => ({
   runTui,
@@ -248,33 +248,24 @@ describe("cli program", () => {
     );
   });
 
-  it("runs providers login", async () => {
+  it("runs channels login", async () => {
     const program = buildProgram();
-    await program.parseAsync(["providers", "login", "--account", "work"], {
+    await program.parseAsync(["channels", "login", "--account", "work"], {
       from: "user",
     });
-    expect(runProviderLogin).toHaveBeenCalledWith(
-      { provider: undefined, account: "work", verbose: false },
+    expect(runChannelLogin).toHaveBeenCalledWith(
+      { channel: undefined, account: "work", verbose: false },
       runtime,
     );
   });
 
-  it("runs providers logout", async () => {
+  it("runs channels logout", async () => {
     const program = buildProgram();
-    await program.parseAsync(["providers", "logout", "--account", "work"], {
+    await program.parseAsync(["channels", "logout", "--account", "work"], {
       from: "user",
     });
-    expect(runProviderLogout).toHaveBeenCalledWith(
-      { provider: undefined, account: "work" },
-      runtime,
-    );
-  });
-
-  it("runs hidden login alias", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["login", "--account", "work"], { from: "user" });
-    expect(runProviderLogin).toHaveBeenCalledWith(
-      { provider: undefined, account: "work", verbose: false },
+    expect(runChannelLogout).toHaveBeenCalledWith(
+      { channel: undefined, account: "work" },
       runtime,
     );
   });

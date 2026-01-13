@@ -33,9 +33,9 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
-import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -281,7 +281,7 @@ export async function doctorCommand(
             initialValue: true,
           });
     if (migrate) {
-      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
+      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(
         snapshot.parsed,
       );
@@ -555,20 +555,20 @@ export async function doctorCommand(
   if (healthOk) {
     try {
       const status = await callGateway<Record<string, unknown>>({
-        method: "providers.status",
+        method: "channels.status",
         params: { probe: true, timeoutMs: 5000 },
         timeoutMs: 6000,
       });
-      const issues = collectProvidersStatusIssues(status);
+      const issues = collectChannelStatusIssues(status);
       if (issues.length > 0) {
         note(
           issues
             .map(
               (issue) =>
-                `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+                `- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
             )
             .join("\n"),
-          "Provider warnings",
+          "Channel warnings",
         );
       }
     } catch {

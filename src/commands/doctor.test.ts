@@ -59,7 +59,7 @@ beforeEach(() => {
     .mockReturnValue({ version: 1, profiles: {} });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,
-    changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+    changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
   }));
   findLegacyGatewayServices.mockReset().mockResolvedValue([]);
   uninstallLegacyGatewayServices.mockReset().mockResolvedValue([]);
@@ -122,7 +122,7 @@ const runGatewayUpdate = vi.fn().mockResolvedValue({
 });
 const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
-  changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+  changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
 }));
 
 const runExec = vi.fn().mockResolvedValue({ stdout: "", stderr: "" });
@@ -253,7 +253,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: vi.fn().mockResolvedValue([]),
+  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../telegram/token.js", () => ({
@@ -324,7 +324,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 
 describe("doctor", () => {
   it(
-    "migrates routing.allowFrom to whatsapp.allowFrom",
+    "migrates routing.allowFrom to channels.whatsapp.allowFrom",
     { timeout: 30_000 },
     async () => {
       readConfigFileSnapshot.mockResolvedValue({
@@ -356,8 +356,8 @@ describe("doctor", () => {
       };
 
       migrateLegacyConfig.mockReturnValue({
-        config: { whatsapp: { allowFrom: ["+15555550123"] } },
-        changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+        config: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
+        changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
       });
 
       await doctorCommand(runtime, { nonInteractive: true });
@@ -367,9 +367,9 @@ describe("doctor", () => {
         string,
         unknown
       >;
-      expect((written.whatsapp as Record<string, unknown>)?.allowFrom).toEqual([
-        "+15555550123",
-      ]);
+      expect((written.channels as Record<string, unknown>)?.whatsapp).toEqual({
+        allowFrom: ["+15555550123"],
+      });
       expect(written.routing).toBeUndefined();
     },
   );

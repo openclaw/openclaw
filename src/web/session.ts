@@ -24,7 +24,7 @@ export {
   getWebAuthAgeMs,
   logoutWeb,
   logWebSelfId,
-  pickProvider,
+  pickWebChannel,
   readWebSelfId,
   WA_WEB_AUTH_DIR,
   webAuthExists,

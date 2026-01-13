@@ -27,6 +27,11 @@ import {
   createCanvasHostHandler,
   startCanvasHost,
 } from "../canvas-host/server.js";
+import {
+  type ChannelId,
+  listChannelPlugins,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
@@ -114,17 +119,12 @@ import {
   startPluginServices,
 } from "../plugins/services.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
-import {
-  listProviderPlugins,
-  normalizeProviderId,
-  type ProviderId,
-} from "../providers/plugins/index.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
   isGatewayCliClient,
   isWebchatClient,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -138,12 +138,12 @@ import {
   type ChatAbortControllerEntry,
 } from "./chat-abort.js";
 import {
+  type ChannelKind,
   type GatewayReloadPlan,
-  type ProviderKind,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { normalizeControlUiBasePath } from "./control-ui.js";
-import { type HookMessageProvider, resolveHooksConfig } from "./hooks.js";
+import { type HookMessageChannel, resolveHooksConfig } from "./hooks.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,
@@ -168,6 +168,7 @@ import {
   createBridgeSubscriptionManager,
 } from "./server-bridge-subscriptions.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
+import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler, createChatRunState } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -189,7 +190,6 @@ import {
   createHooksRequestHandler,
 } from "./server-http.js";
 import { coreGatewayHandlers, handleGatewayRequest } from "./server-methods.js";
-import { createProviderManager } from "./server-providers.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -202,7 +202,7 @@ const logCanvas = log.child("canvas");
 const logBridge = log.child("bridge");
 const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
-const logProviders = log.child("providers");
+const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
 const logHealth = log.child("health");
 const logCron = log.child("cron");
@@ -210,18 +210,18 @@ const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logWsControl = log.child("ws");
 const canvasRuntime = runtimeForLogger(logCanvas);
-const providerLogs = Object.fromEntries(
-  listProviderPlugins().map((plugin) => [
+const channelLogs = Object.fromEntries(
+  listChannelPlugins().map((plugin) => [
     plugin.id,
-    logProviders.child(plugin.id),
+    logChannels.child(plugin.id),
   ]),
-) as Record<ProviderId, ReturnType<typeof createSubsystemLogger>>;
-const providerRuntimeEnvs = Object.fromEntries(
-  Object.entries(providerLogs).map(([id, logger]) => [
+) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
+const channelRuntimeEnvs = Object.fromEntries(
+  Object.entries(channelLogs).map(([id, logger]) => [
     id,
     runtimeForLogger(logger),
   ]),
-) as Record<ProviderId, RuntimeEnv>;
+) as Record<ChannelId, RuntimeEnv>;
 
 type GatewayModelChoice = ModelCatalogEntry;
 
@@ -246,8 +246,8 @@ type Client = {
 const BASE_METHODS = [
   "health",
   "logs.tail",
-  "providers.status",
-  "providers.logout",
+  "channels.status",
+  "channels.logout",
   "status",
   "usage.status",
   "config.get",
@@ -302,11 +302,11 @@ const BASE_METHODS = [
   "chat.send",
 ];
 
-const PROVIDER_METHODS = listProviderPlugins().flatMap(
+const CHANNEL_METHODS = listChannelPlugins().flatMap(
   (plugin) => plugin.gatewayMethods ?? [],
 );
 
-const METHODS = Array.from(new Set([...BASE_METHODS, ...PROVIDER_METHODS]));
+const METHODS = Array.from(new Set([...BASE_METHODS, ...CHANNEL_METHODS]));
 
 const EVENTS = [
   "agent",
@@ -576,7 +576,7 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    provider: HookMessageProvider;
+    channel: HookMessageChannel;
     to?: string;
     model?: string;
     thinking?: string;
@@ -604,7 +604,7 @@ export async function startGatewayServer(
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
         deliver: value.deliver,
-        provider: value.provider,
+        channel: value.channel,
         to: value.to,
       },
       state: { nextRunAtMs: now },
@@ -864,18 +864,18 @@ export async function startGatewayServer(
 
   let { cron, storePath: cronStorePath } = buildCronService(cfgAtStart);
 
-  const providerManager = createProviderManager({
+  const channelManager = createChannelManager({
     loadConfig,
-    providerLogs,
-    providerRuntimeEnvs,
+    channelLogs,
+    channelRuntimeEnvs,
   });
   const {
     getRuntimeSnapshot,
-    startProviders,
-    startProvider,
-    stopProvider,
-    markProviderLoggedOut,
-  } = providerManager;
+    startChannels,
+    startChannel,
+    stopChannel,
+    markChannelLoggedOut,
+  } = channelManager;
 
   const broadcast = (
     event: string,
@@ -1791,9 +1791,9 @@ export async function startGatewayServer(
               findRunningWizard,
               purgeWizardSession,
               getRuntimeSnapshot,
-              startProvider,
-              stopProvider,
-              markProviderLoggedOut,
+              startChannel,
+              stopChannel,
+              markChannelLoggedOut,
               wizardRunner,
               broadcastVoiceWakeChanged,
             },
@@ -1933,16 +1933,21 @@ export async function startGatewayServer(
     }
   }
 
-  // Launch configured providers so gateway replies via the surface the message came from.
-  // Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
-  if (process.env.CLAWDBOT_SKIP_PROVIDERS !== "1") {
+  // Launch configured channels so gateway replies via the surface the message came from.
+  // Tests can opt out via CLAWDBOT_SKIP_CHANNELS (or legacy CLAWDBOT_SKIP_PROVIDERS).
+  const skipChannels =
+    process.env.CLAWDBOT_SKIP_CHANNELS === "1" ||
+    process.env.CLAWDBOT_SKIP_PROVIDERS === "1";
+  if (!skipChannels) {
     try {
-      await startProviders();
+      await startChannels();
     } catch (err) {
-      logProviders.error(`provider startup failed: ${String(err)}`);
+      logChannels.error(`channel startup failed: ${String(err)}`);
     }
   } else {
-    logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
+    logChannels.info(
+      "skipping channel start (CLAWDBOT_SKIP_CHANNELS=1 or CLAWDBOT_SKIP_PROVIDERS=1)",
+    );
   }
 
   try {
@@ -1970,19 +1975,19 @@ export async function startGatewayServer(
     }
 
     const { cfg, entry } = loadSessionEntry(sessionKey);
-    const lastProvider = entry?.lastProvider;
+    const lastChannel = entry?.lastChannel;
     const lastTo = entry?.lastTo?.trim();
     const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
-    const providerRaw = lastProvider ?? parsedTarget?.provider;
-    const provider = providerRaw ? normalizeProviderId(providerRaw) : null;
+    const channelRaw = lastChannel ?? parsedTarget?.channel;
+    const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
     const to = lastTo || parsedTarget?.to;
-    if (!provider || !to) {
+    if (!channel || !to) {
       enqueueSystemEvent(message, { sessionKey });
       return;
     }
 
     const resolved = resolveOutboundTarget({
-      provider,
+      channel,
       to,
       cfg,
       accountId: parsedTarget?.accountId ?? entry?.lastAccountId,
@@ -1999,10 +2004,10 @@ export async function startGatewayServer(
           message,
           sessionKey,
           to: resolved.to,
-          provider,
+          channel,
           deliver: true,
           bestEffortDeliver: true,
-          messageProvider: provider,
+          messageChannel: channel,
         },
         defaultRuntime,
         deps,
@@ -2082,19 +2087,22 @@ export async function startGatewayServer(
       }
     }
 
-    if (plan.restartProviders.size > 0) {
-      if (process.env.CLAWDBOT_SKIP_PROVIDERS === "1") {
-        logProviders.info(
-          "skipping provider reload (CLAWDBOT_SKIP_PROVIDERS=1)",
+    if (plan.restartChannels.size > 0) {
+      if (
+        process.env.CLAWDBOT_SKIP_CHANNELS === "1" ||
+        process.env.CLAWDBOT_SKIP_PROVIDERS === "1"
+      ) {
+        logChannels.info(
+          "skipping channel reload (CLAWDBOT_SKIP_CHANNELS=1 or CLAWDBOT_SKIP_PROVIDERS=1)",
         );
       } else {
-        const restartProvider = async (name: ProviderKind) => {
-          logProviders.info(`restarting ${name} provider`);
-          await stopProvider(name);
-          await startProvider(name);
+        const restartChannel = async (name: ChannelKind) => {
+          logChannels.info(`restarting ${name} channel`);
+          await stopChannel(name);
+          await startChannel(name);
         };
-        for (const provider of plan.restartProviders) {
-          await restartProvider(provider);
+        for (const channel of plan.restartChannels) {
+          await restartChannel(channel);
         }
       }
     }
@@ -2189,8 +2197,8 @@ export async function startGatewayServer(
           /* ignore */
         }
       }
-      for (const plugin of listProviderPlugins()) {
-        await stopProvider(plugin.id);
+      for (const plugin of listChannelPlugins()) {
+        await stopChannel(plugin.id);
       }
       if (pluginServices) {
         await pluginServices.stop().catch(() => {});

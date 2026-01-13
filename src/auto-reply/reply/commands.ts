@@ -19,6 +19,7 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   readConfigFileSnapshot,
@@ -54,7 +55,6 @@ import {
   triggerClawdbotRestart,
 } from "../../infra/restart.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import type { ProviderId } from "../../providers/plugins/types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -108,8 +108,8 @@ function resolveSessionEntryForKey(
 
 export type CommandContext = {
   surface: string;
-  provider: string;
-  providerId?: ProviderId;
+  channel: string;
+  channelId?: ChannelId;
   ownerList: string[];
   isAuthorizedSender: boolean;
   senderId?: string;
@@ -189,7 +189,7 @@ export async function buildStatusReply(params: {
   }
   const queueSettings = resolveQueueSettings({
     cfg,
-    provider: command.provider,
+    channel: command.channel,
     sessionEntry,
   });
   const queueKey = sessionKey ?? sessionEntry?.sessionId;
@@ -347,7 +347,7 @@ export function buildCommandContext(params: {
     commandAuthorized: params.commandAuthorized,
   });
   const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
-  const provider = (ctx.Provider ?? surface).trim().toLowerCase();
+  const channel = (ctx.Provider ?? surface).trim().toLowerCase();
   const abortKey =
     sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
@@ -359,8 +359,8 @@ export function buildCommandContext(params: {
 
   return {
     surface,
-    provider,
-    providerId: auth.providerId,
+    channel,
+    channelId: auth.providerId,
     ownerList: auth.ownerList,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
@@ -677,7 +677,7 @@ export async function handleCommands(params: {
     }
     const senderId = ctx.SenderId ?? "";
     const senderUsername = ctx.SenderUsername ?? "";
-    const lines = ["🧭 Identity", `Provider: ${command.provider}`];
+    const lines = ["🧭 Identity", `Channel: ${command.channel}`];
     if (senderId) lines.push(`User id: ${senderId}`);
     if (senderUsername) {
       const handle = senderUsername.startsWith("@")
@@ -980,7 +980,7 @@ export async function handleCommands(params: {
     const result = await compactEmbeddedPiSession({
       sessionId,
       sessionKey,
-      messageProvider: command.provider,
+      messageChannel: command.channel,
       sessionFile: resolveSessionFilePath(sessionId, sessionEntry),
       workspaceDir,
       config: cfg,
@@ -1056,7 +1056,7 @@ export async function handleCommands(params: {
     cfg,
     entry: sessionEntry,
     sessionKey,
-    provider: sessionEntry?.provider ?? command.provider,
+    channel: sessionEntry?.channel ?? command.channel,
     chatType: sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {

@@ -23,7 +23,7 @@ Inbound message
 Key knobs live in configuration:
 - `messages.*` for prefixes, queueing, and group behavior.
 - `agents.defaults.*` for block streaming and chunking defaults.
-- Provider overrides (`whatsapp.*`, `telegram.*`, etc.) for caps and streaming toggles.
+- Provider overrides (`channels.whatsapp.*`, `channels.telegram.*`, etc.) for caps and streaming toggles.
 
 See [Configuration](/gateway/configuration) for full schema.
 
@@ -63,8 +63,8 @@ Directive stripping only applies to the **current message** section so history
 remains intact. Providers that wrap history should set `CommandBody` (or
 `RawBody`) to the original message text and keep `Body` as the combined prompt.
 History buffers are configurable via `messages.groupChat.historyLimit` (global
-default) and per-provider overrides like `slack.historyLimit` or
-`telegram.accounts.<id>.historyLimit` (set `0` to disable).
+default) and per-provider overrides like `channels.slack.historyLimit` or
+`channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
 
 ## Queueing and followups
 
@@ -103,7 +103,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/tok
 ## Prefixes, threading, and replies
 
 Outbound message formatting is centralized in `messages`:
-- `messages.responsePrefix` (outbound prefix) and `whatsapp.messagePrefix` (WhatsApp inbound prefix)
+- `messages.responsePrefix` (outbound prefix) and `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-provider defaults
 
 Details: [Configuration](/gateway/configuration#messages) and provider docs.

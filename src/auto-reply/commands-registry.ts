@@ -1,5 +1,5 @@
+import { listChannelDocks } from "../channels/dock.js";
 import type { ClawdbotConfig } from "../config/types.js";
-import { listProviderDocks } from "../providers/dock.js";
 
 export type CommandScope = "text" | "native" | "both";
 
@@ -276,7 +276,7 @@ let cachedNativeCommandSurfaces: Set<string> | null = null;
 const getNativeCommandSurfaces = (): Set<string> => {
   if (!cachedNativeCommandSurfaces) {
     cachedNativeCommandSurfaces = new Set(
-      listProviderDocks()
+      listChannelDocks()
         .filter((dock) => dock.capabilities.nativeCommands)
         .map((dock) => dock.id),
     );

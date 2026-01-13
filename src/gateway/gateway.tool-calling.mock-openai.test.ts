@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";

@@ -1,5 +1,5 @@
 ---
-summary: "CLI onboarding wizard: guided setup for gateway, workspace, providers, and skills"
+summary: "CLI onboarding wizard: guided setup for gateway, workspace, channels, and skills"
 read_when:
   - Running or configuring the onboarding wizard
   - Setting up a new machine
@@ -9,7 +9,7 @@ read_when:
 
 The onboarding wizard is the **recommended** way to set up Clawdbot on macOS,
 Linux, or Windows (via WSL2; strongly recommended).
-It configures a local Gateway or a remote Gateway connection, plus providers, skills,
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
 and workspace defaults in one guided flow.
 
 Primary entrypoint:
@@ -36,7 +36,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Tailscale exposure **Off**
 - Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
-**Advanced** exposes every step (mode, workspace, gateway, providers, daemon, skills).
+**Advanced** exposes every step (mode, workspace, gateway, channels, daemon, skills).
 
 ## What the wizard does
 
@@ -259,7 +259,7 @@ Clients (macOS app, Control UI) can render steps without re‑implementing onboa
 The wizard can install `signal-cli` from GitHub releases:
 - Downloads the appropriate release asset.
 - Stores it under `~/.clawdbot/tools/signal-cli/<version>/`.
-- Writes `signal.cliPath` to your config.
+- Writes `channels.signal.cliPath` to your config.
 
 Notes:
 - JVM builds require **Java 21**.
@@ -272,7 +272,7 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)
-- `telegram.botToken`, `discord.token`, `signal.*`, `imessage.*`
+- `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - `skills.install.nodeManager`
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
@@ -289,5 +289,5 @@ Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
-- Providers: [WhatsApp](/providers/whatsapp), [Telegram](/providers/telegram), [Discord](/providers/discord), [Signal](/providers/signal), [iMessage](/providers/imessage)
+- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Signal](/channels/signal), [iMessage](/channels/imessage)
 - Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)

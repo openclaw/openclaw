@@ -8,6 +8,7 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { listChatChannels } from "../channels/registry.js";
 import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -26,7 +27,6 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -54,6 +54,7 @@ import {
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { applyPrimaryModel, promptDefaultModel } from "./model-picker.js";
+import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -65,7 +66,6 @@ import {
   resolveControlUiLinks,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
-import { setupProviders } from "./onboard-providers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
@@ -75,14 +75,14 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "model",
   "gateway",
   "daemon",
-  "providers",
+  "channels",
   "skills",
   "health",
 ] as const;
 
 export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
 
-type ProvidersWizardMode = "configure" | "remove";
+type ChannelsWizardMode = "configure" | "remove";
 
 type ConfigureWizardParams = {
   command: "configure" | "update";
@@ -140,8 +140,8 @@ const CONFIGURE_SECTION_OPTIONS: {
     hint: "Install/manage the background service",
   },
   {
-    value: "providers",
-    label: "Providers",
+    value: "channels",
+    label: "Channels",
     hint: "Link WhatsApp/Telegram/etc and defaults",
   },
   {
@@ -152,7 +152,7 @@ const CONFIGURE_SECTION_OPTIONS: {
   {
     value: "health",
     label: "Health check",
-    hint: "Run gateway + provider checks",
+    hint: "Run gateway + channel checks",
   },
 ];
 
@@ -570,34 +570,31 @@ async function maybeInstallDaemon(params: {
   }
 }
 
-async function removeProviderConfigWizard(
+async function removeChannelConfigWizard(
   cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
 ): Promise<ClawdbotConfig> {
   let next = { ...cfg };
 
-  const listConfiguredProviders = () =>
-    listChatProviders().filter((meta) => {
-      const value = (next as Record<string, unknown>)[meta.id];
-      return value !== undefined;
-    });
+  const listConfiguredChannels = () =>
+    listChatChannels().filter((meta) => next.channels?.[meta.id] !== undefined);
 
   while (true) {
-    const configured = listConfiguredProviders();
+    const configured = listConfiguredChannels();
     if (configured.length === 0) {
       note(
         [
-          "No provider config found in clawdbot.json.",
-          "Tip: `clawdbot providers status` shows what is configured and enabled.",
+          "No channel config found in clawdbot.json.",
+          "Tip: `clawdbot channels status` shows what is configured and enabled.",
         ].join("\n"),
-        "Remove provider",
+        "Remove channel",
       );
       return next;
     }
 
-    const provider = guardCancel(
+    const channel = guardCancel(
       await select({
-        message: "Remove which provider config?",
+        message: "Remove which channel config?",
         options: [
           ...configured.map((meta) => ({
             value: meta.id,
@@ -610,11 +607,10 @@ async function removeProviderConfigWizard(
       runtime,
     ) as string;
 
-    if (provider === "done") return next;
+    if (channel === "done") return next;
 
     const label =
-      listChatProviders().find((meta) => meta.id === provider)?.label ??
-      provider;
+      listChatChannels().find((meta) => meta.id === channel)?.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
         message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
@@ -624,16 +620,21 @@ async function removeProviderConfigWizard(
     );
     if (!confirmed) continue;
 
-    const clone = { ...next } as Record<string, unknown>;
-    delete clone[provider];
-    next = clone as ClawdbotConfig;
+    const nextChannels: Record<string, unknown> = { ...(next.channels ?? {}) };
+    delete nextChannels[channel];
+    next = {
+      ...next,
+      channels: Object.keys(nextChannels).length
+        ? (nextChannels as ClawdbotConfig["channels"])
+        : undefined,
+    };
 
     note(
       [
         `${label} removed from config.`,
         "Note: credentials/sessions on disk are unchanged.",
       ].join("\n"),
-      "Provider removed",
+      "Channel removed",
     );
   }
 }
@@ -794,34 +795,34 @@ export async function runConfigureWizard(
         gatewayToken = gateway.token;
       }
 
-      if (selected.includes("providers")) {
-        const providerMode = guardCancel(
+      if (selected.includes("channels")) {
+        const channelMode = guardCancel(
           await select({
-            message: "Providers",
+            message: "Channels",
             options: [
               {
                 value: "configure",
                 label: "Configure/link",
-                hint: "Add/update providers; disable unselected accounts",
+                hint: "Add/update channels; disable unselected accounts",
               },
               {
                 value: "remove",
-                label: "Remove provider config",
-                hint: "Delete provider tokens/settings from clawdbot.json",
+                label: "Remove channel config",
+                hint: "Delete channel tokens/settings from clawdbot.json",
               },
             ],
             initialValue: "configure",
           }),
           runtime,
-        ) as ProvidersWizardMode;
+        ) as ChannelsWizardMode;
 
-        if (providerMode === "configure") {
-          nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+        if (channelMode === "configure") {
+          nextConfig = await setupChannels(nextConfig, runtime, prompter, {
             allowDisable: true,
             allowSignalInstall: true,
           });
         } else {
-          nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+          nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
         }
       }
 
@@ -917,34 +918,34 @@ export async function runConfigureWizard(
           await persistConfig();
         }
 
-        if (choice === "providers") {
-          const providerMode = guardCancel(
+        if (choice === "channels") {
+          const channelMode = guardCancel(
             await select({
-              message: "Providers",
+              message: "Channels",
               options: [
                 {
                   value: "configure",
                   label: "Configure/link",
-                  hint: "Add/update providers; disable unselected accounts",
+                  hint: "Add/update channels; disable unselected accounts",
                 },
                 {
                   value: "remove",
-                  label: "Remove provider config",
-                  hint: "Delete provider tokens/settings from clawdbot.json",
+                  label: "Remove channel config",
+                  hint: "Delete channel tokens/settings from clawdbot.json",
                 },
               ],
               initialValue: "configure",
             }),
             runtime,
-          ) as ProvidersWizardMode;
+          ) as ChannelsWizardMode;
 
-          if (providerMode === "configure") {
-            nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+          if (channelMode === "configure") {
+            nextConfig = await setupChannels(nextConfig, runtime, prompter, {
               allowDisable: true,
               allowSignalInstall: true,
             });
           } else {
-            nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+            nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
           }
           await persistConfig();
         }

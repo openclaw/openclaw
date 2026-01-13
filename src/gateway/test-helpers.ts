@@ -12,7 +12,7 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 
@@ -261,8 +261,10 @@ vi.mock("../config/config.js", async () => {
         return { defaults };
       })(),
       bindings: testState.bindingsConfig,
-      whatsapp: {
-        allowFrom: testState.allowFrom,
+      channels: {
+        whatsapp: {
+          allowFrom: testState.allowFrom,
+        },
       },
       session: {
         mainKey: "main",

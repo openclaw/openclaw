@@ -20,9 +20,9 @@ vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig: (...args: unknown[]) => dispatchMock(...args),
 }));
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 vi.mock("../config/sessions.js", async (importOriginal) => {
@@ -61,13 +61,13 @@ describe("discord tool result dispatch", () => {
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
-      discord: { dm: { enabled: true, policy: "open" } },
+      channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const runtimeError = vi.fn();
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -130,12 +130,12 @@ describe("discord tool result dispatch", () => {
         },
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: { dm: { enabled: true, policy: "open" } },
+      channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -210,12 +210,12 @@ describe("discord tool result dispatch", () => {
         },
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: { dm: { enabled: true, policy: "open" } },
+      channels: { discord: { dm: { enabled: true, policy: "open" } } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -300,12 +300,14 @@ describe("discord tool result dispatch", () => {
         },
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        guilds: {
-          "*": {
-            requireMention: false,
-            channels: { c1: { allow: true } },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          guilds: {
+            "*": {
+              requireMention: false,
+              channels: { c1: { allow: true } },
+            },
           },
         },
       },
@@ -314,7 +316,7 @@ describe("discord tool result dispatch", () => {
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -382,12 +384,14 @@ describe("discord tool result dispatch", () => {
         },
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+      channels: {
+        discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+      },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -456,10 +460,12 @@ describe("discord tool result dispatch", () => {
         },
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        groupPolicy: "open",
-        guilds: { "*": { requireMention: true } },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          groupPolicy: "open",
+          guilds: { "*": { requireMention: true } },
+        },
       },
       messages: {
         responsePrefix: "PFX",
@@ -469,7 +475,7 @@ describe("discord tool result dispatch", () => {
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -549,16 +555,18 @@ describe("discord tool result dispatch", () => {
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        groupPolicy: "open",
-        guilds: { "*": { requireMention: false } },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          groupPolicy: "open",
+          guilds: { "*": { requireMention: false } },
+        },
       },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -655,17 +663,19 @@ describe("discord tool result dispatch", () => {
     const cfg = {
       agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" },
       session: { store: "/tmp/clawdbot-sessions.json" },
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        groupPolicy: "open",
-        guilds: { "*": { requireMention: false } },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          groupPolicy: "open",
+          guilds: { "*": { requireMention: false } },
+        },
       },
       routing: { allowFrom: [] },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {
@@ -765,19 +775,21 @@ describe("discord tool result dispatch", () => {
       },
       session: { store: "/tmp/clawdbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
-      discord: {
-        dm: { enabled: true, policy: "open" },
-        groupPolicy: "open",
-        guilds: { "*": { requireMention: false } },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          groupPolicy: "open",
+          guilds: { "*": { requireMention: false } },
+        },
       },
       bindings: [
-        { agentId: "support", match: { provider: "discord", guildId: "g1" } },
+        { agentId: "support", match: { channel: "discord", guildId: "g1" } },
       ],
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
       cfg,
-      discordConfig: cfg.discord,
+      discordConfig: cfg.channels.discord,
       accountId: "default",
       token: "token",
       runtime: {

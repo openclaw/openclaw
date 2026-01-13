@@ -65,13 +65,13 @@ Details + files on disk: [Pairing](/start/pairing)
 
 Clawdbot has two separate “who can trigger me?” layers:
 
-- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+- **DM allowlist** (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
   - When `dmPolicy="pairing"`, approvals are written to `~/.clawdbot/credentials/<provider>-allowFrom.json` (merged with config allowlists).
 - **Group allowlist** (provider-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
-    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
-    - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
+    - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - **Security note:** treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings. They should be barely used; prefer pairing + allowlists unless you fully trust every member of the room.
 
 Details: [Configuration](/gateway/configuration) and [Groups](/concepts/groups)
@@ -163,7 +163,7 @@ See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ```json5
 {
-  whatsapp: { dmPolicy: "pairing" }
+  channels: { whatsapp: { dmPolicy: "pairing" } }
 }
 ```
 
@@ -171,9 +171,11 @@ See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ```json
 {
-  "whatsapp": {
-    "groups": {
-      "*": { "requireMention": true }
+  "channels": {
+    "whatsapp": {
+      "groups": {
+        "*": { "requireMention": true }
+      }
     }
   },
   "agents": {

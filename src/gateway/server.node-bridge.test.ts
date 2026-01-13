@@ -6,7 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   agentCommand,
   bridgeInvoke,
@@ -814,7 +814,7 @@ describe("gateway server node/bridge", () => {
           main: {
             sessionId: "sess-main",
             updatedAt: Date.now(),
-            lastProvider: "whatsapp",
+            lastChannel: "whatsapp",
             lastTo: "+1555",
           },
         },
@@ -842,7 +842,7 @@ describe("gateway server node/bridge", () => {
     expect(call.sessionId).toBe("sess-main");
     expect(call.sessionKey).toBe("main");
     expect(call.deliver).toBe(false);
-    expect(call.messageProvider).toBe("node");
+    expect(call.messageChannel).toBe("node");
 
     const stored = JSON.parse(
       await fs.readFile(testState.sessionStorePath, "utf-8"),

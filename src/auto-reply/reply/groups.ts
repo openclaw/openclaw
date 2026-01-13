@@ -1,14 +1,14 @@
+import { getChannelDock } from "../../channels/dock.js";
+import {
+  getChatChannelMeta,
+  normalizeChannelId,
+} from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type {
   GroupKeyResolution,
   SessionEntry,
 } from "../../config/sessions.js";
-import { getProviderDock } from "../../providers/dock.js";
-import {
-  getChatProviderMeta,
-  normalizeProviderId,
-} from "../../providers/registry.js";
-import { isInternalMessageProvider } from "../../utils/message-provider.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 
@@ -18,14 +18,14 @@ export function resolveGroupRequireMention(params: {
   groupResolution?: GroupKeyResolution;
 }): boolean {
   const { cfg, ctx, groupResolution } = params;
-  const rawProvider = groupResolution?.provider ?? ctx.Provider?.trim();
-  const provider = normalizeProviderId(rawProvider);
-  if (!provider) return true;
+  const rawChannel = groupResolution?.channel ?? ctx.Provider?.trim();
+  const channel = normalizeChannelId(rawChannel);
+  if (!channel) return true;
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
   const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  const requireMention = getProviderDock(
-    provider,
+  const requireMention = getChannelDock(
+    channel,
   )?.groups?.resolveRequireMention?.({
     cfg,
     groupId,
@@ -57,11 +57,11 @@ export function buildGroupIntro(params: {
   const members = params.sessionCtx.GroupMembers?.trim();
   const rawProvider = params.sessionCtx.Provider?.trim();
   const providerKey = rawProvider?.toLowerCase() ?? "";
-  const providerId = normalizeProviderId(rawProvider);
+  const providerId = normalizeChannelId(rawProvider);
   const providerLabel = (() => {
     if (!providerKey) return "chat";
-    if (isInternalMessageProvider(providerKey)) return "WebChat";
-    if (providerId) return getChatProviderMeta(providerId).label;
+    if (isInternalMessageChannel(providerKey)) return "WebChat";
+    if (providerId) return getChatChannelMeta(providerId).label;
     return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
   })();
   const subjectLine = subject
@@ -76,7 +76,7 @@ export function buildGroupIntro(params: {
   const groupRoom = params.sessionCtx.GroupRoom?.trim() ?? subject;
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
-    ? getProviderDock(providerId)?.groups?.resolveGroupIntroHint?.({
+    ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
         groupRoom,

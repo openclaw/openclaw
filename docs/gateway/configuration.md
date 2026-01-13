@@ -8,8 +8,8 @@ read_when:
 Clawdbot reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (comments + trailing commas allowed).
 
 If the file is missing, Clawdbot uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
-- restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
-- control group allowlists + mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `agents.list[].groupChat`)
+- restrict who can trigger the bot (`channels.whatsapp.allowFrom`, `channels.telegram.allowFrom`, etc.)
+- control group allowlists + mention behavior (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.discord.guilds`, `agents.list[].groupChat`)
 - customize message prefixes (`messages`)
 - set the agent's workspace (`agents.defaults.workspace` or `agents.list[].workspace`)
 - tune the embedded agent defaults (`agents.defaults`) and session behavior (`session`)
@@ -50,7 +50,7 @@ clawdbot gateway call config.apply --params '{
 ```json5
 {
   agents: { defaults: { workspace: "~/clawd" } },
-  whatsapp: { allowFrom: ["+15555550123"] }
+  channels: { whatsapp: { allowFrom: ["+15555550123"] } }
 }
 ```
 
@@ -74,10 +74,12 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
       }
     ]
   },
-  whatsapp: {
-    // Allowlist is DMs only; including your own number enables self-chat mode.
-    allowFrom: ["+15555550123"],
-    groups: { "*": { requireMention: true } }
+  channels: {
+    whatsapp: {
+      // Allowlist is DMs only; including your own number enables self-chat mode.
+      allowFrom: ["+15555550123"],
+      groups: { "*": { requireMention: true } }
+    }
   }
 }
 ```
@@ -189,7 +191,7 @@ Included files can themselves contain `$include` directives (up to 10 levels dee
     "./clients/schmidt/broadcast.json5"
   ]},
   
-  whatsapp: { groupPolicy: "allowlist" }
+  channels: { whatsapp: { groupPolicy: "allowlist" } }
 }
 ```
 
@@ -366,12 +368,12 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 }
 ```
 
-### `whatsapp.dmPolicy`
+### `channels.whatsapp.dmPolicy`
 
 Controls how WhatsApp direct chats (DMs) are handled:
 - `"pairing"` (default): unknown senders get a pairing code; owner must approve
-- `"allowlist"`: only allow senders in `whatsapp.allowFrom` (or paired allow store)
-- `"open"`: allow all inbound DMs (**requires** `whatsapp.allowFrom` to include `"*"`)
+- `"allowlist"`: only allow senders in `channels.whatsapp.allowFrom` (or paired allow store)
+- `"open"`: allow all inbound DMs (**requires** `channels.whatsapp.allowFrom` to include `"*"`)
 - `"disabled"`: ignore all inbound DMs
 
 Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per provider** by default.
@@ -380,36 +382,40 @@ Pairing approvals:
 - `clawdbot pairing list whatsapp`
 - `clawdbot pairing approve whatsapp <code>`
 
-### `whatsapp.allowFrom`
+### `channels.whatsapp.allowFrom`
 
 Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (**DMs only**).
-If empty and `whatsapp.dmPolicy="pairing"`, unknown senders will receive a pairing code.
-For groups, use `whatsapp.groupPolicy` + `whatsapp.groupAllowFrom`.
+If empty and `channels.whatsapp.dmPolicy="pairing"`, unknown senders will receive a pairing code.
+For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowFrom`.
 
 ```json5
 {
-  whatsapp: {
-    dmPolicy: "pairing", // pairing | allowlist | open | disabled
-    allowFrom: ["+15555550123", "+447700900123"],
-    textChunkLimit: 4000, // optional outbound chunk size (chars)
-    mediaMaxMb: 50 // optional inbound media cap (MB)
+  channels: {
+    whatsapp: {
+      dmPolicy: "pairing", // pairing | allowlist | open | disabled
+      allowFrom: ["+15555550123", "+447700900123"],
+      textChunkLimit: 4000, // optional outbound chunk size (chars)
+      mediaMaxMb: 50 // optional inbound media cap (MB)
+    }
   }
 }
 ```
 
-### `whatsapp.accounts` (multi-account)
+### `channels.whatsapp.accounts` (multi-account)
 
 Run multiple WhatsApp accounts in one gateway:
 
 ```json5
 {
-  whatsapp: {
-    accounts: {
-      default: {}, // optional; keeps the default id stable
-      personal: {},
-      biz: {
-        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-        // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+  channels: {
+    whatsapp: {
+      accounts: {
+        default: {}, // optional; keeps the default id stable
+        personal: {},
+        biz: {
+          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
+          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+        }
       }
     }
   }
@@ -420,21 +426,23 @@ Notes:
 - Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
 - The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
 
-### `telegram.accounts` / `discord.accounts` / `slack.accounts` / `signal.accounts` / `imessage.accounts`
+### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
 Run multiple accounts per provider (each account has its own `accountId` and optional `name`):
 
 ```json5
 {
-  telegram: {
-    accounts: {
-      default: {
-        name: "Primary bot",
-        botToken: "123456:ABC..."
-      },
-      alerts: {
-        name: "Alerts bot",
-        botToken: "987654:XYZ..."
+  channels: {
+    telegram: {
+      accounts: {
+        default: {
+          name: "Primary bot",
+          botToken: "123456:ABC..."
+        },
+        alerts: {
+          name: "Alerts bot",
+          botToken: "987654:XYZ..."
+        }
       }
     }
   }
@@ -452,7 +460,7 @@ Notes:
 Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
 
 **Mention types:**
-- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
+- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `channels.whatsapp.allowFrom`).
 - **Text patterns**: Regex patterns defined in `agents.list[].groupChat.mentionPatterns`. Always checked regardless of self-chat mode.
 - Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
 
@@ -469,7 +477,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-`messages.groupChat.historyLimit` sets the global default for group history context. Providers can override with `<provider>.historyLimit` (or `<provider>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
+`messages.groupChat.historyLimit` sets the global default for group history context. Providers can override with `channels.<provider>.historyLimit` (or `channels.<provider>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
 
 Per-agent override (takes precedence when set, even `[]`):
 ```json5
@@ -483,15 +491,17 @@ Per-agent override (takes precedence when set, even `[]`):
 }
 ```
 
-Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
+Mention gating defaults live per provider (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 
 To respond **only** to specific text triggers (ignoring native @-mentions):
 ```json5
 {
-  whatsapp: {
-    // Include your own number to enable self-chat mode (ignore native @-mentions).
-    allowFrom: ["+15555550123"],
-    groups: { "*": { requireMention: true } }
+  channels: {
+    whatsapp: {
+      // Include your own number to enable self-chat mode (ignore native @-mentions).
+      allowFrom: ["+15555550123"],
+      groups: { "*": { requireMention: true } }
+    }
   },
   agents: {
     list: [
@@ -509,41 +519,43 @@ To respond **only** to specific text triggers (ignoring native @-mentions):
 
 ### Group policy (per provider)
 
-Use `*.groupPolicy` to control whether group/room messages are accepted at all:
+Use `channels.*.groupPolicy` to control whether group/room messages are accepted at all:
 
 ```json5
 {
-  whatsapp: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["+15551234567"]
-  },
-  telegram: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["tg:123456789", "@alice"]
-  },
-  signal: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["+15551234567"]
-  },
-  imessage: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["chat_id:123"]
-  },
-  msteams: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["user@org.com"]
-  },
-  discord: {
-    groupPolicy: "allowlist",
-    guilds: {
-      "GUILD_ID": {
-        channels: { help: { allow: true } }
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"]
+    },
+    telegram: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["tg:123456789", "@alice"]
+    },
+    signal: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"]
+    },
+    imessage: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["chat_id:123"]
+    },
+    msteams: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["user@org.com"]
+    },
+    discord: {
+      groupPolicy: "allowlist",
+      guilds: {
+        "GUILD_ID": {
+          channels: { help: { allow: true } }
+        }
       }
+    },
+    slack: {
+      groupPolicy: "allowlist",
+      channels: { "#general": { allow: true } }
     }
-  },
-  slack: {
-    groupPolicy: "allowlist",
-    channels: { "#general": { allow: true } }
   }
 }
 ```
@@ -553,7 +565,7 @@ Notes:
 - `"disabled"`: block all group/room messages.
 - `"allowlist"`: only allow groups/rooms that match the configured allowlist.
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams use `groupAllowFrom` (fallback: explicit `allowFrom`).
-- Discord/Slack use channel allowlists (`discord.guilds.*.channels`, `slack.channels`).
+- Discord/Slack use channel allowlists (`channels.discord.guilds.*.channels`, `channels.slack.channels`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
 - Default is `groupPolicy: "allowlist"`; if no allowlist is configured, group messages are blocked.
 
@@ -691,10 +703,12 @@ Example: two WhatsApp accounts → two agents:
     { agentId: "home", match: { provider: "whatsapp", accountId: "personal" } },
     { agentId: "work", match: { provider: "whatsapp", accountId: "biz" } }
   ],
-  whatsapp: {
-    accounts: {
-      personal: {},
-      biz: {},
+  channels: {
+    whatsapp: {
+      accounts: {
+        personal: {},
+        biz: {},
+      }
     }
   }
 }
@@ -761,9 +775,9 @@ Controls how chat commands are enabled across connectors.
 Notes:
 - Text commands must be sent as a **standalone** message and use the leading `/` (no plain-text aliases).
 - `commands.text: false` disables parsing chat messages for commands.
-- `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported providers stay text-only.
-- Set `commands.native: true|false` to force all, or override per provider with `discord.commands.native`, `telegram.commands.native`, `slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
-- `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<provider>`.
+- `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported channels stay text-only.
+- Set `commands.native: true|false` to force all, or override per channel with `channels.discord.commands.native`, `channels.telegram.commands.native`, `channels.slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
+- `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
 - `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
@@ -791,53 +805,55 @@ Set `web.enabled: false` to keep it off by default.
 }
 ```
 
-### `telegram` (bot transport)
+### `channels.telegram` (bot transport)
 
-Clawdbot starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
-Set `telegram.enabled: false` to disable automatic startup.
-Multi-account support lives under `telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+Clawdbot starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `channels.telegram.botToken`.
+Set `channels.telegram.enabled: false` to disable automatic startup.
+Multi-account support lives under `channels.telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
-  telegram: {
-    enabled: true,
-    botToken: "your-bot-token",
-    dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
-    allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
-    groups: {
-      "*": { requireMention: true },
-      "-1001234567890": {
-        allowFrom: ["@admin"],
-        systemPrompt: "Keep answers brief.",
-        topics: {
-          "99": {
-            requireMention: false,
-            skills: ["search"],
-            systemPrompt: "Stay on topic."
+  channels: {
+    telegram: {
+      enabled: true,
+      botToken: "your-bot-token",
+      dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
+      allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
+      groups: {
+        "*": { requireMention: true },
+        "-1001234567890": {
+          allowFrom: ["@admin"],
+          systemPrompt: "Keep answers brief.",
+          topics: {
+            "99": {
+              requireMention: false,
+              skills: ["search"],
+              systemPrompt: "Stay on topic."
+            }
           }
         }
-      }
-    },
-    historyLimit: 50,                     // include last N group messages as context (0 disables)
-    replyToMode: "first",                 // off | first | all
-    streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
-    draftChunk: {                        // optional; only for streamMode=block
-      minChars: 200,
-      maxChars: 800,
-      breakPreference: "paragraph"       // paragraph | newline | sentence
-    },
-    actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
-    mediaMaxMb: 5,
-    retry: {                             // outbound retry policy
-      attempts: 3,
-      minDelayMs: 400,
-      maxDelayMs: 30000,
-      jitter: 0.1
-    },
-    proxy: "socks5://localhost:9050",
-    webhookUrl: "https://example.com/telegram-webhook",
-    webhookSecret: "secret",
-    webhookPath: "/telegram-webhook"
+      },
+      historyLimit: 50,                     // include last N group messages as context (0 disables)
+      replyToMode: "first",                 // off | first | all
+      streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
+      draftChunk: {                        // optional; only for streamMode=block
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph"       // paragraph | newline | sentence
+      },
+      actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
+      mediaMaxMb: 5,
+      retry: {                             // outbound retry policy
+        attempts: 3,
+        minDelayMs: 400,
+        maxDelayMs: 30000,
+        jitter: 0.1
+      },
+      proxy: "socks5://localhost:9050",
+      webhookUrl: "https://example.com/telegram-webhook",
+      webhookSecret: "secret",
+      webhookPath: "/telegram-webhook"
+    }
   }
 }
 ```
@@ -848,148 +864,152 @@ Draft streaming notes:
 - `/reasoning stream` streams reasoning into the draft, then sends the final answer.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
-### `discord` (bot transport)
+### `channels.discord` (bot transport)
 
 Configure the Discord bot by setting the bot token and optional gating:
-Multi-account support lives under `discord.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+Multi-account support lives under `channels.discord.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 ```json5
 {
-  discord: {
-    enabled: true,
-    token: "your-bot-token",
-    mediaMaxMb: 8,                          // clamp inbound media size
-    allowBots: false,                       // allow bot-authored messages
-    actions: {                              // tool action gates (false disables)
-      reactions: true,
-      stickers: true,
-      polls: true,
-      permissions: true,
-      messages: true,
-      threads: true,
-      pins: true,
-      search: true,
-      memberInfo: true,
-      roleInfo: true,
-      roles: false,
-      channelInfo: true,
-      voiceStatus: true,
-      events: true,
-      moderation: false
-    },
-    replyToMode: "off",                     // off | first | all
-    dm: {
-      enabled: true,                        // disable all DMs when false
-      policy: "pairing",                    // pairing | allowlist | open | disabled
-      allowFrom: ["1234567890", "steipete"], // optional DM allowlist ("open" requires ["*"])
-      groupEnabled: false,                 // enable group DMs
-      groupChannels: ["clawd-dm"]          // optional group DM allowlist
-    },
-    guilds: {
-      "123456789012345678": {               // guild id (preferred) or slug
-        slug: "friends-of-clawd",
-        requireMention: false,              // per-guild default
-        reactionNotifications: "own",       // off | own | all | allowlist
-        users: ["987654321098765432"],      // optional per-guild user allowlist
-        channels: {
-          general: { allow: true },
-          help: {
-            allow: true,
-            requireMention: true,
-            users: ["987654321098765432"],
-            skills: ["docs"],
-            systemPrompt: "Short answers only."
+  channels: {
+    discord: {
+      enabled: true,
+      token: "your-bot-token",
+      mediaMaxMb: 8,                          // clamp inbound media size
+      allowBots: false,                       // allow bot-authored messages
+      actions: {                              // tool action gates (false disables)
+        reactions: true,
+        stickers: true,
+        polls: true,
+        permissions: true,
+        messages: true,
+        threads: true,
+        pins: true,
+        search: true,
+        memberInfo: true,
+        roleInfo: true,
+        roles: false,
+        channelInfo: true,
+        voiceStatus: true,
+        events: true,
+        moderation: false
+      },
+      replyToMode: "off",                     // off | first | all
+      dm: {
+        enabled: true,                        // disable all DMs when false
+        policy: "pairing",                    // pairing | allowlist | open | disabled
+        allowFrom: ["1234567890", "steipete"], // optional DM allowlist ("open" requires ["*"])
+        groupEnabled: false,                 // enable group DMs
+        groupChannels: ["clawd-dm"]          // optional group DM allowlist
+      },
+      guilds: {
+        "123456789012345678": {               // guild id (preferred) or slug
+          slug: "friends-of-clawd",
+          requireMention: false,              // per-guild default
+          reactionNotifications: "own",       // off | own | all | allowlist
+          users: ["987654321098765432"],      // optional per-guild user allowlist
+          channels: {
+            general: { allow: true },
+            help: {
+              allow: true,
+              requireMention: true,
+              users: ["987654321098765432"],
+              skills: ["docs"],
+              systemPrompt: "Short answers only."
+            }
           }
         }
+      },
+      historyLimit: 20,                       // include last N guild messages as context
+      textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
+      maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
+      retry: {                                // outbound retry policy
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 30000,
+        jitter: 0.1
       }
-    },
-    historyLimit: 20,                       // include last N guild messages as context
-    textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
-    maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
-    retry: {                                // outbound retry policy
-      attempts: 3,
-      minDelayMs: 500,
-      maxDelayMs: 30000,
-      jitter: 0.1
     }
   }
 }
 ```
 
-Clawdbot starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
+Clawdbot starts Discord only when a `channels.discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `channels.discord.token` (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
-Bot-authored messages are ignored by default. Enable with `discord.allowBots` (own messages are still filtered to prevent self-reply loops).
+Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
 Reaction notification modes:
 - `off`: no reaction events.
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
-Outbound text is chunked by `discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
+Outbound text is chunked by `channels.discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `channels.discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
-### `slack` (socket mode)
+### `channels.slack` (socket mode)
 
 Slack runs in Socket Mode and requires both a bot token and app token:
 
 ```json5
 {
-  slack: {
-    enabled: true,
-    botToken: "xoxb-...",
-    appToken: "xapp-...",
-    dm: {
+  channels: {
+    slack: {
       enabled: true,
-      policy: "pairing", // pairing | allowlist | open | disabled
-      allowFrom: ["U123", "U456", "*"], // optional; "open" requires ["*"]
-      groupEnabled: false,
-      groupChannels: ["G123"]
-    },
-    channels: {
-      C123: { allow: true, requireMention: true, allowBots: false },
-      "#general": {
-        allow: true,
-        requireMention: true,
-        allowBots: false,
-        users: ["U123"],
-        skills: ["docs"],
-        systemPrompt: "Short answers only."
-      }
-    },
-    historyLimit: 50,          // include last N channel/group messages as context (0 disables)
-    allowBots: false,
-    reactionNotifications: "own", // off | own | all | allowlist
-    reactionAllowlist: ["U123"],
-    replyToMode: "off",           // off | first | all
-    actions: {
-      reactions: true,
-      messages: true,
-      pins: true,
-      memberInfo: true,
-      emojiList: true
-    },
-    slashCommand: {
-      enabled: true,
-      name: "clawd",
-      sessionPrefix: "slack:slash",
-      ephemeral: true
-    },
-    textChunkLimit: 4000,
-    mediaMaxMb: 20
+      botToken: "xoxb-...",
+      appToken: "xapp-...",
+      dm: {
+        enabled: true,
+        policy: "pairing", // pairing | allowlist | open | disabled
+        allowFrom: ["U123", "U456", "*"], // optional; "open" requires ["*"]
+        groupEnabled: false,
+        groupChannels: ["G123"]
+      },
+      channels: {
+        C123: { allow: true, requireMention: true, allowBots: false },
+        "#general": {
+          allow: true,
+          requireMention: true,
+          allowBots: false,
+          users: ["U123"],
+          skills: ["docs"],
+          systemPrompt: "Short answers only."
+        }
+      },
+      historyLimit: 50,          // include last N channel/group messages as context (0 disables)
+      allowBots: false,
+      reactionNotifications: "own", // off | own | all | allowlist
+      reactionAllowlist: ["U123"],
+      replyToMode: "off",           // off | first | all
+      actions: {
+        reactions: true,
+        messages: true,
+        pins: true,
+        memberInfo: true,
+        emojiList: true
+      },
+      slashCommand: {
+        enabled: true,
+        name: "clawd",
+        sessionPrefix: "slack:slash",
+        ephemeral: true
+      },
+      textChunkLimit: 4000,
+      mediaMaxMb: 20
+    }
   }
 }
 ```
 
-Multi-account support lives under `slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+Multi-account support lives under `channels.slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 
-Bot-authored messages are ignored by default. Enable with `slack.allowBots` or `slack.channels.<id>.allowBots`.
+Bot-authored messages are ignored by default. Enable with `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
 
 Reaction notification modes:
 - `off`: no reaction events.
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
-- `allowlist`: reactions from `slack.reactionAllowlist` on all messages (empty list disables).
+- `allowlist`: reactions from `channels.slack.reactionAllowlist` on all messages (empty list disables).
 
 Slack action groups (gate `slack` tool actions):
 | Action group | Default | Notes |
@@ -1000,16 +1020,18 @@ Slack action groups (gate `slack` tool actions):
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
 
-### `signal` (signal-cli)
+### `channels.signal` (signal-cli)
 
 Signal reactions can emit system events (shared reaction tooling):
 
 ```json5
 {
-  signal: {
-    reactionNotifications: "own", // off | own | all | allowlist
-    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
-    historyLimit: 50 // include last N group messages as context (0 disables)
+  channels: {
+    signal: {
+      reactionNotifications: "own", // off | own | all | allowlist
+      reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+      historyLimit: 50 // include last N group messages as context (0 disables)
+    }
   }
 }
 ```
@@ -1018,36 +1040,38 @@ Reaction notification modes:
 - `off`: no reaction events.
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
-- `allowlist`: reactions from `signal.reactionAllowlist` on all messages (empty list disables).
+- `allowlist`: reactions from `channels.signal.reactionAllowlist` on all messages (empty list disables).
 
-### `imessage` (imsg CLI)
+### `channels.imessage` (imsg CLI)
 
 Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 ```json5
 {
-  imessage: {
-    enabled: true,
-    cliPath: "imsg",
-    dbPath: "~/Library/Messages/chat.db",
-    dmPolicy: "pairing", // pairing | allowlist | open | disabled
-    allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
-    historyLimit: 50,    // include last N group messages as context (0 disables)
-    includeAttachments: false,
-    mediaMaxMb: 16,
-    service: "auto",
-    region: "US"
+  channels: {
+    imessage: {
+      enabled: true,
+      cliPath: "imsg",
+      dbPath: "~/Library/Messages/chat.db",
+      dmPolicy: "pairing", // pairing | allowlist | open | disabled
+      allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
+      historyLimit: 50,    // include last N group messages as context (0 disables)
+      includeAttachments: false,
+      mediaMaxMb: 16,
+      service: "auto",
+      region: "US"
+    }
   }
 }
 ```
 
-Multi-account support lives under `imessage.accounts` (see the multi-account section above).
+Multi-account support lives under `channels.imessage.accounts` (see the multi-account section above).
 
 Notes:
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
+- `channels.imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
 
 Example wrapper:
 ```bash
@@ -1129,9 +1153,9 @@ streaming, final replies) across providers unless already present.
 If `messages.responsePrefix` is unset, no prefix is applied by default.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
-WhatsApp inbound prefix is configured via `whatsapp.messagePrefix` (deprecated:
+WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[clawdbot]"` when
-`whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
+`channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
 `"[clawdbot]"`, Clawdbot will instead use `[{identity.name}]` when the routed
 agent has `identity.name` set.
 
@@ -1474,9 +1498,9 @@ Block streaming:
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
   with `maxChars` capped to the provider text limit. Signal/Slack/Discord default
   to `minChars: 1500` unless overridden.
-  Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
-  `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
-  `imessage.blockStreamingCoalesce`, `msteams.blockStreamingCoalesce` (and per-account variants).
+  Provider overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
+  `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.signal.blockStreamingCoalesce`,
+  `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce` (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
   Per-agent override: `agents.list[].humanDelay`.
@@ -1585,7 +1609,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 - `allowFrom`: per-provider allowlists (empty = disabled)
   - `whatsapp`: E.164 numbers
   - `telegram`: chat ids or usernames
-  - `discord`: user ids or usernames (falls back to `discord.dm.allowFrom` if omitted)
+  - `discord`: user ids or usernames (falls back to `channels.discord.dm.allowFrom` if omitted)
   - `signal`: E.164 numbers
   - `imessage`: handles/chat ids
   - `webchat`: session ids or usernames

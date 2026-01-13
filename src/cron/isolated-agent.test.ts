@@ -539,7 +539,9 @@ describe("runCronIsolatedAgentTurn", () => {
       process.env.TELEGRAM_BOT_TOKEN = "";
       try {
         const res = await runCronIsolatedAgentTurn({
-          cfg: makeCfg(home, storePath, { telegram: { botToken: "t-1" } }),
+          cfg: makeCfg(home, storePath, {
+            channels: { telegram: { botToken: "t-1" } },
+          }),
           deps,
           job: makeJob({
             kind: "agentTurn",
@@ -642,7 +644,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "-1001234567890:321",
         }),
         message: "do it",
@@ -687,7 +689,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "discord",
+          channel: "discord",
           to: "channel:1122",
         }),
         message: "do it",
@@ -732,7 +734,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "123",
         }),
         message: "do it",
@@ -770,7 +772,9 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, { whatsapp: { allowFrom: ["+1234"] } }),
+        cfg: makeCfg(home, storePath, {
+          channels: { whatsapp: { allowFrom: ["+1234"] } },
+        }),
         deps,
         job: makeJob({
           kind: "agentTurn",

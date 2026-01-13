@@ -12,7 +12,7 @@ import { rawDataToString } from "../infra/ws.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 
 async function isPortFree(port: number): Promise<boolean> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;

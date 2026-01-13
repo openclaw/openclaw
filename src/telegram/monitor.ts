@@ -79,7 +79,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const token = opts.token?.trim() || account.token;
   if (!token) {
     throw new Error(
-      `Telegram bot token missing for account "${account.accountId}" (set telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
+      `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
     );
   }
 

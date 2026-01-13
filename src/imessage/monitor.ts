@@ -21,16 +21,16 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
-  resolveProviderGroupPolicy,
-  resolveProviderGroupRequireMention,
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -189,9 +189,9 @@ export async function monitorIMessageProvider(
 
     const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
     const groupListPolicy = groupIdCandidate
-      ? resolveProviderGroupPolicy({
+      ? resolveChannelGroupPolicy({
           cfg,
-          provider: "imessage",
+          channel: "imessage",
           accountId: accountInfo.accountId,
           groupId: groupIdCandidate,
         })
@@ -216,7 +216,7 @@ export async function monitorIMessageProvider(
     if (isGroup && !chatId) return;
 
     const groupId = isGroup ? groupIdCandidate : undefined;
-    const storeAllowFrom = await readProviderAllowFromStore("imessage").catch(
+    const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(
       () => [],
     );
     const effectiveDmAllowFrom = Array.from(
@@ -282,8 +282,8 @@ export async function monitorIMessageProvider(
       if (!dmAuthorized) {
         if (dmPolicy === "pairing") {
           const senderId = normalizeIMessageHandle(sender);
-          const { code, created } = await upsertProviderPairingRequest({
-            provider: "imessage",
+          const { code, created } = await upsertChannelPairingRequest({
+            channel: "imessage",
             id: senderId,
             meta: {
               sender: senderId,
@@ -296,7 +296,7 @@ export async function monitorIMessageProvider(
               await sendMessageIMessage(
                 sender,
                 buildPairingReply({
-                  provider: "imessage",
+                  channel: "imessage",
                   idLine: `Your iMessage sender id: ${senderId}`,
                   code,
                 }),
@@ -324,7 +324,7 @@ export async function monitorIMessageProvider(
 
     const route = resolveAgentRoute({
       cfg,
-      provider: "imessage",
+      channel: "imessage",
       accountId: accountInfo.accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
@@ -338,9 +338,9 @@ export async function monitorIMessageProvider(
     const mentioned = isGroup
       ? matchesMentionPatterns(messageText, mentionRegexes)
       : true;
-    const requireMention = resolveProviderGroupRequireMention({
+    const requireMention = resolveChannelGroupRequireMention({
       cfg,
-      provider: "imessage",
+      channel: "imessage",
       accountId: accountInfo.accountId,
       groupId,
       requireMentionOverride: opts.requireMention,
@@ -399,7 +399,7 @@ export async function monitorIMessageProvider(
       ? Date.parse(message.created_at)
       : undefined;
     const body = formatAgentEnvelope({
-      provider: "iMessage",
+      channel: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
       body: bodyText,
@@ -422,7 +422,7 @@ export async function monitorIMessageProvider(
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
-            provider: "iMessage",
+            channel: "iMessage",
             from: fromLabel,
             timestamp: entry.timestamp,
             body: `${entry.sender}: ${entry.body}${
@@ -472,7 +472,7 @@ export async function monitorIMessageProvider(
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,
-          provider: "imessage",
+          channel: "imessage",
           to,
           accountId: route.accountId,
         });

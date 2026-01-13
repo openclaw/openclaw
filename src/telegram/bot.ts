@@ -33,14 +33,19 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
+  formatLocationText,
+  type NormalizedLocation,
+  toLocationContext,
+} from "../channels/location.js";
+import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
 } from "../config/commands.js";
 import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
-  resolveProviderGroupPolicy,
-  resolveProviderGroupRequireMention,
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import {
   loadSessionStore,
@@ -48,19 +53,14 @@ import {
   updateLastRoute,
 } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { recordProviderActivity } from "../infra/provider-activity.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { isGifMedia } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
-import {
-  formatLocationText,
-  type NormalizedLocation,
-  toLocationContext,
-} from "../providers/location.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
@@ -369,9 +369,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return botHasTopicsEnabled;
   };
   const resolveGroupPolicy = (chatId: string | number) =>
-    resolveProviderGroupPolicy({
+    resolveChannelGroupPolicy({
       cfg,
-      provider: "telegram",
+      channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
     });
@@ -397,9 +397,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return undefined;
   };
   const resolveGroupRequireMention = (chatId: string | number) =>
-    resolveProviderGroupRequireMention({
+    resolveChannelGroupRequireMention({
       cfg,
-      provider: "telegram",
+      channel: "telegram",
       accountId: account.accountId,
       groupId: String(chatId),
       requireMentionOverride: opts.requireMention,
@@ -427,8 +427,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     options?: { forceWasMentioned?: boolean; messageIdOverride?: string },
   ) => {
     const msg = primaryCtx.message;
-    recordProviderActivity({
-      provider: "telegram",
+    recordChannelActivity({
+      channel: "telegram",
       accountId: account.accountId,
       direction: "inbound",
     });
@@ -450,7 +450,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : String(chatId);
     const route = resolveAgentRoute({
       cfg,
-      provider: "telegram",
+      channel: "telegram",
       accountId: account.accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
@@ -699,7 +699,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ? buildGroupLabel(msg, chatId, resolvedThreadId)
       : undefined;
     const body = formatAgentEnvelope({
-      provider: "Telegram",
+      channel: "Telegram",
       from: isGroup
         ? buildGroupFromLabel(msg, chatId, senderId, resolvedThreadId)
         : buildSenderLabel(msg, senderId || chatId),
@@ -727,7 +727,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
-            provider: "Telegram",
+            channel: "Telegram",
             from: groupLabel ?? `group:${chatId}`,
             timestamp: entry.timestamp,
             body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
@@ -800,7 +800,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       await updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
-        provider: "telegram",
+        channel: "telegram",
         to: String(chatId),
         accountId: route.accountId,
       });
@@ -1127,7 +1127,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           const prompt = buildCommandText(command.name, ctx.match ?? "");
           const route = resolveAgentRoute({
             cfg,
-            provider: "telegram",
+            channel: "telegram",
             accountId: account.accountId,
             peer: {
               kind: isGroup ? "group" : "dm",
@@ -1718,7 +1718,9 @@ async function resolveMedia(
   }
   const fetchImpl = proxyFetch ?? globalThis.fetch;
   if (!fetchImpl) {
-    throw new Error("fetch is not available; set telegram.proxy in config");
+    throw new Error(
+      "fetch is not available; set channels.telegram.proxy in config",
+    );
   }
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
   const fetched = await fetchRemoteMedia({

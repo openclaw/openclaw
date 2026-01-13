@@ -6,7 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   agentCommand,
   connectOk,
@@ -107,7 +107,7 @@ describe("gateway server chat", () => {
         rules: [
           {
             action: "deny",
-            match: { provider: "discord", chatType: "group" },
+            match: { channel: "discord", chatType: "group" },
           },
         ],
       },
@@ -121,7 +121,7 @@ describe("gateway server chat", () => {
             sessionId: "sess-discord",
             updatedAt: Date.now(),
             chatType: "group",
-            provider: "discord",
+            channel: "discord",
           },
         },
         null,
@@ -534,7 +534,7 @@ describe("gateway server chat", () => {
           main: {
             sessionId: "sess-main",
             updatedAt: Date.now(),
-            lastProvider: "whatsapp",
+            lastChannel: "whatsapp",
             lastTo: "+1555",
           },
         },
@@ -557,9 +557,9 @@ describe("gateway server chat", () => {
     const stored = JSON.parse(
       await fs.readFile(testState.sessionStorePath, "utf-8"),
     ) as {
-      main?: { lastProvider?: string; lastTo?: string };
+      main?: { lastChannel?: string; lastTo?: string };
     };
-    expect(stored.main?.lastProvider).toBe("whatsapp");
+    expect(stored.main?.lastChannel).toBe("whatsapp");
     expect(stored.main?.lastTo).toBe("+1555");
 
     ws.close();

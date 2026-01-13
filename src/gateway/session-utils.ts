@@ -37,7 +37,7 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
-  provider?: string;
+  channel?: string;
   subject?: string;
   room?: string;
   space?: string;
@@ -58,7 +58,7 @@ export type GatewaySessionRow = {
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
-  lastProvider?: SessionEntry["lastProvider"];
+  lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
 };
@@ -201,7 +201,7 @@ export function classifySessionKey(
 
 export function parseGroupKey(
   key: string,
-): { provider?: string; kind?: "group" | "channel"; id?: string } | null {
+): { channel?: string; kind?: "group" | "channel"; id?: string } | null {
   const agentParsed = parseAgentSessionKey(key);
   const rawKey = agentParsed?.rest ?? key;
   if (rawKey.startsWith("group:")) {
@@ -210,10 +210,10 @@ export function parseGroupKey(
   }
   const parts = rawKey.split(":").filter(Boolean);
   if (parts.length >= 3) {
-    const [provider, kind, ...rest] = parts;
+    const [channel, kind, ...rest] = parts;
     if (kind === "group" || kind === "channel") {
       const id = rest.join(":");
-      return { provider, kind, id };
+      return { channel, kind, id };
     }
   }
   return null;
@@ -533,16 +533,16 @@ export function listSessionsFromStore(params: {
       const output = entry?.outputTokens ?? 0;
       const total = entry?.totalTokens ?? input + output;
       const parsed = parseGroupKey(key);
-      const provider = entry?.provider ?? parsed?.provider;
+      const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
       const room = entry?.room;
       const space = entry?.space;
       const id = parsed?.id;
       const displayName =
         entry?.displayName ??
-        (provider
+        (channel
           ? buildGroupDisplayName({
-              provider,
+              provider: channel,
               subject,
               room,
               space,
@@ -555,7 +555,7 @@ export function listSessionsFromStore(params: {
         kind: classifySessionKey(key, entry),
         label: entry?.label,
         displayName,
-        provider,
+        channel,
         subject,
         room,
         space,
@@ -576,7 +576,7 @@ export function listSessionsFromStore(params: {
         modelProvider: entry?.modelProvider,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
-        lastProvider: entry?.lastProvider,
+        lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
         lastAccountId: entry?.lastAccountId,
       } satisfies GatewaySessionRow;

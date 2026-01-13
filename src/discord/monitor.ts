@@ -58,16 +58,16 @@ import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { formatDurationSeconds } from "../infra/format-duration.js";
-import { recordProviderActivity } from "../infra/provider-activity.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import {
   buildAgentSessionKey,
@@ -102,6 +102,8 @@ export type MonitorDiscordOpts = {
   historyLimit?: number;
   replyToMode?: ReplyToMode;
 };
+
+type DiscordConfig = NonNullable<ClawdbotConfig["channels"]>["discord"];
 
 type DiscordMediaInfo = {
   path: string;
@@ -721,7 +723,7 @@ async function clearDiscordNativeCommands(params: {
 
 export function createDiscordMessageHandler(params: {
   cfg: ReturnType<typeof loadConfig>;
-  discordConfig: ClawdbotConfig["discord"];
+  discordConfig: DiscordConfig;
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
@@ -800,7 +802,7 @@ export function createDiscordMessageHandler(params: {
           return;
         }
         if (dmPolicy !== "open") {
-          const storeAllowFrom = await readProviderAllowFromStore(
+          const storeAllowFrom = await readChannelAllowFromStore(
             "discord",
           ).catch(() => []);
           const effectiveAllowFrom = [...(allowFrom ?? []), ...storeAllowFrom];
@@ -818,8 +820,8 @@ export function createDiscordMessageHandler(params: {
           if (!permitted) {
             commandAuthorized = false;
             if (dmPolicy === "pairing") {
-              const { code, created } = await upsertProviderPairingRequest({
-                provider: "discord",
+              const { code, created } = await upsertChannelPairingRequest({
+                channel: "discord",
                 id: author.id,
                 meta: {
                   tag: formatDiscordUserTag(author),
@@ -834,7 +836,7 @@ export function createDiscordMessageHandler(params: {
                   await sendMessageDiscord(
                     `user:${author.id}`,
                     buildPairingReply({
-                      provider: "discord",
+                      channel: "discord",
                       idLine: `Your Discord user id: ${author.id}`,
                       code,
                     }),
@@ -863,14 +865,14 @@ export function createDiscordMessageHandler(params: {
       const messageText = resolveDiscordMessageText(message, {
         includeForwarded: true,
       });
-      recordProviderActivity({
-        provider: "discord",
+      recordChannelActivity({
+        channel: "discord",
         accountId,
         direction: "inbound",
       });
       const route = resolveAgentRoute({
         cfg,
-        provider: "discord",
+        channel: "discord",
         accountId,
         guildId: data.guild_id ?? undefined,
         peer: {
@@ -1174,7 +1176,7 @@ export function createDiscordMessageHandler(params: {
           ? systemPromptParts.join("\n\n")
           : undefined;
       let combinedBody = formatAgentEnvelope({
-        provider: "Discord",
+        channel: "Discord",
         from: fromLabel,
         timestamp: resolveTimestampMs(message.timestamp),
         body: text,
@@ -1189,7 +1191,7 @@ export function createDiscordMessageHandler(params: {
           currentMessage: combinedBody,
           formatEntry: (entry) =>
             formatAgentEnvelope({
-              provider: "Discord",
+              channel: "Discord",
               from: fromLabel,
               timestamp: entry.timestamp,
               body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
@@ -1217,7 +1219,7 @@ export function createDiscordMessageHandler(params: {
         });
         if (starter?.text) {
           const starterEnvelope = formatThreadStarterEnvelope({
-            provider: "Discord",
+            channel: "Discord",
             author: starter.author,
             timestamp: starter.timestamp,
             body: starter.text,
@@ -1231,7 +1233,7 @@ export function createDiscordMessageHandler(params: {
         if (threadParentId) {
           parentSessionKey = buildAgentSessionKey({
             agentId: route.agentId,
-            provider: route.provider,
+            channel: route.channel,
             peer: { kind: "channel", id: threadParentId },
           });
         }
@@ -1314,7 +1316,7 @@ export function createDiscordMessageHandler(params: {
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,
-          provider: "discord",
+          channel: "discord",
           to: `user:${author.id}`,
           accountId: route.accountId,
         });
@@ -1602,7 +1604,7 @@ async function handleDiscordReactionEvent(params: {
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     const route = resolveAgentRoute({
       cfg: params.cfg,
-      provider: "discord",
+      channel: "discord",
       accountId: params.accountId,
       guildId: data.guild_id ?? undefined,
       peer: { kind: "channel", id: data.channel_id },
@@ -1625,7 +1627,7 @@ export function createDiscordNativeCommand(params: {
     acceptsArgs: boolean;
   };
   cfg: ReturnType<typeof loadConfig>;
-  discordConfig: ClawdbotConfig["discord"];
+  discordConfig: DiscordConfig;
   accountId: string;
   sessionPrefix: string;
   ephemeralDefault: boolean;
@@ -1721,7 +1723,7 @@ export function createDiscordNativeCommand(params: {
           return;
         }
         if (dmPolicy !== "open") {
-          const storeAllowFrom = await readProviderAllowFromStore(
+          const storeAllowFrom = await readChannelAllowFromStore(
             "discord",
           ).catch(() => []);
           const effectiveAllowFrom = [
@@ -1742,8 +1744,8 @@ export function createDiscordNativeCommand(params: {
           if (!permitted) {
             commandAuthorized = false;
             if (dmPolicy === "pairing") {
-              const { code, created } = await upsertProviderPairingRequest({
-                provider: "discord",
+              const { code, created } = await upsertChannelPairingRequest({
+                channel: "discord",
                 id: user.id,
                 meta: {
                   tag: formatDiscordUserTag(user),
@@ -1753,7 +1755,7 @@ export function createDiscordNativeCommand(params: {
               if (created) {
                 await interaction.reply({
                   content: buildPairingReply({
-                    provider: "discord",
+                    channel: "discord",
                     idLine: `Your Discord user id: ${user.id}`,
                     code,
                   }),
@@ -1798,7 +1800,7 @@ export function createDiscordNativeCommand(params: {
       const interactionId = interaction.rawData.id;
       const route = resolveAgentRoute({
         cfg,
-        provider: "discord",
+        channel: "discord",
         accountId,
         guildId: interaction.guild?.id ?? undefined,
         peer: {
@@ -2244,7 +2246,7 @@ function resolveReplyContext(message: Message): string | null {
     : "Unknown";
   const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${formatDiscordUserTag(referenced.author)} user id:${referenced.author?.id ?? "unknown"}]`;
   return formatAgentEnvelope({
-    provider: "Discord",
+    channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(referenced.timestamp),
     body,

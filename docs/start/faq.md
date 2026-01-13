@@ -271,11 +271,11 @@ without WhatsApp/Telegram.
 
 ### Telegram: what goes in `allowFrom`?
 
-`telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username. To find your ID, DM `@userinfobot` or read the `from.id` in the gateway log for a DM. See [/providers/telegram](/providers/telegram#access-control-dms--groups).
+`channels.telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username. To find your ID, DM `@userinfobot` or read the `from.id` in the gateway log for a DM. See [/channels/telegram](/channels/telegram#access-control-dms--groups).
 
 ### Can multiple people use one WhatsApp number with different Clawdbots?
 
-Yes, via **multi‑agent routing**. Bind each sender’s WhatsApp **DM** (peer `kind: "dm"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`whatsapp.dmPolicy` / `whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/providers/whatsapp).
+Yes, via **multi‑agent routing**. Bind each sender’s WhatsApp **DM** (peer `kind: "dm"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`channels.whatsapp.dmPolicy` / `channels.whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/channels/whatsapp).
 
 ### Can I run a "fast chat" agent and an "Opus for coding" agent?
 
@@ -548,7 +548,7 @@ The Gateway watches the config and supports hot‑reload:
 
 The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **agents**:
 
-- **Gateway (central):** owns providers (Signal/WhatsApp), routing, and sessions.
+- **Gateway (central):** owns channels (Signal/WhatsApp), routing, and sessions.
 - **Nodes (devices):** Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
 - **Agents (workers):** separate brains/workspaces for special roles (e.g. “Hetzner ops”, “Personal data”).
 - **Sub‑agents:** spawn background work from a main agent when you want parallelism.
@@ -605,7 +605,7 @@ Yes. `config.apply` validates + writes the full config and restarts the Gateway 
 ```json5
 {
   agents: { defaults: { workspace: "~/clawd" } },
-  whatsapp: { allowFrom: ["+15555550123"] }
+  channels: { whatsapp: { allowFrom: ["+15555550123"] } }
 }
 ```
 
@@ -788,9 +788,11 @@ If you want only **you** to be able to trigger group replies:
 
 ```json5
 {
-  whatsapp: {
-    groupPolicy: "allowlist",
-    groupAllowFrom: ["+15551234567"]
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"]
+    }
   }
 }
 ```
@@ -799,7 +801,7 @@ If you want only **you** to be able to trigger group replies:
 
 Two common causes:
 - Mention gating is on (default). You must @mention the bot (or match `mentionPatterns`).
-- You configured `whatsapp.groups` without `"*"` and the group isn’t allowlisted.
+- You configured `channels.whatsapp.groups` without `"*"` and the group isn’t allowlisted.
 
 See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
 
@@ -1276,7 +1278,7 @@ Note: images are resized/recompressed (max side 2048px) to hit size limits. See 
 
 Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
-- Default behavior on DM‑capable providers is **pairing**:
+- Default behavior on DM‑capable channels is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
   - Approve with: `clawdbot pairing approve <provider> <code>`
   - Pending requests are capped at **3 per provider**; check `clawdbot pairing list <provider>` if a code didn’t arrive.
@@ -1300,7 +1302,7 @@ List pending requests:
 clawdbot pairing list whatsapp
 ```
 
-Wizard phone number prompt: it’s used to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `whatsapp.selfChatMode`.
+Wizard phone number prompt: it’s used to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `channels.whatsapp.selfChatMode`.
 
 ## Chat commands, aborting tasks, and “it won’t stop”
 
@@ -1355,22 +1357,24 @@ Enable self-chat mode and allowlist your own number:
 
 ```json5
 {
-  whatsapp: {
-    selfChatMode: true,
-    dmPolicy: "allowlist",
-    allowFrom: ["+15555550123"]
+  channels: {
+    whatsapp: {
+      selfChatMode: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["+15555550123"]
+    }
   }
 }
 ```
 
-See [WhatsApp setup](/providers/whatsapp).
+See [WhatsApp setup](/channels/whatsapp).
 
 ### WhatsApp logged me out. How do I re‑auth?
 
 Run the login command again and scan the QR code:
 
 ```bash
-clawdbot providers login
+clawdbot channels login
 ```
 
 ### Build errors on `main` — what’s the standard fix path?

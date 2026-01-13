@@ -57,7 +57,7 @@ function coercePayload(payload: UnknownRecord) {
     else if (typeof payload.message === "string") next.kind = "agentTurn";
   }
 
-  // Back-compat: older configs used `channel` for delivery provider.
+  // Back-compat: older configs used `provider` for delivery channel.
   migrateLegacyCronPayload(next);
   return next;
 }

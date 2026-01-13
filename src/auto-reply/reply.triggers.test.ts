@@ -95,8 +95,10 @@ function makeCfg(home: string) {
         workspace: join(home, "clawd"),
       },
     },
-    whatsapp: {
-      allowFrom: ["*"],
+    channels: {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
     },
     session: { store: join(home, "sessions.json") },
   };
@@ -856,8 +858,10 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -886,8 +890,10 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -923,8 +929,10 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -965,8 +973,10 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1017,8 +1027,10 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1060,8 +1072,10 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1104,8 +1118,10 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1154,9 +1170,11 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
-          groups: { "*": { requireMention: false } },
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+            groups: { "*": { requireMention: false } },
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1201,9 +1219,11 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
-          groups: { "*": { requireMention: false } },
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+            groups: { "*": { requireMention: false } },
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1245,9 +1265,11 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
-          groups: { "*": { requireMention: true } },
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+            groups: { "*": { requireMention: true } },
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1293,8 +1315,10 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1343,8 +1367,10 @@ describe("trigger handling", () => {
             allowFrom: { whatsapp: ["+1000"] },
           },
         },
-        whatsapp: {
-          allowFrom: ["+1000"],
+        channels: {
+          whatsapp: {
+            allowFrom: ["+1000"],
+          },
         },
         session: { store: join(home, "sessions.json") },
       };
@@ -1648,9 +1674,11 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-            groups: { "*": { requireMention: false } },
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+              groups: { "*": { requireMention: false } },
+            },
           },
           messages: {
             groupChat: {},
@@ -1694,8 +1722,10 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+            },
           },
           session: {
             store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
@@ -1735,8 +1765,10 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+            },
           },
           session: {
             store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
@@ -1769,8 +1801,10 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["+1999"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["+1999"],
+            },
           },
           session: {
             store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
@@ -1798,8 +1832,10 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["+1999"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["+1999"],
+            },
           },
           session: {
             store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
@@ -1841,8 +1877,10 @@ describe("trigger handling", () => {
               workspace: join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+            },
           },
           session: {
             store: storePath,
@@ -1956,8 +1994,10 @@ describe("trigger handling", () => {
               },
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
+          channels: {
+            whatsapp: {
+              allowFrom: ["*"],
+            },
           },
           session: {
             store: join(home, "sessions.json"),

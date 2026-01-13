@@ -11,22 +11,21 @@ import {
   isJidGroup,
   normalizeMessageContent,
 } from "@whiskeysockets/baileys";
-
+import {
+  formatLocationText,
+  type NormalizedLocation,
+} from "../channels/location.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import {
-  formatLocationText,
-  type NormalizedLocation,
-} from "../providers/location.js";
 import {
   isSelfChatMode,
   jidToE164,
@@ -101,7 +100,7 @@ export async function monitorWebInbox(options: {
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger(
-    "gateway/providers/whatsapp",
+    "gateway/channels/whatsapp",
   ).child("inbound");
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
@@ -174,8 +173,8 @@ export async function monitorWebInbox(options: {
   }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") return;
     for (const msg of upsert.messages ?? []) {
-      recordProviderActivity({
-        provider: "whatsapp",
+      recordChannelActivity({
+        channel: "whatsapp",
         accountId: options.accountId,
         direction: "inbound",
       });
@@ -215,9 +214,9 @@ export async function monitorWebInbox(options: {
         cfg,
         accountId: options.accountId,
       });
-      const dmPolicy = cfg.whatsapp?.dmPolicy ?? "pairing";
+      const dmPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
       const configuredAllowFrom = account.allowFrom;
-      const storeAllowFrom = await readProviderAllowFromStore("whatsapp").catch(
+      const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(
         () => [],
       );
       // Without user config, default to self-only DM access so the owner can talk to themselves
@@ -296,8 +295,8 @@ export async function monitorWebInbox(options: {
               normalizedAllowFrom.includes(candidate));
           if (!allowed) {
             if (dmPolicy === "pairing") {
-              const { code, created } = await upsertProviderPairingRequest({
-                provider: "whatsapp",
+              const { code, created } = await upsertChannelPairingRequest({
+                channel: "whatsapp",
                 id: candidate,
                 meta: {
                   name: (msg.pushName ?? "").trim() || undefined,
@@ -310,7 +309,7 @@ export async function monitorWebInbox(options: {
                 try {
                   await sock.sendMessage(remoteJid, {
                     text: buildPairingReply({
-                      provider: "whatsapp",
+                      channel: "whatsapp",
                       idLine: `Your WhatsApp phone number: ${candidate}`,
                       code,
                     }),
@@ -583,8 +582,8 @@ export async function monitorWebInbox(options: {
       }
       const result = await sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? options.accountId;
-      recordProviderActivity({
-        provider: "whatsapp",
+      recordChannelActivity({
+        channel: "whatsapp",
         accountId,
         direction: "outbound",
       });
@@ -606,8 +605,8 @@ export async function monitorWebInbox(options: {
           selectableCount: poll.maxSelections ?? 1,
         },
       });
-      recordProviderActivity({
-        provider: "whatsapp",
+      recordChannelActivity({
+        channel: "whatsapp",
         accountId: options.accountId,
         direction: "outbound",
       });

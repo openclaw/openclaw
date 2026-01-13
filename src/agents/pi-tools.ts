@@ -9,7 +9,7 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import { resolveGatewayMessageProvider } from "../utils/message-provider.js";
+import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import {
   resolveAgentConfig,
   resolveAgentIdFromSessionKey,
@@ -21,9 +21,9 @@ import {
   type ExecToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
+import { listChannelAgentTools } from "./channel-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
 import type { ModelAuthMode } from "./model-auth.js";
-import { listProviderAgentTools } from "./provider-tools.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -807,8 +807,8 @@ export function createClawdbotCodingTools(options?: {
     execTool as unknown as AnyAgentTool,
     bashTool,
     processTool as unknown as AnyAgentTool,
-    // Provider docking: include provider-defined agent tools (login, etc.).
-    ...listProviderAgentTools({ cfg: options?.config }),
+    // Channel docking: include channel-defined agent tools (login, etc.).
+    ...listChannelAgentTools({ cfg: options?.config }),
     ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -816,7 +816,7 @@ export function createClawdbotCodingTools(options?: {
       allowedControlHosts: sandbox?.browserAllowedControlHosts,
       allowedControlPorts: sandbox?.browserAllowedControlPorts,
       agentSessionKey: options?.sessionKey,
-      agentProvider: resolveGatewayMessageProvider(options?.messageProvider),
+      agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
       agentDir: options?.agentDir,
       sandboxRoot,

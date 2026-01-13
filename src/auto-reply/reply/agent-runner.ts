@@ -21,6 +21,9 @@ import {
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
+import { getChannelDock } from "../../channels/dock.js";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -37,9 +40,6 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { isAudioFileName } from "../../media/mime.js";
-import { getProviderDock } from "../../providers/dock.js";
-import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
-import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import {
@@ -96,19 +96,19 @@ function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: ClawdbotConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
-}): ProviderThreadingToolContext {
+}): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
   if (!config) return {};
-  const provider = normalizeProviderId(sessionCtx.Provider);
+  const provider = normalizeChannelId(sessionCtx.Provider);
   if (!provider) return {};
-  const dock = getProviderDock(provider);
+  const dock = getChannelDock(provider);
   if (!dock?.threading?.buildToolContext) return {};
   return (
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
       context: {
-        Provider: sessionCtx.Provider,
+        Channel: sessionCtx.Provider,
         To: sessionCtx.To,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,

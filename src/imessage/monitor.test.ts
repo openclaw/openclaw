@@ -33,9 +33,9 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 
@@ -72,10 +72,12 @@ async function waitForSubscribe() {
 
 beforeEach(() => {
   config = {
-    imessage: {
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      groups: { "*": { requireMention: true } },
+    channels: {
+      imessage: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groups: { "*": { requireMention: true } },
+      },
     },
     session: { mainKey: "main" },
     messages: {
@@ -129,9 +131,13 @@ describe("monitorIMessageProvider", () => {
   it("allows group messages when imessage groups default disables mention gating", async () => {
     config = {
       ...config,
-      imessage: {
-        groupPolicy: "open",
-        groups: { "*": { requireMention: false } },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
       },
     };
     const run = monitorIMessageProvider();
@@ -162,9 +168,13 @@ describe("monitorIMessageProvider", () => {
     config = {
       ...config,
       messages: { groupChat: { mentionPatterns: [] } },
-      imessage: {
-        groupPolicy: "open",
-        groups: { "*": { requireMention: true } },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
       },
     };
     const run = monitorIMessageProvider();
@@ -194,7 +204,13 @@ describe("monitorIMessageProvider", () => {
   it("blocks group messages when imessage.groups is set without a wildcard", async () => {
     config = {
       ...config,
-      imessage: { groups: { "99": { requireMention: false } } },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          groups: { "99": { requireMention: false } },
+        },
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -224,10 +240,14 @@ describe("monitorIMessageProvider", () => {
   it("treats configured chat_id as a group session even when is_group is false", async () => {
     config = {
       ...config,
-      imessage: {
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        groups: { "2": { requireMention: false } },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groups: { "2": { requireMention: false } },
+        },
       },
     };
 
@@ -299,10 +319,14 @@ describe("monitorIMessageProvider", () => {
   it("defaults to dmPolicy=pairing behavior when allowFrom is empty", async () => {
     config = {
       ...config,
-      imessage: {
-        dmPolicy: "pairing",
-        allowFrom: [],
-        groups: { "*": { requireMention: true } },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groups: { "*": { requireMention: true } },
+        },
       },
     };
     const run = monitorIMessageProvider();
@@ -372,9 +396,13 @@ describe("monitorIMessageProvider", () => {
   it("honors group allowlist when groupPolicy is allowlist", async () => {
     config = {
       ...config,
-      imessage: {
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["chat_id:101"],
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_id:101"],
+        },
       },
     };
     const run = monitorIMessageProvider();
@@ -404,7 +432,13 @@ describe("monitorIMessageProvider", () => {
   it("blocks group messages when groupPolicy is disabled", async () => {
     config = {
       ...config,
-      imessage: { groupPolicy: "disabled" },
+      channels: {
+        ...config.channels,
+        imessage: {
+          ...config.channels?.imessage,
+          groupPolicy: "disabled",
+        },
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -455,7 +489,7 @@ describe("monitorIMessageProvider", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        provider: "imessage",
+        channel: "imessage",
         to: "chat_id:7",
       }),
     );

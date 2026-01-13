@@ -1,8 +1,8 @@
 import type { Command } from "commander";
+import { CHANNEL_IDS } from "../channels/registry.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
-import { PROVIDER_IDS } from "../providers/registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -10,7 +10,7 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-const CRON_PROVIDER_OPTIONS = ["last", ...PROVIDER_IDS].join("|");
+const CRON_CHANNEL_OPTIONS = ["last", ...CHANNEL_IDS].join("|");
 
 async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -322,8 +322,8 @@ export function registerCronCli(program: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
-        "--provider <provider>",
-        `Delivery provider (${CRON_PROVIDER_OPTIONS})`,
+        "--channel <channel>",
+        `Delivery channel (${CRON_CHANNEL_OPTIONS})`,
         "last",
       )
       .option(
@@ -432,8 +432,7 @@ export function registerCronCli(program: Command) {
                   ? timeoutSeconds
                   : undefined,
               deliver: Boolean(opts.deliver),
-              provider:
-                typeof opts.provider === "string" ? opts.provider : "last",
+              channel: typeof opts.channel === "string" ? opts.channel : "last",
               to:
                 typeof opts.to === "string" && opts.to.trim()
                   ? opts.to.trim()
@@ -604,8 +603,8 @@ export function registerCronCli(program: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
-        "--provider <provider>",
-        `Delivery provider (${CRON_PROVIDER_OPTIONS})`,
+        "--channel <channel>",
+        `Delivery channel (${CRON_CHANNEL_OPTIONS})`,
       )
       .option(
         "--to <dest>",
@@ -717,8 +716,8 @@ export function registerCronCli(program: Command) {
                   ? timeoutSeconds
                   : undefined,
               deliver: Boolean(opts.deliver),
-              provider:
-                typeof opts.provider === "string" ? opts.provider : undefined,
+              channel:
+                typeof opts.channel === "string" ? opts.channel : undefined,
               to: typeof opts.to === "string" ? opts.to : undefined,
               bestEffortDeliver: Boolean(opts.bestEffortDeliver),
             };

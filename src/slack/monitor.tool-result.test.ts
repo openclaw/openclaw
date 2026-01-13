@@ -38,9 +38,9 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 
@@ -108,9 +108,11 @@ beforeEach(() => {
       ackReaction: "👀",
       ackReactionScope: "group-mentions",
     },
-    slack: {
-      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-      groupPolicy: "open",
+    channels: {
+      slack: {
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        groupPolicy: "open",
+      },
     },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
@@ -179,14 +181,16 @@ describe("monitorSlackProvider tool results", () => {
       bindings: [
         {
           agentId: "rich",
-          match: { provider: "slack", peer: { kind: "dm", id: "U1" } },
+          match: { channel: "slack", peer: { kind: "dm", id: "U1" } },
         },
       ],
       messages: {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+      channels: {
+        slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+      },
     };
 
     replyMock.mockImplementation(async (_ctx, opts) => {
@@ -228,10 +232,12 @@ describe("monitorSlackProvider tool results", () => {
   it("wraps room history in Body and preserves RawBody", async () => {
     config = {
       messages: { ackReactionScope: "group-mentions" },
-      slack: {
-        historyLimit: 5,
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        channels: { "*": { requireMention: false } },
+      channels: {
+        slack: {
+          historyLimit: 5,
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { "*": { requireMention: false } },
+        },
       },
     };
 
@@ -344,9 +350,11 @@ describe("monitorSlackProvider tool results", () => {
         responsePrefix: "PFX",
         groupChat: { mentionPatterns: ["\\bclawd\\b"] },
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        channels: { C1: { allow: true, requireMention: true } },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+        },
       },
     };
     replyMock.mockResolvedValue({ text: "hi" });
@@ -422,9 +430,11 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "off",
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "off",
+        },
       },
     };
 
@@ -467,9 +477,11 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "all",
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "all",
+        },
       },
     };
 
@@ -560,9 +572,11 @@ describe("monitorSlackProvider tool results", () => {
 
     config = {
       messages: { responsePrefix: "PFX" },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        channels: { C1: { allow: true, requireMention: false } },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: false } },
+        },
       },
     };
 
@@ -610,12 +624,14 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue({ text: "ok" });
     config = {
       messages: { responsePrefix: "PFX" },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        channels: { C1: { allow: true, requireMention: false } },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: false } },
+        },
       },
       bindings: [
-        { agentId: "support", match: { provider: "slack", teamId: "T1" } },
+        { agentId: "support", match: { channel: "slack", teamId: "T1" } },
       ],
     };
 
@@ -678,9 +694,11 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "off",
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "off",
+        },
       },
     };
 
@@ -722,9 +740,11 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "first",
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "first",
+        },
       },
     };
 
@@ -767,9 +787,11 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
       },
-      slack: {
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "off",
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          replyToMode: "off",
+        },
       },
     };
 
@@ -850,7 +872,13 @@ describe("monitorSlackProvider tool results", () => {
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     config = {
       ...config,
-      slack: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+      channels: {
+        ...config.channels,
+        slack: {
+          ...config.channels?.slack,
+          dm: { enabled: true, policy: "pairing", allowFrom: [] },
+        },
+      },
     };
 
     const controller = new AbortController();
@@ -893,7 +921,13 @@ describe("monitorSlackProvider tool results", () => {
   it("does not resend pairing code when a request is already pending", async () => {
     config = {
       ...config,
-      slack: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+      channels: {
+        ...config.channels,
+        slack: {
+          ...config.channels?.slack,
+          dm: { enabled: true, policy: "pairing", allowFrom: [] },
+        },
+      },
     };
     upsertPairingRequestMock
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })

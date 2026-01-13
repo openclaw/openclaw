@@ -7,7 +7,7 @@ import { theme } from "../terminal/theme.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   type CameraFacing,
   cameraTempPath,

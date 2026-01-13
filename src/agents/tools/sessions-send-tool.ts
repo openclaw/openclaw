@@ -13,9 +13,9 @@ import {
 } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
-  type GatewayMessageProvider,
-  INTERNAL_MESSAGE_PROVIDER,
-} from "../../utils/message-provider.js";
+  type GatewayMessageChannel,
+  INTERNAL_MESSAGE_CHANNEL,
+} from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
@@ -51,7 +51,7 @@ const SessionsSendToolSchema = Type.Object({
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentProvider?: GatewayMessageProvider;
+  agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -297,7 +297,7 @@ export function createSessionsSendTool(opts?: {
 
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
-        requesterProvider: opts?.agentProvider,
+        requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
       });
       const sendParams = {
@@ -305,12 +305,12 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        provider: INTERNAL_MESSAGE_PROVIDER,
+        channel: INTERNAL_MESSAGE_CHANNEL,
         lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
-      const requesterProvider = opts?.agentProvider;
+      const requesterChannel = opts?.agentChannel;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
       const delivery = { status: "pending", mode: "announce" as const };
 
@@ -344,7 +344,7 @@ export function createSessionsSendTool(opts?: {
             sessionKey: resolvedKey,
             displayKey,
           });
-          const targetProvider = announceTarget?.provider ?? "unknown";
+          const targetChannel = announceTarget?.channel ?? "unknown";
           if (
             maxPingPongTurns > 0 &&
             requesterSessionKey &&
@@ -360,9 +360,9 @@ export function createSessionsSendTool(opts?: {
                   : "target";
               const replyPrompt = buildAgentToAgentReplyContext({
                 requesterSessionKey,
-                requesterProvider,
+                requesterChannel,
                 targetSessionKey: displayKey,
-                targetProvider,
+                targetChannel,
                 currentRole,
                 turn,
                 maxTurns: maxPingPongTurns,
@@ -386,9 +386,9 @@ export function createSessionsSendTool(opts?: {
           }
           const announcePrompt = buildAgentToAgentAnnounceContext({
             requesterSessionKey,
-            requesterProvider,
+            requesterChannel,
             targetSessionKey: displayKey,
-            targetProvider,
+            targetChannel,
             originalMessage: message,
             roundOneReply: primaryReply,
             latestReply,
@@ -412,7 +412,7 @@ export function createSessionsSendTool(opts?: {
                 params: {
                   to: announceTarget.to,
                   message: announceReply.trim(),
-                  provider: announceTarget.provider,
+                  channel: announceTarget.channel,
                   accountId: announceTarget.accountId,
                   idempotencyKey: crypto.randomUUID(),
                 },
@@ -421,7 +421,7 @@ export function createSessionsSendTool(opts?: {
             } catch (err) {
               log.warn("sessions_send announce delivery failed", {
                 runId: runContextId,
-                provider: announceTarget.provider,
+                channel: announceTarget.channel,
                 to: announceTarget.to,
                 error: formatErrorMessage(err),
               });

@@ -12,7 +12,7 @@ describe("WhatsApp ack reaction logic", () => {
     },
     groupActivation?: "always" | "mention",
   ): boolean {
-    const ackConfig = cfg.whatsapp?.ackReaction;
+    const ackConfig = cfg.channels?.whatsapp?.ackReaction;
     const emoji = (ackConfig?.emoji ?? "").trim();
     const directEnabled = ackConfig?.direct ?? true;
     const groupMode = ackConfig?.group ?? "mentions";
@@ -43,7 +43,7 @@ describe("WhatsApp ack reaction logic", () => {
   describe("direct chat", () => {
     it("should react when direct=true", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", direct: true } },
+        channels: { whatsapp: { ackReaction: { emoji: "👀", direct: true } } },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -55,7 +55,7 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should not react when direct=false", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", direct: false } },
+        channels: { whatsapp: { ackReaction: { emoji: "👀", direct: false } } },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -67,7 +67,7 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should not react when emoji is empty", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "", direct: true } },
+        channels: { whatsapp: { ackReaction: { emoji: "", direct: true } } },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -79,7 +79,7 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should not react when message id is missing", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", direct: true } },
+        channels: { whatsapp: { ackReaction: { emoji: "👀", direct: true } } },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -92,7 +92,9 @@ describe("WhatsApp ack reaction logic", () => {
   describe("group chat - always mode", () => {
     it("should react to all messages when group=always", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+        },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -105,7 +107,9 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should react even with mention when group=always", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+        },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -120,7 +124,9 @@ describe("WhatsApp ack reaction logic", () => {
   describe("group chat - mentions mode", () => {
     it("should react when mentioned", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -133,7 +139,9 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should not react when not mentioned", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        },
       };
       expect(
         shouldSendReaction(
@@ -150,7 +158,9 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should react to all messages when group activation is always", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+        },
       };
       expect(
         shouldSendReaction(
@@ -169,7 +179,9 @@ describe("WhatsApp ack reaction logic", () => {
   describe("group chat - never mode", () => {
     it("should not react even with mention", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+        },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -182,7 +194,9 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should not react without mention", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+        channels: {
+          whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+        },
       };
       expect(
         shouldSendReaction(cfg, {
@@ -197,8 +211,10 @@ describe("WhatsApp ack reaction logic", () => {
   describe("combinations", () => {
     it("direct=false, group=always: only groups", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: {
-          ackReaction: { emoji: "✅", direct: false, group: "always" },
+        channels: {
+          whatsapp: {
+            ackReaction: { emoji: "✅", direct: false, group: "always" },
+          },
         },
       };
 
@@ -217,8 +233,10 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("direct=true, group=never: only direct", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: {
-          ackReaction: { emoji: "🤖", direct: true, group: "never" },
+        channels: {
+          whatsapp: {
+            ackReaction: { emoji: "🤖", direct: true, group: "never" },
+          },
         },
       };
 
@@ -239,7 +257,7 @@ describe("WhatsApp ack reaction logic", () => {
   describe("defaults", () => {
     it("should default direct=true", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀" } },
+        channels: { whatsapp: { ackReaction: { emoji: "👀" } } },
       };
       expect(shouldSendReaction(cfg, { id: "m1", chatType: "direct" })).toBe(
         true,
@@ -248,7 +266,7 @@ describe("WhatsApp ack reaction logic", () => {
 
     it("should default group=mentions", () => {
       const cfg: ClawdbotConfig = {
-        whatsapp: { ackReaction: { emoji: "👀" } },
+        channels: { whatsapp: { ackReaction: { emoji: "👀" } } },
       };
 
       expect(

@@ -227,7 +227,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("migrates legacy payload.channel to payload.provider on load", async () => {
+  it("migrates legacy payload.provider to payload.channel on load", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -245,7 +245,7 @@ describe("CronService", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        channel: " TeLeGrAm ",
+        provider: " TeLeGrAm ",
         to: "7200373102",
       },
       state: {},
@@ -271,14 +271,14 @@ describe("CronService", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const job = jobs.find((j) => j.id === rawJob.id);
     const payload = job?.payload as unknown as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
-    expect("channel" in payload).toBe(false);
+    expect(payload.channel).toBe("telegram");
+    expect("provider" in payload).toBe(false);
 
     cron.stop();
     await store.cleanup();
   });
 
-  it("canonicalizes payload.provider casing on load", async () => {
+  it("canonicalizes payload.channel casing on load", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -296,7 +296,7 @@ describe("CronService", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        provider: "Telegram",
+        channel: "Telegram",
         to: "7200373102",
       },
       state: {},
@@ -322,7 +322,7 @@ describe("CronService", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const job = jobs.find((j) => j.id === rawJob.id);
     const payload = job?.payload as unknown as Record<string, unknown>;
-    expect(payload.provider).toBe("telegram");
+    expect(payload.channel).toBe("telegram");
 
     cron.stop();
     await store.cleanup();

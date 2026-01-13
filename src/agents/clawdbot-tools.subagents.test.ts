@@ -37,12 +37,12 @@ describe("subagents", () => {
     };
   });
 
-  it("sessions_spawn announces back to the requester group provider", async () => {
+  it("sessions_spawn announces back to the requester group channel", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let sendParams: { to?: string; provider?: string; message?: string } = {};
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
     let deletedKey: string | undefined;
     let childRunId: string | undefined;
     let childSessionKey: string | undefined;
@@ -58,7 +58,7 @@ describe("subagents", () => {
         const params = request.params as {
           message?: string;
           sessionKey?: string;
-          provider?: string;
+          channel?: string;
           timeout?: number;
         };
         const message = params?.message ?? "";
@@ -69,7 +69,7 @@ describe("subagents", () => {
           childRunId = runId;
           childSessionKey = sessionKey;
           sessionLastAssistantText.set(sessionKey, "result");
-          expect(params?.provider).toBe("discord");
+          expect(params?.channel).toBe("discord");
           expect(params?.timeout).toBe(1);
         }
         return {
@@ -96,11 +96,11 @@ describe("subagents", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; provider?: string; message?: string }
+          | { to?: string; channel?: string; message?: string }
           | undefined;
         sendParams = {
           to: params?.to,
-          provider: params?.provider,
+          channel: params?.channel,
           message: params?.message,
         };
         return { messageId: "m-announce" };
@@ -115,7 +115,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "discord:group:req",
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -153,22 +153,22 @@ describe("subagents", () => {
           lane?: string;
           deliver?: boolean;
           sessionKey?: string;
-          provider?: string;
+          channel?: string;
         }
       | undefined;
     expect(first?.lane).toBe("subagent");
     expect(first?.deliver).toBe(false);
-    expect(first?.provider).toBe("discord");
+    expect(first?.channel).toBe("discord");
     expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
     expect(childSessionKey?.startsWith("agent:main:subagent:")).toBe(true);
     const second = agentCalls[1]?.params as
-      | { provider?: string; deliver?: boolean; lane?: string }
+      | { channel?: string; deliver?: boolean; lane?: string }
       | undefined;
     expect(second?.lane).toBe("nested");
     expect(second?.deliver).toBe(false);
-    expect(second?.provider).toBe("webchat");
+    expect(second?.channel).toBe("webchat");
 
-    expect(sendParams.provider).toBe("discord");
+    expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:req");
     expect(sendParams.message ?? "").toContain("announce now");
     expect(sendParams.message ?? "").toContain("Stats:");
@@ -180,7 +180,7 @@ describe("subagents", () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let sendParams: { to?: string; provider?: string; message?: string } = {};
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
     let deletedKey: string | undefined;
     let childRunId: string | undefined;
     let childSessionKey: string | undefined;
@@ -196,7 +196,7 @@ describe("subagents", () => {
         const params = request.params as {
           message?: string;
           sessionKey?: string;
-          provider?: string;
+          channel?: string;
           timeout?: number;
         };
         const message = params?.message ?? "";
@@ -207,7 +207,7 @@ describe("subagents", () => {
           childRunId = runId;
           childSessionKey = sessionKey;
           sessionLastAssistantText.set(sessionKey, "result");
-          expect(params?.provider).toBe("discord");
+          expect(params?.channel).toBe("discord");
           expect(params?.timeout).toBe(1);
         }
         return {
@@ -238,11 +238,11 @@ describe("subagents", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; provider?: string; message?: string }
+          | { to?: string; channel?: string; message?: string }
           | undefined;
         sendParams = {
           to: params?.to,
-          provider: params?.provider,
+          channel: params?.channel,
           message: params?.message,
         };
         return { messageId: "m-announce" };
@@ -257,7 +257,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "discord:group:req",
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -282,13 +282,13 @@ describe("subagents", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const second = agentCalls[1]?.params as
-      | { provider?: string; deliver?: boolean; lane?: string }
+      | { channel?: string; deliver?: boolean; lane?: string }
       | undefined;
     expect(second?.lane).toBe("nested");
     expect(second?.deliver).toBe(false);
-    expect(second?.provider).toBe("webchat");
+    expect(second?.channel).toBe("webchat");
 
-    expect(sendParams.provider).toBe("discord");
+    expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:req");
     expect(sendParams.message ?? "").toContain("announce now");
     expect(sendParams.message ?? "").toContain("Stats:");
@@ -300,7 +300,7 @@ describe("subagents", () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let sendParams: { to?: string; provider?: string; message?: string } = {};
+    let sendParams: { to?: string; channel?: string; message?: string } = {};
     let childRunId: string | undefined;
     let childSessionKey: string | undefined;
     const waitCalls: Array<{ runId?: string; timeoutMs?: number }> = [];
@@ -314,7 +314,7 @@ describe("subagents", () => {
           sessions: [
             {
               key: "main",
-              lastProvider: "whatsapp",
+              lastChannel: "whatsapp",
               lastTo: "+123",
             },
           ],
@@ -360,11 +360,11 @@ describe("subagents", () => {
       }
       if (request.method === "send") {
         const params = request.params as
-          | { to?: string; provider?: string; message?: string }
+          | { to?: string; channel?: string; message?: string }
           | undefined;
         sendParams = {
           to: params?.to,
-          provider: params?.provider,
+          channel: params?.channel,
           message: params?.message,
         };
         return { messageId: "m1" };
@@ -377,7 +377,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -407,7 +407,7 @@ describe("subagents", () => {
 
     const childWait = waitCalls.find((call) => call.runId === childRunId);
     expect(childWait?.timeoutMs).toBe(1000);
-    expect(sendParams.provider).toBe("whatsapp");
+    expect(sendParams.channel).toBe("whatsapp");
     expect(sendParams.to).toBe("+123");
     expect(sendParams.message ?? "").toContain("hello from sub");
     expect(sendParams.message ?? "").toContain("Stats:");
@@ -420,7 +420,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -470,7 +470,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -522,7 +522,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -574,7 +574,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -612,7 +612,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -710,7 +710,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "agent:main:main",
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -754,7 +754,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "agent:research:main",
-      agentProvider: "discord",
+      agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -804,7 +804,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -840,7 +840,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentProvider: "whatsapp",
+      agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 

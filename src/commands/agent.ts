@@ -39,6 +39,12 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import {
+  getChannelPlugin,
+  normalizeChannelId,
+} from "../channels/plugins/index.js";
+import type { ChannelOutboundTargetMode } from "../channels/plugins/types.js";
+import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
+import {
   type CliDeps,
   createDefaultDeps,
   createOutboundSendDeps,
@@ -67,21 +73,15 @@ import {
   normalizeOutboundPayloadsForJson,
 } from "../infra/outbound/payloads.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
-import type { ProviderOutboundTargetMode } from "../providers/plugins/types.js";
-import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
-  isInternalMessageProvider,
-  resolveGatewayMessageProvider,
-  resolveMessageProvider,
-} from "../utils/message-provider.js";
+  isInternalMessageChannel,
+  resolveGatewayMessageChannel,
+  resolveMessageChannel,
+} from "../utils/message-channel.js";
 
 /** Image content block for Claude API multimodal messages. */
 type ImageContent = {
@@ -103,10 +103,10 @@ type AgentCommandOpts = {
   json?: boolean;
   timeout?: string;
   deliver?: boolean;
-  /** Message provider context (webchat|voicewake|whatsapp|...). */
-  messageProvider?: string;
-  provider?: string; // delivery provider (whatsapp|telegram|...)
-  deliveryTargetMode?: ProviderOutboundTargetMode;
+  /** Message channel context (webchat|voicewake|whatsapp|...). */
+  messageChannel?: string;
+  channel?: string; // delivery channel (whatsapp|telegram|...)
+  deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
   lane?: string;
@@ -287,7 +287,7 @@ export async function agentCommand(
       cfg,
       entry: sessionEntry,
       sessionKey,
-      provider: sessionEntry?.provider,
+      channel: sessionEntry?.channel,
       chatType: sessionEntry?.chatType,
     });
     if (sendPolicy === "deny") {
@@ -490,9 +490,9 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const messageProvider = resolveMessageProvider(
-      opts.messageProvider,
-      opts.provider,
+    const messageChannel = resolveMessageChannel(
+      opts.messageChannel,
+      opts.channel,
     );
     const fallbackResult = await runWithModelFallback({
       cfg,
@@ -525,7 +525,7 @@ export async function agentCommand(
         return runEmbeddedPiAgent({
           sessionId,
           sessionKey,
-          messageProvider,
+          messageChannel,
           sessionFile,
           workspaceDir,
           config: cfg,
@@ -636,30 +636,28 @@ export async function agentCommand(
   const payloads = result.payloads ?? [];
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryProvider =
-    resolveGatewayMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
-  // Provider docking: delivery providers are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageProvider(deliveryProvider)
-    ? getProviderPlugin(
-        normalizeProviderId(deliveryProvider) ?? deliveryProvider,
-      )
+  const deliveryChannel =
+    resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
+  // Channel docking: delivery channels are resolved via plugin registry.
+  const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
+    ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
     : undefined;
 
   const logDeliveryError = (err: unknown) => {
-    const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
+    const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) runtime.log(message);
   };
 
-  const isDeliveryProviderKnown =
-    isInternalMessageProvider(deliveryProvider) || Boolean(deliveryPlugin);
+  const isDeliveryChannelKnown =
+    isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
 
-  const targetMode: ProviderOutboundTargetMode =
+  const targetMode: ChannelOutboundTargetMode =
     opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
   const resolvedTarget =
-    deliver && isDeliveryProviderKnown && deliveryProvider
+    deliver && isDeliveryChannelKnown && deliveryChannel
       ? resolveOutboundTarget({
-          provider: deliveryProvider,
+          channel: deliveryChannel,
           to: opts.to,
           cfg,
           accountId:
@@ -670,8 +668,8 @@ export async function agentCommand(
   const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
 
   if (deliver) {
-    if (!isDeliveryProviderKnown) {
-      const err = new Error(`Unknown provider: ${deliveryProvider}`);
+    if (!isDeliveryChannelKnown) {
+      const err = new Error(`Unknown channel: ${deliveryChannel}`);
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);
     } else if (resolvedTarget && !resolvedTarget.ok) {
@@ -715,13 +713,13 @@ export async function agentCommand(
   }
   if (
     deliver &&
-    deliveryProvider &&
-    !isInternalMessageProvider(deliveryProvider)
+    deliveryChannel &&
+    !isInternalMessageChannel(deliveryChannel)
   ) {
     if (deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,
-        provider: deliveryProvider,
+        channel: deliveryChannel,
         to: deliveryTarget,
         payloads: deliveryPayloads,
         bestEffort: bestEffortDeliver,

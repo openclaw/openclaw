@@ -206,7 +206,7 @@ export const SendParamsSchema = Type.Object(
     message: NonEmptyString,
     mediaUrl: Type.Optional(Type.String()),
     gifPlayback: Type.Optional(Type.Boolean()),
-    provider: Type.Optional(Type.String()),
+    channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
@@ -220,7 +220,7 @@ export const PollParamsSchema = Type.Object(
     options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
     maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
-    provider: Type.Optional(Type.String()),
+    channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
@@ -235,7 +235,7 @@ export const AgentParamsSchema = Type.Object(
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
-    provider: Type.Optional(Type.String()),
+    channel: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
@@ -588,7 +588,7 @@ export const TalkModeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ProvidersStatusParamsSchema = Type.Object(
+export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -596,9 +596,9 @@ export const ProvidersStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-// Provider docking: providers.status is intentionally schema-light so new
-// providers can ship without protocol updates.
-export const ProviderAccountSnapshotSchema = Type.Object(
+// Channel docking: channels.status is intentionally schema-light so new
+// channels can ship without protocol updates.
+export const ChannelAccountSnapshotSchema = Type.Object(
   {
     accountId: NonEmptyString,
     name: Type.Optional(Type.String()),
@@ -635,24 +635,24 @@ export const ProviderAccountSnapshotSchema = Type.Object(
   { additionalProperties: true },
 );
 
-export const ProvidersStatusResultSchema = Type.Object(
+export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
-    providerOrder: Type.Array(NonEmptyString),
-    providerLabels: Type.Record(NonEmptyString, NonEmptyString),
-    providers: Type.Record(NonEmptyString, Type.Unknown()),
-    providerAccounts: Type.Record(
+    channelOrder: Type.Array(NonEmptyString),
+    channelLabels: Type.Record(NonEmptyString, NonEmptyString),
+    channels: Type.Record(NonEmptyString, Type.Unknown()),
+    channelAccounts: Type.Record(
       NonEmptyString,
-      Type.Array(ProviderAccountSnapshotSchema),
+      Type.Array(ChannelAccountSnapshotSchema),
     ),
-    providerDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
+    channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),
   },
   { additionalProperties: false },
 );
 
-export const ProvidersLogoutParamsSchema = Type.Object(
+export const ChannelsLogoutParamsSchema = Type.Object(
   {
-    provider: NonEmptyString,
+    channel: NonEmptyString,
     accountId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -788,7 +788,7 @@ export const CronPayloadSchema = Type.Union([
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       deliver: Type.Optional(Type.Boolean()),
-      provider: Type.Optional(
+      channel: Type.Optional(
         Type.Union([Type.Literal("last"), NonEmptyString]),
       ),
       to: Type.Optional(Type.String()),
@@ -1078,9 +1078,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WizardStartResult: WizardStartResultSchema,
   WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
-  ProvidersStatusParams: ProvidersStatusParamsSchema,
-  ProvidersStatusResult: ProvidersStatusResultSchema,
-  ProvidersLogoutParams: ProvidersLogoutParamsSchema,
+  ChannelsStatusParams: ChannelsStatusParamsSchema,
+  ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
   AgentSummary: AgentSummarySchema,
@@ -1157,9 +1157,9 @@ export type WizardNextResult = Static<typeof WizardNextResultSchema>;
 export type WizardStartResult = Static<typeof WizardStartResultSchema>;
 export type WizardStatusResult = Static<typeof WizardStatusResultSchema>;
 export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
-export type ProvidersStatusParams = Static<typeof ProvidersStatusParamsSchema>;
-export type ProvidersStatusResult = Static<typeof ProvidersStatusResultSchema>;
-export type ProvidersLogoutParams = Static<typeof ProvidersLogoutParamsSchema>;
+export type ChannelsStatusParams = Static<typeof ChannelsStatusParamsSchema>;
+export type ChannelsStatusResult = Static<typeof ChannelsStatusResultSchema>;
+export type ChannelsLogoutParams = Static<typeof ChannelsLogoutParamsSchema>;
 export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
 export type WebLoginWaitParams = Static<typeof WebLoginWaitParamsSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;

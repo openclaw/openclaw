@@ -10,8 +10,8 @@ import type { ClawdbotConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -117,7 +117,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     pollStore,
     log,
   } = deps;
-  const msteamsCfg = cfg.msteams;
+  const msteamsCfg = cfg.channels?.msteams;
   const historyLimit = Math.max(
     0,
     msteamsCfg?.historyLimit ??
@@ -177,7 +177,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
-    const storedAllowFrom = await readProviderAllowFromStore("msteams").catch(
+    const storedAllowFrom = await readChannelAllowFromStore("msteams").catch(
       () => [],
     );
 
@@ -207,8 +207,8 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
         if (!allowed) {
           if (dmPolicy === "pairing") {
-            const request = await upsertProviderPairingRequest({
-              provider: "msteams",
+            const request = await upsertChannelPairingRequest({
+              channel: "msteams",
               id: senderId,
               meta: { name: senderName },
             });
@@ -341,7 +341,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // Resolve routing
     const route = resolveAgentRoute({
       cfg,
-      provider: "msteams",
+      channel: "msteams",
       peer: {
         kind: isDirectMessage ? "dm" : isChannel ? "channel" : "group",
         id: isDirectMessage ? senderId : conversationId,
@@ -469,7 +469,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     }
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
     const body = formatAgentEnvelope({
-      provider: "Teams",
+      channel: "Teams",
       from: senderName,
       timestamp,
       body: rawBody,
@@ -491,7 +491,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
-            provider: "Teams",
+            channel: "Teams",
             from: conversationType,
             timestamp: entry.timestamp,
             body: `${entry.sender}: ${entry.body}${

@@ -4,9 +4,9 @@ import util from "node:util";
 
 import { Chalk } from "chalk";
 import { Logger as TsLogger } from "tslog";
+import { CHAT_CHANNEL_ORDER } from "./channels/registry.js";
 import { type ClawdbotConfig, loadConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
-import { CHAT_PROVIDER_ORDER } from "./providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -432,7 +432,7 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-const PROVIDER_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_PROVIDER_ORDER);
+const PROVIDER_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
 
 function pickSubsystemColor(
   color: ChalkInstance,

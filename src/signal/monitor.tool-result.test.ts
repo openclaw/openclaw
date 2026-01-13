@@ -34,9 +34,9 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 
@@ -65,7 +65,9 @@ beforeEach(() => {
   resetInboundDedupe();
   config = {
     messages: { responsePrefix: "PFX" },
-    signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
+    channels: {
+      signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
+    },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
@@ -122,7 +124,15 @@ describe("monitorSignalProvider tool results", () => {
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     config = {
       ...config,
-      signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
     };
     const abortController = new AbortController();
 
@@ -241,11 +251,15 @@ describe("monitorSignalProvider tool results", () => {
   it("enqueues system events for reaction notifications", async () => {
     config = {
       ...config,
-      signal: {
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        reactionNotifications: "all",
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          reactionNotifications: "all",
+        },
       },
     };
     const abortController = new AbortController();
@@ -280,7 +294,7 @@ describe("monitorSignalProvider tool results", () => {
 
     const route = resolveAgentRoute({
       cfg: config as ClawdbotConfig,
-      provider: "signal",
+      channel: "signal",
       accountId: "default",
       peer: { kind: "dm", id: normalizeE164("+15550001111") },
     });
@@ -293,12 +307,16 @@ describe("monitorSignalProvider tool results", () => {
   it("notifies on own reactions when target includes uuid + phone", async () => {
     config = {
       ...config,
-      signal: {
-        autoStart: false,
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        account: "+15550002222",
-        reactionNotifications: "own",
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          account: "+15550002222",
+          reactionNotifications: "own",
+        },
       },
     };
     const abortController = new AbortController();
@@ -334,7 +352,7 @@ describe("monitorSignalProvider tool results", () => {
 
     const route = resolveAgentRoute({
       cfg: config as ClawdbotConfig,
-      provider: "signal",
+      channel: "signal",
       accountId: "default",
       peer: { kind: "dm", id: normalizeE164("+15550001111") },
     });
@@ -386,7 +404,15 @@ describe("monitorSignalProvider tool results", () => {
   it("does not resend pairing code when a request is already pending", async () => {
     config = {
       ...config,
-      signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
     };
     const abortController = new AbortController();
     upsertPairingRequestMock
@@ -432,7 +458,15 @@ describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
     config = {
       ...config,
-      signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
+      channels: {
+        ...config.channels,
+        signal: {
+          ...config.channels?.signal,
+          autoStart: false,
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
     };
     const abortController = new AbortController();
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
@@ -465,7 +499,11 @@ describe("monitorSignalProvider tool results", () => {
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "signal", id: `uuid:${uuid}` }),
+      expect.objectContaining({
+        channel: "signal",
+        id: `uuid:${uuid}`,
+        meta: expect.objectContaining({ name: "Ada" }),
+      }),
     );
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);

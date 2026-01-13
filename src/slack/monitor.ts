@@ -59,8 +59,8 @@ import { type FetchLike, fetchRemoteMedia } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import {
@@ -488,7 +488,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
   if (!botToken || !appToken) {
     throw new Error(
-      `Slack bot + app tokens missing for account "${account.accountId}" (set slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`,
+      `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`,
     );
   }
 
@@ -745,7 +745,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const allowBots =
       channelConfig?.allowBots ??
       account.config?.allowBots ??
-      cfg.slack?.allowBots ??
+      cfg.channels?.slack?.allowBots ??
       false;
     const isBotMessage = Boolean(message.bot_id);
     if (isBotMessage) {
@@ -779,7 +779,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       return;
     }
 
-    const storeAllowFrom = await readProviderAllowFromStore("slack").catch(
+    const storeAllowFrom = await readChannelAllowFromStore("slack").catch(
       () => [],
     );
     const effectiveAllowFrom = normalizeAllowList([
@@ -807,8 +807,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           if (dmPolicy === "pairing") {
             const sender = await resolveUserName(directUserId);
             const senderName = sender?.name ?? undefined;
-            const { code, created } = await upsertProviderPairingRequest({
-              provider: "slack",
+            const { code, created } = await upsertChannelPairingRequest({
+              channel: "slack",
               id: directUserId,
               meta: { name: senderName },
             });
@@ -820,7 +820,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 await sendMessageSlack(
                   message.channel,
                   buildPairingReply({
-                    provider: "slack",
+                    channel: "slack",
                     idLine: `Your Slack user id: ${directUserId}`,
                     code,
                   }),
@@ -848,7 +848,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     const route = resolveAgentRoute({
       cfg,
-      provider: "slack",
+      channel: "slack",
       accountId: account.accountId,
       teamId: teamId || undefined,
       peer: {
@@ -1012,7 +1012,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
     const body = formatAgentEnvelope({
-      provider: "Slack",
+      channel: "Slack",
       from: senderName,
       timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
       body: textWithId,
@@ -1028,7 +1028,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
-            provider: "Slack",
+            channel: "Slack",
             from: roomLabel,
             timestamp: entry.timestamp,
             body: `${entry.sender}: ${entry.body}${
@@ -1068,7 +1068,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
         const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
         threadStarterBody = formatThreadStarterEnvelope({
-          provider: "Slack",
+          channel: "Slack",
           author: starterName,
           timestamp: starter.ts
             ? Math.round(Number(starter.ts) * 1000)
@@ -1126,7 +1126,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       await updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
-        provider: "slack",
+        channel: "slack",
         to: `user:${message.user}`,
         accountId: route.accountId,
       });
@@ -1771,7 +1771,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
 
-      const storeAllowFrom = await readProviderAllowFromStore("slack").catch(
+      const storeAllowFrom = await readChannelAllowFromStore("slack").catch(
         () => [],
       );
       const effectiveAllowFrom = normalizeAllowList([
@@ -1801,15 +1801,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           });
           if (!permitted) {
             if (dmPolicy === "pairing") {
-              const { code, created } = await upsertProviderPairingRequest({
-                provider: "slack",
+              const { code, created } = await upsertChannelPairingRequest({
+                channel: "slack",
                 id: command.user_id,
                 meta: { name: senderName },
               });
               if (created) {
                 await respond({
                   text: buildPairingReply({
-                    provider: "slack",
+                    channel: "slack",
                     idLine: `Your Slack user id: ${command.user_id}`,
                     code,
                   }),
@@ -1882,7 +1882,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       const isRoomish = isRoom || isGroupDm;
       const route = resolveAgentRoute({
         cfg,
-        provider: "slack",
+        channel: "slack",
         accountId: account.accountId,
         teamId: teamId || undefined,
         peer: {

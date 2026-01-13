@@ -16,13 +16,13 @@
 </p>
 
 **Clawdbot** is a *personal AI assistant* you run on your own devices.
-It answers you on the providers you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
 [Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · [Getting Started](https://docs.clawd.bot/start/getting-started) · [Updating](https://docs.clawd.bot/install/updating) · [Showcase](https://docs.clawd.bot/start/showcase) · [FAQ](https://docs.clawd.bot/start/faq) · [Wizard](https://docs.clawd.bot/start/wizard) · [Nix](https://github.com/clawdbot/nix-clawdbot) · [Docker](https://docs.clawd.bot/install/docker) · [Discord](https://discord.gg/clawd)
 
-Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
+Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.clawd.bot/start/getting-started)
 
@@ -54,7 +54,7 @@ The wizard installs the Gateway daemon (launchd/systemd user service) so it stay
 
 Runtime: **Node ≥22**.
 
-Full beginner guide (auth, pairing, providers): [Getting started](https://docs.clawd.bot/start/getting-started)
+Full beginner guide (auth, pairing, channels): [Getting started](https://docs.clawd.bot/start/getting-started)
 
 ```bash
 clawdbot onboard --install-daemon
@@ -97,17 +97,17 @@ Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted i
 Full security guide: [Security](https://docs.clawd.bot/gateway/security)
 
 Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Slack:
-- **DM pairing** (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
-- Approve with: `clawdbot pairing approve <provider> <code>` (then the sender is added to a local allowlist store).
-- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the provider allowlist (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`).
+- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
+- Approve with: `clawdbot pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
+- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`).
 
 Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 
 ## Highlights
 
-- **[Local-first Gateway](https://docs.clawd.bot/gateway)** — single control plane for sessions, providers, tools, and events.
-- **[Multi-provider inbox](https://docs.clawd.bot/providers)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, WebChat, macOS, iOS/Android.
-- **[Multi-agent routing](https://docs.clawd.bot/gateway/configuration)** — route inbound providers/accounts/peers to isolated agents (workspaces + per-agent sessions).
+- **[Local-first Gateway](https://docs.clawd.bot/gateway)** — single control plane for sessions, channels, tools, and events.
+- **[Multi-channel inbox](https://docs.clawd.bot/channels)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Microsoft Teams, WebChat, macOS, iOS/Android.
+- **[Multi-agent routing](https://docs.clawd.bot/gateway/configuration)** — route inbound channels/accounts/peers to isolated agents (workspaces + per-agent sessions).
 - **[Voice Wake](https://docs.clawd.bot/nodes/voicewake) + [Talk Mode](https://docs.clawd.bot/nodes/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
 - **[Live Canvas](https://docs.clawd.bot/platforms/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawd.bot/platforms/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.clawd.bot/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
@@ -127,9 +127,9 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 - [Session model](https://docs.clawd.bot/concepts/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawd.bot/concepts/groups).
 - [Media pipeline](https://docs.clawd.bot/nodes/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawd.bot/nodes/audio).
 
-### Providers
-- [Providers](https://docs.clawd.bot/providers): [WhatsApp](https://docs.clawd.bot/providers/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/providers/telegram) (grammY), [Slack](https://docs.clawd.bot/providers/slack) (Bolt), [Discord](https://docs.clawd.bot/providers/discord) (discord.js), [Signal](https://docs.clawd.bot/providers/signal) (signal-cli), [iMessage](https://docs.clawd.bot/providers/imessage) (imsg), [Microsoft Teams](https://docs.clawd.bot/providers/msteams) (Bot Framework), [WebChat](https://docs.clawd.bot/web/webchat).
-- [Group routing](https://docs.clawd.bot/concepts/group-messages): mention gating, reply tags, per-provider chunking and routing. Provider rules: [Providers](https://docs.clawd.bot/providers).
+### Channels
+- [Channels](https://docs.clawd.bot/channels): [WhatsApp](https://docs.clawd.bot/channels/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/channels/telegram) (grammY), [Slack](https://docs.clawd.bot/channels/slack) (Bolt), [Discord](https://docs.clawd.bot/channels/discord) (discord.js), [Signal](https://docs.clawd.bot/channels/signal) (signal-cli), [iMessage](https://docs.clawd.bot/channels/imessage) (imsg), [Microsoft Teams](https://docs.clawd.bot/channels/msteams) (Bot Framework), [WebChat](https://docs.clawd.bot/web/webchat).
+- [Group routing](https://docs.clawd.bot/concepts/group-messages): mention gating, reply tags, per-channel chunking and routing. Channel rules: [Channels](https://docs.clawd.bot/channels).
 
 ### Apps + nodes
 - [macOS app](https://docs.clawd.bot/platforms/macos): menu bar control plane, [Voice Wake](https://docs.clawd.bot/nodes/voicewake)/PTT, [Talk Mode](https://docs.clawd.bot/nodes/talk) overlay, [WebChat](https://docs.clawd.bot/web/webchat), debug tools, [remote gateway](https://docs.clawd.bot/gateway/remote) control.
@@ -145,10 +145,10 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 - [Skills platform](https://docs.clawd.bot/tools/skills): bundled, managed, and workspace skills with install gating + UI.
 
 ### Runtime + safety
-- [Provider routing](https://docs.clawd.bot/concepts/provider-routing), [retry policy](https://docs.clawd.bot/concepts/retry), and [streaming/chunking](https://docs.clawd.bot/concepts/streaming).
+- [Channel routing](https://docs.clawd.bot/concepts/channel-routing), [retry policy](https://docs.clawd.bot/concepts/retry), and [streaming/chunking](https://docs.clawd.bot/concepts/streaming).
 - [Presence](https://docs.clawd.bot/concepts/presence), [typing indicators](https://docs.clawd.bot/concepts/typing-indicators), and [usage tracking](https://docs.clawd.bot/concepts/usage-tracking).
 - [Models](https://docs.clawd.bot/concepts/models), [model failover](https://docs.clawd.bot/concepts/model-failover), and [session pruning](https://docs.clawd.bot/concepts/session-pruning).
-- [Security](https://docs.clawd.bot/gateway/security) and [troubleshooting](https://docs.clawd.bot/providers/troubleshooting).
+- [Security](https://docs.clawd.bot/gateway/security) and [troubleshooting](https://docs.clawd.bot/channels/troubleshooting).
 
 ### Ops + packaging
 - [Control UI](https://docs.clawd.bot/web) + [WebChat](https://docs.clawd.bot/web/webchat) served directly from the Gateway.
@@ -315,13 +315,13 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 
 Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + sandboxing](https://docs.clawd.bot/install/docker) · [Sandbox config](https://docs.clawd.bot/gateway/configuration)
 
-### [WhatsApp](https://docs.clawd.bot/providers/whatsapp)
+### [WhatsApp](https://docs.clawd.bot/channels/whatsapp)
 
 - Link the device: `pnpm clawdbot providers login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 - If `whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [Telegram](https://docs.clawd.bot/providers/telegram)
+### [Telegram](https://docs.clawd.bot/channels/telegram)
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
 - Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `telegram.allowFrom` or `telegram.webhookUrl` as needed.
@@ -334,11 +334,11 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 }
 ```
 
-### [Slack](https://docs.clawd.bot/providers/slack)
+### [Slack](https://docs.clawd.bot/channels/slack)
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `slack.botToken` + `slack.appToken`).
 
-### [Discord](https://docs.clawd.bot/providers/discord)
+### [Discord](https://docs.clawd.bot/channels/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
 - Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
@@ -351,11 +351,11 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 }
 ```
 
-### [Signal](https://docs.clawd.bot/providers/signal)
+### [Signal](https://docs.clawd.bot/channels/signal)
 
 - Requires `signal-cli` and a `signal` config section.
 
-### [iMessage](https://docs.clawd.bot/providers/imessage)
+### [iMessage](https://docs.clawd.bot/channels/imessage)
 
 - macOS only; Messages must be signed in.
 - If `imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
@@ -395,7 +395,7 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 - [Set up Gmail Pub/Sub triggers.](https://docs.clawd.bot/automation/gmail-pubsub)
 - [Learn the macOS menu bar companion details.](https://docs.clawd.bot/platforms/mac/menu-bar)
 - [Platform guides: Windows (WSL2)](https://docs.clawd.bot/platforms/windows), [Linux](https://docs.clawd.bot/platforms/linux), [macOS](https://docs.clawd.bot/platforms/macos), [iOS](https://docs.clawd.bot/platforms/ios), [Android](https://docs.clawd.bot/platforms/android)
-- [Debug common failures with the troubleshooting guide.](https://docs.clawd.bot/providers/troubleshooting)
+- [Debug common failures with the troubleshooting guide.](https://docs.clawd.bot/channels/troubleshooting)
 - [Review security guidance before exposing anything.](https://docs.clawd.bot/gateway/security)
 
 ## Advanced docs (discovery + control)

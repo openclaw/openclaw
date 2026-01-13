@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   applyAuthChoice,
   resolvePreferredProviderForAuthChoice,
@@ -19,6 +20,7 @@ import {
   applyPrimaryModel,
   promptDefaultModel,
 } from "../commands/model-picker.js";
+import { setupChannels } from "../commands/onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -33,7 +35,6 @@ import {
   resolveControlUiLinks,
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
-import { setupProviders } from "../commands/onboard-providers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import type {
@@ -63,7 +64,6 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
@@ -602,18 +602,18 @@ export async function runOnboardingWizard(
     },
   };
 
-  if (opts.skipProviders) {
-    await prompter.note("Skipping provider setup.", "Providers");
+  if (opts.skipChannels ?? opts.skipProviders) {
+    await prompter.note("Skipping channel setup.", "Channels");
   } else {
-    const quickstartAllowFromProviders =
+    const quickstartAllowFromChannels =
       flow === "quickstart"
-        ? listProviderPlugins()
+        ? listChannelPlugins()
             .filter((plugin) => plugin.meta.quickstartAllowFrom)
             .map((plugin) => plugin.id)
         : [];
-    nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+    nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowSignalInstall: true,
-      forceAllowFromProviders: quickstartAllowFromProviders,
+      forceAllowFromChannels: quickstartAllowFromChannels,
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",
       quickstartDefaults: flow === "quickstart",

@@ -103,8 +103,8 @@ The Gateway also auto-runs doctor migrations on startup when it detects a
 legacy config format, so stale configs are repaired without manual intervention.
 
 Current migrations:
-- `routing.allowFrom` → `whatsapp.allowFrom`
-- `routing.groupChat.requireMention` → `whatsapp/telegram/imessage.groups."*".requireMention`
+- `routing.allowFrom` → `channels.whatsapp.allowFrom`
+- `routing.groupChat.requireMention` → `channels.whatsapp/telegram/imessage.groups."*".requireMention`
 - `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
 - `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
 - `routing.queue` → `messages.queue`

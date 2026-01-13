@@ -16,4 +16,4 @@ Provider notes:
 - **Discord/Slack**: empty `emoji` removes all of the bot's reactions on the message; `remove: true` removes just that emoji.
 - **Telegram**: empty `emoji` removes the bot's reactions; `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
 - **WhatsApp**: empty `emoji` removes the bot reaction; `remove: true` maps to empty emoji (still requires `emoji`).
-- **Signal**: inbound reaction notifications emit system events when `signal.reactionNotifications` is enabled.
+- **Signal**: inbound reaction notifications emit system events when `channels.signal.reactionNotifications` is enabled.

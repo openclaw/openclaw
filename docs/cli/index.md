@@ -51,7 +51,7 @@ clawdbot [--dev] [--profile <name>] <command>
   reset
   uninstall
   update
-  providers
+  channels
     list
     status
     logs
@@ -257,8 +257,8 @@ Options:
 - `--tailscale-reset-on-exit`
 - `--install-daemon`
 - `--no-install-daemon` (alias: `--skip-daemon`)
-- `--daemon-runtime <node|bun>` (bun not recommended for WhatsApp/Telegram)
-- `--skip-providers`
+- `--daemon-runtime <node|bun>`
+- `--skip-channels`
 - `--skip-skills`
 - `--skip-health`
 - `--skip-ui`
@@ -266,7 +266,7 @@ Options:
 - `--json`
 
 ### `configure` / `config`
-Interactive configuration wizard (models, providers, skills, gateway).
+Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `doctor`
 Health checks + quick fixes (config + gateway + legacy services).
@@ -277,41 +277,41 @@ Options:
 - `--non-interactive`: skip prompts; apply safe migrations only.
 - `--deep`: scan system services for extra gateway installs.
 
-## Provider helpers
+## Channel helpers
 
-### `providers`
-Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams).
+### `channels`
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams).
 
 Subcommands:
-- `providers list`: show configured chat providers and auth profiles (Claude Code + Codex CLI OAuth sync included).
-- `providers status`: check gateway reachability and provider health (`--probe` runs extra checks; use `clawdbot health` or `clawdbot status --deep` for gateway health probes).
-- Tip: `providers status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `clawdbot doctor`).
-- `providers logs`: show recent provider logs from the gateway log file.
-- `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
-- `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
-- `providers login`: interactive provider login (WhatsApp Web only).
-- `providers logout`: log out of a provider session (if supported).
+- `channels list`: show configured channels and auth profiles (Claude Code + Codex CLI OAuth sync included).
+- `channels status`: check gateway reachability and channel health (`--probe` runs extra checks; use `clawdbot health` or `clawdbot status --deep` for gateway health probes).
+- Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `clawdbot doctor`).
+- `channels logs`: show recent channel logs from the gateway log file.
+- `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+- `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
+- `channels login`: interactive channel login (WhatsApp Web only).
+- `channels logout`: log out of a channel session (if supported).
 
 Common options:
-- `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
-- `--account <id>`: provider account id (default `default`)
+- `--channel <name>`: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
+- `--account <id>`: channel account id (default `default`)
 - `--name <label>`: display name for the account
 
-`providers login` options:
-- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
+`channels login` options:
+- `--channel <channel>` (default `whatsapp`; supports `whatsapp`/`web`)
 - `--account <id>`
 - `--verbose`
 
-`providers logout` options:
-- `--provider <provider>` (default `whatsapp`)
+`channels logout` options:
+- `--channel <channel>` (default `whatsapp`)
 - `--account <id>`
 
-`providers list` options:
-- `--no-usage`: skip provider usage/quota snapshots (OAuth/API-backed only).
+`channels list` options:
+- `--no-usage`: skip model provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
-`providers logs` options:
-- `--provider <name|all>` (default `all`)
+`channels logs` options:
+- `--channel <name|all>` (default `all`)
 - `--lines <n>` (default `200`)
 - `--json`
 
@@ -325,10 +325,10 @@ More detail: [/concepts/oauth](/concepts/oauth)
 
 Examples:
 ```bash
-clawdbot providers add --provider telegram --account alerts --name "Alerts Bot" --token $TELEGRAM_BOT_TOKEN
-clawdbot providers add --provider discord --account work --name "Work Bot" --token $DISCORD_BOT_TOKEN
-clawdbot providers remove --provider discord --account work --delete
-clawdbot providers status --probe
+clawdbot channels add --channel telegram --account alerts --name "Alerts Bot" --token $TELEGRAM_BOT_TOKEN
+clawdbot channels add --channel discord --account work --name "Work Bot" --token $DISCORD_BOT_TOKEN
+clawdbot channels remove --channel discord --account work --delete
+clawdbot channels status --probe
 clawdbot status --deep
 ```
 
@@ -348,11 +348,11 @@ Options:
 Tip: use `npx clawdhub` to search, install, and sync skills.
 
 ### `pairing`
-Approve DM pairing requests across providers.
+Approve DM pairing requests across channels.
 
 Subcommands:
-- `pairing list <provider> [--json]`
-- `pairing approve <provider> <code> [--notify]`
+- `pairing list <channel> [--json]`
+- `pairing approve <channel> <code> [--notify]`
 
 ### `hooks gmail`
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
@@ -370,7 +370,7 @@ Options:
 ## Messaging + agent
 
 ### `message`
-Unified outbound messaging + provider actions.
+Unified outbound messaging + channel actions.
 
 See: [/cli/message](/cli/message)
 
@@ -423,11 +423,11 @@ Options:
 - `--workspace <dir>`
 - `--model <id>`
 - `--agent-dir <dir>`
-- `--bind <provider[:accountId]>` (repeatable)
+- `--bind <channel[:accountId]>` (repeatable)
 - `--non-interactive`
 - `--json`
 
-Binding specs use `provider[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
+Binding specs use `channel[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
 
 #### `agents delete <id>`
 Delete an agent and prune its workspace + state.
@@ -442,7 +442,7 @@ Show linked session health and recent recipients.
 Options:
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
-- `--deep` (probe providers)
+- `--deep` (probe channels)
 - `--usage` (show provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`

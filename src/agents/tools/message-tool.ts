@@ -1,5 +1,12 @@
 import { Type } from "@sinclair/typebox";
-
+import {
+  listChannelMessageActions,
+  supportsChannelMessageButtons,
+} from "../../channels/plugins/message-actions.js";
+import {
+  CHANNEL_MESSAGE_ACTION_NAMES,
+  type ChannelMessageActionName,
+} from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -7,23 +14,15 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../gateway/protocol/client-info.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import {
-  listProviderMessageActions,
-  supportsProviderMessageButtons,
-} from "../../providers/plugins/message-actions.js";
-import {
-  PROVIDER_MESSAGE_ACTION_NAMES,
-  type ProviderMessageActionName,
-} from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
-const AllMessageActions = PROVIDER_MESSAGE_ACTION_NAMES;
+const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 
 const MessageToolCommonSchema = {
-  provider: Type.Optional(Type.String()),
+  channel: Type.Optional(Type.String()),
   to: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
@@ -131,8 +130,8 @@ type MessageToolOptions = {
 };
 
 function buildMessageToolSchema(cfg: ClawdbotConfig) {
-  const actions = listProviderMessageActions(cfg);
-  const includeButtons = supportsProviderMessageButtons(cfg);
+  const actions = listChannelMessageActions(cfg);
+  const includeButtons = supportsChannelMessageButtons(cfg);
   return buildMessageToolSchemaFromActions(
     actions.length > 0 ? actions : ["send"],
     { includeButtons },
@@ -155,14 +154,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     label: "Message",
     name: "message",
     description:
-      "Send messages and provider actions (polls, reactions, pins, threads, etc.) via configured provider plugins.",
+      "Send messages and channel actions (polls, reactions, pins, threads, etc.) via configured channel plugins.",
     parameters: schema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = options?.config ?? loadConfig();
       const action = readStringParam(params, "action", {
         required: true,
-      }) as ProviderMessageActionName;
+      }) as ChannelMessageActionName;
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
 
       const gateway = {

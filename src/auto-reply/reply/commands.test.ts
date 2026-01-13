@@ -83,7 +83,7 @@ describe("handleCommands gating", () => {
   it("blocks /config when disabled", async () => {
     const cfg = {
       commands: { config: false, debug: false, text: true },
-      whatsapp: { allowFrom: ["*"] },
+      channels: { whatsapp: { allowFrom: ["*"] } },
     } as ClawdbotConfig;
     const params = buildParams("/config show", cfg);
     const result = await handleCommands(params);
@@ -94,7 +94,7 @@ describe("handleCommands gating", () => {
   it("blocks /debug when disabled", async () => {
     const cfg = {
       commands: { config: false, debug: false, text: true },
-      whatsapp: { allowFrom: ["*"] },
+      channels: { whatsapp: { allowFrom: ["*"] } },
     } as ClawdbotConfig;
     const params = buildParams("/debug show", cfg);
     const result = await handleCommands(params);
@@ -133,7 +133,7 @@ describe("handleCommands identity", () => {
   it("returns sender details for /whoami", async () => {
     const cfg = {
       commands: { text: true },
-      whatsapp: { allowFrom: ["*"] },
+      channels: { whatsapp: { allowFrom: ["*"] } },
     } as ClawdbotConfig;
     const params = buildParams("/whoami", cfg, {
       SenderId: "12345",
@@ -142,7 +142,7 @@ describe("handleCommands identity", () => {
     });
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply?.text).toContain("Provider: whatsapp");
+    expect(result.reply?.text).toContain("Channel: whatsapp");
     expect(result.reply?.text).toContain("User id: 12345");
     expect(result.reply?.text).toContain("Username: @TestUser");
     expect(result.reply?.text).toContain("AllowFrom: 12345");

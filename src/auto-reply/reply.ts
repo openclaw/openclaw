@@ -24,6 +24,11 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
+import { getChannelDock } from "../channels/dock.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  normalizeChannelId,
+} from "../channels/registry.js";
 import {
   type AgentElevatedAllowFromConfig,
   type ClawdbotConfig,
@@ -35,14 +40,9 @@ import {
 } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
-import { getProviderDock } from "../providers/dock.js";
-import {
-  CHAT_PROVIDER_ORDER,
-  normalizeProviderId,
-} from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
@@ -141,8 +141,8 @@ function slugAllowToken(value?: string) {
 }
 
 const SENDER_PREFIXES = [
-  ...CHAT_PROVIDER_ORDER,
-  INTERNAL_MESSAGE_PROVIDER,
+  ...CHAT_CHANNEL_ORDER,
+  INTERNAL_MESSAGE_CHANNEL,
   "user",
   "group",
   "channel",
@@ -287,9 +287,9 @@ function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedProvider = normalizeChannelId(params.provider);
   const dockFallbackAllowFrom = normalizedProvider
-    ? getProviderDock(normalizedProvider)?.elevated?.allowFromFallback?.({
+    ? getChannelDock(normalizedProvider)?.elevated?.allowFromFallback?.({
         cfg: params.cfg,
         accountId: params.ctx.AccountId,
       })
@@ -1017,10 +1017,8 @@ export async function getReplyFromConfig(
   }
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.providerId
-    ? Boolean(
-        getProviderDock(command.providerId)?.commands?.skipWhenConfigEmpty,
-      )
+  const skipWhenConfigEmpty = command.channelId
+    ? Boolean(getChannelDock(command.channelId)?.commands?.skipWhenConfigEmpty)
     : false;
   if (
     skipWhenConfigEmpty &&
@@ -1255,7 +1253,7 @@ export async function getReplyFromConfig(
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
-    provider: sessionCtx.Provider,
+    channel: sessionCtx.Provider,
     sessionEntry,
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,

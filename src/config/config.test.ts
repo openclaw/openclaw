@@ -207,15 +207,17 @@ describe("config identity defaults", () => {
               // legacy field should be ignored (moved to providers)
               textChunkLimit: 9999,
             },
-            whatsapp: { allowFrom: ["+15555550123"], textChunkLimit: 4444 },
-            telegram: { enabled: true, textChunkLimit: 3333 },
-            discord: {
-              enabled: true,
-              textChunkLimit: 1999,
-              maxLinesPerMessage: 17,
+            channels: {
+              whatsapp: { allowFrom: ["+15555550123"], textChunkLimit: 4444 },
+              telegram: { enabled: true, textChunkLimit: 3333 },
+              discord: {
+                enabled: true,
+                textChunkLimit: 1999,
+                maxLinesPerMessage: 17,
+              },
+              signal: { enabled: true, textChunkLimit: 2222 },
+              imessage: { enabled: true, textChunkLimit: 1111 },
             },
-            signal: { enabled: true, textChunkLimit: 2222 },
-            imessage: { enabled: true, textChunkLimit: 1111 },
           },
           null,
           2,
@@ -227,12 +229,12 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.whatsapp?.textChunkLimit).toBe(4444);
-      expect(cfg.telegram?.textChunkLimit).toBe(3333);
-      expect(cfg.discord?.textChunkLimit).toBe(1999);
-      expect(cfg.discord?.maxLinesPerMessage).toBe(17);
-      expect(cfg.signal?.textChunkLimit).toBe(2222);
-      expect(cfg.imessage?.textChunkLimit).toBe(1111);
+      expect(cfg.channels?.whatsapp?.textChunkLimit).toBe(4444);
+      expect(cfg.channels?.telegram?.textChunkLimit).toBe(3333);
+      expect(cfg.channels?.discord?.textChunkLimit).toBe(1999);
+      expect(cfg.channels?.discord?.maxLinesPerMessage).toBe(17);
+      expect(cfg.channels?.signal?.textChunkLimit).toBe(2222);
+      expect(cfg.channels?.imessage?.textChunkLimit).toBe(1111);
 
       const legacy = (cfg.messages as unknown as Record<string, unknown>)
         .textChunkLimit;
@@ -581,21 +583,23 @@ describe("config discord", () => {
         path.join(configDir, "clawdbot.json"),
         JSON.stringify(
           {
-            discord: {
-              enabled: true,
-              dm: {
+            channels: {
+              discord: {
                 enabled: true,
-                allowFrom: ["steipete"],
-                groupEnabled: true,
-                groupChannels: ["clawd-dm"],
-              },
-              guilds: {
-                "123": {
-                  slug: "friends-of-clawd",
-                  requireMention: false,
-                  users: ["steipete"],
-                  channels: {
-                    general: { allow: true },
+                dm: {
+                  enabled: true,
+                  allowFrom: ["steipete"],
+                  groupEnabled: true,
+                  groupChannels: ["clawd-dm"],
+                },
+                guilds: {
+                  "123": {
+                    slug: "friends-of-clawd",
+                    requireMention: false,
+                    users: ["steipete"],
+                    channels: {
+                      general: { allow: true },
+                    },
                   },
                 },
               },
@@ -611,11 +615,15 @@ describe("config discord", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.discord?.enabled).toBe(true);
-      expect(cfg.discord?.dm?.groupEnabled).toBe(true);
-      expect(cfg.discord?.dm?.groupChannels).toEqual(["clawd-dm"]);
-      expect(cfg.discord?.guilds?.["123"]?.slug).toBe("friends-of-clawd");
-      expect(cfg.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
+      expect(cfg.channels?.discord?.enabled).toBe(true);
+      expect(cfg.channels?.discord?.dm?.groupEnabled).toBe(true);
+      expect(cfg.channels?.discord?.dm?.groupChannels).toEqual(["clawd-dm"]);
+      expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe(
+        "friends-of-clawd",
+      );
+      expect(
+        cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow,
+      ).toBe(true);
     });
   });
 });
@@ -625,13 +633,15 @@ describe("config msteams", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      msteams: {
-        replyStyle: "top-level",
-        teams: {
-          team123: {
-            replyStyle: "thread",
-            channels: {
-              chan456: { replyStyle: "top-level" },
+      channels: {
+        msteams: {
+          replyStyle: "top-level",
+          teams: {
+            team123: {
+              replyStyle: "thread",
+              channels: {
+                chan456: { replyStyle: "top-level" },
+              },
             },
           },
         },
@@ -639,10 +649,13 @@ describe("config msteams", () => {
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.msteams?.replyStyle).toBe("top-level");
-      expect(res.config.msteams?.teams?.team123?.replyStyle).toBe("thread");
+      expect(res.config.channels?.msteams?.replyStyle).toBe("top-level");
+      expect(res.config.channels?.msteams?.teams?.team123?.replyStyle).toBe(
+        "thread",
+      );
       expect(
-        res.config.msteams?.teams?.team123?.channels?.chan456?.replyStyle,
+        res.config.channels?.msteams?.teams?.team123?.channels?.chan456
+          ?.replyStyle,
       ).toBe("top-level");
     }
   });
@@ -651,7 +664,7 @@ describe("config msteams", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      msteams: { replyStyle: "nope" },
+      channels: { msteams: { replyStyle: "nope" } },
     });
     expect(res.ok).toBe(false);
   });
@@ -785,10 +798,12 @@ describe("Nix integration (U3, U5, U9)", () => {
                   },
                 ],
               },
-              whatsapp: {
-                accounts: {
-                  personal: {
-                    authDir: "~/.clawdbot/credentials/wa-personal",
+              channels: {
+                whatsapp: {
+                  accounts: {
+                    personal: {
+                      authDir: "~/.clawdbot/credentials/wa-personal",
+                    },
                   },
                 },
               },
@@ -818,7 +833,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(
           path.join(home, "sandbox-root"),
         );
-        expect(cfg.whatsapp?.accounts?.personal?.authDir).toBe(
+        expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
           path.join(home, ".clawdbot", "credentials", "wa-personal"),
         );
       });
@@ -858,7 +873,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         await fs.writeFile(
           path.join(configDir, "clawdbot.json"),
           JSON.stringify({
-            telegram: { botToken: "123:ABC" },
+            channels: { telegram: { botToken: "123:ABC" } },
           }),
           "utf-8",
         );
@@ -866,8 +881,8 @@ describe("Nix integration (U3, U5, U9)", () => {
         vi.resetModules();
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
-        expect(cfg.telegram?.botToken).toBe("123:ABC");
-        expect(cfg.telegram?.tokenFile).toBeUndefined();
+        expect(cfg.channels?.telegram?.botToken).toBe("123:ABC");
+        expect(cfg.channels?.telegram?.tokenFile).toBeUndefined();
       });
     });
 
@@ -878,7 +893,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         await fs.writeFile(
           path.join(configDir, "clawdbot.json"),
           JSON.stringify({
-            telegram: { tokenFile: "/run/agenix/telegram-token" },
+            channels: { telegram: { tokenFile: "/run/agenix/telegram-token" } },
           }),
           "utf-8",
         );
@@ -886,8 +901,10 @@ describe("Nix integration (U3, U5, U9)", () => {
         vi.resetModules();
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
-        expect(cfg.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
-        expect(cfg.telegram?.botToken).toBeUndefined();
+        expect(cfg.channels?.telegram?.tokenFile).toBe(
+          "/run/agenix/telegram-token",
+        );
+        expect(cfg.channels?.telegram?.botToken).toBeUndefined();
       });
     });
 
@@ -898,9 +915,11 @@ describe("Nix integration (U3, U5, U9)", () => {
         await fs.writeFile(
           path.join(configDir, "clawdbot.json"),
           JSON.stringify({
-            telegram: {
-              botToken: "fallback:token",
-              tokenFile: "/run/agenix/telegram-token",
+            channels: {
+              telegram: {
+                botToken: "fallback:token",
+                tokenFile: "/run/agenix/telegram-token",
+              },
             },
           }),
           "utf-8",
@@ -909,8 +928,10 @@ describe("Nix integration (U3, U5, U9)", () => {
         vi.resetModules();
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
-        expect(cfg.telegram?.botToken).toBe("fallback:token");
-        expect(cfg.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
+        expect(cfg.channels?.telegram?.botToken).toBe("fallback:token");
+        expect(cfg.channels?.telegram?.tokenFile).toBe(
+          "/run/agenix/telegram-token",
+        );
       });
     });
   });
@@ -1052,37 +1073,43 @@ describe("legacy config detection", () => {
     }
   });
 
-  it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
+  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { allowFrom: ["+15555550123"] },
     });
     expect(res.changes).toContain(
-      "Moved routing.allowFrom → whatsapp.allowFrom.",
+      "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
     );
-    expect(res.config?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(res.config?.routing?.allowFrom).toBeUndefined();
   });
 
-  it("migrates routing.groupChat.requireMention to whatsapp/telegram/imessage groups", async () => {
+  it("migrates routing.groupChat.requireMention to channels whatsapp/telegram/imessage groups", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       routing: { groupChat: { requireMention: false } },
     });
     expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → whatsapp.groups."*".requireMention.',
+      'Moved routing.groupChat.requireMention → channels.whatsapp.groups."*".requireMention.',
     );
     expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → telegram.groups."*".requireMention.',
+      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
     );
     expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → imessage.groups."*".requireMention.',
+      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
     );
-    expect(res.config?.whatsapp?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.imessage?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
+    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
     expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
   });
 
@@ -1221,7 +1248,9 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("telegram.requireMention");
+      expect(
+        res.issues.some((issue) => issue.path === "telegram.requireMention"),
+      ).toBe(true);
     }
   });
 
@@ -1270,11 +1299,11 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      telegram: { dmPolicy: "open", allowFrom: ["123456789"] },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["123456789"] } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("telegram.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.telegram.allowFrom");
     }
   });
 
@@ -1282,41 +1311,41 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.telegram?.dmPolicy).toBe("open");
+      expect(res.config.channels?.telegram?.dmPolicy).toBe("open");
     }
   });
 
   it("defaults telegram.dmPolicy to pairing when telegram section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ telegram: {} });
+    const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.telegram?.dmPolicy).toBe("pairing");
+      expect(res.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 
   it("defaults telegram.groupPolicy to allowlist when telegram section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ telegram: {} });
+    const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.telegram?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
     }
   });
 
   it("defaults telegram.streamMode to partial when telegram section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ telegram: {} });
+    const res = validateConfigObject({ channels: { telegram: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.telegram?.streamMode).toBe("partial");
+      expect(res.config.channels?.telegram?.streamMode).toBe("partial");
     }
   });
 
@@ -1324,11 +1353,13 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      whatsapp: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+      channels: {
+        whatsapp: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+      },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("whatsapp.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.whatsapp.allowFrom");
     }
   });
 
@@ -1336,31 +1367,31 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      whatsapp: { dmPolicy: "open", allowFrom: ["*"] },
+      channels: { whatsapp: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.whatsapp?.dmPolicy).toBe("open");
+      expect(res.config.channels?.whatsapp?.dmPolicy).toBe("open");
     }
   });
 
   it("defaults whatsapp.dmPolicy to pairing when whatsapp section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ whatsapp: {} });
+    const res = validateConfigObject({ channels: { whatsapp: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.whatsapp?.dmPolicy).toBe("pairing");
+      expect(res.config.channels?.whatsapp?.dmPolicy).toBe("pairing");
     }
   });
 
   it("defaults whatsapp.groupPolicy to allowlist when whatsapp section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ whatsapp: {} });
+    const res = validateConfigObject({ channels: { whatsapp: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.whatsapp?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.whatsapp?.groupPolicy).toBe("allowlist");
     }
   });
 
@@ -1368,11 +1399,11 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      signal: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+      channels: { signal: { dmPolicy: "open", allowFrom: ["+15555550123"] } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("signal.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.signal.allowFrom");
     }
   });
 
@@ -1380,31 +1411,31 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      signal: { dmPolicy: "open", allowFrom: ["*"] },
+      channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.signal?.dmPolicy).toBe("open");
+      expect(res.config.channels?.signal?.dmPolicy).toBe("open");
     }
   });
 
   it("defaults signal.dmPolicy to pairing when signal section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ signal: {} });
+    const res = validateConfigObject({ channels: { signal: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.signal?.dmPolicy).toBe("pairing");
+      expect(res.config.channels?.signal?.dmPolicy).toBe("pairing");
     }
   });
 
   it("defaults signal.groupPolicy to allowlist when signal section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ signal: {} });
+    const res = validateConfigObject({ channels: { signal: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.signal?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.signal?.groupPolicy).toBe("allowlist");
     }
   });
 
@@ -1413,26 +1444,32 @@ describe("legacy config detection", () => {
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       messages: { groupChat: { historyLimit: 12 } },
-      whatsapp: { historyLimit: 9, accounts: { work: { historyLimit: 4 } } },
-      telegram: { historyLimit: 8, accounts: { ops: { historyLimit: 3 } } },
-      slack: { historyLimit: 7, accounts: { ops: { historyLimit: 2 } } },
-      signal: { historyLimit: 6 },
-      imessage: { historyLimit: 5 },
-      msteams: { historyLimit: 4 },
-      discord: { historyLimit: 3 },
+      channels: {
+        whatsapp: { historyLimit: 9, accounts: { work: { historyLimit: 4 } } },
+        telegram: { historyLimit: 8, accounts: { ops: { historyLimit: 3 } } },
+        slack: { historyLimit: 7, accounts: { ops: { historyLimit: 2 } } },
+        signal: { historyLimit: 6 },
+        imessage: { historyLimit: 5 },
+        msteams: { historyLimit: 4 },
+        discord: { historyLimit: 3 },
+      },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.whatsapp?.historyLimit).toBe(9);
-      expect(res.config.whatsapp?.accounts?.work?.historyLimit).toBe(4);
-      expect(res.config.telegram?.historyLimit).toBe(8);
-      expect(res.config.telegram?.accounts?.ops?.historyLimit).toBe(3);
-      expect(res.config.slack?.historyLimit).toBe(7);
-      expect(res.config.slack?.accounts?.ops?.historyLimit).toBe(2);
-      expect(res.config.signal?.historyLimit).toBe(6);
-      expect(res.config.imessage?.historyLimit).toBe(5);
-      expect(res.config.msteams?.historyLimit).toBe(4);
-      expect(res.config.discord?.historyLimit).toBe(3);
+      expect(res.config.channels?.whatsapp?.historyLimit).toBe(9);
+      expect(res.config.channels?.whatsapp?.accounts?.work?.historyLimit).toBe(
+        4,
+      );
+      expect(res.config.channels?.telegram?.historyLimit).toBe(8);
+      expect(res.config.channels?.telegram?.accounts?.ops?.historyLimit).toBe(
+        3,
+      );
+      expect(res.config.channels?.slack?.historyLimit).toBe(7);
+      expect(res.config.channels?.slack?.accounts?.ops?.historyLimit).toBe(2);
+      expect(res.config.channels?.signal?.historyLimit).toBe(6);
+      expect(res.config.channels?.imessage?.historyLimit).toBe(5);
+      expect(res.config.channels?.msteams?.historyLimit).toBe(4);
+      expect(res.config.channels?.discord?.historyLimit).toBe(3);
     }
   });
 
@@ -1440,11 +1477,13 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      imessage: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+      channels: {
+        imessage: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+      },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("imessage.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.imessage.allowFrom");
     }
   });
 
@@ -1452,61 +1491,61 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      imessage: { dmPolicy: "open", allowFrom: ["*"] },
+      channels: { imessage: { dmPolicy: "open", allowFrom: ["*"] } },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.imessage?.dmPolicy).toBe("open");
+      expect(res.config.channels?.imessage?.dmPolicy).toBe("open");
     }
   });
 
   it("defaults imessage.dmPolicy to pairing when imessage section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ imessage: {} });
+    const res = validateConfigObject({ channels: { imessage: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.imessage?.dmPolicy).toBe("pairing");
+      expect(res.config.channels?.imessage?.dmPolicy).toBe("pairing");
     }
   });
 
   it("defaults imessage.groupPolicy to allowlist when imessage section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ imessage: {} });
+    const res = validateConfigObject({ channels: { imessage: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.imessage?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.imessage?.groupPolicy).toBe("allowlist");
     }
   });
 
   it("defaults discord.groupPolicy to allowlist when discord section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ discord: {} });
+    const res = validateConfigObject({ channels: { discord: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.discord?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.discord?.groupPolicy).toBe("allowlist");
     }
   });
 
   it("defaults slack.groupPolicy to allowlist when slack section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ slack: {} });
+    const res = validateConfigObject({ channels: { slack: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.slack?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.slack?.groupPolicy).toBe("allowlist");
     }
   });
 
   it("defaults msteams.groupPolicy to allowlist when msteams section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const res = validateConfigObject({ msteams: {} });
+    const res = validateConfigObject({ channels: { msteams: {} } });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config.msteams?.groupPolicy).toBe("allowlist");
+      expect(res.config.channels?.msteams?.groupPolicy).toBe("allowlist");
     }
   });
 
@@ -1514,12 +1553,14 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      imessage: { cliPath: "imsg; rm -rf /" },
+      channels: { imessage: { cliPath: "imsg; rm -rf /" } },
       tools: { audio: { transcription: { args: ["--model", "base"] } } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path === "imessage.cliPath")).toBe(true);
+      expect(
+        res.issues.some((i) => i.path === "channels.imessage.cliPath"),
+      ).toBe(true);
     }
   });
 
@@ -1536,7 +1577,7 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      imessage: { cliPath: "/Applications/Imsg Tools/imsg" },
+      channels: { imessage: { cliPath: "/Applications/Imsg Tools/imsg" } },
       tools: {
         audio: {
           transcription: {
@@ -1552,11 +1593,11 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      discord: { dm: { policy: "open", allowFrom: ["123"] } },
+      channels: { discord: { dm: { policy: "open", allowFrom: ["123"] } } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("discord.dm.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.discord.dm.allowFrom");
     }
   });
 
@@ -1564,11 +1605,11 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      slack: { dm: { policy: "open", allowFrom: ["U123"] } },
+      channels: { slack: { dm: { policy: "open", allowFrom: ["U123"] } } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("slack.dm.allowFrom");
+      expect(res.issues[0]?.path).toBe("channels.slack.dm.allowFrom");
     }
   });
 
@@ -1584,17 +1625,19 @@ describe("legacy config detection", () => {
     }
   });
 
-  it("migrates telegram.requireMention to telegram.groups.*.requireMention", async () => {
+  it("migrates telegram.requireMention to channels.telegram.groups.*.requireMention", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
       telegram: { requireMention: false },
     });
     expect(res.changes).toContain(
-      'Moved telegram.requireMention → telegram.groups."*".requireMention.',
+      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
     );
-    expect(res.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(res.config?.telegram?.requireMention).toBeUndefined();
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
+      false,
+    );
+    expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
   });
 
   it("migrates legacy model config to agent.models + model lists", async () => {
@@ -1632,7 +1675,7 @@ describe("legacy config detection", () => {
     expect(res.config?.agent).toBeUndefined();
   });
 
-  it("surfaces legacy issues in snapshot", async () => {
+  it("auto-migrates legacy config in snapshot (no legacyIssues)", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -1642,13 +1685,234 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      const { readConfigFileSnapshot } = await import("./config.js");
-      const snap = await readConfigFileSnapshot();
+      try {
+        const { readConfigFileSnapshot } = await import("./config.js");
+        const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.length).toBe(1);
-      expect(snap.legacyIssues[0]?.path).toBe("routing.allowFrom");
+        expect(snap.valid).toBe(true);
+        expect(snap.legacyIssues.length).toBe(0);
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          channels?: { whatsapp?: { allowFrom?: string[] } };
+          routing?: unknown;
+        };
+        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+        expect(parsed.routing).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) =>
+            String(msg).includes("Auto-migrated config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  it("auto-migrates legacy provider sections on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ whatsapp: { allowFrom: ["+1555"] } }, null, 2),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+
+        expect(cfg.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          channels?: { whatsapp?: { allowFrom?: string[] } };
+          whatsapp?: unknown;
+        };
+        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
+        expect(parsed.whatsapp).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) =>
+            String(msg).includes("Auto-migrated config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  it("auto-migrates routing.allowFrom on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ routing: { allowFrom: ["+1666"] } }, null, 2),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+
+        expect(cfg.channels?.whatsapp?.allowFrom).toEqual(["+1666"]);
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          channels?: { whatsapp?: { allowFrom?: string[] } };
+          routing?: unknown;
+        };
+        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+1666"]);
+        expect(parsed.routing).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  it("auto-migrates bindings[].match.provider on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            bindings: [{ agentId: "main", match: { provider: "slack" } }],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+        expect(cfg.bindings?.[0]?.match?.channel).toBe("slack");
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          bindings?: Array<{ match?: { channel?: string; provider?: string } }>;
+        };
+        expect(parsed.bindings?.[0]?.match?.channel).toBe("slack");
+        expect(parsed.bindings?.[0]?.match?.provider).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) =>
+            String(msg).includes("Auto-migrated config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  it("auto-migrates session.sendPolicy.rules[].match.provider on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            session: {
+              sendPolicy: {
+                rules: [{ action: "deny", match: { provider: "telegram" } }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+        expect(cfg.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe(
+          "telegram",
+        );
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          session?: {
+            sendPolicy?: {
+              rules?: Array<{
+                match?: { channel?: string; provider?: string };
+              }>;
+            };
+          };
+        };
+        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe(
+          "telegram",
+        );
+        expect(
+          parsed.session?.sendPolicy?.rules?.[0]?.match?.provider,
+        ).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) =>
+            String(msg).includes("Auto-migrated config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  it("auto-migrates messages.queue.byProvider on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          { messages: { queue: { byProvider: { whatsapp: "queue" } } } },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+        expect(cfg.messages?.queue?.byChannel?.whatsapp).toBe("queue");
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          messages?: {
+            queue?: {
+              byChannel?: Record<string, unknown>;
+              byProvider?: unknown;
+            };
+          };
+        };
+        expect(parsed.messages?.queue?.byChannel?.whatsapp).toBe("queue");
+        expect(parsed.messages?.queue?.byProvider).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) =>
+            String(msg).includes("Auto-migrated config"),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });

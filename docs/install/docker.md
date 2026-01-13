@@ -186,7 +186,7 @@ Discord (bot token):
 docker compose run --rm clawdbot-cli providers add --provider discord --token "<token>"
 ```
 
-Docs: [WhatsApp](/providers/whatsapp), [Telegram](/providers/telegram), [Discord](/providers/discord)
+Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord)
 
 ### Health check
 

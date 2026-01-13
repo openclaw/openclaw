@@ -11,7 +11,7 @@ import { rawDataToString } from "../infra/ws.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {

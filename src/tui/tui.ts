@@ -12,7 +12,7 @@ import {
   normalizeUsageDisplay,
 } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
-import { formatAge } from "../infra/provider-summary.js";
+import { formatAge } from "../infra/channel-summary.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,

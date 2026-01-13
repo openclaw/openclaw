@@ -90,9 +90,11 @@ Example:
     { agentId: "alex", match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
     { agentId: "mia",  match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } }
   ],
-  whatsapp: {
-    dmPolicy: "allowlist",
-    allowFrom: ["+15551230001", "+15551230002"]
+  channels: {
+    whatsapp: {
+      dmPolicy: "allowlist",
+      allowFrom: ["+15551230001", "+15551230002"]
+    }
   }
 }
 ```
@@ -173,15 +175,17 @@ multiple phone numbers without mixing sessions.
     },
   },
 
-  whatsapp: {
-    accounts: {
-      personal: {
-        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
-        // authDir: "~/.clawdbot/credentials/whatsapp/personal",
-      },
-      biz: {
-        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
-        // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+  channels: {
+    whatsapp: {
+      accounts: {
+        personal: {
+          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/personal
+          // authDir: "~/.clawdbot/credentials/whatsapp/personal",
+        },
+        biz: {
+          // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
+          // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+        },
       },
     },
   },

@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import {
   agentsAddCommand,
@@ -30,8 +32,6 @@ import {
 import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { registerPluginCliCommands } from "../plugins/cli.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
-import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -42,6 +42,7 @@ import {
   hasEmittedCliBanner,
 } from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
+import { registerChannelsCli } from "./channels-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { registerCronCli } from "./cron-cli.js";
 import { registerDaemonCli } from "./daemon-cli.js";
@@ -57,8 +58,6 @@ import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
 import { registerPluginsCli } from "./plugins-cli.js";
 import { forceFreePort } from "./ports.js";
-import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
-import { registerProvidersCli } from "./providers-cli.js";
 import { registerSandboxCli } from "./sandbox-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
@@ -73,9 +72,9 @@ function collectOption(value: string, previous: string[] = []): string[] {
 export function buildProgram() {
   const program = new Command();
   const PROGRAM_VERSION = VERSION;
-  const providerOptions = listProviderPlugins().map((plugin) => plugin.id);
-  const messageProviderOptions = providerOptions.join("|");
-  const agentProviderOptions = ["last", ...providerOptions].join("|");
+  const channelOptions = listChannelPlugins().map((plugin) => plugin.id);
+  const messageChannelOptions = channelOptions.join("|");
+  const agentChannelOptions = ["last", ...channelOptions].join("|");
 
   program
     .name("clawdbot")
@@ -167,7 +166,7 @@ export function buildProgram() {
   });
   const examples = [
     [
-      "clawdbot providers login --verbose",
+      "clawdbot channels login --verbose",
       "Link personal WhatsApp Web and show QR + connection logs.",
     ],
     [
@@ -189,7 +188,7 @@ export function buildProgram() {
       "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
     ],
     [
-      'clawdbot message send --provider telegram --to @mychat --message "Hi"',
+      'clawdbot message send --channel telegram --to @mychat --message "Hi"',
       "Send via your Telegram bot.",
     ],
   ] as const;
@@ -304,7 +303,7 @@ export function buildProgram() {
     .option("--no-install-daemon", "Skip gateway daemon install")
     .option("--skip-daemon", "Skip gateway daemon install")
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
-    .option("--skip-providers", "Skip provider setup")
+    .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
@@ -385,7 +384,7 @@ export function buildProgram() {
             tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
             installDaemon,
             daemonRuntime: opts.daemonRuntime as "node" | "bun" | undefined,
-            skipProviders: Boolean(opts.skipProviders),
+            skipChannels: Boolean(opts.skipChannels),
             skipSkills: Boolean(opts.skipSkills),
             skipHealth: Boolean(opts.skipHealth),
             skipUi: Boolean(opts.skipUi),
@@ -404,7 +403,7 @@ export function buildProgram() {
     .command("configure")
     .alias("config")
     .description(
-      "Interactive wizard to update models, providers, skills, and gateway",
+      "Interactive wizard to update models, channels, skills, and gateway",
     )
     .option(
       "--section <name>",
@@ -446,7 +445,7 @@ export function buildProgram() {
 
   program
     .command("doctor")
-    .description("Health checks + quick fixes for the gateway and providers")
+    .description("Health checks + quick fixes for the gateway and channels")
     .option(
       "--no-workspace-suggestions",
       "Disable workspace memory system suggestions",
@@ -559,52 +558,9 @@ export function buildProgram() {
       }
     });
 
-  // Deprecated hidden aliases: use `clawdbot providers login/logout`. Remove in a future major.
-  program
-    .command("login", { hidden: true })
-    .description("Link your personal WhatsApp via QR (web provider)")
-    .option("--verbose", "Verbose connection logs", false)
-    .option("--provider <provider>", "Provider alias (default: whatsapp)")
-    .option("--account <id>", "WhatsApp account id (accountId)")
-    .action(async (opts) => {
-      try {
-        await runProviderLogin(
-          {
-            provider: opts.provider as string | undefined,
-            account: opts.account as string | undefined,
-            verbose: Boolean(opts.verbose),
-          },
-          defaultRuntime,
-        );
-      } catch (err) {
-        defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  program
-    .command("logout", { hidden: true })
-    .description("Log out of WhatsApp Web (keeps config)")
-    .option("--provider <provider>", "Provider alias (default: whatsapp)")
-    .option("--account <id>", "WhatsApp account id (accountId)")
-    .action(async (opts) => {
-      try {
-        await runProviderLogout(
-          {
-            provider: opts.provider as string | undefined,
-            account: opts.account as string | undefined,
-          },
-          defaultRuntime,
-        );
-      } catch (err) {
-        defaultRuntime.error(danger(`Logout failed: ${String(err)}`));
-        defaultRuntime.exit(1);
-      }
-    });
-
   const message = program
     .command("message")
-    .description("Send messages and provider actions")
+    .description("Send messages and channel actions")
     .addHelpText(
       "after",
       () =>
@@ -612,8 +568,8 @@ export function buildProgram() {
 Examples:
   clawdbot message send --to +15555550123 --message "Hi"
   clawdbot message send --to +15555550123 --message "Hi" --media photo.jpg
-  clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
-  clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"
+  clawdbot message poll --channel discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
+  clawdbot message react --channel discord --to 123 --message-id 456 --emoji "✅"
 
 ${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/message",
@@ -626,8 +582,8 @@ ${theme.muted("Docs:")} ${formatDocsLink(
 
   const withMessageBase = (command: Command) =>
     command
-      .option("--provider <provider>", `Provider: ${messageProviderOptions}`)
-      .option("--account <id>", "Provider account id (accountId)")
+      .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
+      .option("--account <id>", "Channel account id (accountId)")
       .option("--json", "Output result as JSON", false)
       .option("--dry-run", "Print payload and skip sending", false)
       .option("--verbose", "Verbose logging", false);
@@ -1097,17 +1053,17 @@ ${theme.muted("Docs:")} ${formatDocsLink(
     )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
-      "--provider <provider>",
-      `Delivery provider: ${agentProviderOptions} (default: ${DEFAULT_CHAT_PROVIDER})`,
+      "--channel <channel>",
+      `Delivery channel: ${agentChannelOptions} (default: ${DEFAULT_CHAT_CHANNEL})`,
     )
     .option(
       "--local",
-      "Run the embedded agent locally (requires provider API keys in your shell)",
+      "Run the embedded agent locally (requires model provider API keys in your shell)",
       false,
     )
     .option(
       "--deliver",
-      "Send the agent's reply back to the selected provider (requires --to)",
+      "Send the agent's reply back to the selected channel (requires --to)",
       false,
     )
     .option("--json", "Output result as JSON", false)
@@ -1172,8 +1128,8 @@ ${theme.muted("Docs:")} ${formatDocsLink(
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
     .option(
-      "--bind <provider[:accountId]>",
-      "Route provider binding (repeatable)",
+      "--bind <channel[:accountId]>",
+      "Route channel binding (repeatable)",
       collectOption,
       [],
     )
@@ -1253,20 +1209,20 @@ ${theme.muted("Docs:")} ${formatDocsLink(
   registerHooksCli(program);
   registerPairingCli(program);
   registerPluginsCli(program);
-  registerProvidersCli(program);
+  registerChannelsCli(program);
   registerSkillsCli(program);
   registerUpdateCli(program);
   registerPluginCliCommands(program, loadConfig());
 
   program
     .command("status")
-    .description("Show provider health and recent session recipients")
+    .description("Show channel health and recent session recipients")
     .option("--json", "Output JSON instead of text", false)
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
-    .option("--usage", "Show provider usage/quota snapshots", false)
+    .option("--usage", "Show model provider usage/quota snapshots", false)
     .option(
       "--deep",
-      "Probe providers (WhatsApp Web + Telegram + Discord + Slack + Signal)",
+      "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)",
       false,
     )
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
@@ -1279,10 +1235,10 @@ Examples:
   clawdbot status                   # show linked account + session store summary
   clawdbot status --all             # full diagnosis (read-only)
   clawdbot status --json            # machine-readable output
-  clawdbot status --usage           # show provider usage/quota snapshots
-  clawdbot status --deep            # run provider probes (WA + Telegram + Discord + Slack + Signal)
+  clawdbot status --usage           # show model provider usage/quota snapshots
+  clawdbot status --deep            # run channel probes (WA + Telegram + Discord + Slack + Signal)
   clawdbot status --deep --timeout 5000 # tighten probe timeout
-  clawdbot providers status         # gateway provider runtime + probes`,
+  clawdbot channels status          # gateway channel runtime + probes`,
     )
     .action(async (opts) => {
       const verbose = Boolean(opts.verbose || opts.debug);

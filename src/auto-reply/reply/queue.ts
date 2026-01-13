@@ -577,28 +577,28 @@ export function scheduleFollowupDrain(
     }
   })();
 }
-function defaultQueueModeForProvider(_provider?: string): QueueMode {
+function defaultQueueModeForChannel(_channel?: string): QueueMode {
   return "collect";
 }
 export function resolveQueueSettings(params: {
   cfg: ClawdbotConfig;
-  provider?: string;
+  channel?: string;
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
 }): QueueSettings {
-  const providerKey = params.provider?.trim().toLowerCase();
+  const channelKey = params.channel?.trim().toLowerCase();
   const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =
-    providerKey && queueCfg?.byProvider
-      ? (queueCfg.byProvider as Record<string, string | undefined>)[providerKey]
+    channelKey && queueCfg?.byChannel
+      ? (queueCfg.byChannel as Record<string, string | undefined>)[channelKey]
       : undefined;
   const resolvedMode =
     params.inlineMode ??
     normalizeQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
-    defaultQueueModeForProvider(providerKey);
+    defaultQueueModeForChannel(channelKey);
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??

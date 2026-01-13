@@ -3,6 +3,7 @@
 ## 2025.1.12 (Unreleased)
 
 ### Highlights
+- **BREAKING:** rename chat “providers” (Slack/Telegram/WhatsApp/…) to **channels** across CLI/RPC/config; legacy config keys auto-migrate on load (and are written back as `channels.*`).
 - Memory: add vector search for agent memories (Markdown-only) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
 - Plugins: restore full voice-call plugin parity (Telnyx/Twilio, streaming, inbound policies, tools/CLI).
 - Models: add Synthetic provider plus Moonshot Kimi K2 0905 + turbo/thinking variants (with docs).

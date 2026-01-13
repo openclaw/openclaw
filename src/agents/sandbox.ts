@@ -14,6 +14,7 @@ import {
   resolveProfile,
 } from "../browser/config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
+import { CHANNEL_IDS } from "../channels/registry.js";
 import {
   type ClawdbotConfig,
   loadConfig,
@@ -23,7 +24,6 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
-import { PROVIDER_IDS } from "../providers/registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -188,7 +188,7 @@ const DEFAULT_TOOL_DENY = [
   "nodes",
   "cron",
   "gateway",
-  ...PROVIDER_IDS,
+  ...CHANNEL_IDS,
 ];
 export const DEFAULT_SANDBOX_BROWSER_IMAGE =
   "clawdbot-sandbox-browser:bookworm-slim";

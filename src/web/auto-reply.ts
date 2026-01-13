@@ -29,11 +29,13 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/pr
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { toLocationContext } from "../channels/location.js";
+import { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
 import {
-  resolveProviderGroupPolicy,
-  resolveProviderGroupRequireMention,
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
 import {
   DEFAULT_IDLE_MINUTES,
@@ -50,8 +52,6 @@ import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
-import { toLocationContext } from "../providers/location.js";
-import { resolveWhatsAppHeartbeatRecipients } from "../providers/plugins/whatsapp-heartbeat.js";
 import {
   buildAgentSessionKey,
   resolveAgentRoute,
@@ -80,7 +80,7 @@ import {
 } from "./reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
 
-const whatsappLog = createSubsystemLogger("gateway/providers/whatsapp");
+const whatsappLog = createSubsystemLogger("gateway/channels/whatsapp");
 const whatsappInboundLog = whatsappLog.child("inbound");
 const whatsappOutboundLog = whatsappLog.child("outbound");
 const whatsappHeartbeatLog = whatsappLog.child("heartbeat");
@@ -145,14 +145,14 @@ export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
   heartbeatSeconds?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  statusSink?: (status: WebProviderStatus) => void;
+  statusSink?: (status: WebChannelStatus) => void;
   /** WhatsApp account id. Default: "default". */
   accountId?: string;
 };
 
 export { HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN };
 
-export type WebProviderStatus = {
+export type WebChannelStatus = {
   running: boolean;
   connected: boolean;
   reconnectAttempts: number;
@@ -190,7 +190,7 @@ function buildMentionConfig(
   agentId?: string,
 ): MentionConfig {
   const mentionRegexes = buildMentionRegexes(cfg, agentId);
-  return { mentionRegexes, allowFrom: cfg.whatsapp?.allowFrom };
+  return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
 function resolveMentionTargets(
@@ -726,7 +726,7 @@ async function deliverWebReply(params: {
   }
 }
 
-export async function monitorWebProvider(
+export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof monitorWebInbox | undefined = monitorWebInbox,
   keepAlive = true,
@@ -739,7 +739,7 @@ export async function monitorWebProvider(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const status: WebProviderStatus = {
+  const status: WebChannelStatus = {
     running: true,
     connected: false,
     reconnectAttempts: 0,
@@ -765,17 +765,20 @@ export async function monitorWebProvider(
   });
   const cfg = {
     ...baseCfg,
-    whatsapp: {
-      ...baseCfg.whatsapp,
-      ackReaction: account.ackReaction,
-      messagePrefix: account.messagePrefix,
-      allowFrom: account.allowFrom,
-      groupAllowFrom: account.groupAllowFrom,
-      groupPolicy: account.groupPolicy,
-      textChunkLimit: account.textChunkLimit,
-      mediaMaxMb: account.mediaMaxMb,
-      blockStreaming: account.blockStreaming,
-      groups: account.groups,
+    channels: {
+      ...baseCfg.channels,
+      whatsapp: {
+        ...baseCfg.channels?.whatsapp,
+        ackReaction: account.ackReaction,
+        messagePrefix: account.messagePrefix,
+        allowFrom: account.allowFrom,
+        groupAllowFrom: account.groupAllowFrom,
+        groupPolicy: account.groupPolicy,
+        textChunkLimit: account.textChunkLimit,
+        mediaMaxMb: account.mediaMaxMb,
+        blockStreaming: account.blockStreaming,
+        groups: account.groups,
+      },
     },
   } satisfies ReturnType<typeof loadConfig>;
   const configuredMaxMb = cfg.agents?.defaults?.mediaMaxMb;
@@ -792,8 +795,8 @@ export async function monitorWebProvider(
     buildMentionConfig(cfg, agentId);
   const baseMentionConfig = resolveMentionConfig();
   const groupHistoryLimit =
-    cfg.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
-    cfg.whatsapp?.historyLimit ??
+    cfg.channels?.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
+    cfg.channels?.whatsapp?.historyLimit ??
     cfg.messages?.groupChat?.historyLimit ??
     DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
@@ -884,9 +887,9 @@ export async function monitorWebProvider(
   const resolveGroupPolicyFor = (conversationId: string) => {
     const groupId =
       resolveGroupResolution(conversationId)?.id ?? conversationId;
-    return resolveProviderGroupPolicy({
+    return resolveChannelGroupPolicy({
       cfg,
-      provider: "whatsapp",
+      channel: "whatsapp",
       groupId,
     });
   };
@@ -894,9 +897,9 @@ export async function monitorWebProvider(
   const resolveGroupRequireMentionFor = (conversationId: string) => {
     const groupId =
       resolveGroupResolution(conversationId)?.id ?? conversationId;
-    return resolveProviderGroupRequireMention({
+    return resolveChannelGroupRequireMention({
       cfg,
-      provider: "whatsapp",
+      channel: "whatsapp",
       groupId,
     });
   };
@@ -1046,10 +1049,10 @@ export async function monitorWebProvider(
     };
 
     const buildLine = (msg: WebInboundMsg, agentId: string) => {
-      // WhatsApp inbound prefix: whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
+      // WhatsApp inbound prefix: channels.whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
       const messagePrefix = resolveMessagePrefix(cfg, agentId, {
-        configured: cfg.whatsapp?.messagePrefix,
-        hasAllowFrom: (cfg.whatsapp?.allowFrom?.length ?? 0) > 0,
+        configured: cfg.channels?.whatsapp?.messagePrefix,
+        hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
       });
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
@@ -1063,7 +1066,7 @@ export async function monitorWebProvider(
 
       // Wrap with standardized envelope for the agent.
       return formatAgentEnvelope({
-        provider: "WhatsApp",
+        channel: "WhatsApp",
         from:
           msg.chatType === "group"
             ? msg.from
@@ -1108,7 +1111,7 @@ export async function monitorWebProvider(
                 ? `${m.body}\n[message_id: ${m.id}]`
                 : m.body;
               return formatAgentEnvelope({
-                provider: "WhatsApp",
+                channel: "WhatsApp",
                 from: conversationId,
                 timestamp: m.timestamp,
                 body: `${m.sender}: ${bodyWithId}`,
@@ -1143,7 +1146,7 @@ export async function monitorWebProvider(
 
       // Send ack reaction immediately upon message receipt (post-gating)
       if (msg.id) {
-        const ackConfig = cfg.whatsapp?.ackReaction;
+        const ackConfig = cfg.channels?.whatsapp?.ackReaction;
         const emoji = (ackConfig?.emoji ?? "").trim();
         const directEnabled = ackConfig?.direct ?? true;
         const groupMode = ackConfig?.group ?? "mentions";
@@ -1239,7 +1242,7 @@ export async function monitorWebProvider(
           const task = updateLastRoute({
             storePath,
             sessionKey: route.mainSessionKey,
-            provider: "whatsapp",
+            channel: "whatsapp",
             to,
             accountId: route.accountId,
           }).catch((err) => {
@@ -1368,8 +1371,8 @@ export async function monitorWebProvider(
         },
         replyOptions: {
           disableBlockStreaming:
-            typeof cfg.whatsapp?.blockStreaming === "boolean"
-              ? !cfg.whatsapp.blockStreaming
+            typeof cfg.channels?.whatsapp?.blockStreaming === "boolean"
+              ? !cfg.channels.whatsapp.blockStreaming
               : undefined,
         },
       });
@@ -1428,7 +1431,7 @@ export async function monitorWebProvider(
           agentId: normalizedAgentId,
           sessionKey: buildAgentSessionKey({
             agentId: normalizedAgentId,
-            provider: "whatsapp",
+            channel: "whatsapp",
             peer: {
               kind: msg.chatType === "group" ? "group" : "dm",
               id: peerId,
@@ -1501,7 +1504,7 @@ export async function monitorWebProvider(
               })();
         const route = resolveAgentRoute({
           cfg,
-          provider: "whatsapp",
+          channel: "whatsapp",
           accountId: msg.accountId,
           peer: {
             kind: msg.chatType === "group" ? "group" : "dm",
@@ -1511,7 +1514,7 @@ export async function monitorWebProvider(
         const groupHistoryKey =
           msg.chatType === "group"
             ? buildGroupHistoryKey({
-                provider: "whatsapp",
+                channel: "whatsapp",
                 accountId: route.accountId,
                 peerKind: "group",
                 peerId,
@@ -1550,7 +1553,7 @@ export async function monitorWebProvider(
             const task = updateLastRoute({
               storePath,
               sessionKey: route.sessionKey,
-              provider: "whatsapp",
+              channel: "whatsapp",
               to: conversationId,
               accountId: route.accountId,
             }).catch((err) => {
@@ -1665,7 +1668,7 @@ export async function monitorWebProvider(
     const { e164: selfE164 } = readWebSelfId(account.authDir);
     const connectRoute = resolveAgentRoute({
       cfg,
-      provider: "whatsapp",
+      channel: "whatsapp",
       accountId: account.accountId,
     });
     enqueueSystemEvent(

@@ -478,17 +478,23 @@ describe("getDmHistoryLimitFromSessionKey", () => {
   });
 
   it("returns dmHistoryLimit for telegram provider", () => {
-    const config = { telegram: { dmHistoryLimit: 15 } } as ClawdbotConfig;
+    const config = {
+      channels: { telegram: { dmHistoryLimit: 15 } },
+    } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
   });
 
   it("returns dmHistoryLimit for whatsapp provider", () => {
-    const config = { whatsapp: { dmHistoryLimit: 20 } } as ClawdbotConfig;
+    const config = {
+      channels: { whatsapp: { dmHistoryLimit: 20 } },
+    } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("whatsapp:dm:123", config)).toBe(20);
   });
 
   it("returns dmHistoryLimit for agent-prefixed session keys", () => {
-    const config = { telegram: { dmHistoryLimit: 10 } } as ClawdbotConfig;
+    const config = {
+      channels: { telegram: { dmHistoryLimit: 10 } },
+    } as ClawdbotConfig;
     expect(
       getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config),
     ).toBe(10);
@@ -496,8 +502,10 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("returns undefined for non-dm session kinds", () => {
     const config = {
-      slack: { dmHistoryLimit: 10 },
-      telegram: { dmHistoryLimit: 15 },
+      channels: {
+        telegram: { dmHistoryLimit: 15 },
+        slack: { dmHistoryLimit: 10 },
+      },
     } as ClawdbotConfig;
     expect(
       getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:C1", config),
@@ -508,14 +516,16 @@ describe("getDmHistoryLimitFromSessionKey", () => {
   });
 
   it("returns undefined for unknown provider", () => {
-    const config = { telegram: { dmHistoryLimit: 15 } } as ClawdbotConfig;
+    const config = {
+      channels: { telegram: { dmHistoryLimit: 15 } },
+    } as ClawdbotConfig;
     expect(
       getDmHistoryLimitFromSessionKey("unknown:dm:123", config),
     ).toBeUndefined();
   });
 
   it("returns undefined when provider config has no dmHistoryLimit", () => {
-    const config = { telegram: {} } as ClawdbotConfig;
+    const config = { channels: { telegram: {} } } as ClawdbotConfig;
     expect(
       getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
     ).toBeUndefined();
@@ -533,7 +543,9 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     ] as const;
 
     for (const provider of providers) {
-      const config = { [provider]: { dmHistoryLimit: 5 } } as ClawdbotConfig;
+      const config = {
+        channels: { [provider]: { dmHistoryLimit: 5 } },
+      } as ClawdbotConfig;
       expect(
         getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config),
       ).toBe(5);
@@ -554,9 +566,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     for (const provider of providers) {
       // Test per-DM override takes precedence
       const configWithOverride = {
-        [provider]: {
-          dmHistoryLimit: 20,
-          dms: { user123: { historyLimit: 7 } },
+        channels: {
+          [provider]: {
+            dmHistoryLimit: 20,
+            dms: { user123: { historyLimit: 7 } },
+          },
         },
       } as ClawdbotConfig;
       expect(
@@ -586,9 +600,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("returns per-DM override when set", () => {
     const config = {
-      telegram: {
-        dmHistoryLimit: 15,
-        dms: { "123": { historyLimit: 5 } },
+      channels: {
+        telegram: {
+          dmHistoryLimit: 15,
+          dms: { "123": { historyLimit: 5 } },
+        },
       },
     } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
@@ -596,9 +612,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("falls back to provider default when per-DM not set", () => {
     const config = {
-      telegram: {
-        dmHistoryLimit: 15,
-        dms: { "456": { historyLimit: 5 } },
+      channels: {
+        telegram: {
+          dmHistoryLimit: 15,
+          dms: { "456": { historyLimit: 5 } },
+        },
       },
     } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
@@ -606,9 +624,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("returns per-DM override for agent-prefixed keys", () => {
     const config = {
-      telegram: {
-        dmHistoryLimit: 20,
-        dms: { "789": { historyLimit: 3 } },
+      channels: {
+        telegram: {
+          dmHistoryLimit: 20,
+          dms: { "789": { historyLimit: 3 } },
+        },
       },
     } as ClawdbotConfig;
     expect(
@@ -618,9 +638,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("handles userId with colons (e.g., email)", () => {
     const config = {
-      msteams: {
-        dmHistoryLimit: 10,
-        dms: { "user@example.com": { historyLimit: 7 } },
+      channels: {
+        msteams: {
+          dmHistoryLimit: 10,
+          dms: { "user@example.com": { historyLimit: 7 } },
+        },
       },
     } as ClawdbotConfig;
     expect(
@@ -630,8 +652,10 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("returns undefined when per-DM historyLimit is not set", () => {
     const config = {
-      telegram: {
-        dms: { "123": {} },
+      channels: {
+        telegram: {
+          dms: { "123": {} },
+        },
       },
     } as ClawdbotConfig;
     expect(
@@ -641,9 +665,11 @@ describe("getDmHistoryLimitFromSessionKey", () => {
 
   it("returns 0 when per-DM historyLimit is explicitly 0 (unlimited)", () => {
     const config = {
-      telegram: {
-        dmHistoryLimit: 15,
-        dms: { "123": { historyLimit: 0 } },
+      channels: {
+        telegram: {
+          dmHistoryLimit: 15,
+          dms: { "123": { historyLimit: 0 } },
+        },
       },
     } as ClawdbotConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(0);

@@ -29,7 +29,7 @@ import type { ClawdbotConfig, ModelProviderConfig } from "../config/types.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";

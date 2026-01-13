@@ -102,7 +102,7 @@ More details: [Streaming + chunking](/concepts/streaming).
 
 At minimum, set:
 - `agents.defaults.workspace`
-- `whatsapp.allowFrom` (strongly recommended)
+- `channels.whatsapp.allowFrom` (strongly recommended)
 
 ---
 

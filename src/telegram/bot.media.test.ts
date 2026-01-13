@@ -64,7 +64,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => ({ telegram: { dmPolicy: "open", allowFrom: ["*"] } }),
+    loadConfig: () => ({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    }),
   };
 });
 

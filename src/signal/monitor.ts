@@ -23,8 +23,8 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -462,7 +462,7 @@ export async function monitorSignalProvider(
         const senderPeerId = resolveSignalPeerId(sender);
         const route = resolveAgentRoute({
           cfg,
-          provider: "signal",
+          channel: "signal",
           accountId: accountInfo.accountId,
           peer: {
             kind: isGroup ? "group" : "dm",
@@ -510,7 +510,7 @@ export async function monitorSignalProvider(
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
-      const storeAllowFrom = await readProviderAllowFromStore("signal").catch(
+      const storeAllowFrom = await readChannelAllowFromStore("signal").catch(
         () => [],
       );
       const effectiveDmAllow = [...allowFrom, ...storeAllowFrom];
@@ -525,8 +525,8 @@ export async function monitorSignalProvider(
         if (!dmAllowed) {
           if (dmPolicy === "pairing") {
             const senderId = senderAllowId;
-            const { code, created } = await upsertProviderPairingRequest({
-              provider: "signal",
+            const { code, created } = await upsertChannelPairingRequest({
+              channel: "signal",
               id: senderId,
               meta: {
                 name: envelope.sourceName ?? undefined,
@@ -538,7 +538,7 @@ export async function monitorSignalProvider(
                 await sendMessageSignal(
                   `signal:${senderRecipient}`,
                   buildPairingReply({
-                    provider: "signal",
+                    channel: "signal",
                     idLine: senderIdLine,
                     code,
                   }),
@@ -627,7 +627,7 @@ export async function monitorSignalProvider(
         ? `${groupName ?? "Signal Group"} id:${groupId}`
         : `${envelope.sourceName ?? senderDisplay} id:${senderDisplay}`;
       const body = formatAgentEnvelope({
-        provider: "Signal",
+        channel: "Signal",
         from: fromLabel,
         timestamp: envelope.timestamp ?? undefined,
         body: bodyText,
@@ -651,7 +651,7 @@ export async function monitorSignalProvider(
           currentMessage: combinedBody,
           formatEntry: (entry) =>
             formatAgentEnvelope({
-              provider: "Signal",
+              channel: "Signal",
               from: fromLabel,
               timestamp: entry.timestamp,
               body: `${entry.sender}: ${entry.body}${
@@ -663,7 +663,7 @@ export async function monitorSignalProvider(
 
       const route = resolveAgentRoute({
         cfg,
-        provider: "signal",
+        channel: "signal",
         accountId: accountInfo.accountId,
         peer: {
           kind: isGroup ? "group" : "dm",
@@ -708,7 +708,7 @@ export async function monitorSignalProvider(
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,
-          provider: "signal",
+          channel: "signal",
           to: senderRecipient,
           accountId: route.accountId,
         });

@@ -6,8 +6,8 @@ import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { ProviderId } from "../providers/plugins/types.js";
-import { PROVIDER_IDS } from "../providers/registry.js";
+import type { ChannelId } from "../channels/plugins/types.js";
+import { CHANNEL_IDS } from "../channels/registry.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -65,9 +65,9 @@ export function clearSessionStoreCacheForTest(): void {
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionProviderId = ProviderId | "webchat";
+export type SessionChannelId = ChannelId | "webchat";
 
-const GROUP_SURFACES = new Set<string>([...PROVIDER_IDS, "webchat"]);
+const GROUP_SURFACES = new Set<string>([...CHANNEL_IDS, "webchat"]);
 
 export type SessionChatType = "direct" | "group" | "room";
 
@@ -115,11 +115,11 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
-  provider?: string;
+  channel?: string;
   subject?: string;
   room?: string;
   space?: string;
-  lastProvider?: SessionProviderId;
+  lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
@@ -142,7 +142,7 @@ export function mergeSessionEntry(
 export type GroupKeyResolution = {
   key: string;
   legacyKey?: string;
-  provider?: string;
+  channel?: string;
   id?: string;
   chatType?: SessionChatType;
 };
@@ -418,7 +418,7 @@ export function resolveGroupSessionKey(
   return {
     key,
     legacyKey,
-    provider: resolvedProvider,
+    channel: resolvedProvider,
     id: id || raw || from,
     chatType: resolvedKind === "channel" ? "room" : "group",
   };
@@ -452,6 +452,23 @@ export function loadSessionStore(
     mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
   } catch {
     // ignore missing/invalid store; we'll recreate it
+  }
+
+  // Best-effort migration: message provider → channel naming.
+  for (const entry of Object.values(store)) {
+    if (!entry || typeof entry !== "object") continue;
+    const rec = entry as unknown as Record<string, unknown>;
+    if (typeof rec.channel !== "string" && typeof rec.provider === "string") {
+      rec.channel = rec.provider;
+      delete rec.provider;
+    }
+    if (
+      typeof rec.lastChannel !== "string" &&
+      typeof rec.lastProvider === "string"
+    ) {
+      rec.lastChannel = rec.lastProvider;
+      delete rec.lastProvider;
+    }
   }
 
   // Cache the result if caching is enabled
@@ -633,18 +650,18 @@ export async function updateSessionStoreEntry(params: {
 export async function updateLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  provider: SessionEntry["lastProvider"];
+  channel: SessionEntry["lastChannel"];
   to?: string;
   accountId?: string;
 }) {
-  const { storePath, sessionKey, provider, to, accountId } = params;
+  const { storePath, sessionKey, channel, to, accountId } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
     const now = Date.now();
     const next = mergeSessionEntry(existing, {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-      lastProvider: provider,
+      lastChannel: channel,
       lastTo: to?.trim() ? to.trim() : undefined,
       lastAccountId: accountId?.trim()
         ? accountId.trim()

@@ -41,7 +41,7 @@ They run immediately, are stripped before the model sees the message, and the re
   - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
 - `commands.native` (default `"auto"`) registers native commands.
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
-  - Set `discord.commands.native`, `telegram.commands.native`, or `slack.commands.native` to override per provider (bool or `"auto"`).
+  - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
   - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 - `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
@@ -125,7 +125,7 @@ Examples:
 ```
 /debug show
 /debug set messages.responsePrefix="[clawdbot]"
-/debug set whatsapp.allowFrom=["+1555","+4477"]
+/debug set channels.whatsapp.allowFrom=["+1555","+4477"]
 /debug unset messages.responsePrefix
 /debug reset
 ```
@@ -157,7 +157,7 @@ Notes:
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).
 - **Native commands** use isolated sessions:
   - Discord: `agent:<agentId>:discord:slash:<userId>`
-  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `slack.slashCommand.sessionPrefix`)
+  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
-- **Slack:** `slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).
+- **Slack:** `channels.slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).

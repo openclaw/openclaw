@@ -10,8 +10,11 @@ vi.mock("../media/store.js", () => ({
 }));
 
 const mockLoadConfig = vi.fn().mockReturnValue({
-  whatsapp: {
-    allowFrom: ["*"], // Allow all in tests by default
+  channels: {
+    whatsapp: {
+      // Allow all in tests by default
+      allowFrom: ["*"],
+    },
   },
   messages: {
     messagePrefix: undefined,
@@ -33,9 +36,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readProviderAllowFromStore: (...args: unknown[]) =>
+  readChannelAllowFromStore: (...args: unknown[]) =>
     readAllowFromStoreMock(...args),
-  upsertProviderPairingRequest: (...args: unknown[]) =>
+  upsertChannelPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
 
@@ -680,9 +683,12 @@ describe("web monitor inbox", () => {
 
   it("still forwards group messages (with sender info) even when allowFrom is restrictive", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+111"], // does not include +777
-        groupPolicy: "open",
+      channels: {
+        whatsapp: {
+          // does not include +777
+          allowFrom: ["+111"],
+          groupPolicy: "open",
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -736,8 +742,11 @@ describe("web monitor inbox", () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+111"], // Only allow +111
+      channels: {
+        whatsapp: {
+          // Only allow +111
+          allowFrom: ["+111"],
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -782,9 +791,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -796,9 +803,11 @@ describe("web monitor inbox", () => {
 
   it("skips read receipts in self-chat mode", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        // Self-chat heuristic: allowFrom includes selfE164 (+123).
-        allowFrom: ["+123"],
+      channels: {
+        whatsapp: {
+          // Self-chat heuristic: allowFrom includes selfE164 (+123).
+          allowFrom: ["+123"],
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -832,9 +841,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -846,10 +853,7 @@ describe("web monitor inbox", () => {
 
   it("lets group messages through even when sender not in allowFrom", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+1234"],
-        groupPolicy: "open",
-      },
+      channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "open" } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -888,10 +892,7 @@ describe("web monitor inbox", () => {
 
   it("blocks all group messages when groupPolicy is 'disabled'", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+1234"],
-        groupPolicy: "disabled",
-      },
+      channels: { whatsapp: { allowFrom: ["+1234"], groupPolicy: "disabled" } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -929,9 +930,11 @@ describe("web monitor inbox", () => {
 
   it("blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        groupAllowFrom: ["+1234"], // Does not include +999
-        groupPolicy: "allowlist",
+      channels: {
+        whatsapp: {
+          groupAllowFrom: ["+1234"], // Does not include +999
+          groupPolicy: "allowlist",
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -970,9 +973,11 @@ describe("web monitor inbox", () => {
 
   it("allows group messages from senders in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        groupAllowFrom: ["+15551234567"], // Includes the sender
-        groupPolicy: "allowlist",
+      channels: {
+        whatsapp: {
+          groupAllowFrom: ["+15551234567"], // Includes the sender
+          groupPolicy: "allowlist",
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1014,9 +1019,11 @@ describe("web monitor inbox", () => {
 
   it("allows all group senders with wildcard in groupPolicy allowlist", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        groupAllowFrom: ["*"], // Wildcard allows everyone
-        groupPolicy: "allowlist",
+      channels: {
+        whatsapp: {
+          groupAllowFrom: ["*"], // Wildcard allows everyone
+          groupPolicy: "allowlist",
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1057,8 +1064,10 @@ describe("web monitor inbox", () => {
 
   it("blocks group messages when groupPolicy allowlist has no groupAllowFrom", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        groupPolicy: "allowlist",
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1096,8 +1105,11 @@ describe("web monitor inbox", () => {
 
   it("allows messages from senders in allowFrom list", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+111", "+999"], // Allow +999
+      channels: {
+        whatsapp: {
+          // Allow +999
+          allowFrom: ["+111", "+999"],
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1134,9 +1146,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -1150,8 +1160,11 @@ describe("web monitor inbox", () => {
     // Same-phone mode: when from === selfJid, should always be allowed
     // This allows users to message themselves even with restrictive allowFrom
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["+111"], // Only allow +111, but self is +123
+      channels: {
+        whatsapp: {
+          // Only allow +111, but self is +123
+          allowFrom: ["+111"],
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1185,9 +1198,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -1285,9 +1296,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -1299,9 +1308,11 @@ describe("web monitor inbox", () => {
 
   it("skips pairing replies for outbound DMs in same-phone mode", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        dmPolicy: "pairing",
-        selfChatMode: true,
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          selfChatMode: true,
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1336,9 +1347,7 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
@@ -1350,9 +1359,11 @@ describe("web monitor inbox", () => {
 
   it("skips pairing replies for outbound DMs when same-phone mode is disabled", async () => {
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        dmPolicy: "pairing",
-        selfChatMode: false,
+      channels: {
+        whatsapp: {
+          dmPolicy: "pairing",
+          selfChatMode: false,
+        },
       },
       messages: {
         messagePrefix: undefined,
@@ -1387,9 +1398,7 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     mockLoadConfig.mockReturnValue({
-      whatsapp: {
-        allowFrom: ["*"],
-      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,

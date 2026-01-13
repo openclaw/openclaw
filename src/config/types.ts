@@ -39,7 +39,7 @@ export type HumanDelayConfig = {
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
-  provider?: string;
+  channel?: string;
   chatType?: "direct" | "group" | "room";
   keyPrefix?: string;
 };
@@ -292,7 +292,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  provider?:
+  channel?:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -637,7 +637,7 @@ export type SlackAccountConfig = {
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies
    * - "disabled": block all channel messages
-   * - "allowlist": only allow channels present in slack.channels
+   * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
   /** Max channel messages to keep as history context (0 disables). */
@@ -801,6 +801,16 @@ export type MSTeamsConfig = {
   replyStyle?: MSTeamsReplyStyle;
   /** Per-team config. Key is team ID (from the /team/ URL path segment). */
   teams?: Record<string, MSTeamsTeamConfig>;
+};
+
+export type ChannelsConfig = {
+  whatsapp?: WhatsAppConfig;
+  telegram?: TelegramConfig;
+  discord?: DiscordConfig;
+  slack?: SlackConfig;
+  signal?: SignalConfig;
+  imessage?: IMessageConfig;
+  msteams?: MSTeamsConfig;
 };
 
 export type IMessageAccountConfig = {
@@ -982,7 +992,7 @@ export type DmConfig = {
 
 export type QueueConfig = {
   mode?: QueueMode;
-  byProvider?: QueueModeByProvider;
+  byChannel?: QueueModeByProvider;
   debounceMs?: number;
   cap?: number;
   drop?: QueueDropPolicy;
@@ -1187,7 +1197,7 @@ export type AgentsConfig = {
 export type AgentBinding = {
   agentId: string;
   match: {
-    provider: string;
+    channel: string;
     accountId?: string;
     peer?: { kind: "dm" | "group" | "channel"; id: string };
     guildId?: string;
@@ -1800,13 +1810,7 @@ export type ClawdbotConfig = {
   commands?: CommandsConfig;
   session?: SessionConfig;
   web?: WebConfig;
-  whatsapp?: WhatsAppConfig;
-  telegram?: TelegramConfig;
-  discord?: DiscordConfig;
-  slack?: SlackConfig;
-  signal?: SignalConfig;
-  imessage?: IMessageConfig;
-  msteams?: MSTeamsConfig;
+  channels?: ChannelsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   bridge?: BridgeConfig;

@@ -10,7 +10,7 @@ import {
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
+} from "../utils/message-channel.js";
 import {
   agentCommand,
   connectOk,
@@ -28,9 +28,9 @@ installGatewayTestHooks();
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-function expectProviders(call: Record<string, unknown>, provider: string) {
-  expect(call.provider).toBe(provider);
-  expect(call.messageProvider).toBe(provider);
+function expectChannels(call: Record<string, unknown>, channel: string) {
+  expect(call.channel).toBe(channel);
+  expect(call.messageChannel).toBe(channel);
 }
 
 describe("gateway server agent", () => {
@@ -45,7 +45,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-main-stale",
             updatedAt: Date.now(),
-            lastProvider: "whatsapp",
+            lastChannel: "whatsapp",
             lastTo: "+1555",
           },
         },
@@ -61,7 +61,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-stale",
     });
@@ -69,7 +69,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "whatsapp");
+    expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliveryTargetMode).toBe("implicit");
     expect(call.sessionId).toBe("sess-main-stale");
@@ -111,7 +111,7 @@ describe("gateway server agent", () => {
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.sessionKey).toBe("agent:main:subagent:abc");
     expect(call.sessionId).toBe("sess-sub");
-    expectProviders(call, "webchat");
+    expectChannels(call, "webchat");
     expect(call.deliver).toBe(false);
     expect(call.to).toBeUndefined();
 
@@ -157,7 +157,7 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.sessionKey).toBe("main");
-    expectProviders(call, "webchat");
+    expectChannels(call, "webchat");
     expect(call.message).toBe("what is in the image?");
 
     const images = call.images as Array<Record<string, unknown>>;
@@ -171,7 +171,7 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-  test("agent falls back to whatsapp when delivery requested and no last provider exists", async () => {
+  test("agent falls back to whatsapp when delivery requested and no last channel exists", async () => {
     testState.allowFrom = ["+1555"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -203,7 +203,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "whatsapp");
+    expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliver).toBe(true);
     expect(call.sessionId).toBe("sess-main-missing-provider");
@@ -223,7 +223,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-main-whatsapp",
             updatedAt: Date.now(),
-            lastProvider: "whatsapp",
+            lastChannel: "whatsapp",
             lastTo: "+1555",
           },
         },
@@ -239,7 +239,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-whatsapp",
     });
@@ -247,8 +247,8 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "whatsapp");
-    expect(call.messageProvider).toBe("whatsapp");
+    expectChannels(call, "whatsapp");
+    expect(call.messageChannel).toBe("whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -268,7 +268,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-main",
             updatedAt: Date.now(),
-            lastProvider: "telegram",
+            lastChannel: "telegram",
             lastTo: "123",
           },
         },
@@ -284,7 +284,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last",
     });
@@ -292,7 +292,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "telegram");
+    expectChannels(call, "telegram");
     expect(call.to).toBe("123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -312,7 +312,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-discord",
             updatedAt: Date.now(),
-            lastProvider: "discord",
+            lastChannel: "discord",
             lastTo: "channel:discord-123",
           },
         },
@@ -328,7 +328,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-discord",
     });
@@ -336,7 +336,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "discord");
+    expectChannels(call, "discord");
     expect(call.to).toBe("channel:discord-123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -356,7 +356,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-slack",
             updatedAt: Date.now(),
-            lastProvider: "slack",
+            lastChannel: "slack",
             lastTo: "channel:slack-123",
           },
         },
@@ -372,7 +372,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-slack",
     });
@@ -380,7 +380,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "slack");
+    expectChannels(call, "slack");
     expect(call.to).toBe("channel:slack-123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -400,7 +400,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-signal",
             updatedAt: Date.now(),
-            lastProvider: "signal",
+            lastChannel: "signal",
             lastTo: "+15551234567",
           },
         },
@@ -416,7 +416,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-signal",
     });
@@ -424,7 +424,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "signal");
+    expectChannels(call, "signal");
     expect(call.to).toBe("+15551234567");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -444,7 +444,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-teams",
             updatedAt: Date.now(),
-            lastProvider: "msteams",
+            lastChannel: "msteams",
             lastTo: "conversation:teams-123",
           },
         },
@@ -460,7 +460,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-last-msteams",
     });
@@ -468,7 +468,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "msteams");
+    expectChannels(call, "msteams");
     expect(call.to).toBe("conversation:teams-123");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -478,7 +478,7 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-  test("agent accepts provider aliases (imsg/teams)", async () => {
+  test("agent accepts channel aliases (imsg/teams)", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
@@ -488,7 +488,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-alias",
             updatedAt: Date.now(),
-            lastProvider: "imessage",
+            lastChannel: "imessage",
             lastTo: "chat_id:123",
           },
         },
@@ -504,7 +504,7 @@ describe("gateway server agent", () => {
     const resIMessage = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "imsg",
+      channel: "imsg",
       deliver: true,
       idempotencyKey: "idem-agent-imsg",
     });
@@ -513,7 +513,7 @@ describe("gateway server agent", () => {
     const resTeams = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "teams",
+      channel: "teams",
       to: "conversation:teams-abc",
       deliver: false,
       idempotencyKey: "idem-agent-teams",
@@ -525,26 +525,26 @@ describe("gateway server agent", () => {
       string,
       unknown
     >;
-    expectProviders(lastIMessageCall, "imessage");
+    expectChannels(lastIMessageCall, "imessage");
     expect(lastIMessageCall.to).toBe("chat_id:123");
 
     const lastTeamsCall = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(lastTeamsCall, "msteams");
+    expectChannels(lastTeamsCall, "msteams");
     expect(lastTeamsCall.to).toBe("conversation:teams-abc");
 
     ws.close();
     await server.close();
   });
 
-  test("agent rejects unknown provider", async () => {
+  test("agent rejects unknown channel", async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "sms",
-      idempotencyKey: "idem-agent-bad-provider",
+      channel: "sms",
+      idempotencyKey: "idem-agent-bad-channel",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
@@ -564,7 +564,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-main-webchat",
             updatedAt: Date.now(),
-            lastProvider: "webchat",
+            lastChannel: "webchat",
             lastTo: "+1555",
           },
         },
@@ -580,7 +580,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: true,
       idempotencyKey: "idem-agent-webchat",
     });
@@ -588,7 +588,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "whatsapp");
+    expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
@@ -608,7 +608,7 @@ describe("gateway server agent", () => {
           main: {
             sessionId: "sess-main-webchat-internal",
             updatedAt: Date.now(),
-            lastProvider: "webchat",
+            lastChannel: "webchat",
             lastTo: "+1555",
           },
         },
@@ -624,7 +624,7 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      provider: "last",
+      channel: "last",
       deliver: false,
       idempotencyKey: "idem-agent-webchat-internal",
     });
@@ -632,7 +632,7 @@ describe("gateway server agent", () => {
 
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expectProviders(call, "webchat");
+    expectChannels(call, "webchat");
     expect(call.to).toBeUndefined();
     expect(call.deliver).toBe(false);
     expect(call.bestEffortDeliver).toBe(true);

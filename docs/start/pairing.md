@@ -34,7 +34,7 @@ clawdbot pairing list telegram
 clawdbot pairing approve telegram <CODE>
 ```
 
-Supported providers: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
+Supported channels: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
 
 ### Where the state lives
 
@@ -73,9 +73,9 @@ Full protocol + design notes: [Gateway pairing](/gateway/pairing)
 - Security model + prompt injection: [Security](/gateway/security)
 - Updating safely (run doctor): [Updating](/install/updating)
 - Provider configs:
-  - Telegram: [Telegram](/providers/telegram)
-  - WhatsApp: [WhatsApp](/providers/whatsapp)
-  - Signal: [Signal](/providers/signal)
-  - iMessage: [iMessage](/providers/imessage)
-  - Discord: [Discord](/providers/discord)
-  - Slack: [Slack](/providers/slack)
+  - Telegram: [Telegram](/channels/telegram)
+  - WhatsApp: [WhatsApp](/channels/whatsapp)
+  - Signal: [Signal](/channels/signal)
+  - iMessage: [iMessage](/channels/imessage)
+  - Discord: [Discord](/channels/discord)
+  - Slack: [Slack](/channels/slack)

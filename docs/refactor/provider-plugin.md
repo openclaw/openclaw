@@ -31,7 +31,7 @@ Each `ProviderPlugin` bundles:
 - `gateway`: startAccount/stopAccount with runtime context (`getStatus`/`setStatus`), plus optional `loginWithQrStart/loginWithQrWait` for gateway-owned QR login flows.
 - `security`: dmPolicy + allowFrom hints used by `doctor security`.
 - `heartbeat`: optional readiness checks + heartbeat recipient resolution when providers own targeting.
-- `auth`: optional login hook used by `clawdbot providers login`.
+- `auth`: optional login hook used by `clawdbot channels login`.
 - `reload`: `configPrefixes` that map to hot restarts.
 - `onboarding`: optional CLI onboarding adapter (wizard UI hooks per provider).
 - `agentTools`: optional provider-owned agent tools (ex: QR login).
@@ -88,14 +88,14 @@ Each `ProviderPlugin` bundles:
 - Session announce targets can opt into `meta.preferSessionLookupForAnnounceTarget` when session keys are insufficient (e.g., WhatsApp).
 - Onboarding provider setup is delegated to adapter modules under `src/providers/plugins/onboarding/*`, keeping `setupProviders` provider-agnostic.
 - Onboarding registry now reads `plugin.onboarding` from each provider (no standalone onboarding map).
-- Provider login flows (`clawdbot providers login`) route through `plugin.auth.login` when available.
+- Channel login flows (`clawdbot channels login`) route through `plugin.auth.login` when available.
 - `clawdbot status` reports `linkProvider` (derived from `status.buildProviderSummary().linked`) instead of a hardcoded `web` provider field.
 - Gateway `web.login.*` methods use `plugin.gatewayMethods` ownership to pick the provider (no hardcoded `normalizeProviderId("web")` in the handler).
 
 ## CLI Commands (inline references)
-- Add/remove providers: `clawdbot providers add <provider>` / `clawdbot providers remove <provider>`.
-- Inspect provider state: `clawdbot providers list`, `clawdbot providers status`.
-- Link/unlink providers: `clawdbot providers login --provider <provider>` / `clawdbot providers logout --provider <provider>`.
+- Add/remove channels: `clawdbot channels add <channel>` / `clawdbot channels remove <channel>`.
+- Inspect channel state: `clawdbot channels list`, `clawdbot channels status`.
+- Link/unlink channels: `clawdbot channels login --channel <channel>` / `clawdbot channels logout --channel <channel>`.
 - Pairing approvals: `clawdbot pairing list <provider>`, `clawdbot pairing approve <provider> <code>`.
 
 ## Adding a Provider (checklist)

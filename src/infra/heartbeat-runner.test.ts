@@ -81,7 +81,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       agents: { defaults: { heartbeat: { target: "none" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      provider: "none",
+      channel: "none",
       reason: "target-none",
     });
   });
@@ -90,11 +90,11 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
-      lastProvider: "whatsapp" as const,
+      lastChannel: "whatsapp" as const,
       lastTo: "+1555",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "+1555",
     });
   });
@@ -106,10 +106,10 @@ describe("resolveHeartbeatDeliveryTarget", () => {
           heartbeat: { target: "whatsapp", to: "whatsapp:(555) 123" },
         },
       },
-      whatsapp: { allowFrom: ["*"] },
+      channels: { whatsapp: { allowFrom: ["*"] } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "+555123",
     });
   });
@@ -118,11 +118,11 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
-      lastProvider: "webchat" as const,
+      lastChannel: "webchat" as const,
       lastTo: "web",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      provider: "none",
+      channel: "none",
       reason: "no-target",
     });
   });
@@ -130,15 +130,15 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   it("applies allowFrom fallback for WhatsApp targets", () => {
     const cfg: ClawdbotConfig = {
       agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
-      whatsapp: { allowFrom: ["+1555", "+1666"] },
+      channels: { whatsapp: { allowFrom: ["+1555", "+1666"] } },
     };
     const entry = {
       ...baseEntry,
-      lastProvider: "whatsapp" as const,
+      lastChannel: "whatsapp" as const,
       lastTo: "+1222",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "+1555",
       reason: "allowFrom-fallback",
     });
@@ -146,30 +146,30 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it("keeps WhatsApp group targets even with allowFrom set", () => {
     const cfg: ClawdbotConfig = {
-      whatsapp: { allowFrom: ["+1555"] },
+      channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const entry = {
       ...baseEntry,
-      lastProvider: "whatsapp" as const,
+      lastChannel: "whatsapp" as const,
       lastTo: "120363401234567890@g.us",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "120363401234567890@g.us",
     });
   });
 
   it("normalizes prefixed WhatsApp group targets for heartbeat delivery", () => {
     const cfg: ClawdbotConfig = {
-      whatsapp: { allowFrom: ["+1555"] },
+      channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const entry = {
       ...baseEntry,
-      lastProvider: "whatsapp" as const,
+      lastChannel: "whatsapp" as const,
       lastTo: "whatsapp:group:120363401234567890@G.US",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      provider: "whatsapp",
+      channel: "whatsapp",
       to: "120363401234567890@g.us",
     });
   });
@@ -179,7 +179,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      provider: "telegram",
+      channel: "telegram",
       to: "123",
     });
   });
@@ -198,7 +198,7 @@ describe("runHeartbeatOnce", () => {
             main: {
               sessionId: "sid",
               updatedAt: Date.now(),
-              lastProvider: "whatsapp",
+              lastChannel: "whatsapp",
               lastTo: "+1555",
             },
           },
@@ -213,7 +213,7 @@ describe("runHeartbeatOnce", () => {
             heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -281,7 +281,7 @@ describe("runHeartbeatOnce", () => {
             },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -356,7 +356,7 @@ describe("runHeartbeatOnce", () => {
             },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -408,7 +408,7 @@ describe("runHeartbeatOnce", () => {
           defaults: { heartbeat: { every: "5m" } },
           list: [{ id: "work", default: true }],
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storeTemplate },
       };
       const sessionKey = resolveMainSessionKey(cfg);
@@ -493,7 +493,7 @@ describe("runHeartbeatOnce", () => {
             },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -552,7 +552,7 @@ describe("runHeartbeatOnce", () => {
             },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -607,7 +607,7 @@ describe("runHeartbeatOnce", () => {
             heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
           },
         },
-        whatsapp: { allowFrom: ["*"] },
+        channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
 
@@ -666,7 +666,7 @@ describe("runHeartbeatOnce", () => {
             heartbeat: { every: "5m", target: "telegram", to: "123456" },
           },
         },
-        telegram: { botToken: "test-bot-token-123" },
+        channels: { telegram: { botToken: "test-bot-token-123" } },
         session: { store: storePath },
       };
 
@@ -731,9 +731,11 @@ describe("runHeartbeatOnce", () => {
             heartbeat: { every: "5m", target: "telegram", to: "123456" },
           },
         },
-        telegram: {
-          accounts: {
-            work: { botToken: "test-bot-token-123" },
+        channels: {
+          telegram: {
+            accounts: {
+              work: { botToken: "test-bot-token-123" },
+            },
           },
         },
         session: { store: storePath },

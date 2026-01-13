@@ -33,8 +33,8 @@ import type {
 } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { isCacheEnabled, resolveCacheTtlMs } from "../config/cache-utils.js";
+import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { resolveProviderCapabilities } from "../config/provider-capabilities.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -42,7 +42,7 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
-import { normalizeMessageProvider } from "../utils/message-provider.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
@@ -690,19 +690,19 @@ export function getDmHistoryLimitFromSessionKey(
   // Map provider to config key
   switch (provider) {
     case "telegram":
-      return getLimit(config.telegram);
+      return getLimit(config.channels?.telegram);
     case "whatsapp":
-      return getLimit(config.whatsapp);
+      return getLimit(config.channels?.whatsapp);
     case "discord":
-      return getLimit(config.discord);
+      return getLimit(config.channels?.discord);
     case "slack":
-      return getLimit(config.slack);
+      return getLimit(config.channels?.slack);
     case "signal":
-      return getLimit(config.signal);
+      return getLimit(config.channels?.signal);
     case "imessage":
-      return getLimit(config.imessage);
+      return getLimit(config.channels?.imessage);
     case "msteams":
-      return getLimit(config.msteams);
+      return getLimit(config.channels?.msteams);
     default:
       return undefined;
   }
@@ -1125,6 +1125,7 @@ function resolveModel(
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
+  messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
   sessionFile: string;
@@ -1258,7 +1259,7 @@ export async function compactEmbeddedPiSession(params: {
             elevated: params.bashElevated,
           },
           sandbox,
-          messageProvider: params.messageProvider,
+          messageProvider: params.messageChannel ?? params.messageProvider,
           agentAccountId: params.agentAccountId,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
@@ -1272,13 +1273,13 @@ export async function compactEmbeddedPiSession(params: {
         });
         logToolSchemasForGoogle({ tools, provider });
         const machineName = await getMachineDisplayName();
-        const runtimeProvider = normalizeMessageProvider(
-          params.messageProvider,
+        const runtimeChannel = normalizeMessageChannel(
+          params.messageChannel ?? params.messageProvider,
         );
-        const runtimeCapabilities = runtimeProvider
-          ? (resolveProviderCapabilities({
+        const runtimeCapabilities = runtimeChannel
+          ? (resolveChannelCapabilities({
               cfg: params.config,
-              provider: runtimeProvider,
+              channel: runtimeChannel,
               accountId: params.agentAccountId,
             }) ?? [])
           : undefined;
@@ -1288,7 +1289,7 @@ export async function compactEmbeddedPiSession(params: {
           arch: os.arch(),
           node: process.version,
           model: `${provider}/${modelId}`,
-          provider: runtimeProvider,
+          channel: runtimeChannel,
           capabilities: runtimeCapabilities,
         };
         const sandboxInfo = buildEmbeddedSandboxInfo(
@@ -1443,6 +1444,7 @@ export async function compactEmbeddedPiSession(params: {
 export async function runEmbeddedPiAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
   /** Current channel ID for auto-threading (Slack). */
@@ -1639,7 +1641,7 @@ export async function runEmbeddedPiAgent(params: {
         attemptedThinking.add(thinkLevel);
 
         log.debug(
-          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} messageProvider=${params.messageProvider ?? "unknown"}`,
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
         );
 
         await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -1698,7 +1700,7 @@ export async function runEmbeddedPiAgent(params: {
               elevated: params.bashElevated,
             },
             sandbox,
-            messageProvider: params.messageProvider,
+            messageProvider: params.messageChannel ?? params.messageProvider,
             agentAccountId: params.agentAccountId,
             sessionKey: params.sessionKey ?? params.sessionId,
             agentDir,

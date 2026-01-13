@@ -181,7 +181,7 @@ describe("directive behavior", () => {
               },
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -210,7 +210,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -250,7 +250,7 @@ describe("directive behavior", () => {
               drop: "summarize",
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -383,7 +383,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -419,7 +419,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -459,7 +459,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -494,9 +494,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -541,9 +539,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -589,7 +585,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -613,7 +609,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -803,7 +799,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -842,7 +838,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: storePath },
         },
       );
@@ -894,7 +890,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: storePath },
         },
       );
@@ -937,7 +933,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: storePath },
         },
       );
@@ -964,7 +960,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: storePath },
         },
       );
@@ -993,7 +989,7 @@ describe("directive behavior", () => {
             allowFrom: { whatsapp: ["+1222"] },
           },
         },
-        whatsapp: { allowFrom: ["+1222"] },
+        channels: { whatsapp: { allowFrom: ["+1222"] } },
         session: { store: storePath },
       } as const;
 
@@ -1079,7 +1075,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1126,7 +1122,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222", "+1333"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222", "+1333"] },
+          channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1173,7 +1169,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222", "+1333"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222", "+1333"] },
+          channels: { whatsapp: { allowFrom: ["+1222", "+1333"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1210,7 +1206,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1247,7 +1243,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1283,7 +1279,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1321,7 +1317,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: storePath },
         },
       );
@@ -1375,7 +1371,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1222"] },
             },
           },
-          whatsapp: { allowFrom: ["+1222"] },
+          channels: { whatsapp: { allowFrom: ["+1222"] } },
           session: { store: path.join(home, "sessions.json") },
         },
       );
@@ -1401,7 +1397,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1434,7 +1430,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1469,7 +1465,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1484,7 +1480,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1545,9 +1541,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1608,9 +1602,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -1625,9 +1617,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -2283,7 +2273,7 @@ describe("directive behavior", () => {
             },
           },
           tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -2313,7 +2303,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -2352,9 +2342,7 @@ describe("directive behavior", () => {
               },
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -2403,9 +2391,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -2448,9 +2434,7 @@ describe("directive behavior", () => {
               allowFrom: { whatsapp: ["+1004"] },
             },
           },
-          whatsapp: {
-            allowFrom: ["*"],
-          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );

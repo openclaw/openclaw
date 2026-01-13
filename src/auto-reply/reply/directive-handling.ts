@@ -1150,7 +1150,7 @@ export async function handleDirectiveOnly(params: {
   ) {
     const settings = resolveQueueSettings({
       cfg: params.cfg,
-      provider,
+      channel: provider,
       sessionEntry,
     });
     const debounceLabel =
