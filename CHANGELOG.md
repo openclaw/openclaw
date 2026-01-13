@@ -7,6 +7,7 @@
 - Gateway: add Tailscale binary discovery, custom bind mode, and probe auth retry for password changes. (#740 — thanks @jeffersonwarrior)
 - Agents: add compaction mode config with optional safeguard summarization for long histories. (#700 — thanks @thewilloftheshadow)
 - Tools: add tool profiles plus group shorthands for tool policy allow/deny (global, per-agent, sandbox).
+- Thinking: allow xhigh for GPT-5.2 + Codex models and downgrade on unsupported switches. (#444 — thanks @grp06)
 
 ### Fixes
 - Gateway: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides when checking or restarting the daemon.

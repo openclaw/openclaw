@@ -37,6 +37,11 @@ import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
+import {
+  formatThinkingLevels,
+  formatXHighModelHint,
+  supportsXHighThinking,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import {
   type ElevatedLevel,
@@ -778,6 +783,7 @@ export async function handleDirectiveOnly(params: {
     allowedModelCatalog,
     resetModelOverride,
     provider,
+    model,
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
@@ -943,6 +949,117 @@ export async function handleDirectiveOnly(params: {
     }
   }
 
+  let modelSelection: ModelDirectiveSelection | undefined;
+  let profileOverride: string | undefined;
+  if (directives.hasModelDirective && directives.rawModelDirective) {
+    const raw = directives.rawModelDirective.trim();
+    if (/^[0-9]+$/.test(raw)) {
+      const resolvedDefault = resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider,
+        defaultModel,
+      });
+      const pickerCatalog: ModelPickerCatalogEntry[] = (() => {
+        const keys = new Set<string>();
+        const out: ModelPickerCatalogEntry[] = [];
+
+        const push = (entry: ModelPickerCatalogEntry) => {
+          const provider = normalizeProviderId(entry.provider);
+          const id = String(entry.id ?? "").trim();
+          if (!provider || !id) return;
+          const key = modelKey(provider, id);
+          if (keys.has(key)) return;
+          keys.add(key);
+          out.push({ provider, id, name: entry.name });
+        };
+
+        for (const entry of allowedModelCatalog) push(entry);
+
+        for (const rawKey of Object.keys(
+          params.cfg.agents?.defaults?.models ?? {},
+        )) {
+          const resolved = resolveModelRefFromString({
+            raw: String(rawKey),
+            defaultProvider,
+            aliasIndex,
+          });
+          if (!resolved) continue;
+          push({
+            provider: resolved.ref.provider,
+            id: resolved.ref.model,
+            name: resolved.ref.model,
+          });
+        }
+        if (resolvedDefault.model) {
+          push({
+            provider: resolvedDefault.provider,
+            id: resolvedDefault.model,
+            name: resolvedDefault.model,
+          });
+        }
+        return out;
+      })();
+
+      const items = buildModelPickerItems(pickerCatalog);
+      const index = Number.parseInt(raw, 10) - 1;
+      const item = Number.isFinite(index) ? items[index] : undefined;
+      if (!item) {
+        return {
+          text: `Invalid model selection "${raw}". Use /model to list.`,
+        };
+      }
+      const picked = pickProviderForModel({
+        item,
+        preferredProvider: params.provider,
+      });
+      if (!picked) {
+        return {
+          text: `Invalid model selection "${raw}". Use /model to list.`,
+        };
+      }
+      const key = `${picked.provider}/${picked.model}`;
+      const aliases = aliasIndex.byKey.get(key);
+      const alias = aliases && aliases.length > 0 ? aliases[0] : undefined;
+      modelSelection = {
+        provider: picked.provider,
+        model: picked.model,
+        isDefault:
+          picked.provider === defaultProvider && picked.model === defaultModel,
+        ...(alias ? { alias } : {}),
+      };
+    } else {
+      const resolved = resolveModelDirectiveSelection({
+        raw,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys,
+      });
+      if (resolved.error) {
+        return { text: resolved.error };
+      }
+      modelSelection = resolved.selection;
+    }
+    if (modelSelection && directives.rawModelProfile) {
+      const profileResolved = resolveProfileOverride({
+        rawProfile: directives.rawModelProfile,
+        provider: modelSelection.provider,
+        cfg: params.cfg,
+        agentDir,
+      });
+      if (profileResolved.error) {
+        return { text: profileResolved.error };
+      }
+      profileOverride = profileResolved.profileId;
+    }
+  }
+  if (directives.rawModelProfile && !modelSelection) {
+    return { text: "Auth profile override requires a model selection." };
+  }
+
+  const resolvedProvider = modelSelection?.provider ?? provider;
+  const resolvedModel = modelSelection?.model ?? model;
+
   if (directives.hasThinkDirective && !directives.thinkLevel) {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
@@ -950,12 +1067,12 @@ export async function handleDirectiveOnly(params: {
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          "off, minimal, low, medium, high",
+          formatThinkingLevels(resolvedProvider, resolvedModel),
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: off, minimal, low, medium, high.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -1098,125 +1215,24 @@ export async function handleDirectiveOnly(params: {
     return { text: errors.join(" ") };
   }
 
-  let modelSelection: ModelDirectiveSelection | undefined;
-  let profileOverride: string | undefined;
-  if (directives.hasModelDirective && directives.rawModelDirective) {
-    const raw = directives.rawModelDirective.trim();
-    if (/^[0-9]+$/.test(raw)) {
-      const resolvedDefault = resolveConfiguredModelRef({
-        cfg: params.cfg,
-        defaultProvider,
-        defaultModel,
-      });
-      const pickerCatalog: ModelPickerCatalogEntry[] = (() => {
-        const keys = new Set<string>();
-        const out: ModelPickerCatalogEntry[] = [];
-
-        const push = (entry: ModelPickerCatalogEntry) => {
-          const provider = normalizeProviderId(entry.provider);
-          const id = String(entry.id ?? "").trim();
-          if (!provider || !id) return;
-          const key = modelKey(provider, id);
-          if (keys.has(key)) return;
-          keys.add(key);
-          out.push({ provider, id, name: entry.name });
-        };
-
-        for (const entry of allowedModelCatalog) push(entry);
-
-        for (const rawKey of Object.keys(
-          params.cfg.agents?.defaults?.models ?? {},
-        )) {
-          const resolved = resolveModelRefFromString({
-            raw: String(rawKey),
-            defaultProvider,
-            aliasIndex,
-          });
-          if (!resolved) continue;
-          push({
-            provider: resolved.ref.provider,
-            id: resolved.ref.model,
-            name: resolved.ref.model,
-          });
-        }
-        if (resolvedDefault.model) {
-          push({
-            provider: resolvedDefault.provider,
-            id: resolvedDefault.model,
-            name: resolvedDefault.model,
-          });
-        }
-        return out;
-      })();
-
-      const items = buildModelPickerItems(pickerCatalog);
-      const index = Number.parseInt(raw, 10) - 1;
-      const item = Number.isFinite(index) ? items[index] : undefined;
-      if (!item) {
-        return {
-          text: `Invalid model selection "${raw}". Use /model to list.`,
-        };
-      }
-      const picked = pickProviderForModel({
-        item,
-        preferredProvider: params.provider,
-      });
-      if (!picked) {
-        return {
-          text: `Invalid model selection "${raw}". Use /model to list.`,
-        };
-      }
-      const key = `${picked.provider}/${picked.model}`;
-      const aliases = aliasIndex.byKey.get(key);
-      const alias = aliases && aliases.length > 0 ? aliases[0] : undefined;
-      modelSelection = {
-        provider: picked.provider,
-        model: picked.model,
-        isDefault:
-          picked.provider === defaultProvider && picked.model === defaultModel,
-        ...(alias ? { alias } : {}),
-      };
-    } else {
-      const resolved = resolveModelDirectiveSelection({
-        raw,
-        defaultProvider,
-        defaultModel,
-        aliasIndex,
-        allowedModelKeys,
-      });
-      if (resolved.error) {
-        return { text: resolved.error };
-      }
-      modelSelection = resolved.selection;
-    }
-    if (modelSelection) {
-      if (directives.rawModelProfile) {
-        const profileResolved = resolveProfileOverride({
-          rawProfile: directives.rawModelProfile,
-          provider: modelSelection.provider,
-          cfg: params.cfg,
-          agentDir,
-        });
-        if (profileResolved.error) {
-          return { text: profileResolved.error };
-        }
-        profileOverride = profileResolved.profileId;
-      }
-      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-      if (nextLabel !== initialModelLabel) {
-        enqueueSystemEvent(
-          formatModelSwitchEvent(nextLabel, modelSelection.alias),
-          {
-            sessionKey,
-            contextKey: `model:${nextLabel}`,
-          },
-        );
-      }
-    }
+  if (
+    directives.hasThinkDirective &&
+    directives.thinkLevel === "xhigh" &&
+    !supportsXHighThinking(resolvedProvider, resolvedModel)
+  ) {
+    return {
+      text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+    };
   }
-  if (directives.rawModelProfile && !modelSelection) {
-    return { text: "Auth profile override requires a model selection." };
-  }
+
+  const nextThinkLevel = directives.hasThinkDirective
+    ? directives.thinkLevel
+    : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      currentThinkLevel);
+  const shouldDowngradeXHigh =
+    !directives.hasThinkDirective &&
+    nextThinkLevel === "xhigh" &&
+    !supportsXHighThinking(resolvedProvider, resolvedModel);
 
   if (sessionEntry && sessionStore && sessionKey) {
     const prevElevatedLevel =
@@ -1238,6 +1254,9 @@ export async function handleDirectiveOnly(params: {
     if (directives.hasThinkDirective && directives.thinkLevel) {
       if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
       else sessionEntry.thinkingLevel = directives.thinkLevel;
+    }
+    if (shouldDowngradeXHigh) {
+      sessionEntry.thinkingLevel = "high";
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
@@ -1295,6 +1314,18 @@ export async function handleDirectiveOnly(params: {
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
     }
+    if (modelSelection) {
+      const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
+      if (nextLabel !== initialModelLabel) {
+        enqueueSystemEvent(
+          formatModelSwitchEvent(nextLabel, modelSelection.alias),
+          {
+            sessionKey,
+            contextKey: `model:${nextLabel}`,
+          },
+        );
+      }
+    }
     if (elevatedChanged) {
       const nextElevated = (sessionEntry.elevatedLevel ??
         "off") as ElevatedLevel;
@@ -1344,6 +1375,11 @@ export async function handleDirectiveOnly(params: {
         : formatDirectiveAck("Elevated mode enabled."),
     );
     if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
+  }
+  if (shouldDowngradeXHigh) {
+    parts.push(
+      `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
+    );
   }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
