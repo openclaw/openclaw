@@ -167,7 +167,7 @@ describe("runCronIsolatedAgentTurn", () => {
             kind: "agentTurn",
             message: "do it",
             deliver: false,
-            provider: "last",
+            channel: "last",
           }),
           agentId: "ops",
         },
@@ -460,7 +460,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "whatsapp",
+          channel: "whatsapp",
           bestEffortDeliver: false,
         }),
         message: "do it",
@@ -500,7 +500,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "whatsapp",
+          channel: "whatsapp",
           bestEffortDeliver: true,
         }),
         message: "do it",
@@ -514,7 +514,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("delivers telegram via provider send", async () => {
+  it("delivers telegram via channel send", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
@@ -547,7 +547,7 @@ describe("runCronIsolatedAgentTurn", () => {
             kind: "agentTurn",
             message: "do it",
             deliver: true,
-            provider: "telegram",
+            channel: "telegram",
             to: "123",
           }),
           message: "do it",
@@ -571,7 +571,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("delivers telegram topic targets via provider send", async () => {
+  it("delivers telegram topic targets via channel send", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
@@ -599,7 +599,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "telegram:group:-1001234567890:topic:321",
         }),
         message: "do it",
@@ -616,7 +616,7 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
-  it("delivers telegram shorthand topic suffixes via provider send", async () => {
+  it("delivers telegram shorthand topic suffixes via channel send", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
@@ -780,7 +780,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "whatsapp",
+          channel: "whatsapp",
           to: "+1234",
         }),
         message: "do it",
@@ -823,7 +823,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "123",
         }),
         message: "do it",
@@ -867,7 +867,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "123",
         }),
         message: "do it",
@@ -921,7 +921,7 @@ describe("runCronIsolatedAgentTurn", () => {
           kind: "agentTurn",
           message: "do it",
           deliver: true,
-          provider: "telegram",
+          channel: "telegram",
           to: "123",
         }),
         message: "do it",
