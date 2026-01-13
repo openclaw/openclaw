@@ -118,7 +118,8 @@ private func printUsage() {
     clawdbot-mac-wizard
 
     Usage:
-      clawdbot-mac-wizard [--url <ws://host:port>] [--token <token>] [--password <password>] [--mode <local|remote>] [--workspace <path>] [--json]
+      clawdbot-mac-wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
+                          [--mode <local|remote>] [--workspace <path>] [--json]
 
     Options:
       --url <url>        Gateway WebSocket URL (overrides config)

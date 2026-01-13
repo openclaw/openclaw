@@ -61,19 +61,60 @@ extension CronJobEditor {
     }
 
     func buildPayload() throws -> [String: AnyCodable] {
-        let name = self.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = try self.requireName()
+        let description = self.trimmed(self.description)
+        let agentId = self.trimmed(self.agentId)
+        let schedule = try self.buildSchedule()
+        let payload = try self.buildSelectedPayload()
+
+        try self.validateSessionTarget(payload)
+        try self.validatePayloadRequiredFields(payload)
+
+        var root: [String: Any] = [
+            "name": name,
+            "enabled": self.enabled,
+            "schedule": schedule,
+            "sessionTarget": self.sessionTarget.rawValue,
+            "wakeMode": self.wakeMode.rawValue,
+            "payload": payload,
+        ]
+        self.applyDeleteAfterRun(to: &root)
+        if !description.isEmpty { root["description"] = description }
+        if !agentId.isEmpty {
+            root["agentId"] = agentId
+        } else if self.job?.agentId != nil {
+            root["agentId"] = NSNull()
+        }
+
+        if self.sessionTarget == .isolated {
+            let trimmed = self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            root["isolation"] = [
+                "postToMainPrefix": trimmed.isEmpty ? "Cron" : trimmed,
+            ]
+        }
+
+        return root.mapValues { AnyCodable($0) }
+    }
+
+    func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func requireName() throws -> String {
+        let name = self.trimmed(self.name)
         if name.isEmpty {
             throw NSError(
                 domain: "Cron",
                 code: 0,
                 userInfo: [NSLocalizedDescriptionKey: "Name is required."])
         }
-        let description = self.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let agentId = self.agentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let schedule: [String: Any]
+        return name
+    }
+
+    func buildSchedule() throws -> [String: Any] {
         switch self.scheduleKind {
         case .at:
-            schedule = ["kind": "at", "atMs": Int(self.atDate.timeIntervalSince1970 * 1000)]
+            return ["kind": "at", "atMs": Int(self.atDate.timeIntervalSince1970 * 1000)]
         case .every:
             guard let ms = Self.parseDurationMs(self.everyText) else {
                 throw NSError(
@@ -81,34 +122,35 @@ extension CronJobEditor {
                     code: 0,
                     userInfo: [NSLocalizedDescriptionKey: "Invalid every duration (use 10m, 1h, 1d)."])
             }
-            schedule = ["kind": "every", "everyMs": ms]
+            return ["kind": "every", "everyMs": ms]
         case .cron:
-            let expr = self.cronExpr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expr = self.trimmed(self.cronExpr)
             if expr.isEmpty {
                 throw NSError(
                     domain: "Cron",
                     code: 0,
                     userInfo: [NSLocalizedDescriptionKey: "Cron expression is required."])
             }
-            let tz = self.cronTz.trimmingCharacters(in: .whitespacesAndNewlines)
+            let tz = self.trimmed(self.cronTz)
             if tz.isEmpty {
-                schedule = ["kind": "cron", "expr": expr]
-            } else {
-                schedule = ["kind": "cron", "expr": expr, "tz": tz]
+                return ["kind": "cron", "expr": expr]
             }
+            return ["kind": "cron", "expr": expr, "tz": tz]
         }
+    }
 
-        let payload: [String: Any] = {
-            if self.sessionTarget == .isolated { return self.buildAgentTurnPayload() }
-            switch self.payloadKind {
-            case .systemEvent:
-                let text = self.systemEventText.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ["kind": "systemEvent", "text": text]
-            case .agentTurn:
-                return self.buildAgentTurnPayload()
-            }
-        }()
+    func buildSelectedPayload() throws -> [String: Any] {
+        if self.sessionTarget == .isolated { return self.buildAgentTurnPayload() }
+        switch self.payloadKind {
+        case .systemEvent:
+            let text = self.trimmed(self.systemEventText)
+            return ["kind": "systemEvent", "text": text]
+        case .agentTurn:
+            return self.buildAgentTurnPayload()
+        }
+    }
 
+    func validateSessionTarget(_ payload: [String: Any]) throws {
         if self.sessionTarget == .main, payload["kind"] as? String == "agentTurn" {
             throw NSError(
                 domain: "Cron",
@@ -125,7 +167,9 @@ extension CronJobEditor {
                 code: 0,
                 userInfo: [NSLocalizedDescriptionKey: "Isolated jobs require agentTurn payloads."])
         }
+    }
 
+    func validatePayloadRequiredFields(_ payload: [String: Any]) throws {
         if payload["kind"] as? String == "systemEvent" {
             if (payload["text"] as? String ?? "").isEmpty {
                 throw NSError(
@@ -133,7 +177,8 @@ extension CronJobEditor {
                     code: 0,
                     userInfo: [NSLocalizedDescriptionKey: "System event text is required."])
             }
-        } else if payload["kind"] as? String == "agentTurn" {
+        }
+        if payload["kind"] as? String == "agentTurn" {
             if (payload["message"] as? String ?? "").isEmpty {
                 throw NSError(
                     domain: "Cron",
@@ -141,35 +186,14 @@ extension CronJobEditor {
                     userInfo: [NSLocalizedDescriptionKey: "Agent message is required."])
             }
         }
+    }
 
-        var root: [String: Any] = [
-            "name": name,
-            "enabled": self.enabled,
-            "schedule": schedule,
-            "sessionTarget": self.sessionTarget.rawValue,
-            "wakeMode": self.wakeMode.rawValue,
-            "payload": payload,
-        ]
+    func applyDeleteAfterRun(to root: inout [String: Any]) {
         if self.scheduleKind == .at {
             root["deleteAfterRun"] = self.deleteAfterRun
         } else if self.job?.deleteAfterRun != nil {
             root["deleteAfterRun"] = false
         }
-        if !description.isEmpty { root["description"] = description }
-        if !agentId.isEmpty {
-            root["agentId"] = agentId
-        } else if self.job?.agentId != nil {
-            root["agentId"] = NSNull()
-        }
-
-        if self.sessionTarget == .isolated {
-            let trimmed = self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-            root["isolation"] = [
-                "postToMainPrefix": trimmed.isEmpty ? "Cron" : trimmed,
-            ]
-        }
-
-        return root.mapValues { AnyCodable($0) }
     }
 
     func buildAgentTurnPayload() -> [String: Any] {
