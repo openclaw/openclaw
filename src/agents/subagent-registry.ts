@@ -2,6 +2,10 @@ import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import {
+  loadSubagentRegistryFromDisk,
+  saveSubagentRegistryToDisk,
+} from "./subagent-registry.store.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type SubagentRunRecord = {
@@ -23,6 +27,81 @@ export type SubagentRunRecord = {
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
+let restoreAttempted = false;
+
+function persistSubagentRuns() {
+  try {
+    saveSubagentRegistryToDisk(subagentRuns);
+  } catch {
+    // ignore persistence failures
+  }
+}
+
+const resumedRuns = new Set<string>();
+
+function resumeSubagentRun(runId: string) {
+  if (!runId || resumedRuns.has(runId)) return;
+  const entry = subagentRuns.get(runId);
+  if (!entry) return;
+  if (entry.announceHandled) return;
+
+  if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
+    if (!beginSubagentAnnounce(runId)) return;
+    void runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterProvider: entry.requesterProvider,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: 30_000,
+      cleanup: entry.cleanup,
+      waitForCompletion: false,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      label: entry.label,
+    });
+    if (entry.cleanup === "delete") {
+      subagentRuns.delete(runId);
+      persistSubagentRuns();
+    }
+    resumedRuns.add(runId);
+    return;
+  }
+
+  // Wait for completion again after restart.
+  const cfg = loadConfig();
+  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, undefined);
+  void waitForSubagentCompletion(runId, waitTimeoutMs);
+  resumedRuns.add(runId);
+}
+
+function restoreSubagentRunsOnce() {
+  if (restoreAttempted) return;
+  restoreAttempted = true;
+  try {
+    const restored = loadSubagentRegistryFromDisk();
+    if (restored.size === 0) return;
+    for (const [runId, entry] of restored.entries()) {
+      if (!runId || !entry) continue;
+      // Keep any newer in-memory entries.
+      if (!subagentRuns.has(runId)) {
+        subagentRuns.set(runId, entry);
+      }
+    }
+
+    // Resume pending work.
+    ensureListener();
+    if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
+      startSweeper();
+    }
+    for (const runId of subagentRuns.keys()) {
+      resumeSubagentRun(runId);
+    }
+  } catch {
+    // ignore restore failures
+  }
+}
 
 function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
   const config = cfg ?? loadConfig();
@@ -54,9 +133,11 @@ function stopSweeper() {
 
 async function sweepSubagentRuns() {
   const now = Date.now();
+  let mutated = false;
   for (const [runId, entry] of subagentRuns.entries()) {
     if (!entry.archiveAtMs || entry.archiveAtMs > now) continue;
     subagentRuns.delete(runId);
+    mutated = true;
     try {
       await callGateway({
         method: "sessions.delete",
@@ -67,6 +148,7 @@ async function sweepSubagentRuns() {
       // ignore
     }
   }
+  if (mutated) persistSubagentRuns();
   if (subagentRuns.size === 0) stopSweeper();
 }
 
@@ -85,7 +167,10 @@ function ensureListener() {
         typeof evt.data?.startedAt === "number"
           ? (evt.data.startedAt as number)
           : undefined;
-      if (startedAt) entry.startedAt = startedAt;
+      if (startedAt) {
+        entry.startedAt = startedAt;
+        persistSubagentRuns();
+      }
       return;
     }
     if (phase !== "end" && phase !== "error") return;
@@ -94,10 +179,12 @@ function ensureListener() {
         ? (evt.data.endedAt as number)
         : Date.now();
     entry.endedAt = endedAt;
+    persistSubagentRuns();
 
     if (!beginSubagentAnnounce(evt.runId)) {
       if (entry.cleanup === "delete") {
         subagentRuns.delete(evt.runId);
+        persistSubagentRuns();
       }
       return;
     }
@@ -117,6 +204,7 @@ function ensureListener() {
     });
     if (entry.cleanup === "delete") {
       subagentRuns.delete(evt.runId);
+      persistSubagentRuns();
     }
   });
 }
@@ -126,6 +214,7 @@ export function beginSubagentAnnounce(runId: string) {
   if (!entry) return false;
   if (entry.announceHandled) return false;
   entry.announceHandled = true;
+  persistSubagentRuns();
   return true;
 }
 
@@ -163,6 +252,7 @@ export function registerSubagentRun(params: {
     announceHandled: false,
   });
   ensureListener();
+  persistSubagentRuns();
   if (archiveAfterMs) startSweeper();
   // Wait for subagent completion via gateway RPC (cross-process).
   // The in-process lifecycle listener is a fallback for embedded runs.
@@ -183,9 +273,20 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);
     if (!entry) return;
-    if (typeof wait.startedAt === "number") entry.startedAt = wait.startedAt;
-    if (typeof wait.endedAt === "number") entry.endedAt = wait.endedAt;
-    if (!entry.endedAt) entry.endedAt = Date.now();
+    let mutated = false;
+    if (typeof wait.startedAt === "number") {
+      entry.startedAt = wait.startedAt;
+      mutated = true;
+    }
+    if (typeof wait.endedAt === "number") {
+      entry.endedAt = wait.endedAt;
+      mutated = true;
+    }
+    if (!entry.endedAt) {
+      entry.endedAt = Date.now();
+      mutated = true;
+    }
+    if (mutated) persistSubagentRuns();
     if (!beginSubagentAnnounce(runId)) return;
     void runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
@@ -203,6 +304,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     });
     if (entry.cleanup === "delete") {
       subagentRuns.delete(runId);
+      persistSubagentRuns();
     }
   } catch {
     // ignore
@@ -212,9 +314,17 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 export function resetSubagentRegistryForTests() {
   subagentRuns.clear();
   stopSweeper();
+  restoreAttempted = false;
+  listenerStarted = false;
+  persistSubagentRuns();
 }
 
 export function releaseSubagentRun(runId: string) {
-  subagentRuns.delete(runId);
+  const didDelete = subagentRuns.delete(runId);
+  if (didDelete) persistSubagentRuns();
   if (subagentRuns.size === 0) stopSweeper();
 }
+
+// Best-effort: restore persisted runs on process start so announces/cleanup can
+// continue after gateway restarts.
+restoreSubagentRunsOnce();
