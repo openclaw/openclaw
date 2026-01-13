@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { openUrl, resolveBrowserOpenCommand } from "./onboard-helpers.js";
+import {
+  openUrl,
+  resolveBrowserOpenCommand,
+  resolveControlUiLinks,
+} from "./onboard-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   runCommandWithTimeout: vi.fn(async () => ({
@@ -10,10 +14,15 @@ const mocks = vi.hoisted(() => ({
     signal: null,
     killed: false,
   })),
+  pickPrimaryTailnetIPv4: vi.fn(() => undefined),
 }));
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
+
+vi.mock("../infra/tailnet.js", () => ({
+  pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
 describe("openUrl", () => {
@@ -43,5 +52,27 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
     expect(resolved.argv).toEqual(["cmd", "/c", "start", ""]);
     expect(resolved.quoteUrl).toBe(true);
+  });
+});
+
+describe("resolveControlUiLinks", () => {
+  it("uses customBindHost for custom bind", () => {
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "custom",
+      customBindHost: "192.168.1.100",
+    });
+    expect(links.httpUrl).toBe("http://192.168.1.100:18789/");
+    expect(links.wsUrl).toBe("ws://192.168.1.100:18789");
+  });
+
+  it("falls back to loopback for invalid customBindHost", () => {
+    const links = resolveControlUiLinks({
+      port: 18789,
+      bind: "custom",
+      customBindHost: "192.168.001.100",
+    });
+    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
+    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
 });
