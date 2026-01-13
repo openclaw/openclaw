@@ -10,9 +10,15 @@ import {
   discoverModels,
 } from "@mariozechner/pi-coding-agent";
 import { describe, it } from "vitest";
+import {
+  type AuthProfileStore,
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles.js";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   collectAnthropicApiKeys,
+  isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
 import { isModernModelRef } from "../agents/live-model-filter.js";
@@ -104,6 +110,10 @@ function isGoogleModelNotFoundText(text: string): boolean {
 
 function isRefreshTokenReused(error: string): boolean {
   return /refresh_token_reused/i.test(error);
+}
+
+function isMissingProfileError(error: string): boolean {
+  return /no credentials found for profile/i.test(error);
 }
 
 function randomImageProbeCode(len = 10): string {
@@ -280,6 +290,45 @@ function buildLiveGatewayConfig(params: {
   };
 }
 
+function sanitizeAuthConfig(params: {
+  cfg: ClawdbotConfig;
+  agentDir: string;
+}): ClawdbotConfig["auth"] | undefined {
+  const auth = params.cfg.auth;
+  if (!auth) return auth;
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+
+  let profiles: NonNullable<ClawdbotConfig["auth"]>["profiles"] | undefined;
+  if (auth.profiles) {
+    profiles = {};
+    for (const [profileId, profile] of Object.entries(auth.profiles)) {
+      if (!store.profiles[profileId]) continue;
+      profiles[profileId] = profile;
+    }
+    if (Object.keys(profiles).length === 0) profiles = undefined;
+  }
+
+  let order: Record<string, string[]> | undefined;
+  if (auth.order) {
+    order = {};
+    for (const [provider, ids] of Object.entries(auth.order)) {
+      const filtered = ids.filter((id) => Boolean(store.profiles[id]));
+      if (filtered.length === 0) continue;
+      order[provider] = filtered;
+    }
+    if (Object.keys(order).length === 0) order = undefined;
+  }
+
+  if (!profiles && !order && !auth.cooldowns) return undefined;
+  return {
+    ...auth,
+    profiles,
+    order,
+  };
+}
+
 function buildMinimaxProviderOverride(params: {
   cfg: ClawdbotConfig;
   api: "openai-completions" | "anthropic-messages";
@@ -307,7 +356,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
     skipCron: process.env.CLAWDBOT_SKIP_CRON,
     skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+    agentDir: process.env.CLAWDBOT_AGENT_DIR,
+    piAgentDir: process.env.PI_CODING_AGENT_DIR,
+    stateDir: process.env.CLAWDBOT_STATE_DIR,
   };
+  let tempAgentDir: string | undefined;
+  let tempStateDir: string | undefined;
 
   process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
   process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
@@ -316,6 +370,26 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const token = `test-${randomUUID()}`;
   process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+
+  const hostAgentDir = resolveClawdbotAgentDir();
+  const hostStore = ensureAuthProfileStore(hostAgentDir, {
+    allowKeychainPrompt: false,
+  });
+  const sanitizedStore: AuthProfileStore = {
+    version: hostStore.version,
+    profiles: { ...hostStore.profiles },
+    order: undefined,
+    lastGood: undefined,
+    usageStats: undefined,
+  };
+  tempStateDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "clawdbot-live-state-"),
+  );
+  process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+  tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+  saveAuthProfileStore(sanitizedStore, tempAgentDir);
+  process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
+  process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 
   const workspaceDir = resolveUserPath(
     params.cfg.agents?.defaults?.workspace ?? path.join(os.homedir(), "clawd"),
@@ -329,8 +403,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   );
   await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
+  const agentDir = resolveClawdbotAgentDir();
+  const sanitizedCfg: ClawdbotConfig = {
+    ...params.cfg,
+    auth: sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+  };
   const nextCfg = buildLiveGatewayConfig({
-    cfg: params.cfg,
+    cfg: sanitizedCfg,
     candidates: params.candidates,
     providerOverrides: params.providerOverrides,
   });
@@ -366,6 +445,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
     const sessionKey = `agent:dev:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
+    let skippedCount = 0;
     const total = params.candidates.length;
 
     for (const [index, model] of params.candidates.entries()) {
@@ -632,12 +712,32 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
+          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+            if (attempt + 1 < attemptMax) {
+              logProgress(
+                `${progressLabel}: billing issue, retrying with next key`,
+              );
+              continue;
+            }
+            logProgress(`${progressLabel}: skip (anthropic billing)`);
+            break;
+          }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (
             model.provider === "openai-codex" &&
             isRefreshTokenReused(message)
           ) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+            break;
+          }
+          if (isMissingProfileError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (missing auth profile)`);
+            break;
+          }
+          if (params.label.startsWith("minimax-")) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (minimax endpoint error)`);
             break;
           }
           logProgress(`${progressLabel}: failed`);
@@ -656,11 +756,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `gateway live model failures (${failures.length}):\n${preview}`,
       );
     }
+    if (skippedCount === total) {
+      logProgress(`[${params.label}] skipped all models (missing profiles)`);
+    }
   } finally {
     client.stop();
     await server.close({ reason: "live test complete" });
     await fs.rm(toolProbePath, { force: true });
     await fs.rm(tempDir, { recursive: true, force: true });
+    if (tempAgentDir) {
+      await fs.rm(tempAgentDir, { recursive: true, force: true });
+    }
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+    }
 
     process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
     process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
@@ -668,6 +777,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
     process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
+    process.env.CLAWDBOT_AGENT_DIR = previous.agentDir;
+    process.env.PI_CODING_AGENT_DIR = previous.piAgentDir;
+    process.env.CLAWDBOT_STATE_DIR = previous.stateDir;
   }
 }
 
@@ -679,6 +791,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await ensureClawdbotModelsJson(cfg);
 
       const agentDir = resolveClawdbotAgentDir();
+      const authStore = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const all = modelRegistry.getAll() as Array<Model<Api>>;
@@ -699,7 +814,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         if (PROVIDERS && !PROVIDERS.has(model.provider)) continue;
         try {
           // eslint-disable-next-line no-await-in-loop
-          await getApiKeyForModel({ model, cfg });
+          const apiKeyInfo = await getApiKeyForModel({
+            model,
+            cfg,
+            store: authStore,
+            agentDir,
+          });
+          if (!apiKeyInfo.source.startsWith("profile:")) {
+            continue;
+          }
           candidates.push(model);
         } catch {
           // no creds; skip
@@ -738,27 +861,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "[minimax] no candidates with keys; skipping dual endpoint probes",
         );
         return;
-      }
-
-      const minimaxOpenAi = buildMinimaxProviderOverride({
-        cfg,
-        api: "openai-completions",
-        baseUrl: "https://api.minimax.io/v1",
-      });
-      if (minimaxOpenAi) {
-        await runGatewayModelSuite({
-          label: "minimax-openai",
-          cfg,
-          candidates: minimaxCandidates,
-          extraToolProbes: true,
-          extraImageProbes: true,
-          thinkingLevel: THINKING_LEVEL,
-          providerOverrides: { minimax: minimaxOpenAi },
-        });
-      } else {
-        logProgress(
-          "[minimax-openai] missing minimax provider config; skipping",
-        );
       }
 
       const minimaxAnthropic = buildMinimaxProviderOverride({

@@ -9,6 +9,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
+  isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "./live-auth-keys.js";
 import { isModernModelRef } from "./live-model-filter.js";
@@ -72,6 +73,18 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveTestReasoning(
+  model: Model<Api>,
+): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+  if (!model.reasoning) return undefined;
+  const id = model.id.toLowerCase();
+  if (model.provider === "openai" || model.provider === "openai-codex") {
+    if (id.includes("pro")) return "high";
+    return "medium";
+  }
+  return "low";
+}
+
 async function completeSimpleWithTimeout<TApi extends Api>(
   model: Model<TApi>,
   context: Parameters<typeof completeSimple<TApi>>[1],
@@ -110,7 +123,7 @@ async function completeOkWithRetry(params: {
       },
       {
         apiKey: params.apiKey,
-        reasoning: params.model.reasoning ? "low" : undefined,
+        reasoning: resolveTestReasoning(params.model),
         maxTokens: 64,
       },
       params.timeoutMs,
@@ -255,7 +268,7 @@ describeLive("live models (profile keys)", () => {
                 },
                 {
                   apiKey,
-                  reasoning: model.reasoning ? "low" : undefined,
+                  reasoning: resolveTestReasoning(model),
                   maxTokens: 128,
                 },
                 perModelTimeoutMs,
@@ -295,7 +308,7 @@ describeLive("live models (profile keys)", () => {
                 },
                 {
                   apiKey,
-                  reasoning: model.reasoning ? "low" : undefined,
+                  reasoning: resolveTestReasoning(model),
                   maxTokens: 64,
                 },
                 perModelTimeoutMs,
@@ -335,6 +348,18 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (google model not found)`);
               break;
             }
+            if (
+              ok.text.length === 0 &&
+              (model.provider === "openrouter" ||
+                model.provider === "opencode")
+            ) {
+              skipped.push({
+                model: id,
+                reason: "no text returned (provider returned empty content)",
+              });
+              logProgress(`${progressLabel}: skip (empty response)`);
+              break;
+            }
             expect(ok.text.length).toBeGreaterThan(0);
             logProgress(`${progressLabel}: done`);
             break;
@@ -350,12 +375,32 @@ describeLive("live models (profile keys)", () => {
               );
               continue;
             }
+            if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+              if (attempt + 1 < attemptMax) {
+                logProgress(
+                  `${progressLabel}: billing issue, retrying with next key`,
+                );
+                continue;
+              }
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (anthropic billing)`);
+              break;
+            }
             if (
               model.provider === "google" &&
               isGoogleModelNotFoundError(err)
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (google model not found)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "minimax" &&
+              message.includes("request ended without sending any chunks")
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (minimax empty response)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

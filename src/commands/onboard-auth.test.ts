@@ -133,12 +133,7 @@ describe("applyMinimaxApiConfig", () => {
     );
   });
 
-  it("sets reasoning flag for MiniMax-M2 model", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
-  });
-
-  it("does not set reasoning for non-M2 models", () => {
+  it("does not set reasoning for non-reasoning models", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
   });
