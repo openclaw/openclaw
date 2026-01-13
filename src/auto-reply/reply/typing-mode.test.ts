@@ -96,6 +96,20 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
+  it("signals on message start for message mode", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalMessageStart();
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
   it("signals on reasoning for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({

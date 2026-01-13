@@ -51,6 +51,7 @@ type EmbeddedPiAgentParams = {
     text?: string;
     mediaUrls?: string[];
   }) => Promise<void> | void;
+  onAssistantMessageStart?: () => Promise<void> | void;
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -212,19 +213,21 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("starts typing only on deltas in message mode", async () => {
-    runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
-      payloads: [{ text: "final" }],
-      meta: {},
-    }));
+  it("starts typing on assistant message start in message mode", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: EmbeddedPiAgentParams) => {
+        await params.onAssistantMessageStart?.();
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
 
     const { run, typing } = createMinimalRun({
       typingMode: "message",
     });
     await run();
 
+    expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("starts typing from reasoning stream in thinking mode", async () => {

@@ -146,7 +146,7 @@ function extractMessagingToolSend(
     : undefined;
 }
 
-export function subscribeEmbeddedPiSession(params: {
+export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
   verboseLevel?: "off" | "on";
@@ -173,12 +173,17 @@ export function subscribeEmbeddedPiSession(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
   }) => void;
   enforceFinalTag?: boolean;
-}) {
+};
+
+export function subscribeEmbeddedPiSession(
+  params: SubscribeEmbeddedPiSessionParams,
+) {
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
@@ -492,6 +497,8 @@ export function subscribeEmbeddedPiSession(params: {
           // may deliver late text_end updates after message_end, which would
           // otherwise re-trigger block replies.
           resetAssistantMessageState(assistantTexts.length);
+          // Use assistant message_start as the earliest "writing" signal for typing.
+          void params.onAssistantMessageStart?.();
         }
       }
 
