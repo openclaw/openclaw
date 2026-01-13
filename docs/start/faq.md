@@ -231,13 +231,16 @@ Clawdbot also runs a **silent pre-compaction memory flush** to remind the model
 to write durable notes before auto-compaction. This only runs when the workspace
 is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
 
-### Why does memory search need an OpenAI API key if I already signed in with Codex?
+### Does semantic memory search require an OpenAI API key?
 
-Vector memory search uses **embeddings**. Codex OAuth only covers
-chat/completions and does **not** grant embeddings access, so the upstream
-memory indexer needs a real OpenAI API key (`OPENAI_API_KEY` or
-`models.providers.openai.apiKey`). If you don’t want to set a key, switch to
-`memorySearch.provider = "local"` or set `memorySearch.fallback = "none"`.
+Only if you use **remote embeddings** (OpenAI). Codex OAuth covers
+chat/completions and does **not** grant embeddings access, so **signing in with
+Codex (OAuth or the Codex CLI login)** does not help for semantic memory search.
+Remote memory search still needs a real OpenAI API key (`OPENAI_API_KEY` or
+`models.providers.openai.apiKey`). If you’d rather stay local, set
+`memorySearch.provider = "local"` (and optionally `memorySearch.fallback =
+"none"`). We support **remote or local embedding models** — see [Memory](/concepts/memory)
+for the setup details.
 
 ## Where things live on disk
 
