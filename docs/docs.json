@@ -46,6 +46,70 @@
       "destination": "/concepts/messages"
     },
     {
+      "source": "/minimax",
+      "destination": "/providers/minimax"
+    },
+    {
+      "source": "/minimax/",
+      "destination": "/providers/minimax"
+    },
+    {
+      "source": "/openai",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/openai/",
+      "destination": "/providers/openai"
+    },
+    {
+      "source": "/anthropic",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/anthropic/",
+      "destination": "/providers/anthropic"
+    },
+    {
+      "source": "/moonshot",
+      "destination": "/providers/moonshot"
+    },
+    {
+      "source": "/moonshot/",
+      "destination": "/providers/moonshot"
+    },
+    {
+      "source": "/openrouter",
+      "destination": "/providers/openrouter"
+    },
+    {
+      "source": "/openrouter/",
+      "destination": "/providers/openrouter"
+    },
+    {
+      "source": "/opencode",
+      "destination": "/providers/opencode"
+    },
+    {
+      "source": "/opencode/",
+      "destination": "/providers/opencode"
+    },
+    {
+      "source": "/glm",
+      "destination": "/providers/glm"
+    },
+    {
+      "source": "/glm/",
+      "destination": "/providers/glm"
+    },
+    {
+      "source": "/zai",
+      "destination": "/providers/zai"
+    },
+    {
+      "source": "/zai/",
+      "destination": "/providers/zai"
+    },
+    {
       "source": "/message",
       "destination": "/cli/message"
     },
@@ -675,14 +739,22 @@
       {
         "group": "Providers",
         "pages": [
-          "providers/whatsapp",
-          "broadcast-groups",
+          "providers/openai",
+          "providers/anthropic",
+          "providers/moonshot",
+          "providers/minimax",
+          "providers/openrouter",
+          "providers/opencode",
+          "providers/glm",
+          "providers/zai",
           "providers/telegram",
           "providers/grammy",
           "providers/discord",
           "providers/slack",
           "providers/signal",
           "providers/imessage",
+          "providers/whatsapp",
+          "broadcast-groups",
           "providers/msteams",
           "providers/troubleshooting",
           "providers/location"
