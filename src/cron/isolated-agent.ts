@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   resolveAgentConfig,
+  resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -458,6 +459,10 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       model,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        params.cfg,
+        agentId,
+      ),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
           const cliSessionId = getCliSessionId(
