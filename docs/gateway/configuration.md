@@ -1213,6 +1213,27 @@ is already present in `agents.defaults.models`:
 
 If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
 
+Example: Opus 4.5 primary with MiniMax M2.1 fallback (hosted MiniMax):
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "minimax/MiniMax-M2.1": { alias: "minimax" }
+      },
+      model: {
+        primary: "anthropic/claude-opus-4-5",
+        fallbacks: ["minimax/MiniMax-M2.1"]
+      }
+    }
+  }
+}
+```
+
+MiniMax auth: set `MINIMAX_API_KEY` (env) or configure `models.providers.minimax`.
+
 #### `agents.defaults.cliBackends` (CLI fallback)
 
 Optional CLI backends for text-only fallback runs (no tool calls). These are useful as a
