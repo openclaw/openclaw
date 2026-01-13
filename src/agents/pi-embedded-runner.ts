@@ -85,6 +85,7 @@ export type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import {
   buildBootstrapContextFiles,
   classifyFailoverReason,
+  downgradeGeminiHistory,
   type EmbeddedContextFile,
   ensureSessionHeader,
   formatAssistantErrorText,
@@ -493,8 +494,14 @@ async function sanitizeSessionHistory(params: {
     },
   );
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
+
+  // Downgrade tool calls missing thought_signature if using Gemini
+  const downgraded = isGoogleModelApi(params.modelApi)
+    ? downgradeGeminiHistory(repairedTools)
+    : repairedTools;
+
   return applyGoogleTurnOrderingFix({
-    messages: repairedTools,
+    messages: downgraded,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,
