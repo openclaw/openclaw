@@ -10,12 +10,12 @@ import {
   discoverModels,
 } from "@mariozechner/pi-coding-agent";
 import { describe, it } from "vitest";
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -712,7 +712,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
-          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+          if (
+            model.provider === "anthropic" &&
+            isAnthropicBillingError(message)
+          ) {
             if (attempt + 1 < attemptMax) {
               logProgress(
                 `${progressLabel}: billing issue, retrying with next key`,

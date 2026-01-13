@@ -350,8 +350,7 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               ok.text.length === 0 &&
-              (model.provider === "openrouter" ||
-                model.provider === "opencode")
+              (model.provider === "openrouter" || model.provider === "opencode")
             ) {
               skipped.push({
                 model: id,
@@ -375,7 +374,10 @@ describeLive("live models (profile keys)", () => {
               );
               continue;
             }
-            if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+            if (
+              model.provider === "anthropic" &&
+              isAnthropicBillingError(message)
+            ) {
               if (attempt + 1 < attemptMax) {
                 logProgress(
                   `${progressLabel}: billing issue, retrying with next key`,
