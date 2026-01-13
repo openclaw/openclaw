@@ -33,6 +33,11 @@ export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unk
       fetch: {
         // Match grammY defaults
         timeout: 30,
+        // Request reaction updates from Telegram
+        allowed_updates: [
+          "message",
+          "message_reaction",
+        ],
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
@@ -111,6 +116,21 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onUpdateId: persistUpdateId,
     },
   });
+
+  // When using polling mode, ensure no webhook is active
+  if (!opts.useWebhook) {
+    try {
+      const webhookInfo = await bot.api.getWebhookInfo();
+      if (webhookInfo.url) {
+        await bot.api.deleteWebhook({ drop_pending_updates: false });
+        log(`telegram: deleted webhook to enable polling`);
+      }
+    } catch (err) {
+      (opts.runtime?.error ?? console.error)(
+        `telegram: failed to check/delete webhook: ${String(err)}`,
+      );
+    }
+  }
 
   if (opts.useWebhook) {
     await startTelegramWebhook({

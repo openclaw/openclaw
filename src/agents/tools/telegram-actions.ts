@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
   deleteMessageTelegram,
   reactMessageTelegram,
@@ -82,8 +83,20 @@ export async function handleTelegramAction(
   const isActionEnabled = createActionGate(cfg.channels?.telegram?.actions);
 
   if (action === "react") {
+    // Check reaction level first
+    const reactionLevelInfo = resolveTelegramReactionLevel({
+      cfg,
+      accountId: accountId ?? undefined,
+    });
+    if (!reactionLevelInfo.agentReactionsEnabled) {
+      throw new Error(
+        `Telegram agent reactions disabled (reactionLevel="${reactionLevelInfo.level}"). ` +
+          `Set channels.telegram.reactionLevel to "minimal" or "extensive" to enable.`,
+      );
+    }
+    // Also check the existing action gate for backward compatibility
     if (!isActionEnabled("reactions")) {
-      throw new Error("Telegram reactions are disabled.");
+      throw new Error("Telegram reactions are disabled via actions.reactions.");
     }
     const chatId = readStringOrNumberParam(params, "chatId", {
       required: true,

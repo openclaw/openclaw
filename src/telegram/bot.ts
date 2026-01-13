@@ -28,9 +28,14 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramForumThreadId, resolveTelegramStreamMode } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  resolveTelegramForumThreadId,
+  resolveTelegramStreamMode,
+} from "./bot/helpers.js";
 import type { TelegramContext, TelegramMessage } from "./bot/types.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -322,14 +327,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const messageId = reaction.message_id;
       const user = reaction.user;
 
-      // Resolve reaction notification mode (default: "own")
-      const reactionMode = telegramCfg.reactionNotifications ?? "own";
+      // Resolve reaction notification mode (default: "off")
+      const reactionMode = telegramCfg.reactionNotifications ?? "off";
       if (reactionMode === "off") return;
-
-      // For "own" mode, only notify for reactions to bot's messages
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
-        return;
-      }
 
       // Detect added reactions
       const oldEmojis = new Set(
@@ -364,14 +364,25 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
       senderLabel = senderLabel || "unknown";
 
+      // Extract forum thread info (similar to message processing)
+      const messageThreadId = (reaction as any).message_thread_id;
+      const isForum = (reaction.chat as any).is_forum === true;
+      const resolvedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId,
+      });
+
       // Resolve agent route for session
       const isGroup =
         reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const peerId = isGroup
+        ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+        : String(chatId);
       const route = resolveAgentRoute({
         cfg,
         channel: "telegram",
         accountId: account.accountId,
-        peer: { kind: isGroup ? "group" : "dm", id: String(chatId) },
+        peer: { kind: isGroup ? "group" : "dm", id: peerId },
       });
 
       // Enqueue system event for each added reaction

@@ -423,8 +423,10 @@ export type TelegramAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
-  /** Reaction notification mode: off, own (default), all. */
-  reactionNotifications?: "off" | "own" | "all";
+  /** Reaction notification mode: off (default), all. */
+  reactionNotifications?: "off" | "all";
+  /** Reaction level: off, ack (default), minimal, extensive. */
+  reactionLevel?: "off" | "ack" | "minimal" | "extensive";
   mediaMaxMb?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;

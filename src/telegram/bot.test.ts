@@ -2244,14 +2244,13 @@ describe("createTelegramBot", () => {
     expect(reactionHandler).toBeDefined();
   });
 
-  it("enqueues system event for reaction on bot message", async () => {
+  it("enqueues system event for reaction", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();
-    wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
       },
     });
 
@@ -2312,37 +2311,6 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("skips reaction in own mode when message was not sent by bot", async () => {
-    onSpy.mockReset();
-    enqueueSystemEvent.mockReset();
-    wasSentByBot.mockReturnValue(false);
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 502 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 99,
-        user: { id: 9, first_name: "Ada" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
-      },
-    });
-
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
   it("allows reaction in all mode regardless of message sender", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();
@@ -2381,11 +2349,10 @@ describe("createTelegramBot", () => {
   it("skips reaction removal (only processes added reactions)", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();
-    wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
       },
     });
 
@@ -2407,5 +2374,121 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("uses correct session key for forum group reactions with topic", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 505 },
+      messageReaction: {
+        chat: { id: 5678, type: "supergroup", is_forum: true },
+        message_id: 100,
+        message_thread_id: 42,
+        user: { id: 10, first_name: "Bob", username: "bob_user" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🔥" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Telegram reaction added: 🔥 by Bob (@bob_user) on msg 100",
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("telegram:group:5678:topic:42"),
+        contextKey: expect.stringContaining("telegram:reaction:add:5678:100:10"),
+      }),
+    );
+  });
+
+  it("uses correct session key for forum group reactions in general topic", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 506 },
+      messageReaction: {
+        chat: { id: 5678, type: "supergroup", is_forum: true },
+        message_id: 101,
+        // No message_thread_id - should default to general topic (1)
+        user: { id: 10, first_name: "Bob" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👀" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Telegram reaction added: 👀 by Bob on msg 101",
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
+        contextKey: expect.stringContaining("telegram:reaction:add:5678:101:10"),
+      }),
+    );
+  });
+
+  it("uses correct session key for regular group reactions without topic", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 507 },
+      messageReaction: {
+        chat: { id: 9999, type: "group" },
+        message_id: 200,
+        user: { id: 11, first_name: "Charlie" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "❤️" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Telegram reaction added: ❤️ by Charlie on msg 200",
+      expect.objectContaining({
+        sessionKey: expect.stringContaining("telegram:group:9999"),
+        contextKey: expect.stringContaining("telegram:reaction:add:9999:200:11"),
+      }),
+    );
+    // Verify session key does NOT contain :topic:
+    const sessionKey = enqueueSystemEvent.mock.calls[0][1].sessionKey;
+    expect(sessionKey).not.toContain(":topic:");
   });
 });

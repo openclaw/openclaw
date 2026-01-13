@@ -63,6 +63,10 @@ export async function startTelegramWebhook(opts: {
 
   await bot.api.setWebhook(publicUrl, {
     secret_token: opts.secret,
+    allowed_updates: [
+      "message",
+      "message_reaction",
+    ],
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
