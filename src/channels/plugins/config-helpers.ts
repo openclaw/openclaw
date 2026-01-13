@@ -106,10 +106,7 @@ export function deleteAccountFromConfigSection(params: {
     } as ClawdbotConfig;
   }
 
-  const nextChannels = { ...(params.cfg.channels ?? {}) } as Record<
-    string,
-    unknown
-  >;
+  const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
   delete nextChannels[params.sectionKey];
   const nextCfg = { ...params.cfg } as ClawdbotConfig;
   if (Object.keys(nextChannels).length > 0) {

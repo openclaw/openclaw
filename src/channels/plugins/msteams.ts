@@ -67,7 +67,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     }),
     deleteAccount: ({ cfg }) => {
       const next = { ...cfg } as ClawdbotConfig;
-      const nextChannels = { ...(cfg.channels ?? {}) };
+      const nextChannels = { ...cfg.channels };
       delete nextChannels.msteams;
       if (Object.keys(nextChannels).length > 0) {
         next.channels = nextChannels;

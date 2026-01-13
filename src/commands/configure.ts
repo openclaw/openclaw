@@ -620,7 +620,7 @@ async function removeChannelConfigWizard(
     );
     if (!confirmed) continue;
 
-    const nextChannels: Record<string, unknown> = { ...(next.channels ?? {}) };
+    const nextChannels: Record<string, unknown> = { ...next.channels };
     delete nextChannels[channel];
     next = {
       ...next,

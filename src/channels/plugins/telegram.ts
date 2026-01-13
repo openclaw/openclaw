@@ -462,7 +462,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         if (nextTelegram && Object.keys(nextTelegram).length > 0) {
           nextCfg.channels = { ...nextCfg.channels, telegram: nextTelegram };
         } else {
-          const nextChannels = { ...(nextCfg.channels ?? {}) };
+          const nextChannels = { ...nextCfg.channels };
           delete nextChannels.telegram;
           if (Object.keys(nextChannels).length > 0) {
             nextCfg.channels = nextChannels;
