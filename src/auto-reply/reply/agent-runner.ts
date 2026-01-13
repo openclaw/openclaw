@@ -704,7 +704,7 @@ export async function runReplyAgent(params: {
                 if (evt.stream === "tool") {
                   const phase =
                     typeof evt.data.phase === "string" ? evt.data.phase : "";
-                  if (phase === "start") {
+                  if (phase === "start" || phase === "update") {
                     void typingSignals.signalToolStart();
                   }
                 }
