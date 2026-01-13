@@ -771,6 +771,36 @@ const WhatsAppConfigSchema = z
     });
   });
 
+const ZaloAccountSchema = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional().default(true),
+  botToken: z.string().optional(),
+  tokenFile: z.string().optional(),
+  webhookUrl: z.string().optional(),
+  webhookSecret: z.string().optional(),
+  webhookPath: z.string().optional(),
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+  groups: z
+    .record(
+      z.string(),
+      z.object({ requireMention: z.boolean().optional() }).optional(),
+    )
+    .optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+  historyLimit: z.number().int().min(0).optional(),
+  proxy: z.string().optional(),
+});
+
+const ZaloConfigSchema = z
+  .object({
+    accounts: z.record(z.string(), ZaloAccountSchema.optional()).optional(),
+    defaultAccount: z.string().optional(),
+  })
+  .merge(ZaloAccountSchema)
+  .optional();
+
 const ChannelsSchema = z
   .object({
     whatsapp: WhatsAppConfigSchema.optional(),
@@ -780,6 +810,7 @@ const ChannelsSchema = z
     signal: SignalConfigSchema.optional(),
     imessage: IMessageConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
+    zalo: ZaloConfigSchema.optional(),
   })
   .optional();
 

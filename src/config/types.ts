@@ -803,6 +803,49 @@ export type MSTeamsConfig = {
   teams?: Record<string, MSTeamsTeamConfig>;
 };
 
+export type ZaloAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this Zalo account. Default: true. */
+  enabled?: boolean;
+  /** Bot token from Zalo Bot Creator. */
+  botToken?: string;
+  /** Path to file containing the bot token. */
+  tokenFile?: string;
+  /** Webhook URL for receiving updates (HTTPS required). */
+  webhookUrl?: string;
+  /** Webhook secret token (8-256 chars) for request verification. */
+  webhookSecret?: string;
+  /** Webhook path for the gateway HTTP server. */
+  webhookPath?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
+  /** Allowlist for DM senders (Zalo user IDs). */
+  allowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open": groups bypass allowFrom; mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in allowFrom
+   */
+  groupPolicy?: GroupPolicy;
+  /** Per-group config. Key is group ID. */
+  groups?: Record<string, { requireMention?: boolean }>;
+  /** Max inbound media size in MB. */
+  mediaMaxMb?: number;
+  /** Max messages to keep as history context (0 disables). */
+  historyLimit?: number;
+  /** Proxy URL for API requests. */
+  proxy?: string;
+};
+
+export type ZaloConfig = {
+  /** Optional per-account Zalo configuration (multi-account). */
+  accounts?: Record<string, ZaloAccountConfig>;
+  /** Default account ID when multiple accounts are configured. */
+  defaultAccount?: string;
+} & ZaloAccountConfig;
+
 export type ChannelsConfig = {
   whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
@@ -811,6 +854,7 @@ export type ChannelsConfig = {
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
+  zalo?: ZaloConfig;
 };
 
 export type IMessageAccountConfig = {

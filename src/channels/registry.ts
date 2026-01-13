@@ -8,6 +8,7 @@ export const CHAT_CHANNEL_ORDER = [
   "signal",
   "imessage",
   "msteams",
+  "zalo",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -94,11 +95,20 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
     docsLabel: "msteams",
     blurb: "supported (Bot Framework).",
   },
+  zalo: {
+    id: "zalo",
+    label: "Zalo",
+    selectionLabel: "Zalo (Bot API)",
+    docsPath: "/channels/zalo",
+    docsLabel: "zalo",
+    blurb: "Vietnam-focused messaging platform with Bot API.",
+  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
   teams: "msteams",
+  zl: "zalo",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

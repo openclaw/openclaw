@@ -7,6 +7,7 @@ import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
+import { resolveZaloAccount } from "../zalo/accounts.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
@@ -319,6 +320,33 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
         currentThreadTs: context.ReplyToId,
         hasRepliedRef,
       }),
+    },
+  },
+  zalo: {
+    id: "zalo",
+    capabilities: {
+      chatTypes: ["direct"],
+      media: true,
+      blockStreaming: true,
+    },
+    outbound: { textChunkLimit: 2000 },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveZaloAccount({ cfg, accountId }).config.allowFrom ?? []).map(
+          (entry) => String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => entry.replace(/^(zalo|zl):/i, ""))
+          .map((entry) => entry.toLowerCase()),
+    },
+    groups: {
+      resolveRequireMention: () => true,
+    },
+    threading: {
+      resolveReplyToMode: () => "off",
     },
   },
 };

@@ -15,6 +15,7 @@ const LOADERS: Record<ChannelId, OutboundLoader> = {
   signal: async () => (await import("./signal.js")).signalOutbound,
   imessage: async () => (await import("./imessage.js")).imessageOutbound,
   msteams: async () => (await import("./msteams.js")).msteamsOutbound,
+  zalo: async () => (await import("./zalo.js")).zaloOutbound,
 };
 
 const cache = new Map<ChannelId, ChannelOutboundAdapter>();
