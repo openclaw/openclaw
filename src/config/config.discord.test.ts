@@ -28,13 +28,18 @@ describe("config discord", () => {
                 dm: {
                   enabled: true,
                   allowFrom: ["steipete"],
-                  groupEnabled: true,
-                  groupChannels: ["clawd-dm"],
-                },
-                guilds: {
-                  "123": {
-                    slug: "friends-of-clawd",
-                    requireMention: false,
+                groupEnabled: true,
+                groupChannels: ["clawd-dm"],
+              },
+              actions: {
+                emojiUploads: true,
+                stickerUploads: false,
+                channels: true,
+              },
+              guilds: {
+                "123": {
+                  slug: "friends-of-clawd",
+                  requireMention: false,
                     users: ["steipete"],
                     channels: {
                       general: { allow: true },
@@ -57,6 +62,9 @@ describe("config discord", () => {
       expect(cfg.channels?.discord?.enabled).toBe(true);
       expect(cfg.channels?.discord?.dm?.groupEnabled).toBe(true);
       expect(cfg.channels?.discord?.dm?.groupChannels).toEqual(["clawd-dm"]);
+      expect(cfg.channels?.discord?.actions?.emojiUploads).toBe(true);
+      expect(cfg.channels?.discord?.actions?.stickerUploads).toBe(false);
+      expect(cfg.channels?.discord?.actions?.channels).toBe(true);
       expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-clawd");
       expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
     });

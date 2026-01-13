@@ -47,7 +47,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("channel-info");
       actions.add("channel-list");
     }
-    if (gate("channels", false)) {
+    if (gate("channels")) {
       actions.add("channel-create");
       actions.add("channel-edit");
       actions.add("channel-delete");

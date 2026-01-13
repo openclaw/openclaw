@@ -154,6 +154,8 @@ export const DiscordAccountSchema = z.object({
     .object({
       reactions: z.boolean().optional(),
       stickers: z.boolean().optional(),
+      emojiUploads: z.boolean().optional(),
+      stickerUploads: z.boolean().optional(),
       polls: z.boolean().optional(),
       permissions: z.boolean().optional(),
       messages: z.boolean().optional(),
@@ -167,6 +169,7 @@ export const DiscordAccountSchema = z.object({
       voiceStatus: z.boolean().optional(),
       events: z.boolean().optional(),
       moderation: z.boolean().optional(),
+      channels: z.boolean().optional(),
     })
     .optional(),
   replyToMode: ReplyToModeSchema.optional(),

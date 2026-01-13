@@ -227,6 +227,8 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
       actions: {
         reactions: true,
         stickers: true,
+        emojiUploads: true,
+        stickerUploads: true,
         polls: true,
         permissions: true,
         messages: true,
@@ -237,6 +239,7 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
         roleInfo: true,
         roles: false,
         channelInfo: true,
+        channels: true,
         voiceStatus: true,
         events: true,
         moderation: false
@@ -304,8 +307,9 @@ ack reaction after the bot replies.
 - `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `actions`: per-action tool gates; omit to allow all (set `false` to disable).
   - `reactions` (covers react + read reactions)
-  - `stickers`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
+  - `stickers`, `emojiUploads`, `stickerUploads`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
   - `memberInfo`, `roleInfo`, `channelInfo`, `voiceStatus`, `events`
+  - `channels` (create/edit/delete channels + categories + permissions)
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
 
@@ -321,6 +325,8 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 | --- | --- | --- |
 | reactions | enabled | React + list reactions + emojiList |
 | stickers | enabled | Send stickers |
+| emojiUploads | enabled | Upload emojis |
+| stickerUploads | enabled | Upload stickers |
 | polls | enabled | Create polls |
 | permissions | enabled | Channel permission snapshot |
 | messages | enabled | Read/send/edit/delete |
@@ -330,6 +336,7 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 | memberInfo | enabled | Member info |
 | roleInfo | enabled | Role list |
 | channelInfo | enabled | Channel info + list |
+| channels | enabled | Channel/category management |
 | voiceStatus | enabled | Voice state lookup |
 | events | enabled | List/create scheduled events |
 | roles | disabled | Role add/remove |
