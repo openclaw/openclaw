@@ -366,6 +366,72 @@ export function sanitizeDiscordThreadName(
   return truncateUtf16Safe(base, 100) || `Thread ${fallbackId}`;
 }
 
+type DiscordReplyDeliveryPlan = {
+  deliverTarget: string;
+  replyTarget: string;
+  replyReference: ReturnType<typeof createReplyReferencePlanner>;
+};
+
+async function maybeCreateDiscordAutoThread(params: {
+  client: Client;
+  message: DiscordMessageEvent["message"];
+  isGuildMessage: boolean;
+  channelConfig?: DiscordChannelConfigResolved;
+  threadChannel?: DiscordThreadChannel | null;
+  baseText: string;
+  combinedBody: string;
+}): Promise<string | undefined> {
+  if (!params.isGuildMessage) return undefined;
+  if (!params.channelConfig?.autoThread) return undefined;
+  if (params.threadChannel) return undefined;
+  try {
+    const threadName = sanitizeDiscordThreadName(
+      params.baseText || params.combinedBody || "Thread",
+      params.message.id,
+    );
+    const created = (await params.client.rest.post(
+      `${Routes.channelMessage(params.message.channelId, params.message.id)}/threads`,
+      {
+        body: {
+          name: threadName,
+          auto_archive_duration: 60,
+        },
+      },
+    )) as { id?: string };
+    const createdId = created?.id ? String(created.id) : "";
+    return createdId || undefined;
+  } catch (err) {
+    logVerbose(
+      `discord: autoThread failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
+    );
+    return undefined;
+  }
+}
+
+function resolveDiscordReplyDeliveryPlan(params: {
+  replyTarget: string;
+  replyToMode: ReplyToMode;
+  messageId: string;
+  threadChannel?: DiscordThreadChannel | null;
+  createdThreadId?: string | null;
+}): DiscordReplyDeliveryPlan {
+  const originalReplyTarget = params.replyTarget;
+  let deliverTarget = originalReplyTarget;
+  let replyTarget = originalReplyTarget;
+  if (params.createdThreadId) {
+    deliverTarget = `channel:${params.createdThreadId}`;
+    replyTarget = deliverTarget;
+  }
+  const allowReference = deliverTarget === originalReplyTarget;
+  const replyReference = createReplyReferencePlanner({
+    replyToMode: allowReference ? params.replyToMode : "off",
+    existingId: params.threadChannel ? params.messageId : undefined,
+    startId: params.messageId,
+    allowReference,
+  });
+  return { deliverTarget, replyTarget, replyReference };
+}
+
 function summarizeAllowList(list?: Array<string | number>) {
   if (!list || list.length === 0) return "any";
   const sample = list.slice(0, 4).map((entry) => String(entry));
@@ -1205,45 +1271,25 @@ export function createDiscordMessageHandler(params: {
         runtime.error?.(danger("discord: missing reply target"));
         return;
       }
-      const originalReplyTarget = replyTarget;
-
-      let deliverTarget = replyTarget;
-      if (isGuildMessage && channelConfig?.autoThread && !threadChannel) {
-        try {
-          const threadName = sanitizeDiscordThreadName(
-            baseText || combinedBody || "Thread",
-            message.id,
-          );
-
-          const created = (await client.rest.post(
-            `${Routes.channelMessage(message.channelId, message.id)}/threads`,
-            {
-              body: {
-                name: threadName,
-                auto_archive_duration: 60,
-              },
-            },
-          )) as { id?: string };
-
-          const createdId = created?.id ? String(created.id) : "";
-          if (createdId) {
-            deliverTarget = `channel:${createdId}`;
-            replyTarget = deliverTarget;
-          }
-        } catch (err) {
-          logVerbose(
-            `discord: autoThread failed for ${message.channelId}/${message.id}: ${String(err)}`,
-          );
-        }
-      }
-
-      const replyReference = createReplyReferencePlanner({
-        replyToMode:
-          deliverTarget !== originalReplyTarget ? "off" : replyToMode,
-        existingId: threadChannel ? message.id : undefined,
-        startId: message.id,
-        allowReference: deliverTarget === originalReplyTarget,
+      const createdThreadId = await maybeCreateDiscordAutoThread({
+        client,
+        message,
+        isGuildMessage,
+        channelConfig,
+        threadChannel,
+        baseText: baseText ?? "",
+        combinedBody,
       });
+      const replyPlan = resolveDiscordReplyDeliveryPlan({
+        replyTarget,
+        replyToMode,
+        messageId: message.id,
+        threadChannel,
+        createdThreadId,
+      });
+      const deliverTarget = replyPlan.deliverTarget;
+      replyTarget = replyPlan.replyTarget;
+      const replyReference = replyPlan.replyReference;
 
       if (isDirectMessage) {
         const sessionCfg = cfg.session;
