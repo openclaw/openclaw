@@ -12,6 +12,7 @@ import {
 import type { GatewayMessageProvider } from "../../utils/message-provider.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
@@ -30,9 +31,7 @@ const SessionsSpawnToolSchema = Type.Object({
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  cleanup: Type.Optional(
-    Type.Union([Type.Literal("delete"), Type.Literal("keep")]),
-  ),
+  cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
 
 function normalizeModelSelection(value: unknown): string | undefined {
