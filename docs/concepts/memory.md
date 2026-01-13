@@ -79,6 +79,12 @@ Defaults:
 - Uses remote embeddings (OpenAI) unless configured for local.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 
+Remote embeddings **require** an OpenAI API key (`OPENAI_API_KEY` or
+`models.providers.openai.apiKey`). Codex OAuth only covers chat/completions and
+does **not** satisfy embeddings for memory search. If you don't want to set an
+API key, use `memorySearch.provider = "local"` or set
+`memorySearch.fallback = "none"`.
+
 Config example:
 
 ```json5
