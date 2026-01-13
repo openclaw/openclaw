@@ -1,10 +1,8 @@
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import {
-  resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentModelPrimary,
   resolveDefaultAgentId,
   resolveSessionAgentId,
-  resolveAgentModelPrimary,
 } from "../../agents/agent-scope.js";
 import {
   isProfileInCooldown,
