@@ -352,11 +352,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       const migrated = applyLegacyMigrations(resolved);
-      const resolvedConfig = migrated.next ?? resolved;
-      const legacyIssues = findLegacyConfigIssues(resolvedConfig);
+      const resolvedConfigRaw = migrated.next ?? resolved;
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
-      const validated = validateConfigObject(resolvedConfig);
+      const validated = validateConfigObject(resolvedConfigRaw);
       if (!validated.ok) {
+        const resolvedConfig =
+          typeof resolvedConfigRaw === "object" && resolvedConfigRaw !== null
+            ? (resolvedConfigRaw as ClawdbotConfig)
+            : {};
         return {
           path: configPath,
           exists: true,

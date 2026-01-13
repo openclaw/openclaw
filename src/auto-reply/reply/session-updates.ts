@@ -3,8 +3,8 @@ import crypto from "node:crypto";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { drainSystemEventEntries } from "../../infra/system-events.js";
 
 export async function prependSystemEvents(params: {
   cfg: ClawdbotConfig;

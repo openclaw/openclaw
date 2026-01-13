@@ -924,18 +924,20 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      telegram: {
-        accounts: {
-          opie: {
-            botToken: "tok-opie",
-            dmPolicy: "open",
+      channels: {
+        telegram: {
+          accounts: {
+            opie: {
+              botToken: "tok-opie",
+              dmPolicy: "open",
+            },
           },
         },
       },
       bindings: [
         {
           agentId: "opie",
-          match: { provider: "telegram", accountId: "opie" },
+          match: { channel: "telegram", accountId: "opie" },
         },
       ],
     });
@@ -1851,9 +1853,11 @@ describe("createTelegramBot", () => {
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
-      telegram: {
-        groupPolicy: "open",
-        groups: { "*": { requireMention: false } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
       },
     });
 
