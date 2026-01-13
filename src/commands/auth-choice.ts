@@ -33,6 +33,7 @@ import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
+import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
@@ -97,61 +98,8 @@ function normalizeApiKeyInput(raw: string): string {
   return withoutSemicolon.trim();
 }
 
-const validateApiKeyInput = (value: unknown) => {
-  const normalized =
-    typeof value === "string" ? normalizeApiKeyInput(value) : "";
-  return normalized.length > 0 ? undefined : "Required";
-};
-
-const validateRequiredInput = (value: string) =>
-  value.trim().length > 0 ? undefined : "Required";
-
-function createVpsAwareOAuthHandlers(params: {
-  isRemote: boolean;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  spin: ReturnType<WizardPrompter["progress"]>;
-  localBrowserMessage: string;
-}): {
-  onAuth: (event: { url: string }) => Promise<void>;
-  onPrompt: (prompt: {
-    message: string;
-    placeholder?: string;
-  }) => Promise<string>;
-} {
-  let manualCodePromise: Promise<string> | undefined;
-
-  return {
-    onAuth: async ({ url }) => {
-      if (params.isRemote) {
-        params.spin.stop("OAuth URL ready");
-        params.runtime.log(
-          `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
-        );
-        manualCodePromise = params.prompter
-          .text({
-            message: "Paste the redirect URL (or authorization code)",
-            validate: validateRequiredInput,
-          })
-          .then((value) => String(value));
-        return;
-      }
-
-      params.spin.update(params.localBrowserMessage);
-      await openUrl(url);
-      params.runtime.log(`Open: ${url}`);
-    },
-    onPrompt: async (prompt) => {
-      if (manualCodePromise) return manualCodePromise;
-      const code = await params.prompter.text({
-        message: prompt.message,
-        placeholder: prompt.placeholder,
-        validate: validateRequiredInput,
-      });
-      return String(code);
-    },
-  };
-}
+const validateApiKeyInput = (value: string) =>
+  normalizeApiKeyInput(value).length > 0 ? undefined : "Required";
 
 function formatApiKeyPreview(
   raw: string,
@@ -628,6 +576,7 @@ export async function applyAuthChoice(params: {
         prompter: params.prompter,
         runtime: params.runtime,
         spin,
+        openUrl,
         localBrowserMessage: "Complete sign-in in browser…",
       });
 
@@ -690,6 +639,7 @@ export async function applyAuthChoice(params: {
         prompter: params.prompter,
         runtime: params.runtime,
         spin,
+        openUrl,
         localBrowserMessage: "Complete sign-in in browser…",
       });
 

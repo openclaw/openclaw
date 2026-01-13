@@ -125,13 +125,19 @@ export async function loginChutes(params: {
   app: ChutesOAuthAppConfig;
   manual?: boolean;
   timeoutMs?: number;
+  createPkce?: typeof generateChutesPkce;
+  createState?: () => string;
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   fetchFn?: typeof fetch;
 }): Promise<OAuthCredentials> {
-  const { verifier, challenge } = generateChutesPkce();
-  const state = randomBytes(16).toString("hex");
+  const createPkce = params.createPkce ?? generateChutesPkce;
+  const createState =
+    params.createState ?? (() => randomBytes(16).toString("hex"));
+
+  const { verifier, challenge } = createPkce();
+  const state = createState();
   const timeoutMs = params.timeoutMs ?? 3 * 60 * 1000;
 
   const url = buildAuthorizeUrl({
