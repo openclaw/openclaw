@@ -62,6 +62,7 @@ import {
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
+import { noteSourceInstallIssues } from "./doctor-install.js";
 import {
   maybeMigrateLegacyConfigFile,
   normalizeLegacyConfigValues,
@@ -187,6 +188,12 @@ export async function doctorCommand(
   printWizardHeader(runtime);
   intro("Clawdbot doctor");
 
+  const root = await resolveClawdbotPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+
   const updateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS === "1";
   const canOfferUpdate =
     !updateInProgress &&
@@ -195,11 +202,6 @@ export async function doctorCommand(
     options.repair !== true &&
     Boolean(process.stdin.isTTY);
   if (canOfferUpdate) {
-    const root = await resolveClawdbotPackageRoot({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    });
     if (root) {
       const git = await detectClawdbotGitCheckout(root);
       if (git === "git") {
@@ -250,6 +252,7 @@ export async function doctorCommand(
   }
 
   await maybeRepairUiProtocolFreshness(runtime, prompter);
+  noteSourceInstallIssues(root);
 
   await maybeMigrateLegacyConfigFile(runtime);
 

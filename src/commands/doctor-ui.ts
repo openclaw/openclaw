@@ -23,9 +23,51 @@ export async function maybeRepairUiProtocolFreshness(
 
   try {
     const [schemaStats, uiStats] = await Promise.all([
-      fs.stat(schemaPath),
-      fs.stat(uiIndexPath),
+      fs.stat(schemaPath).catch(() => null),
+      fs.stat(uiIndexPath).catch(() => null),
     ]);
+
+    if (schemaStats && !uiStats) {
+      note(
+        [
+          "- Control UI assets are missing.",
+          "- Run: pnpm ui:build",
+        ].join("\n"),
+        "UI",
+      );
+
+      const shouldRepair = await prompter.confirmRepair({
+        message: "Build Control UI assets now?",
+        initialValue: true,
+      });
+
+      if (shouldRepair) {
+        note("Building Control UI assets... (this may take a moment)", "UI");
+        const uiScriptPath = path.join(root, "scripts/ui.js");
+        const buildResult = await runCommandWithTimeout(
+          [process.execPath, uiScriptPath, "build"],
+          {
+            cwd: root,
+            timeoutMs: 120_000,
+            env: { ...process.env, FORCE_COLOR: "1" },
+          },
+        );
+        if (buildResult.code === 0) {
+          note("UI build complete.", "UI");
+        } else {
+          const details = [
+            `UI build failed (exit ${buildResult.code ?? "unknown"}).`,
+            buildResult.stderr.trim() ? buildResult.stderr.trim() : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          note(details, "UI");
+        }
+      }
+      return;
+    }
+
+    if (!schemaStats || !uiStats) return;
 
     if (schemaStats.mtime > uiStats.mtime) {
       const uiMtimeIso = uiStats.mtime.toISOString();

@@ -76,6 +76,7 @@ cat ~/.clawdbot/clawdbot.json
 - Security warnings for open DM policies.
 - Gateway auth warnings when no `gateway.auth.token` is set (local mode; offers token generation).
 - systemd linger check on Linux.
+- Source install checks (pnpm workspace mismatch, missing UI assets, missing tsx binary).
 - Writes updated config + wizard metadata.
 
 ## Detailed behavior and rationale
