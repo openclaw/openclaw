@@ -65,6 +65,17 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("enabled" in base) {
+    const enabled = (base as UnknownRecord).enabled;
+    if (typeof enabled === "boolean") {
+      next.enabled = enabled;
+    } else if (typeof enabled === "string") {
+      const trimmed = enabled.trim().toLowerCase();
+      if (trimmed === "true") next.enabled = true;
+      if (trimmed === "false") next.enabled = false;
+    }
+  }
+
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }
