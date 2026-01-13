@@ -563,7 +563,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   return result;
 }
 
-function mergeConsecutiveUserTurns(
+export function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {
@@ -572,6 +572,7 @@ function mergeConsecutiveUserTurns(
     ...(Array.isArray(current.content) ? current.content : []),
   ];
 
+  // Preserve newest metadata while backfilling timestamp if the latest is missing.
   return {
     ...current, // newest wins for metadata
     content: mergedContent,
