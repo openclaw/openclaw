@@ -13,7 +13,10 @@ import type {
   GatewayClientName,
 } from "../../utils/message-provider.js";
 import type { ChatProviderId } from "../registry.js";
+import type { ProviderMessageActionName as ProviderMessageActionNameFromList } from "./message-action-names.js";
 import type { ProviderOnboardingAdapter } from "./onboarding-types.js";
+
+export { PROVIDER_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 
 export type ProviderId = ChatProviderId;
 
@@ -478,45 +481,7 @@ export type ProviderMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
 };
 
-export type ProviderMessageActionName =
-  | "send"
-  | "poll"
-  | "react"
-  | "reactions"
-  | "read"
-  | "edit"
-  | "delete"
-  | "pin"
-  | "unpin"
-  | "list-pins"
-  | "permissions"
-  | "thread-create"
-  | "thread-list"
-  | "thread-reply"
-  | "search"
-  | "sticker"
-  | "member-info"
-  | "role-info"
-  | "emoji-list"
-  | "emoji-upload"
-  | "sticker-upload"
-  | "role-add"
-  | "role-remove"
-  | "channel-info"
-  | "channel-list"
-  | "channel-create"
-  | "channel-edit"
-  | "channel-delete"
-  | "channel-move"
-  | "category-create"
-  | "category-edit"
-  | "category-delete"
-  | "voice-status"
-  | "event-list"
-  | "event-create"
-  | "timeout"
-  | "kick"
-  | "ban";
+export type ProviderMessageActionName = ProviderMessageActionNameFromList;
 
 export type ProviderMessageActionContext = {
   provider: ProviderId;

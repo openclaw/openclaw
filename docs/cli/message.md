@@ -46,7 +46,7 @@ Target formats (`--to`):
   - Providers: WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams
   - Required: `--to`, `--message`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
-  - Telegram only: `--buttons-json` (requires `"inlineButtons"` in `telegram.capabilities` or `telegram.accounts.<id>.capabilities`)
+  - Telegram only: `--buttons` (requires `"inlineButtons"` in `telegram.capabilities` or `telegram.accounts.<id>.capabilities`)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
@@ -206,5 +206,5 @@ clawdbot message react --provider slack \
 Send Telegram inline buttons:
 ```
 clawdbot message send --provider telegram --to @mychat --message "Choose:" \
-  --buttons-json '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
+  --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
 ```

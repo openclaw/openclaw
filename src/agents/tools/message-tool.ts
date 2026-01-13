@@ -1,74 +1,25 @@
 import { Type } from "@sinclair/typebox";
 
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import {
-  type MessagePollResult,
-  type MessageSendResult,
-  sendMessage,
-  sendPoll,
-} from "../../infra/outbound/message.js";
-import { resolveMessageProviderSelection } from "../../infra/outbound/provider-selection.js";
-import {
-  dispatchProviderMessageAction,
   listProviderMessageActions,
   supportsProviderMessageButtons,
 } from "../../providers/plugins/message-actions.js";
-import type { ProviderMessageActionName } from "../../providers/plugins/types.js";
+import {
+  PROVIDER_MESSAGE_ACTION_NAMES,
+  type ProviderMessageActionName,
+} from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../utils/message-provider.js";
 import type { AnyAgentTool } from "./common.js";
-import {
-  jsonResult,
-  readNumberParam,
-  readStringArrayParam,
-  readStringParam,
-} from "./common.js";
+import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
-const AllMessageActions = [
-  "send",
-  "poll",
-  "react",
-  "reactions",
-  "read",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "list-pins",
-  "permissions",
-  "thread-create",
-  "thread-list",
-  "thread-reply",
-  "search",
-  "sticker",
-  "member-info",
-  "role-info",
-  "emoji-list",
-  "emoji-upload",
-  "sticker-upload",
-  "role-add",
-  "role-remove",
-  "channel-info",
-  "channel-list",
-  "channel-create",
-  "channel-edit",
-  "channel-delete",
-  "channel-move",
-  "category-create",
-  "category-edit",
-  "category-delete",
-  "voice-status",
-  "event-list",
-  "event-create",
-  "timeout",
-  "kick",
-  "ban",
-];
+const AllMessageActions = PROVIDER_MESSAGE_ACTION_NAMES;
 
 const MessageToolCommonSchema = {
   provider: Type.Optional(Type.String()),
@@ -148,7 +99,7 @@ const MessageToolCommonSchema = {
 };
 
 function buildMessageToolSchemaFromActions(
-  actions: string[],
+  actions: readonly string[],
   options: { includeButtons: boolean },
 ) {
   const props: Record<string, unknown> = { ...MessageToolCommonSchema };
@@ -227,14 +178,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ProviderMessageActionName;
-
-      const providerSelection = await resolveMessageProviderSelection({
-        cfg,
-        provider: readStringParam(params, "provider"),
-      });
-      const provider = providerSelection.provider;
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
-      const dryRun = Boolean(params.dryRun);
 
       const gateway = {
         url: readStringParam(params, "gatewayUrl", { trim: false }),
@@ -258,144 +202,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      if (action === "send") {
-        const to = readStringParam(params, "to", { required: true });
-        let message = readStringParam(params, "message", {
-          required: true,
-          allowEmpty: true,
-        });
-
-        // Let send accept the same inline directives we use elsewhere.
-        // Provider plugins consume `replyTo` / `media` / `buttons` from params.
-        const parsed = parseReplyDirectives(message);
-        message = parsed.text;
-        params.message = message;
-        if (!params.replyTo && parsed.replyToId)
-          params.replyTo = parsed.replyToId;
-        if (!params.media) {
-          params.media = parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
-        }
-
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const gifPlayback =
-          typeof params.gifPlayback === "boolean" ? params.gifPlayback : false;
-        const bestEffort =
-          typeof params.bestEffort === "boolean"
-            ? params.bestEffort
-            : undefined;
-
-        if (dryRun) {
-          const result: MessageSendResult = await sendMessage({
-            to,
-            content: message,
-            mediaUrl: mediaUrl || undefined,
-            provider: provider || undefined,
-            accountId: accountId ?? undefined,
-            gifPlayback,
-            dryRun,
-            bestEffort,
-            gateway,
-          });
-          return jsonResult(result);
-        }
-
-        const handled = await dispatchProviderMessageAction({
-          provider,
-          action,
-          cfg,
-          params,
-          accountId,
-          gateway,
-          toolContext,
-          dryRun,
-        });
-        if (handled) return handled;
-
-        const result: MessageSendResult = await sendMessage({
-          to,
-          content: message,
-          mediaUrl: mediaUrl || undefined,
-          provider: provider || undefined,
-          accountId: accountId ?? undefined,
-          gifPlayback,
-          dryRun,
-          bestEffort,
-          gateway,
-        });
-        return jsonResult(result);
-      }
-
-      if (action === "poll") {
-        const to = readStringParam(params, "to", { required: true });
-        const question = readStringParam(params, "pollQuestion", {
-          required: true,
-        });
-        const options =
-          readStringArrayParam(params, "pollOption", { required: true }) ?? [];
-        const allowMultiselect =
-          typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
-        const durationHours = readNumberParam(params, "pollDurationHours", {
-          integer: true,
-        });
-
-        const maxSelections = allowMultiselect
-          ? Math.max(2, options.length)
-          : 1;
-
-        if (dryRun) {
-          const result: MessagePollResult = await sendPoll({
-            to,
-            question,
-            options,
-            maxSelections,
-            durationHours: durationHours ?? undefined,
-            provider,
-            dryRun,
-            gateway,
-          });
-          return jsonResult(result);
-        }
-
-        const handled = await dispatchProviderMessageAction({
-          provider,
-          action,
-          cfg,
-          params,
-          accountId,
-          gateway,
-          toolContext,
-          dryRun,
-        });
-        if (handled) return handled;
-
-        const result: MessagePollResult = await sendPoll({
-          to,
-          question,
-          options,
-          maxSelections,
-          durationHours: durationHours ?? undefined,
-          provider,
-          dryRun,
-          gateway,
-        });
-        return jsonResult(result);
-      }
-
-      const handled = await dispatchProviderMessageAction({
-        provider,
-        action,
+      const result = await runMessageAction({
         cfg,
+        action,
         params,
-        accountId,
+        defaultAccountId: accountId ?? undefined,
         gateway,
         toolContext,
-        dryRun,
       });
-      if (handled) return handled;
 
-      throw new Error(
-        `Message action ${action} not supported for provider ${provider}.`,
-      );
+      if (result.toolResult) return result.toolResult;
+      return jsonResult(result.payload);
     },
   };
 }
