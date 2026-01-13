@@ -19,6 +19,15 @@ const formatLine = (label: string, value: string) => {
   const rich = isRich();
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
+
+function resolveLaunchAgentLabel(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): string {
+  const envLabel = params?.env?.CLAWDBOT_LAUNCHD_LABEL?.trim();
+  if (envLabel) return envLabel;
+  return resolveGatewayLaunchAgentLabel(params?.profile);
+}
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) throw new Error("Missing HOME");
@@ -284,9 +293,12 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
-export async function isLaunchAgentLoaded(profile?: string): Promise<boolean> {
+export async function isLaunchAgentLoaded(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): Promise<boolean> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel(params);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
 }
@@ -461,13 +473,15 @@ function isLaunchctlNotLoaded(res: {
 
 export async function stopLaunchAgent({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel({ env, profile });
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(
@@ -548,13 +562,15 @@ export async function installLaunchAgent({
 
 export async function restartLaunchAgent({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = resolveGatewayLaunchAgentLabel(profile);
+  const label = resolveLaunchAgentLabel({ env, profile });
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
     throw new Error(

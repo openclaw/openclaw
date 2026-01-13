@@ -6,6 +6,9 @@
 - Cron: accept ISO timestamps for one-shot schedules (UTC) and allow optional delete-after-run; wired into CLI + macOS editor.
 - Gateway: add Tailscale binary discovery, custom bind mode, and probe auth retry for password changes. (#740 — thanks @jeffersonwarrior)
 
+### Fixes
+- Gateway: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides when checking or restarting the daemon.
+
 ## 2026.1.12-4
 
 ### Changes

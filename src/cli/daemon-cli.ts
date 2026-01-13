@@ -367,7 +367,10 @@ async function gatherDaemonStatus(opts: {
   const service = resolveGatewayService();
   const [loaded, command, runtime] = await Promise.all([
     service
-      .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+      .isLoaded({
+        env: process.env,
+        profile: process.env.CLAWDBOT_PROFILE,
+      })
       .catch(() => false),
     service.readCommand(process.env).catch(() => null),
     service.readRuntime(process.env).catch(() => undefined),
@@ -899,7 +902,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env, profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -980,7 +983,7 @@ export async function runDaemonStart() {
   const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env, profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -994,7 +997,11 @@ export async function runDaemonStart() {
     return;
   }
   try {
-    await service.restart({ profile, stdout: process.stdout });
+    await service.restart({
+      env: process.env,
+      profile,
+      stdout: process.stdout,
+    });
   } catch (err) {
     defaultRuntime.error(`Gateway start failed: ${String(err)}`);
     for (const hint of renderGatewayServiceStartHints()) {
@@ -1009,7 +1016,7 @@ export async function runDaemonStop() {
   const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env, profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -1020,7 +1027,7 @@ export async function runDaemonStop() {
     return;
   }
   try {
-    await service.stop({ profile, stdout: process.stdout });
+    await service.stop({ env: process.env, profile, stdout: process.stdout });
   } catch (err) {
     defaultRuntime.error(`Gateway stop failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -1037,7 +1044,7 @@ export async function runDaemonRestart(): Promise<boolean> {
   const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ profile });
+    loaded = await service.isLoaded({ env: process.env, profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -1051,7 +1058,11 @@ export async function runDaemonRestart(): Promise<boolean> {
     return false;
   }
   try {
-    await service.restart({ profile, stdout: process.stdout });
+    await service.restart({
+      env: process.env,
+      profile,
+      stdout: process.stdout,
+    });
     return true;
   } catch (err) {
     defaultRuntime.error(`Gateway restart failed: ${String(err)}`);

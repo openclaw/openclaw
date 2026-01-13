@@ -473,6 +473,7 @@ async function maybeInstallDaemon(params: {
 }) {
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({
+    env: process.env,
     profile: process.env.CLAWDBOT_PROFILE,
   });
   let shouldCheckLinger = false;
@@ -492,6 +493,7 @@ async function maybeInstallDaemon(params: {
     );
     if (action === "restart") {
       await service.restart({
+        env: process.env,
         profile: process.env.CLAWDBOT_PROFILE,
         stdout: process.stdout,
       });
