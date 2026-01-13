@@ -103,7 +103,7 @@ describe("createClawdbotCodingTools", () => {
     });
   });
 
-  it("flattens simple anyOf/oneOf unions into single types", () => {
+  it("drops null-only union variants without flattening other unions", () => {
     const cleaned = __testing.cleanToolSchemaForGemini({
       type: "object",
       properties: {
@@ -125,8 +125,7 @@ describe("createClawdbotCodingTools", () => {
       | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
       | undefined;
     expect(count?.anyOf).toBeUndefined();
-    expect(count?.oneOf).toBeUndefined();
-    expect(count?.type).toBe("string");
+    expect(Array.isArray(count?.oneOf)).toBe(true);
   });
 
   it("preserves action enums in normalized schemas", () => {
