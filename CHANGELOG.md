@@ -32,6 +32,7 @@
 - Agents: auto-recover from compaction context overflow by resetting the session and retrying; propagate overflow details from embedded runs so callers can recover.
 - MiniMax: strip malformed tool invocation XML; include `MiniMax-VL-01` in implicit provider for image pairing.
 - Onboarding/Auth: honor `CLAWDBOT_AGENT_DIR` / `PI_CODING_AGENT_DIR` when writing auth profiles (MiniMax). (#829) — thanks @roshanasingh4.
+- Anthropic: handle `overloaded_error` with a friendly message and failover classification. (#832) — thanks @danielz1z.
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid incorrect role errors.
 - Messaging: enforce context isolation for message tool sends; keep typing indicators alive during tool execution.
 - Auto-reply: `/status` allowlist behavior, reasoning-tag enforcement on fallback, and system-event enqueueing for elevated/reasoning toggles.
