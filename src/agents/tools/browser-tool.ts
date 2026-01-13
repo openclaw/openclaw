@@ -20,6 +20,7 @@ import {
   browserScreenshotAction,
 } from "../../browser/client-actions.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import {
   type AnyAgentTool,
@@ -43,8 +44,6 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 type BrowserActKind = (typeof BROWSER_ACT_KINDS)[number];
-
-const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
@@ -323,6 +322,7 @@ export function createBrowserTool(opts?: {
             params.format === "ai" || params.format === "aria"
               ? (params.format as "ai" | "aria")
               : "ai";
+          const hasMaxChars = Object.hasOwn(params, "maxChars");
           const targetId =
             typeof params.targetId === "string"
               ? params.targetId.trim()
@@ -339,7 +339,9 @@ export function createBrowserTool(opts?: {
               : undefined;
           const resolvedMaxChars =
             format === "ai"
-              ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS)
+              ? hasMaxChars
+                ? maxChars
+                : DEFAULT_AI_SNAPSHOT_MAX_CHARS
               : undefined;
           const interactive =
             typeof params.interactive === "boolean"
@@ -361,7 +363,9 @@ export function createBrowserTool(opts?: {
             format,
             targetId,
             limit,
-            ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
+            ...(typeof resolvedMaxChars === "number"
+              ? { maxChars: resolvedMaxChars }
+              : {}),
             interactive,
             compact,
             depth,

@@ -2,6 +2,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -329,6 +330,7 @@ describe("browser control server", () => {
     expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
+      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     });
 
     const nav = (await realFetch(`${base}/navigate`, {
@@ -683,6 +685,25 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok: boolean; stopped?: boolean };
     expect(stopped.ok).toBe(true);
     expect(stopped.stopped).toBe(true);
+  });
+
+  it("skips default maxChars when explicitly set to zero", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+
+    const snapAi = (await realFetch(
+      `${base}/snapshot?format=ai&maxChars=0`,
+    ).then((r) => r.json())) as { ok: boolean; format?: string };
+    expect(snapAi.ok).toBe(true);
+    expect(snapAi.format).toBe("ai");
+
+    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(call).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+    });
   });
 
   it("validates agent inputs (agent routes)", async () => {

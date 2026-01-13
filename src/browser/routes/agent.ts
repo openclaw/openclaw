@@ -7,6 +7,7 @@ import type express from "express";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import type { BrowserFormField } from "../client-actions-core.js";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../constants.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -1194,6 +1195,7 @@ export function registerBrowserAgentRoutes(
             : "aria";
     const limitRaw =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const hasMaxChars = Object.hasOwn(req.query, "maxChars");
     const maxCharsRaw =
       typeof req.query.maxChars === "string"
         ? Number(req.query.maxChars)
@@ -1204,6 +1206,12 @@ export function registerBrowserAgentRoutes(
       Number.isFinite(maxCharsRaw) &&
       maxCharsRaw > 0
         ? Math.floor(maxCharsRaw)
+        : undefined;
+    const resolvedMaxChars =
+      format === "ai"
+        ? hasMaxChars
+          ? maxChars
+          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
         : undefined;
     const interactive = toBoolean(req.query.interactive);
     const compact = toBoolean(req.query.compact);
@@ -1239,7 +1247,9 @@ export function registerBrowserAgentRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                ...(maxChars ? { maxChars } : {}),
+                ...(typeof resolvedMaxChars === "number"
+                  ? { maxChars: resolvedMaxChars }
+                  : {}),
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
