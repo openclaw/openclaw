@@ -175,6 +175,17 @@ function logSlowDiscordListener(params: {
   }
 }
 
+export function registerDiscordListener(
+  listeners: Array<object>,
+  listener: object,
+) {
+  if (listeners.some((existing) => existing.constructor === listener.constructor)) {
+    return false;
+  }
+  listeners.push(listener);
+  return true;
+}
+
 async function resolveDiscordThreadStarter(params: {
   channel: DiscordThreadChannel;
   client: Client;
@@ -602,8 +613,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     guildEntries,
   });
 
-  client.listeners.push(new DiscordMessageListener(messageHandler, logger));
-  client.listeners.push(
+  registerDiscordListener(
+    client.listeners,
+    new DiscordMessageListener(messageHandler, logger),
+  );
+  registerDiscordListener(
+    client.listeners,
     new DiscordReactionListener({
       cfg,
       accountId: account.accountId,
@@ -613,7 +628,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       logger,
     }),
   );
-  client.listeners.push(
+  registerDiscordListener(
+    client.listeners,
     new DiscordReactionRemoveListener({
       cfg,
       accountId: account.accountId,
