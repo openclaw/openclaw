@@ -227,6 +227,24 @@ Notes:
 - Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
 
+### `maps`
+Google Maps operations: directions, places search, and reverse geocoding.
+
+Core actions:
+- `directions` (route between two points with travel time/distance)
+- `places` (search nearby places by type or keyword)
+- `geocode` (convert coordinates to address)
+
+Core parameters:
+- `action` (required): `directions`, `places`, or `geocode`
+- `origin`, `destination`, `mode` (for directions)
+- `latitude`, `longitude`, `type`, `keyword`, `radius`, `maxResults` (for places/geocode)
+
+Notes:
+- Requires a Google Maps API key (config, env var, or secret file).
+- Useful for WhatsApp/Telegram location pins—geocode the coordinates, then search for nearby places.
+- Travel modes: `driving`, `walking`, `bicycling`, `transit`.
+
 ### `message`
 Send messages and provider actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
 
