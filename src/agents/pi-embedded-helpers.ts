@@ -361,6 +361,9 @@ const ERROR_PATTERNS = {
     "token has expired",
     /\b401\b/,
     /\b403\b/,
+    // Credential validation failures should trigger fallback (#761)
+    "no credentials found",
+    "no api key found",
   ],
   format: [
     "invalid_request_error",
