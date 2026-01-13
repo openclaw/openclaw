@@ -21,12 +21,14 @@ export type SubagentRunRecord = {
   startedAt?: number;
   endedAt?: number;
   archiveAtMs?: number;
+  announceCompletedAt?: number;
   announceHandled: boolean;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
+let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;
 
 function persistSubagentRuns() {
@@ -43,15 +45,15 @@ function resumeSubagentRun(runId: string) {
   if (!runId || resumedRuns.has(runId)) return;
   const entry = subagentRuns.get(runId);
   if (!entry) return;
-  if (entry.announceHandled) return;
+  if (entry.announceCompletedAt) return;
 
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
     if (!beginSubagentAnnounce(runId)) return;
-    void runSubagentAnnounceFlow({
+    const announce = runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
-      requesterProvider: entry.requesterProvider,
+      requesterChannel: entry.requesterChannel,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,
@@ -61,10 +63,9 @@ function resumeSubagentRun(runId: string) {
       endedAt: entry.endedAt,
       label: entry.label,
     });
-    if (entry.cleanup === "delete") {
-      subagentRuns.delete(runId);
-      persistSubagentRuns();
-    }
+    void announce.then((didAnnounce) => {
+      finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);
+    });
     resumedRuns.add(runId);
     return;
   }
@@ -155,7 +156,7 @@ async function sweepSubagentRuns() {
 function ensureListener() {
   if (listenerStarted) return;
   listenerStarted = true;
-  onAgentEvent((evt) => {
+  listenerStop = onAgentEvent((evt) => {
     if (!evt || evt.stream !== "lifecycle") return;
     const entry = subagentRuns.get(evt.runId);
     if (!entry) {
@@ -182,13 +183,9 @@ function ensureListener() {
     persistSubagentRuns();
 
     if (!beginSubagentAnnounce(evt.runId)) {
-      if (entry.cleanup === "delete") {
-        subagentRuns.delete(evt.runId);
-        persistSubagentRuns();
-      }
       return;
     }
-    void runSubagentAnnounceFlow({
+    const announce = runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -202,16 +199,33 @@ function ensureListener() {
       endedAt: entry.endedAt,
       label: entry.label,
     });
-    if (entry.cleanup === "delete") {
-      subagentRuns.delete(evt.runId);
-      persistSubagentRuns();
-    }
+    void announce.then((didAnnounce) => {
+      finalizeSubagentAnnounce(evt.runId, entry.cleanup, didAnnounce);
+    });
   });
+}
+
+function finalizeSubagentAnnounce(
+  runId: string,
+  cleanup: "delete" | "keep",
+  didAnnounce: boolean,
+) {
+  const entry = subagentRuns.get(runId);
+  if (!entry) return;
+  if (cleanup === "delete") {
+    subagentRuns.delete(runId);
+    persistSubagentRuns();
+    return;
+  }
+  if (!didAnnounce) return;
+  entry.announceCompletedAt = Date.now();
+  persistSubagentRuns();
 }
 
 export function beginSubagentAnnounce(runId: string) {
   const entry = subagentRuns.get(runId);
   if (!entry) return false;
+  if (entry.announceCompletedAt) return false;
   if (entry.announceHandled) return false;
   entry.announceHandled = true;
   persistSubagentRuns();
@@ -288,7 +302,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
     }
     if (mutated) persistSubagentRuns();
     if (!beginSubagentAnnounce(runId)) return;
-    void runSubagentAnnounceFlow({
+    const announce = runSubagentAnnounceFlow({
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
@@ -302,10 +316,9 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       endedAt: entry.endedAt,
       label: entry.label,
     });
-    if (entry.cleanup === "delete") {
-      subagentRuns.delete(runId);
-      persistSubagentRuns();
-    }
+    void announce.then((didAnnounce) => {
+      finalizeSubagentAnnounce(runId, entry.cleanup, didAnnounce);
+    });
   } catch {
     // ignore
   }
@@ -313,8 +326,13 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
 
 export function resetSubagentRegistryForTests() {
   subagentRuns.clear();
+  resumedRuns.clear();
   stopSweeper();
   restoreAttempted = false;
+  if (listenerStop) {
+    listenerStop();
+    listenerStop = null;
+  }
   listenerStarted = false;
   persistSubagentRuns();
 }
@@ -325,6 +343,6 @@ export function releaseSubagentRun(runId: string) {
   if (subagentRuns.size === 0) stopSweeper();
 }
 
-// Best-effort: restore persisted runs on process start so announces/cleanup can
-// continue after gateway restarts.
-restoreSubagentRunsOnce();
+export function initSubagentRegistry() {
+  restoreSubagentRunsOnce();
+}
