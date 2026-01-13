@@ -72,6 +72,28 @@ Configure via CLI:
 }
 ```
 
+### MiniMax M2.1 as fallback (Opus primary)
+
+**Best for:** keep Opus 4.5 as primary, fail over to MiniMax M2.1.
+
+```json5
+{
+  env: { MINIMAX_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "minimax/MiniMax-M2.1": { alias: "minimax" }
+      },
+      model: {
+        primary: "anthropic/claude-opus-4-5",
+        fallbacks: ["minimax/MiniMax-M2.1"]
+      }
+    }
+  }
+}
+```
+
 ### Optional: Local via LM Studio (manual)
 
 **Best for:** local inference with LM Studio.
