@@ -17,7 +17,11 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
-import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
+import { recordSentMessage } from "./sent-message-cache.js";
+import {
+  parseTelegramTarget,
+  stripTelegramInternalPrefixes,
+} from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramSendOpts = {
@@ -272,6 +276,9 @@ export async function sendMessageTelegram(
     }
     const mediaMessageId = String(result?.message_id ?? "unknown");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
+    if (result?.message_id) {
+      recordSentMessage(chatId, result.message_id);
+    }
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
@@ -353,6 +360,9 @@ export async function sendMessageTelegram(
     },
   );
   const messageId = String(res?.message_id ?? "unknown");
+  if (res?.message_id) {
+    recordSentMessage(chatId, res.message_id);
+  }
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
