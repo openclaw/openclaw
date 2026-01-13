@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.12-1
+
+### Fixes
+- Packaging: include `dist/channels/**` in the npm tarball (fixes `ERR_MODULE_NOT_FOUND` for `dist/channels/registry.js`).
+
 ## 2026.1.12
 
 ### Highlights
