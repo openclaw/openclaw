@@ -494,13 +494,14 @@ export function renderApp(state: AppViewState) {
                   ...state.settings,
                   useNewChatLayout: !state.settings.useNewChatLayout,
                 }),
-	              onDraftChange: (next) => (state.chatMessage = next),
-	              onSend: () => state.handleSendChat(),
-	              canAbort: Boolean(state.chatRunId),
-	              onAbort: () => void state.handleAbortChat(),
-	              onQueueRemove: (id) => state.removeQueuedMessage(id),
-	              onNewSession: () =>
-	                state.handleSendChat("/new", { restoreDraft: true }),
+              onChatScroll: (event) => state.handleChatScroll(event),
+              onDraftChange: (next) => (state.chatMessage = next),
+              onSend: () => state.handleSendChat(),
+              canAbort: Boolean(state.chatRunId),
+              onAbort: () => void state.handleAbortChat(),
+              onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onNewSession: () =>
+                state.handleSendChat("/new", { restoreDraft: true }),
               // Sidebar props for tool output viewing
               sidebarOpen: state.sidebarOpen,
               sidebarContent: state.sidebarContent,
