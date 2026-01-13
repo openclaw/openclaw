@@ -27,9 +27,13 @@ describe("openUrl", () => {
     expect(ok).toBe(true);
 
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const argv = mocks.runCommandWithTimeout.mock.calls[0]?.[0];
-    expect(argv?.slice(0, 4)).toEqual(["cmd", "/c", "start", ""]);
+    const [argv, options] = mocks.runCommandWithTimeout.mock.calls[0] ?? [];
+    expect(argv?.slice(0, 4)).toEqual(["cmd", "/c", "start", '""']);
     expect(argv?.at(-1)).toBe(`"${url}"`);
+    expect(options).toMatchObject({
+      timeoutMs: 5_000,
+      windowsVerbatimArguments: true,
+    });
   });
 });
 
