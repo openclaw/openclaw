@@ -22,6 +22,37 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };
 
+// ── Cross-provider thought_signature sanitization ──────────────────────────────
+// Claude's extended thinking feature generates thought_signature fields (message IDs
+// like "msg_abc123...") in content blocks. When these are sent to Google's Gemini API,
+// it expects Base64-encoded bytes and rejects Claude's format with a 400 error.
+// This function strips thought_signature fields to enable cross-provider session sharing.
+
+type ContentBlockWithSignature = {
+  thought_signature?: unknown;
+  [key: string]: unknown;
+};
+
+/**
+ * Strips Claude-style thought_signature fields from content blocks.
+ *
+ * Gemini expects thought signatures as base64-encoded bytes, but Claude stores message ids
+ * like "msg_abc123...". We only strip "msg_*" to preserve any provider-valid signatures.
+ */
+export function stripThoughtSignatures<T>(content: T): T {
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const rec = block as ContentBlockWithSignature;
+    const signature = rec.thought_signature;
+    if (typeof signature !== "string" || !signature.startsWith("msg_")) {
+      return block;
+    }
+    const { thought_signature: _signature, ...rest } = rec;
+    return rest;
+  }) as T;
+}
+
 const MAX_BOOTSTRAP_CHARS = 4000;
 const BOOTSTRAP_HEAD_CHARS = 2800;
 const BOOTSTRAP_TAIL_CHARS = 800;
@@ -138,7 +169,9 @@ export async function sanitizeSessionMessagesImages(
       }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
-        const filteredContent = content.filter((block) => {
+        // Strip thought_signature fields to enable cross-provider session sharing
+        const strippedContent = stripThoughtSignatures(content);
+        const filteredContent = strippedContent.filter((block) => {
           if (!block || typeof block !== "object") return true;
           const rec = block as { type?: unknown; text?: unknown };
           if (rec.type !== "text" || typeof rec.text !== "string") return true;

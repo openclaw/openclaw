@@ -29,6 +29,7 @@
 - Auto-reply: re-evaluate reasoning tag enforcement on fallback providers to prevent leaked reasoning. (#810 — thanks @mcinteerj)
 - Tools/Gemini: drop null-only union variants while cleaning tool schemas to avoid Cloud Code Assist schema errors. (#782 — thanks @AbhisekBasu1)
 - Connections UI: polish multi-account account cards in the Connections view. (#816 — thanks @steipete)
+- Gemini: strip Claude `msg_*` thought_signature fields from session history to avoid base64 decode errors. (#805 — thanks @marcmarg)
 
 ## 2026.1.12-3
 
