@@ -40,18 +40,18 @@ export function attachDiscordGatewayLogging(params: {
 
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
-    logVerbose(`gateway: ${message}`);
+    logVerbose(`discord gateway: ${message}`);
     if (shouldPromoteGatewayDebug(message)) {
-      runtime.log?.(`gateway: ${message}`);
+      runtime.log?.(`discord gateway: ${message}`);
     }
   };
 
   const onGatewayWarning = (warning: unknown) => {
-    logVerbose(`gateway warning: ${String(warning)}`);
+    logVerbose(`discord gateway warning: ${String(warning)}`);
   };
 
   const onGatewayMetrics = (metrics: unknown) => {
-    logVerbose(`gateway metrics: ${formatGatewayMetrics(metrics)}`);
+    logVerbose(`discord gateway metrics: ${formatGatewayMetrics(metrics)}`);
   };
 
   emitter.on("debug", onGatewayDebug);
