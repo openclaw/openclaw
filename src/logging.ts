@@ -470,6 +470,26 @@ function formatSubsystemForConsole(subsystem: string): string {
   return parts.join("/");
 }
 
+export function stripRedundantSubsystemPrefixForConsole(
+  message: string,
+  displaySubsystem: string,
+): string {
+  if (!displaySubsystem) return message;
+  if (!message.startsWith(displaySubsystem)) return message;
+
+  const next = message.slice(
+    displaySubsystem.length,
+    displaySubsystem.length + 1,
+  );
+  if (next !== ":" && next !== " ") return message;
+
+  let i = displaySubsystem.length;
+  while (message[i] === " ") i += 1;
+  if (message[i] === ":") i += 1;
+  while (message[i] === " ") i += 1;
+  return message.slice(i);
+}
+
 function formatConsoleLine(opts: {
   level: Level;
   subsystem: string;
@@ -501,13 +521,17 @@ function formatConsoleLine(opts: {
         : opts.level === "debug" || opts.level === "trace"
           ? color.gray
           : color.cyan;
+  const displayMessage = stripRedundantSubsystemPrefixForConsole(
+    opts.message,
+    displaySubsystem,
+  );
   const time =
     opts.style === "pretty"
       ? color.gray(new Date().toISOString().slice(11, 19))
       : "";
   const prefixToken = prefixColor(prefix);
   const head = [time, prefixToken].filter(Boolean).join(" ");
-  return `${head} ${levelColor(opts.message)}`;
+  return `${head} ${levelColor(displayMessage)}`;
 }
 
 function writeConsoleLine(level: Level, line: string) {
