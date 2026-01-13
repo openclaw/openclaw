@@ -23,7 +23,9 @@ struct CronJobEditorSmokeTests {
     @Test func cronJobEditorBuildsBodyForExistingJob() {
         let job = CronJob(
             id: "job-1",
+            agentId: "ops",
             name: "Daily summary",
+            description: nil,
             enabled: true,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000,

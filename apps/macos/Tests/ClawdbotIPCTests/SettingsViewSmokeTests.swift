@@ -12,6 +12,7 @@ struct SettingsViewSmokeTests {
 
         let job1 = CronJob(
             id: "job-1",
+            agentId: "ops",
             name: "  Morning Check-in  ",
             description: nil,
             enabled: true,
@@ -32,6 +33,7 @@ struct SettingsViewSmokeTests {
 
         let job2 = CronJob(
             id: "job-2",
+            agentId: nil,
             name: "",
             description: nil,
             enabled: false,

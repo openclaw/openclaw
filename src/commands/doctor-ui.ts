@@ -43,7 +43,7 @@ export async function maybeRepairUiProtocolFreshness(
         { timeoutMs: 5000 },
       ).catch(() => null);
 
-      if (gitLog?.stdout.trim()) {
+      if (gitLog && gitLog.code === 0 && gitLog.stdout.trim()) {
         note(
           `UI assets are older than the protocol schema.\nFunctional changes since last build:\n${gitLog.stdout
             .trim()
@@ -64,7 +64,7 @@ export async function maybeRepairUiProtocolFreshness(
           // Use scripts/ui.js to build, assuming node is available as we are running in it.
           // We use the same node executable to run the script.
           const uiScriptPath = path.join(root, "scripts/ui.js");
-          await runCommandWithTimeout(
+          const buildResult = await runCommandWithTimeout(
             [process.execPath, uiScriptPath, "build"],
             {
               cwd: root,
@@ -72,11 +72,21 @@ export async function maybeRepairUiProtocolFreshness(
               env: { ...process.env, FORCE_COLOR: "1" },
             },
           );
-          note("UI rebuild complete.", "UI");
+          if (buildResult.code === 0) {
+            note("UI rebuild complete.", "UI");
+          } else {
+            const details = [
+              `UI rebuild failed (exit ${buildResult.code ?? "unknown"}).`,
+              buildResult.stderr.trim() ? buildResult.stderr.trim() : null,
+            ]
+              .filter(Boolean)
+              .join("\n");
+            note(details, "UI");
+          }
         }
       }
     }
-  } catch (_err) {
+  } catch {
     // If files don't exist, we can't check.
     // If git fails, we silently skip.
     // runtime.debug(`UI freshness check failed: ${String(err)}`);

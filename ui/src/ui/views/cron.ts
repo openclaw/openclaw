@@ -82,6 +82,15 @@ export function renderCron(props: CronProps) {
                 props.onFormChange({ description: (e.target as HTMLInputElement).value })}
             />
           </label>
+          <label class="field">
+            <span>Agent ID</span>
+            <input
+              .value=${props.form.agentId}
+              @input=${(e: Event) =>
+                props.onFormChange({ agentId: (e.target as HTMLInputElement).value })}
+              placeholder="default"
+            />
+          </label>
           <label class="field checkbox">
             <span>Enabled</span>
             <input
@@ -338,6 +347,7 @@ function renderJob(job: CronJob, props: CronProps) {
         <div class="list-title">${job.name}</div>
         <div class="list-sub">${formatCronSchedule(job)}</div>
         <div class="muted">${formatCronPayload(job)}</div>
+        ${job.agentId ? html`<div class="muted">Agent: ${job.agentId}</div>` : nothing}
         <div class="chip-row" style="margin-top: 6px;">
           <span class="chip">${job.enabled ? "enabled" : "disabled"}</span>
           <span class="chip">${job.sessionTarget}</span>

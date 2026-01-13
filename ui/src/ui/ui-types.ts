@@ -157,6 +157,7 @@ export type IMessageForm = {
 export type CronFormState = {
   name: string;
   description: string;
+  agentId: string;
   enabled: boolean;
   scheduleKind: "at" | "every" | "cron";
   scheduleAt: string;

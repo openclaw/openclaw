@@ -145,6 +145,7 @@ struct CronJobState: Codable, Equatable {
 
 struct CronJob: Identifiable, Codable, Equatable {
     let id: String
+    let agentId: String?
     var name: String
     var description: String?
     var enabled: Bool

@@ -60,6 +60,7 @@ struct CronModelsTests {
     @Test func displayNameTrimsWhitespaceAndFallsBack() {
         let base = CronJob(
             id: "x",
+            agentId: nil,
             name: "  hello  ",
             description: nil,
             enabled: true,
@@ -81,6 +82,7 @@ struct CronModelsTests {
     @Test func nextRunDateAndLastRunDateDeriveFromState() {
         let job = CronJob(
             id: "x",
+            agentId: nil,
             name: "t",
             description: nil,
             enabled: true,

@@ -3,6 +3,7 @@ extension CronJobEditor {
     mutating func exerciseForTesting() {
         self.name = "Test job"
         self.description = "Test description"
+        self.agentId = "ops"
         self.enabled = true
         self.sessionTarget = .isolated
         self.wakeMode = .now

@@ -99,9 +99,11 @@ export async function addCronJob(state: CronState) {
   try {
     const schedule = buildCronSchedule(state.cronForm);
     const payload = buildCronPayload(state.cronForm);
+    const agentId = state.cronForm.agentId.trim();
     const job = {
       name: state.cronForm.name.trim(),
       description: state.cronForm.description.trim() || undefined,
+      agentId: agentId || undefined,
       enabled: state.cronForm.enabled,
       schedule,
       sessionTarget: state.cronForm.sessionTarget,
