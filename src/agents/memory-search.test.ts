@@ -53,4 +53,37 @@ describe("memory search config", () => {
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
   });
+
+  it("merges remote defaults with agent overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            remote: {
+              baseUrl: "https://default.example/v1",
+              apiKey: "default-key",
+              headers: { "X-Default": "on" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              remote: {
+                baseUrl: "https://agent.example/v1",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.remote).toEqual({
+      baseUrl: "https://agent.example/v1",
+      apiKey: "default-key",
+      headers: { "X-Default": "on" },
+    });
+  });
 });

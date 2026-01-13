@@ -47,10 +47,12 @@ function normalizeOpenAiModel(model: string): string {
 async function createOpenAiEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
-  const remote = options.config.agents?.defaults?.memorySearch?.remote;
+  const remote = options.remote;
+  const remoteApiKey = remote?.apiKey?.trim();
+  const remoteBaseUrl = remote?.baseUrl?.trim();
 
-  const { apiKey } = remote?.apiKey
-    ? { apiKey: remote.apiKey }
+  const { apiKey } = remoteApiKey
+    ? { apiKey: remoteApiKey }
     : await resolveApiKeyForProvider({
         provider: "openai",
         cfg: options.config,
@@ -59,11 +61,13 @@ async function createOpenAiEmbeddingProvider(
 
   const providerConfig = options.config.models?.providers?.openai;
   const baseUrl =
-    remote?.baseUrl?.trim() ||
-    providerConfig?.baseUrl?.trim() ||
-    DEFAULT_OPENAI_BASE_URL;
+    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
   const url = `${baseUrl.replace(/\/$/, "")}/embeddings`;
-  const headerOverrides = remote?.headers ?? providerConfig?.headers ?? {};
+  const headerOverrides = Object.assign(
+    {},
+    providerConfig?.headers,
+    remote?.headers,
+  );
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
