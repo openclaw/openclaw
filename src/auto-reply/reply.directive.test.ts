@@ -81,9 +81,11 @@ describe("directive behavior", () => {
         },
         {},
         {
-          agent: {
-            model: "openai-codex/gpt-5.2-codex",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "openai-codex/gpt-5.2-codex",
+              workspace: path.join(home, "clawd"),
+            },
           },
           whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },
@@ -109,9 +111,11 @@ describe("directive behavior", () => {
         },
         {},
         {
-          agent: {
-            model: "openai/gpt-5.2",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.2",
+              workspace: path.join(home, "clawd"),
+            },
           },
           whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },
@@ -137,9 +141,11 @@ describe("directive behavior", () => {
         },
         {},
         {
-          agent: {
-            model: "openai/gpt-4.1-mini",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "openai/gpt-4.1-mini",
+              workspace: path.join(home, "clawd"),
+            },
           },
           whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },

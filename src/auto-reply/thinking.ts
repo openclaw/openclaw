@@ -89,11 +89,11 @@ export function formatThinkingLevels(
 }
 
 export function formatXHighModelHint(): string {
-  if (XHIGH_MODEL_REFS.length === 1) return XHIGH_MODEL_REFS[0];
-  if (XHIGH_MODEL_REFS.length === 2) {
-    return `${XHIGH_MODEL_REFS[0]} or ${XHIGH_MODEL_REFS[1]}`;
-  }
-  return `${XHIGH_MODEL_REFS.slice(0, -1).join(", ")} or ${XHIGH_MODEL_REFS[XHIGH_MODEL_REFS.length - 1]}`;
+  const refs = [...XHIGH_MODEL_REFS] as string[];
+  if (refs.length === 0) return "unknown model";
+  if (refs.length === 1) return refs[0];
+  if (refs.length === 2) return `${refs[0]} or ${refs[1]}`;
+  return `${refs.slice(0, -1).join(", ")} or ${refs[refs.length - 1]}`;
 }
 
 // Normalize verbose flags used to toggle agent verbosity.

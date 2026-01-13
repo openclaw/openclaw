@@ -1227,8 +1227,8 @@ export async function handleDirectiveOnly(params: {
 
   const nextThinkLevel = directives.hasThinkDirective
     ? directives.thinkLevel
-    : (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-      currentThinkLevel;
+    : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      currentThinkLevel);
   const shouldDowngradeXHigh =
     !directives.hasThinkDirective &&
     nextThinkLevel === "xhigh" &&
