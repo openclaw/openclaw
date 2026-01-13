@@ -383,12 +383,24 @@ export function verifyPlivoWebhook(
   }
 
   if (signatureV3 && nonceV3) {
+    const method =
+      ctx.method === "GET" || ctx.method === "POST" ? ctx.method : null;
+
+    if (!method) {
+      return {
+        ok: false,
+        version: "v3",
+        verificationUrl,
+        reason: `Unsupported HTTP method for Plivo V3 signature: ${ctx.method}`,
+      };
+    }
+
     const postParams = toParamMapFromSearchParams(new URLSearchParams(ctx.rawBody));
     const ok = validatePlivoV3Signature({
       authToken,
       signatureHeader: signatureV3,
       nonce: nonceV3,
-      method: ctx.method,
+      method,
       url: verificationUrl,
       postParams,
     });
