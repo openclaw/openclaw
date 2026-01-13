@@ -606,7 +606,9 @@ export async function getReplyFromConfig(
     return `${head}${cleanedTail}`;
   })();
 
-  cleanedBody = stripInlineStatus(cleanedBody).cleaned;
+  if (allowStatusDirective) {
+    cleanedBody = stripInlineStatus(cleanedBody).cleaned;
+  }
 
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
