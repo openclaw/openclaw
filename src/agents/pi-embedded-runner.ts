@@ -1383,6 +1383,7 @@ export async function runEmbeddedPiAgent(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -1774,6 +1775,7 @@ export async function runEmbeddedPiAgent(params: {
               blockReplyBreak: params.blockReplyBreak,
               blockReplyChunking: params.blockReplyChunking,
               onPartialReply: params.onPartialReply,
+              onAssistantMessageStart: params.onAssistantMessageStart,
               onAgentEvent: params.onAgentEvent,
               enforceFinalTag: params.enforceFinalTag,
             });

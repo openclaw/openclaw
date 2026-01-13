@@ -25,9 +25,11 @@ export function resolveTypingMode({
 export type TypingSignaler = {
   mode: TypingMode;
   shouldStartImmediately: boolean;
+  shouldStartOnMessageStart: boolean;
   shouldStartOnText: boolean;
   shouldStartOnReasoning: boolean;
   signalRunStart: () => Promise<void>;
+  signalMessageStart: () => Promise<void>;
   signalTextDelta: (text?: string) => Promise<void>;
   signalReasoningDelta: () => Promise<void>;
   signalToolStart: () => Promise<void>;
@@ -40,12 +42,18 @@ export function createTypingSignaler(params: {
 }): TypingSignaler {
   const { typing, mode, isHeartbeat } = params;
   const shouldStartImmediately = mode === "instant";
+  const shouldStartOnMessageStart = mode === "message";
   const shouldStartOnText = mode === "message" || mode === "instant";
   const shouldStartOnReasoning = mode === "thinking";
   const disabled = isHeartbeat || mode === "never";
 
   const signalRunStart = async () => {
     if (disabled || !shouldStartImmediately) return;
+    await typing.startTypingLoop();
+  };
+
+  const signalMessageStart = async () => {
+    if (disabled || !shouldStartOnMessageStart) return;
     await typing.startTypingLoop();
   };
 
@@ -80,9 +88,11 @@ export function createTypingSignaler(params: {
   return {
     mode,
     shouldStartImmediately,
+    shouldStartOnMessageStart,
     shouldStartOnText,
     shouldStartOnReasoning,
     signalRunStart,
+    signalMessageStart,
     signalTextDelta,
     signalReasoningDelta,
     signalToolStart,

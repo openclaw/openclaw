@@ -689,6 +689,9 @@ export async function runReplyAgent(params: {
                     });
                   }
                 : undefined,
+              onAssistantMessageStart: async () => {
+                await typingSignals.signalMessageStart();
+              },
               onReasoningStream:
                 typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
                   ? async (payload) => {
