@@ -177,7 +177,7 @@ describe("runWithModelFallback", () => {
       run: async (provider, model) => {
         calls.push({ provider, model });
         if (provider === "anthropic") {
-          throw new Error("primary failed");
+          throw Object.assign(new Error("nope"), { status: 401 });
         }
         if (provider === "openai" && model === "gpt-4.1") {
           return "ok";
