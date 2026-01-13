@@ -30,6 +30,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 - [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
 - [ ] `pnpm run build` (last sanity check after tests)
 - [ ] `pnpm release:check` (verifies npm pack contents)
+- [ ] `pnpm test:install:smoke` (Docker install smoke test; required before release)
 - [ ] (Optional) Installer E2E (Docker, runs `curl -fsSL https://clawd.bot/install.sh | bash`, onboards, then runs real tool calls):
   - `pnpm test:install:e2e:openai` (requires `OPENAI_API_KEY`)
   - `pnpm test:install:e2e:anthropic` (requires `ANTHROPIC_API_KEY`)
