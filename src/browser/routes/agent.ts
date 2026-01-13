@@ -1195,6 +1195,7 @@ export function registerBrowserAgentRoutes(
             : "aria";
     const limitRaw =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const hasMaxChars = Object.hasOwn(req.query, "maxChars");
     const maxCharsRaw =
       typeof req.query.maxChars === "string"
         ? Number(req.query.maxChars)
@@ -1207,7 +1208,11 @@ export function registerBrowserAgentRoutes(
         ? Math.floor(maxCharsRaw)
         : undefined;
     const resolvedMaxChars =
-      format === "ai" ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS) : undefined;
+      format === "ai"
+        ? hasMaxChars
+          ? maxChars
+          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
+        : undefined;
     const interactive = toBoolean(req.query.interactive);
     const compact = toBoolean(req.query.compact);
     const depth = toNumber(req.query.depth);

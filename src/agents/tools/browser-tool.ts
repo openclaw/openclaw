@@ -322,6 +322,7 @@ export function createBrowserTool(opts?: {
             params.format === "ai" || params.format === "aria"
               ? (params.format as "ai" | "aria")
               : "ai";
+          const hasMaxChars = Object.hasOwn(params, "maxChars");
           const targetId =
             typeof params.targetId === "string"
               ? params.targetId.trim()
@@ -338,7 +339,9 @@ export function createBrowserTool(opts?: {
               : undefined;
           const resolvedMaxChars =
             format === "ai"
-              ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS)
+              ? hasMaxChars
+                ? maxChars
+                : DEFAULT_AI_SNAPSHOT_MAX_CHARS
               : undefined;
           const interactive =
             typeof params.interactive === "boolean"
@@ -360,7 +363,9 @@ export function createBrowserTool(opts?: {
             format,
             targetId,
             limit,
-            ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
+            ...(typeof resolvedMaxChars === "number"
+              ? { maxChars: resolvedMaxChars }
+              : {}),
             interactive,
             compact,
             depth,

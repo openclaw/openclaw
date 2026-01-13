@@ -687,6 +687,25 @@ describe("browser control server", () => {
     expect(stopped.stopped).toBe(true);
   });
 
+  it("skips default maxChars when explicitly set to zero", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+
+    const snapAi = (await realFetch(
+      `${base}/snapshot?format=ai&maxChars=0`,
+    ).then((r) => r.json())) as { ok: boolean; format?: string };
+    expect(snapAi.ok).toBe(true);
+    expect(snapAi.format).toBe("ai");
+
+    const [call] = pwMocks.snapshotAiViaPlaywright.mock.calls.at(-1) ?? [];
+    expect(call).toEqual({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+    });
+  });
+
   it("validates agent inputs (agent routes)", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
