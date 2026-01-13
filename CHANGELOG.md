@@ -7,6 +7,7 @@
 - Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
 
 ### Fixes
+- Cron: coerce enabled patches so disabling jobs persists correctly. (#205 — thanks @thewilloftheshadow)
 - Control UI: keep chat scroll position unless user is near the bottom. (#217 — thanks @thewilloftheshadow)
 - Fallback: treat credential validation failures ("no credentials found", "no API key found") as auth errors that trigger model fallback. (#822 — thanks @sebslight)
 - Telegram: preserve forum topic thread ids, including General topic replies. (#727 — thanks @thewilloftheshadow)
