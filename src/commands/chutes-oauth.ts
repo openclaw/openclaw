@@ -1,9 +1,11 @@
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 
 import type { ChutesOAuthAppConfig } from "../agents/chutes-oauth.js";
 import {
+  CHUTES_AUTHORIZE_ENDPOINT,
   exchangeChutesCodeForTokens,
   generateChutesPkce,
   parseOAuthCallbackInput,
@@ -30,7 +32,7 @@ function buildAuthorizeUrl(params: {
     code_challenge: params.challenge,
     code_challenge_method: "S256",
   });
-  return `https://api.chutes.ai/idp/authorize?${qs.toString()}`;
+  return `${CHUTES_AUTHORIZE_ENDPOINT}?${qs.toString()}`;
 }
 
 async function waitForLocalCallback(params: {
@@ -129,7 +131,7 @@ export async function loginChutes(params: {
   fetchFn?: typeof fetch;
 }): Promise<OAuthCredentials> {
   const { verifier, challenge } = generateChutesPkce();
-  const state = verifier;
+  const state = randomBytes(16).toString("hex");
   const timeoutMs = params.timeoutMs ?? 3 * 60 * 1000;
 
   const url = buildAuthorizeUrl({

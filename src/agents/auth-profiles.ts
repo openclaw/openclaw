@@ -15,7 +15,7 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { type ChutesStoredOAuth, refreshChutesTokens } from "./chutes-oauth.js";
+import { refreshChutesTokens } from "./chutes-oauth.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
@@ -68,7 +68,8 @@ export type TokenCredential = {
 
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
-  provider: OAuthProvider;
+  provider: string;
+  clientId?: string;
   email?: string;
 };
 
@@ -172,7 +173,7 @@ async function updateAuthProfileStoreWithLock(params: {
 }
 
 function buildOAuthApiKey(
-  provider: OAuthProvider,
+  provider: string,
   credentials: OAuthCredentials,
 ): string {
   const needsProjectId =
@@ -187,7 +188,6 @@ function buildOAuthApiKey(
 
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
-  provider: OAuthProvider;
   agentDir?: string;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -218,11 +218,11 @@ async function refreshOAuthTokenWithLock(params: {
       String(cred.provider) === "chutes"
         ? await (async () => {
             const newCredentials = await refreshChutesTokens({
-              credential: cred as unknown as ChutesStoredOAuth,
+              credential: cred,
             });
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : await getOAuthApiKey(cred.provider, oauthCreds);
+        : await getOAuthApiKey(cred.provider as OAuthProvider, oauthCreds);
     if (!result) return null;
     store.profiles[params.profileId] = {
       ...cred,
@@ -269,7 +269,7 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
     }
     entries[key] = {
       ...typed,
-      provider: typed.provider ?? (key as OAuthProvider),
+      provider: String(typed.provider ?? key),
     } as AuthProfileCredential;
   }
   return Object.keys(entries).length > 0 ? entries : null;
@@ -336,7 +336,7 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
     if (store.profiles[profileId]) continue;
     store.profiles[profileId] = {
       type: "oauth",
-      provider: provider as OAuthProvider,
+      provider,
       ...creds,
     };
     mutated = true;
@@ -478,7 +478,7 @@ function syncExternalCliCredentials(
   const existingCodex = store.profiles[CODEX_CLI_PROFILE_ID];
   const shouldSyncCodex =
     !existingCodex ||
-    existingCodex.provider !== ("openai-codex" as OAuthProvider) ||
+    existingCodex.provider !== "openai-codex" ||
     !isExternalProfileFresh(existingCodex, now);
   const codexCreds = shouldSyncCodex
     ? readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
@@ -490,7 +490,7 @@ function syncExternalCliCredentials(
     // Codex creds don't carry expiry; use file mtime heuristic for freshness.
     const shouldUpdate =
       !existingOAuth ||
-      existingOAuth.provider !== ("openai-codex" as unknown as OAuthProvider) ||
+      existingOAuth.provider !== "openai-codex" ||
       existingOAuth.expires <= now ||
       codexCreds.expires > existingOAuth.expires;
 
@@ -535,14 +535,14 @@ export function loadAuthProfileStore(): AuthProfileStore {
       if (cred.type === "api_key") {
         store.profiles[profileId] = {
           type: "api_key",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
       } else if (cred.type === "token") {
         store.profiles[profileId] = {
           type: "token",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           token: cred.token,
           ...(typeof cred.expires === "number"
             ? { expires: cred.expires }
@@ -552,7 +552,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
       } else {
         store.profiles[profileId] = {
           type: "oauth",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           access: cred.access,
           refresh: cred.refresh,
           expires: cred.expires,
@@ -600,14 +600,14 @@ export function ensureAuthProfileStore(
       if (cred.type === "api_key") {
         store.profiles[profileId] = {
           type: "api_key",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
       } else if (cred.type === "token") {
         store.profiles[profileId] = {
           type: "token",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           token: cred.token,
           ...(typeof cred.expires === "number"
             ? { expires: cred.expires }
@@ -617,7 +617,7 @@ export function ensureAuthProfileStore(
       } else {
         store.profiles[profileId] = {
           type: "oauth",
-          provider: cred.provider ?? (provider as OAuthProvider),
+          provider: String(cred.provider ?? provider),
           access: cred.access,
           refresh: cred.refresh,
           expires: cred.expires,
@@ -1231,7 +1231,6 @@ export async function resolveApiKeyForProfile(params: {
   try {
     const result = await refreshOAuthTokenWithLock({
       profileId,
-      provider: cred.provider,
       agentDir: params.agentDir,
     });
     if (!result) return null;
@@ -1351,7 +1350,6 @@ async function tryResolveOAuthProfile(params: {
 
   const refreshed = await refreshOAuthTokenWithLock({
     profileId,
-    provider: cred.provider,
     agentDir: params.agentDir,
   });
   if (!refreshed) return null;
