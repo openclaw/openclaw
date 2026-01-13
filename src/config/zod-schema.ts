@@ -837,6 +837,15 @@ const ToolPolicySchema = z
   })
   .optional();
 
+const ToolProfileSchema = z
+  .union([
+    z.literal("minimal"),
+    z.literal("coding"),
+    z.literal("messaging"),
+    z.literal("full"),
+  ])
+  .optional();
+
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 const ElevatedAllowFromSchema = z
   .record(z.string(), z.array(z.union([z.string(), z.number()])))
@@ -866,6 +875,7 @@ const AgentSandboxSchema = z
 
 const AgentToolsSchema = z
   .object({
+    profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
     elevated: z
@@ -962,6 +972,7 @@ const AgentEntrySchema = z.object({
 
 const ToolsSchema = z
   .object({
+    profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
     audio: z

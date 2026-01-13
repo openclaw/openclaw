@@ -22,6 +22,77 @@ You can globally allow/deny tools via `tools.allow` / `tools.deny` in `clawdbot.
 }
 ```
 
+## Tool profiles (base allowlist)
+
+`tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`.
+Per-agent override: `agents.list[].tools.profile`.
+
+Profiles:
+- `minimal`: `session_status` only
+- `coding`: `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`
+- `messaging`: `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`
+- `full`: no restriction (same as unset)
+
+Example (messaging-only by default, allow Slack + Discord tools too):
+```json5
+{
+  tools: {
+    profile: "messaging",
+    allow: ["slack", "discord"]
+  }
+}
+```
+
+Example (coding profile, but deny exec/process everywhere):
+```json5
+{
+  tools: {
+    profile: "coding",
+    deny: ["group:runtime"]
+  }
+}
+```
+
+Example (global coding profile, messaging-only support agent):
+```json5
+{
+  tools: { profile: "coding" },
+  agents: {
+    list: [
+      {
+        id: "support",
+        tools: { profile: "messaging", allow: ["slack"] }
+      }
+    ]
+  }
+}
+```
+
+## Tool groups (shorthands)
+
+Tool policies (global, agent, sandbox) support `group:*` entries that expand to multiple tools.
+Use these in `tools.allow` / `tools.deny`.
+
+Available groups:
+- `group:runtime`: `exec`, `bash`, `process`
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- `group:memory`: `memory_search`, `memory_get`
+- `group:ui`: `browser`, `canvas`
+- `group:automation`: `cron`, `gateway`
+- `group:messaging`: `message`
+- `group:nodes`: `nodes`
+- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
+
+Example (allow only file tools + browser):
+```json5
+{
+  tools: {
+    allow: ["group:fs", "browser"]
+  }
+}
+```
+
 ## Plugins + tools
 
 Plugins can register **additional tools** (and CLI commands) beyond the core set.
