@@ -19,22 +19,19 @@ import Testing
                         error: "gateway connect failed",
                         elapsedMs: 12,
                         bot: nil,
-                        webhook: nil
-                    ),
-                    lastProbeAt: 0
-                ),
+                        webhook: nil),
+                    lastProbeAt: 0),
             ],
             providerOrder: ["whatsapp"],
             providerLabels: ["whatsapp": "WhatsApp"],
             heartbeatSeconds: 60,
-            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: [])
-        )
+            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
 
         let store = HealthStore.shared
         store.__setSnapshotForTest(snap, lastError: nil)
 
         switch store.state {
-        case .degraded(let message):
+        case let .degraded(message):
             #expect(!message.isEmpty)
         default:
             Issue.record("Expected degraded state when probe fails for linked provider")
@@ -43,4 +40,3 @@ import Testing
         #expect(store.summaryLine.contains("probe degraded"))
     }
 }
-
