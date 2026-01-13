@@ -105,13 +105,13 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Disable auth only if you fully trust every local process.
    - Non‑loopback binds still require auth.
 
-5) **Providers**
+5) **Channels**
    - WhatsApp: optional QR login.
    - Telegram: bot token.
    - Discord: bot token.
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
-  - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve <provider> <code>` or use allowlists.
+  - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve <channel> <code>` or use allowlists.
 
 6) **Daemon install**
    - macOS: LaunchAgent

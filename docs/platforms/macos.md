@@ -70,7 +70,7 @@ Query parameters:
 - `message` (required)
 - `sessionKey` (optional)
 - `thinking` (optional)
-- `deliver` / `to` / `provider` (optional)
+- `deliver` / `to` / `channel` (optional)
 - `timeoutSeconds` (optional)
 - `key` (optional unattended mode key)
 

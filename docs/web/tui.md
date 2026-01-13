@@ -28,7 +28,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `--token <token>`: Gateway token (if required).
 - `--password <password>`: Gateway password (if required).
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global).
-- `--deliver`: Deliver assistant replies to the provider (default off).
+- `--deliver`: Deliver assistant replies to the channel (default off).
 - `--thinking <level>`: Override thinking level for sends.
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`).
 - `--history-limit <n>`: History entries to load (default 200).

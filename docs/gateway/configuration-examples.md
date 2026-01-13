@@ -110,7 +110,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
-      byProvider: {
+      byChannel: {
         whatsapp: "collect",
         telegram: "collect",
         discord: "collect",
@@ -143,12 +143,12 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     sendPolicy: {
       default: "allow",
       rules: [
-        { action: "deny", match: { provider: "discord", chatType: "group" } }
+        { action: "deny", match: { channel: "discord", chatType: "group" } }
       ]
     }
   },
 
-  // Providers
+  // Channels
   channels: {
     whatsapp: {
       dmPolicy: "pairing",
@@ -345,7 +345,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",
         textTemplate: "{{messages[0].snippet}}",
         deliver: true,
-        provider: "last",
+        channel: "last",
         to: "+15555550123",
         thinking: "low",
         timeoutSeconds: 300,

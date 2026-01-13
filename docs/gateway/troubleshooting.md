@@ -75,7 +75,7 @@ managers (pnpm/npm) because the daemon does not load your shell init. Runtime
 variables like `DISPLAY` should live in `~/.clawdbot/.env` (loaded early by the
 gateway).
 
-WhatsApp + Telegram providers require **Node**; Bun is unsupported. If your
+WhatsApp + Telegram channels require **Node**; Bun is unsupported. If your
 service was installed with Bun or a version-managed Node path, run `clawdbot doctor`
 to migrate to a system Node install.
 
@@ -174,7 +174,7 @@ Look for `AllowFrom: ...` in the output.
 
 **Check 2:** For group chats, is mention required?
 ```bash
-# The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
+# The message must match mentionPatterns or explicit mentions; defaults live in channel groups/guilds.
 # Multi-agent: `agents.list[].groupChat.mentionPatterns` overrides global patterns.
 grep -n "agents\\|groupChat\\|mentionPatterns\\|channels\\.whatsapp\\.groups\\|channels\\.telegram\\.groups\\|channels\\.imessage\\.groups\\|channels\\.discord\\.guilds" \
   "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
@@ -193,17 +193,17 @@ If `dmPolicy` is `pairing`, unknown senders should receive a code and their mess
 
 **Check 1:** Is a pending request already waiting?
 ```bash
-clawdbot pairing list <provider>
+clawdbot pairing list <channel>
 ```
 
-Pending DM pairing requests are capped at **3 per provider** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
+Pending DM pairing requests are capped at **3 per channel** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
 
 **Check 2:** Did the request get created but no reply was sent?
 ```bash
 clawdbot logs --follow | grep "pairing request"
 ```
 
-**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that provider.
+**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that channel.
 
 ### Image + Mention Not Working
 
@@ -250,7 +250,7 @@ Or use the `process` tool to background long commands.
 ```bash
 # Check local status (creds, sessions, queued events)
 clawdbot status
-# Probe the running gateway + providers (WA connect + Telegram + Discord APIs)
+# Probe the running gateway + channels (WA connect + Telegram + Discord APIs)
 clawdbot status --deep
 
 # View recent connection events

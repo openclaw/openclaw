@@ -14,7 +14,7 @@ and the agent should rely on them directly.
 ## Disabling tools
 
 You can globally allow/deny tools via `tools.allow` / `tools.deny` in `clawdbot.json`
-(deny wins). This prevents disallowed tools from being sent to providers.
+(deny wins). This prevents disallowed tools from being sent to model providers.
 
 ```json5
 {
@@ -228,7 +228,7 @@ Notes:
 - Uses the image model directly (independent of the main chat model).
 
 ### `message`
-Send messages and provider actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
+Send messages and channel actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
 
 Core actions:
 - `send` (text + optional media)
@@ -248,7 +248,7 @@ Core actions:
 - `timeout` / `kick` / `ban`
 
 Notes:
-- `send` routes WhatsApp via the Gateway; other providers go direct.
+- `send` routes WhatsApp via the Gateway; other channels go direct.
 - `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
 - When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
 

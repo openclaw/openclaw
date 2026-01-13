@@ -125,7 +125,7 @@ CLAWDBOT_CONFIG_PATH=~/.clawdbot/b.json CLAWDBOT_STATE_DIR=~/.clawdbot-b clawdbo
 - `status` — short summary.
 - `system-presence` — current presence list.
 - `system-event` — post a presence/system note (structured).
-- `send` — send a message via the active provider(s).
+- `send` — send a message via the active channel(s).
 - `agent` — run an agent turn (streams events back on same connection).
 - `node.list` — list paired + currently-connected bridge nodes (includes `caps`, `deviceFamily`, `modelIdentifier`, `paired`, `connected`, and advertised `commands`).
 - `node.describe` — describe a node (capabilities + supported `node.invoke` commands; works for paired nodes and for currently-connected unpaired nodes).
@@ -268,7 +268,7 @@ Windows installs should use **WSL2** and follow the Linux systemd section above.
 
 ## Operational checks
 - Liveness: open WS and send `req:connect` → expect `res` with `payload.type="hello-ok"` (with snapshot).
-- Readiness: call `health` → expect `ok: true` and a linked provider in the `providers` payload (when applicable).
+- Readiness: call `health` → expect `ok: true` and a linked channel in `linkChannel` (when applicable).
 - Debug: subscribe to `tick` and `presence` events; ensure `status` shows linked/auth age; presence entries show Gateway host and connected clients.
 
 ## Safety guarantees

@@ -376,7 +376,7 @@ Controls how WhatsApp direct chats (DMs) are handled:
 - `"open"`: allow all inbound DMs (**requires** `channels.whatsapp.allowFrom` to include `"*"`)
 - `"disabled"`: ignore all inbound DMs
 
-Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per provider** by default.
+Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per channel** by default.
 
 Pairing approvals:
 - `clawdbot pairing list whatsapp`
@@ -428,7 +428,7 @@ Notes:
 
 ### `channels.telegram.accounts` / `channels.discord.accounts` / `channels.slack.accounts` / `channels.signal.accounts` / `channels.imessage.accounts`
 
-Run multiple accounts per provider (each account has its own `accountId` and optional `name`):
+Run multiple accounts per channel (each account has its own `accountId` and optional `name`):
 
 ```json5
 {
@@ -452,7 +452,7 @@ Run multiple accounts per provider (each account has its own `accountId` and opt
 Notes:
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
-- Base provider settings (group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Base channel settings (group policy, mention gating, etc.) apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agents.defaults.
 
 ### Group chat mention gating (`agents.list[].groupChat` + `messages.groupChat`)
@@ -477,7 +477,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-`messages.groupChat.historyLimit` sets the global default for group history context. Providers can override with `channels.<provider>.historyLimit` (or `channels.<provider>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
+`messages.groupChat.historyLimit` sets the global default for group history context. Channels can override with `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
 
 Per-agent override (takes precedence when set, even `[]`):
 ```json5
@@ -491,7 +491,7 @@ Per-agent override (takes precedence when set, even `[]`):
 }
 ```
 
-Mention gating defaults live per provider (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
+Mention gating defaults live per channel (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 
 To respond **only** to specific text triggers (ignoring native @-mentions):
 ```json5
@@ -517,7 +517,7 @@ To respond **only** to specific text triggers (ignoring native @-mentions):
 }
 ```
 
-### Group policy (per provider)
+### Group policy (per channel)
 
 Use `channels.*.groupPolicy` to control whether group/room messages are accepted at all:
 
@@ -602,17 +602,17 @@ Inbound messages are routed to an agent via bindings.
     - `deny`: array of denied tool names (deny wins)
 - `agents.defaults`: shared agent defaults (model, workspace, sandbox, etc.).
 - `bindings[]`: routes inbound messages to an `agentId`.
-  - `match.provider` (required)
+  - `match.channel` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)
   - `match.peer` (optional; `{ kind: dm|group|channel, id }`)
-  - `match.guildId` / `match.teamId` (optional; provider-specific)
+  - `match.guildId` / `match.teamId` (optional; channel-specific)
 
 Deterministic match order:
 1) `match.peer`
 2) `match.guildId`
 3) `match.teamId`
 4) `match.accountId` (exact, no peer/guild/team)
-5) `match.accountId: "*"` (provider-wide, no peer/guild/team)
+5) `match.accountId: "*"` (channel-wide, no peer/guild/team)
 6) default agent (`agents.list[].default`, else first list entry, else `"main"`)
 
 Within each match tier, the first matching entry in `bindings` wins.
@@ -700,8 +700,8 @@ Example: two WhatsApp accounts → two agents:
     ]
   },
   bindings: [
-    { agentId: "home", match: { provider: "whatsapp", accountId: "personal" } },
-    { agentId: "work", match: { provider: "whatsapp", accountId: "biz" } }
+    { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
+    { agentId: "work", match: { channel: "whatsapp", accountId: "biz" } }
   ],
   channels: {
     whatsapp: {
@@ -741,7 +741,7 @@ Controls how inbound messages behave when an agent run is already active.
       debounceMs: 1000,
       cap: 20,
       drop: "summarize", // old | new | summarize
-      byProvider: {
+      byChannel: {
         whatsapp: "collect",
         telegram: "collect",
         discord: "collect",
@@ -784,9 +784,9 @@ Notes:
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
 
-### `web` (WhatsApp web provider)
+### `web` (WhatsApp web channel runtime)
 
-WhatsApp runs through the gateway’s web provider. It starts automatically when a linked session exists.
+WhatsApp runs through the gateway’s web channel (Baileys Web). It starts automatically when a linked session exists.
 Set `web.enabled: false` to keep it off by default.
 
 ```json5
@@ -1483,8 +1483,8 @@ Example (tuned):
 
 Block streaming:
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
-- Provider overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.
-  Non-Telegram providers require an explicit `*.blockStreaming: true` to enable block replies.
+- Channel overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.
+  Non-Telegram channels require an explicit `*.blockStreaming: true` to enable block replies.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"` (default: text_end).
 - `agents.defaults.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
@@ -1496,9 +1496,9 @@ Block streaming:
   ```
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
-  with `maxChars` capped to the provider text limit. Signal/Slack/Discord default
+  with `maxChars` capped to the channel text limit. Signal/Slack/Discord default
   to `minChars: 1500` unless overridden.
-  Provider overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
+  Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
   `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.signal.blockStreamingCoalesce`,
   `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce` (and per-account variants).
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
@@ -1532,8 +1532,8 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
   `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
 - `includeReasoning`: when `true`, heartbeats will also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`). Default: `false`.
-- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
-- `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
+- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md if exists` line if you still want the file read.
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 300).
 
@@ -1606,7 +1606,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 
 `tools.elevated` controls elevated (host) exec access:
 - `enabled`: allow elevated mode (default true)
-- `allowFrom`: per-provider allowlists (empty = disabled)
+- `allowFrom`: per-channel allowlists (empty = disabled)
   - `whatsapp`: E.164 numbers
   - `telegram`: chat ids or usernames
   - `discord`: user ids or usernames (falls back to `channels.discord.dm.allowFrom` if omitted)
@@ -2082,12 +2082,12 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
       // Max ping-pong reply turns between requester/target (0–5).
       maxPingPongTurns: 5
     },
-    sendPolicy: {
-      rules: [
-        { action: "deny", match: { provider: "discord", chatType: "group" } }
-      ],
-      default: "allow"
-    }
+        sendPolicy: {
+          rules: [
+        { action: "deny", match: { channel: "discord", chatType: "group" } }
+          ],
+          default: "allow"
+        }
   }
 }
 ```
@@ -2097,7 +2097,7 @@ Fields:
   - Sandbox note: `agents.defaults.sandbox.mode: "non-main"` uses this key to detect the main session. Any session key that does not match `mainKey` (groups/channels) is sandboxed.
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
-- `sendPolicy.rules[]`: match by `provider`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
+- `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
 
 ### `skills` (skills config)
 
@@ -2349,8 +2349,8 @@ Hot-applied (no full gateway restart):
 - `browser` (browser control server restart)
 - `cron` (cron service restart + concurrency update)
 - `agents.defaults.heartbeat` (heartbeat runner restart)
-- `web` (WhatsApp web provider restart)
-- `telegram`, `discord`, `signal`, `imessage` (provider restarts)
+- `web` (WhatsApp web channel restart)
+- `telegram`, `discord`, `signal`, `imessage` (channel restarts)
 - `agent`, `models`, `routing`, `messages`, `session`, `whatsapp`, `logging`, `skills`, `ui`, `talk`, `identity`, `wizard` (dynamic reads)
 
 Requires full Gateway restart:
@@ -2409,7 +2409,7 @@ Defaults:
         messageTemplate:
           "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
-        provider: "last",
+        channel: "last",
         model: "openai/gpt-5.2-mini",
       },
     ],
@@ -2424,7 +2424,7 @@ Requests must include the hook token:
 
 Endpoints:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -2434,8 +2434,8 @@ Mapping notes:
 - `match.source` matches a payload field (e.g. `{ source: "gmail" }`) so you can use a generic `/hooks/ingest` path.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
-- `deliver: true` sends the final reply to a provider; `provider` defaults to `last` (falls back to WhatsApp).
-- If there is no prior delivery route, set `provider` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage/MS Teams).
+- `deliver: true` sends the final reply to a channel; `channel` defaults to `last` (falls back to WhatsApp).
+- If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
 Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
@@ -2574,9 +2574,9 @@ Template placeholders are expanded in `tools.audio.transcription.args` (and any 
 | `{{Body}}` | Full inbound message body |
 | `{{RawBody}}` | Raw inbound message body (no history/sender wrappers; best for command parsing) |
 | `{{BodyStripped}}` | Body with group mentions stripped (best default for agents) |
-| `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per provider) |
+| `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per channel) |
 | `{{To}}` | Destination identifier |
-| `{{MessageSid}}` | Provider message id (when available) |
+| `{{MessageSid}}` | Channel message id (when available) |
 | `{{SessionId}}` | Current session UUID |
 | `{{IsNewSession}}` | `"true"` when a new session was created |
 | `{{MediaUrl}}` | Inbound media pseudo-URL (if present) |

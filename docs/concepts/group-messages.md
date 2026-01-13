@@ -3,7 +3,7 @@ summary: "Behavior and config for WhatsApp group message handling (mentionPatter
 read_when:
   - Changing group message rules or mentions
 ---
-# Group messages (web provider)
+# Group messages (WhatsApp web channel)
 
 Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
 
@@ -18,27 +18,27 @@ Note: `agents.list[].groupChat.mentionPatterns` is now used by Telegram/Discord/
 - Ephemeral/view-once: we unwrap those before extracting text/mentions, so pings inside them still trigger.
 - Group system prompt: on the first turn of a group session (and whenever `/activation` changes the mode) we inject a short blurb into the system prompt like `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
-## Config for Clawd UK (+447700900123)
+## Config example (WhatsApp)
 Add a `groupChat` block to `~/.clawdbot/clawdbot.json` so display-name pings work even when WhatsApp strips the visual `@` in the text body:
 
 ```json5
 {
-  "whatsapp": {
-    "groups": {
-      "*": { "requireMention": true }
+  channels: {
+    whatsapp: {
+      groups: {
+        "*": { requireMention: true }
+      }
     }
   },
-  "agents": {
-    "list": [
+  agents: {
+    list: [
       {
-        "id": "main",
-        "groupChat": {
-          "historyLimit": 50,
-          "mentionPatterns": [
-            "@?clawd",
-            "@?clawd\\s*uk",
+        id: "main",
+        groupChat: {
+          historyLimit: 50,
+          mentionPatterns: [
             "@?clawdbot",
-            "\\+?447700900123"
+            "\\+?15555550123"
           ]
         }
       }
@@ -48,8 +48,8 @@ Add a `groupChat` block to `~/.clawdbot/clawdbot.json` so display-name pings wor
 ```
 
 Notes:
-- The regexes are case-insensitive; they cover `@clawd`, `@clawd uk`, `clawdbot`, and the raw number with or without `+`/spaces.
-- WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a good safety net.
+- The regexes are case-insensitive; they cover a display-name ping like `@clawdbot` and the raw number with or without `+`/spaces.
+- WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
 
 ### Activation command (owner-only)
 
@@ -60,8 +60,8 @@ Use the group chat command:
 Only the owner number (from `channels.whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## How to use
-1) Add Clawd UK (`+447700900123`) to the group.
-2) Say `@clawd …` (or `@clawd uk`, `@clawdbot`, or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
+1) Add your WhatsApp account (the one running Clawdbot) to the group.
+2) Say `@clawdbot …` (or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
 3) The agent prompt will include recent group context plus the trailing `[from: …]` marker so it can address the right person.
 4) Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
