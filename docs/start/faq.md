@@ -204,6 +204,15 @@ Use managed overrides instead of editing the repo copy. Put your changes in `~/.
 
 Yes. Add extra directories via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.clawdbot/skills` → bundled → `skills.load.extraDirs`. `clawdhub` installs into `./skills` by default, which Clawdbot treats as `<workspace>/skills`.
 
+### How can I use different models for different tasks?
+
+Today the supported patterns are:
+- **Cron jobs**: isolated jobs can set a `model` override per job.
+- **Sub-agents**: route tasks to separate agents with different default models.
+- **On-demand switch**: use `/model` to switch the current session model at any time.
+
+See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), and [Slash commands](/tools/slash-commands).
+
 ### How do I install skills on Linux?
 
 Use **ClawdHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn’t available on Linux.
