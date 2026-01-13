@@ -1,4 +1,5 @@
 # Repository Guidelines
+- Repo: https://github.com/clawdbot/clawdbot
 
 ## Project Structure & Module Organization
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
