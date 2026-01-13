@@ -77,6 +77,60 @@
   border-bottom: none;
 }
 
+.account-count {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.account-card-list {
+  margin-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.account-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), transparent),
+    rgba(255, 255, 255, 0.03);
+}
+
+.account-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.account-card-title {
+  font-weight: 600;
+}
+
+.account-card-id {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.account-card-status {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.account-card-status div {
+  padding: 4px 0;
+}
+
+.account-card-error {
+  margin-top: 6px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .label {
   color: var(--muted);
   font-size: 11px;

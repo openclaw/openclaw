@@ -208,6 +208,22 @@ function providerEnabled(key: ProviderKey, props: ConnectionsProps) {
   }
 }
 
+function getProviderAccountCount(
+  key: ProviderKey,
+  providerAccounts?: Record<string, ProviderAccountSnapshot[]> | null,
+): number {
+  return providerAccounts?.[key]?.length ?? 0;
+}
+
+function renderProviderAccountCount(
+  key: ProviderKey,
+  providerAccounts?: Record<string, ProviderAccountSnapshot[]> | null,
+) {
+  const count = getProviderAccountCount(key, providerAccounts);
+  if (count < 2) return nothing;
+  return html`<div class="account-count">Accounts (${count})</div>`;
+}
+
 function renderProvider(
   key: ProviderKey,
   props: ConnectionsProps,
@@ -221,6 +237,10 @@ function renderProvider(
     providerAccounts?: Record<string, ProviderAccountSnapshot[]> | null;
   },
 ) {
+  const accountCountLabel = renderProviderAccountCount(
+    key,
+    data.providerAccounts,
+  );
   switch (key) {
     case "whatsapp": {
       const whatsapp = data.whatsapp;
@@ -228,6 +248,7 @@ function renderProvider(
         <div class="card">
           <div class="card-title">WhatsApp</div>
           <div class="card-sub">Link WhatsApp Web and monitor connection health.</div>
+          ${accountCountLabel}
 
           <div class="status-list" style="margin-top: 16px;">
             <div>
@@ -332,12 +353,14 @@ function renderProvider(
         const botUsername = probe?.bot?.username;
         const label = account.name || account.accountId;
         return html`
-          <div style="border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 8px;">
-            <div style="font-weight: 500; margin-bottom: 8px;">
-              ${botUsername ? `@${botUsername}` : label}
-              <span class="muted" style="font-weight: normal;">(${account.accountId})</span>
+          <div class="account-card">
+            <div class="account-card-header">
+              <div class="account-card-title">
+                ${botUsername ? `@${botUsername}` : label}
+              </div>
+              <div class="account-card-id">${account.accountId}</div>
             </div>
-            <div class="status-list" style="font-size: 13px;">
+            <div class="status-list account-card-status">
               <div>
                 <span class="label">Running</span>
                 <span>${account.running ? "Yes" : "No"}</span>
@@ -351,7 +374,7 @@ function renderProvider(
                 <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
               </div>
               ${account.lastError ? html`
-                <div style="color: var(--danger); margin-top: 4px;">
+                <div class="account-card-error">
                   ${account.lastError}
                 </div>
               ` : nothing}
@@ -364,10 +387,10 @@ function renderProvider(
         <div class="card">
           <div class="card-title">Telegram</div>
           <div class="card-sub">Bot token and delivery options.</div>
+          ${accountCountLabel}
 
           ${hasMultipleAccounts ? html`
-            <div style="margin-top: 16px; margin-bottom: 8px;">
-              <div style="font-weight: 500; margin-bottom: 8px; color: var(--muted);">Accounts (${telegramAccounts.length})</div>
+            <div class="account-card-list">
               ${telegramAccounts.map((account) => renderAccountCard(account))}
             </div>
           ` : html`
@@ -562,6 +585,7 @@ function renderProvider(
         <div class="card">
           <div class="card-title">Discord</div>
           <div class="card-sub">Bot connection and probe status.</div>
+          ${accountCountLabel}
 
           <div class="status-list" style="margin-top: 16px;">
             <div>
@@ -1086,6 +1110,7 @@ function renderProvider(
         <div class="card">
           <div class="card-title">Slack</div>
           <div class="card-sub">Socket mode status and bot details.</div>
+          ${accountCountLabel}
 
           <div class="status-list" style="margin-top: 16px;">
             <div>
@@ -1467,6 +1492,7 @@ function renderProvider(
         <div class="card">
           <div class="card-title">Signal</div>
           <div class="card-sub">REST daemon status and probe details.</div>
+          ${accountCountLabel}
 
           <div class="status-list" style="margin-top: 16px;">
             <div>
@@ -1696,6 +1722,7 @@ function renderProvider(
         <div class="card">
           <div class="card-title">iMessage</div>
           <div class="card-sub">imsg CLI and database availability.</div>
+          ${accountCountLabel}
 
           <div class="status-list" style="margin-top: 16px;">
             <div>
