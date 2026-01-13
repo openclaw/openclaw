@@ -173,6 +173,15 @@ function normalizeSlackSlug(raw?: string) {
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
 }
 
+function normalizeSlackSlashCommandName(raw: string) {
+  return raw.replace(/^\/+/, "");
+}
+
+export function buildSlackSlashCommandMatcher(name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^/?${escaped}$`);
+}
+
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);
 }
@@ -227,9 +236,13 @@ function resolveSlackUserAllowed(params: {
 function resolveSlackSlashCommandConfig(
   raw?: SlackSlashCommandConfig,
 ): Required<SlackSlashCommandConfig> {
+  const normalizedName = normalizeSlackSlashCommandName(
+    raw?.name?.trim() || "clawd",
+  );
+  const name = normalizedName || "clawd";
   return {
     enabled: raw?.enabled === true,
-    name: raw?.name?.trim() || "clawd",
+    name,
     sessionPrefix: raw?.sessionPrefix?.trim() || "slack:slash",
     ephemeral: raw?.ephemeral !== false,
   };
@@ -1980,7 +1993,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   } else if (slashCommand.enabled) {
     app.command(
-      slashCommand.name,
+      buildSlackSlashCommandMatcher(slashCommand.name),
       async ({ command, ack, respond }: SlackCommandMiddlewareArgs) => {
         await handleSlashCommand({
           command,
