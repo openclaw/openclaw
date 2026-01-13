@@ -179,7 +179,9 @@ export function registerDiscordListener(
   listeners: Array<object>,
   listener: object,
 ) {
-  if (listeners.some((existing) => existing.constructor === listener.constructor)) {
+  if (
+    listeners.some((existing) => existing.constructor === listener.constructor)
+  ) {
     return false;
   }
   listeners.push(listener);
