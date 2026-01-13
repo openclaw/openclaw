@@ -475,7 +475,22 @@ export function stripRedundantSubsystemPrefixForConsole(
   displaySubsystem: string,
 ): string {
   if (!displaySubsystem) return message;
-  if (!message.startsWith(displaySubsystem)) return message;
+
+  // Common duplication: "[discord] discord: ..." (when a message manually includes the subsystem tag).
+  if (message.startsWith("[")) {
+    const closeIdx = message.indexOf("]");
+    if (closeIdx > 1) {
+      const bracketTag = message.slice(1, closeIdx);
+      if (bracketTag.toLowerCase() === displaySubsystem.toLowerCase()) {
+        let i = closeIdx + 1;
+        while (message[i] === " ") i += 1;
+        return message.slice(i);
+      }
+    }
+  }
+
+  const prefix = message.slice(0, displaySubsystem.length);
+  if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) return message;
 
   const next = message.slice(
     displaySubsystem.length,
