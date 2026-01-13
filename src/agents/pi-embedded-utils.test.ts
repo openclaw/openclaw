@@ -41,6 +41,24 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Let me check that.");
   });
 
+  it("keeps invoke snippets without Minimax markers", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe(
+      `Example:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
+    );
+  });
+
   it("preserves normal text without tool invocations", () => {
     const msg: AssistantMessage = {
       role: "assistant",
@@ -55,6 +73,22 @@ describe("extractAssistantText", () => {
 
     const result = extractAssistantText(msg);
     expect(result).toBe("This is a normal response without any tool calls.");
+  });
+
+  it("strips Minimax tool invocations with extra attributes", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Before<invoke name='Bash' data-foo="bar">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>After`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Before\nAfter");
   });
 
   it("strips tool XML mixed with regular content", () => {
