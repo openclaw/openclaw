@@ -200,6 +200,10 @@ Doctor detects a gateway service entrypoint mismatch and offers to rewrite the s
 
 Use managed overrides instead of editing the repo copy. Put your changes in `~/.clawdbot/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`). Precedence is `<workspace>/skills` > `~/.clawdbot/skills` > bundled, so managed overrides win without touching git. Only upstream-worthy edits should live in the repo and go out as PRs.
 
+### Can I load skills from a custom folder?
+
+Yes. Add extra directories via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json` (lowest precedence). Default precedence remains: `<workspace>/skills` → `~/.clawdbot/skills` → bundled → `skills.load.extraDirs`. `clawdhub` installs into `./skills` by default, which Clawdbot treats as `<workspace>/skills`.
+
 ### How do I install skills on Linux?
 
 Use **ClawdHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn’t available on Linux.
