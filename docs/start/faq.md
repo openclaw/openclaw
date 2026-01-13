@@ -27,11 +27,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I run a "fast chat" agent and an "Opus for coding" agent?](#can-i-run-a-fast-chat-agent-and-an-opus-for-coding-agent)
   - [Does Homebrew work on Linux?](#does-homebrew-work-on-linux)
   - [Can I switch between npm and git installs later?](#can-i-switch-between-npm-and-git-installs-later)
+  - [Should I run the Gateway on my laptop or a VPS?](#should-i-run-the-gateway-on-my-laptop-or-a-vps)
 - [Skills and automation](#skills-and-automation)
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
+  - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -39,6 +41,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Does semantic memory search require an OpenAI API key?](#does-semantic-memory-search-require-an-openai-api-key)
 - [Where things live on disk](#where-things-live-on-disk)
   - [Where does Clawdbot store its data?](#where-does-clawdbot-store-its-data)
+  - [Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?](#where-should-agentsmd--soulmd--usermd--memorymd-live)
   - [How do I completely uninstall Clawdbot?](#how-do-i-completely-uninstall-clawdbot)
   - [Can agents work outside the workspace?](#can-agents-work-outside-the-workspace)
   - [I’m in remote mode — where is the session store?](#im-in-remote-mode-where-is-the-session-store)
@@ -54,12 +57,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Do nodes run a gateway daemon?](#do-nodes-run-a-gateway-daemon)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
   - [What’s a minimal “sane” config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
+  - [How do I set up Tailscale on a VPS and connect from my Mac?](#how-do-i-set-up-tailscale-on-a-vps-and-connect-from-my-mac)
+  - [How do I connect a Mac node to a remote Gateway (Tailscale Serve)?](#how-do-i-connect-a-mac-node-to-a-remote-gateway-tailscale-serve)
 - [Env vars and .env loading](#env-vars-and-env-loading)
   - [How does Clawdbot load environment variables?](#how-does-clawdbot-load-environment-variables)
   - [“I started the Gateway via a daemon and my env vars disappeared.” What now?](#i-started-the-gateway-via-a-daemon-and-my-env-vars-disappeared-what-now)
+  - [I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?](#i-set-copilot_github_token-but-models-status-shows-shell-env-off-why)
 - [Sessions & multiple chats](#sessions-multiple-chats)
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
   - [How do I completely reset Clawdbot (but keep it installed)?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
+  - [I’m getting “context too large” errors — how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
@@ -67,6 +74,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [What is the “default model”?](#what-is-the-default-model)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
   - [Why do I see “Model … is not allowed” and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
+  - [Why do I see “Unknown model: minimax/MiniMax-M2.1”?](#why-do-i-see-unknown-model-minimaxminimax-m21)
+  - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
   - [Are opus / sonnet / gpt built‑in shortcuts?](#are-opus-sonnet-gpt-builtin-shortcuts)
   - [How do I define/override model shortcuts (aliases)?](#how-do-i-defineoverride-model-shortcuts-aliases)
   - [How do I add models from other providers like OpenRouter or Z.AI?](#how-do-i-add-models-from-other-providers-like-openrouter-or-zai)
@@ -89,6 +98,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [The Control UI says “unauthorized” (or keeps reconnecting). What now?](#the-control-ui-says-unauthorized-or-keeps-reconnecting-what-now)
   - [I set `gateway.bind: "tailnet"` but it can’t bind / nothing listens](#i-set-gatewaybind-tailnet-but-it-cant-bind-nothing-listens)
   - [Can I run multiple Gateways on the same host?](#can-i-run-multiple-gateways-on-the-same-host)
+  - [What does “invalid handshake” / code 1008 mean?](#what-does-invalid-handshake--code-1008-mean)
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
   - [How do I start/stop/restart the Gateway daemon?](#how-do-i-startstoprestart-the-gateway-daemon)
@@ -106,6 +116,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I’m running on my personal WhatsApp number — why is self-chat weird?](#im-running-on-my-personal-whatsapp-number-why-is-self-chat-weird)
   - [WhatsApp logged me out. How do I re‑auth?](#whatsapp-logged-me-out-how-do-i-reauth)
   - [Build errors on `main` — what’s the standard fix path?](#build-errors-on-main-whats-the-standard-fix-path)
+  - [npm install fails (allow-build-scripts / missing tar or yargs). What now?](#npm-install-fails-allow-build-scripts--missing-tar-or-yargs-what-now)
+  - [How do I switch between git installs and npm installs?](#how-do-i-switch-between-git-installs-and-npm-installs)
+  - [Telegram block streaming isn’t splitting text between tool calls. Why?](#telegram-block-streaming-isnt-splitting-text-between-tool-calls-why)
+  - [Discord doesn’t reply in my server even with `requireMention: false`. Why?](#discord-doesnt-reply-in-my-server-even-with-requiremention-false-why)
+  - [Cloud Code Assist API error: invalid tool schema (400). What now?](#cloud-code-assist-api-error-invalid-tool-schema-400-what-now)
 
 ## First 60 seconds if something's broken
 
@@ -205,7 +220,7 @@ See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth
 
 ### What runtime do I need?
 
-Node **>= 22** is required. `pnpm` is recommended; `bun` is optional.
+Node **>= 22** is required. `pnpm` is recommended. Bun is **not recommended** for the Gateway.
 
 ### What does the onboarding wizard actually do?
 
@@ -228,6 +243,8 @@ The wizard can run `claude setup-token` on the gateway host (or you run it yours
 
 Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also supports **setup-token**. If you have a Claude subscription, we recommend **setup-token** on the gateway host for the most reliable long‑running setup (requires Claude Pro/Max + the `claude` CLI). OAuth reuse is supported, but avoid logging in separately via Clawdbot and Claude Code to prevent token conflicts. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
+Note: Claude subscription access is governed by Anthropic’s terms. For production or multi‑user workloads, API keys are usually the safer choice.
+
 ### Is AWS Bedrock supported?
 
 Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI‑compatible proxy in front of Bedrock is still a valid option.
@@ -246,7 +263,11 @@ Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, 
 
 ### Can I use Bun?
 
-Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
+Bun is **not recommended**. We see runtime bugs, especially with WhatsApp and Telegram.
+Use **Node** for stable gateways.
+
+If you still want to experiment with Bun, do it on a non‑production gateway
+without WhatsApp/Telegram.
 
 ### Telegram: what goes in `allowFrom`?
 
@@ -298,6 +319,23 @@ clawdbot daemon restart
 
 Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
 
+### Should I run the Gateway on my laptop or a VPS?
+
+Short answer: **if you want 24/7 reliability, use a VPS**. If you want the
+lowest friction and you’re okay with sleep/restarts, run it locally.
+
+**Laptop (local Gateway)**
+- **Pros:** no server cost, direct access to local files, live browser window.
+- **Cons:** sleep/network drops = disconnects, OS updates/reboots interrupt, must stay awake.
+
+**VPS / cloud**
+- **Pros:** always‑on, stable network, no laptop sleep issues, easier to keep running.
+- **Cons:** often run headless (use screenshots), remote file access only, you must SSH for updates.
+
+**Clawdbot‑specific note:** WhatsApp/Telegram/Slack/Discord all work fine from a VPS. The only real trade‑off is **headless browser** vs a visible window. See [Browser](/tools/browser).
+
+**Recommended default:** VPS if you had gateway disconnects before. Local is great when you’re actively using the Mac and want local file access or UI automation with a visible browser.
+
 ## Skills and automation
 
 ### How do I customize skills without keeping the repo dirty?
@@ -320,6 +358,7 @@ See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-ag
 ### How do I install skills on Linux?
 
 Use **ClawdHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn’t available on Linux.
+Browse skills at https://clawdhub.com.
 
 Install the ClawdHub CLI (pick one package manager):
 
@@ -331,9 +370,20 @@ npm i -g clawdhub
 pnpm add -g clawdhub
 ```
 
-```bash
-bun add -g clawdhub
-```
+### Do you have a Notion or HeyGen integration?
+
+Not built‑in today.
+
+Options:
+- **Custom skill / plugin:** best for reliable API access (Notion/HeyGen both have APIs).
+- **Browser automation:** works without code but is slower and more fragile.
+
+If you want to keep context per client (agency workflows), a simple pattern is:
+- One Notion page per client (context + preferences + active work).
+- Ask the agent to fetch that page at the start of a session.
+
+If you want a native integration, open a feature request or build a skill
+targeting those APIs.
 
 Install skills:
 
@@ -395,6 +445,29 @@ Everything lives under `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`):
 Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agents.defaults.workspace` (default: `~/clawd`).
+
+### Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?
+
+These files live in the **agent workspace**, not `~/.clawdbot`.
+
+- **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
+  `MEMORY.md` (or `memory.md`), `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+- **State dir (`~/.clawdbot`)**: config, credentials, auth profiles, sessions, logs,
+  and shared skills (`~/.clawdbot/skills`).
+
+Default workspace is `~/clawd`, configurable via:
+
+```json5
+{
+  agents: { defaults: { workspace: "~/clawd" } }
+}
+```
+
+If the bot “forgets” after a restart, confirm the Gateway is using the same
+workspace on every launch (and remember: remote mode uses the **gateway host’s**
+workspace, not your local laptop).
+
+See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
 
 ### How do I completely uninstall Clawdbot?
 
@@ -500,6 +573,11 @@ Yes. It’s a config option:
 
 Default is `false` (headful). Headless is more likely to trigger anti‑bot checks on some sites. See [Browser](/tools/browser).
 
+Headless uses the **same Chromium engine** and works for most automation (forms, clicks, scraping, logins). The main differences:
+- No visible browser window (use screenshots if you need visuals).
+- Some sites are stricter about automation in headless mode (CAPTCHAs, anti‑bot).
+  For example, X/Twitter often blocks headless sessions.
+
 ## Remote gateways + nodes
 
 ### How do commands propagate between Telegram, the gateway, and nodes?
@@ -532,6 +610,52 @@ Yes. `config.apply` validates + writes the full config and restarts the Gateway 
 ```
 
 This sets your workspace and restricts who can trigger the bot.
+
+### How do I set up Tailscale on a VPS and connect from my Mac?
+
+Minimal steps:
+
+1) **Install + login on the VPS**
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up
+   ```
+2) **Install + login on your Mac**
+   - Use the Tailscale app and sign in to the same tailnet.
+3) **Enable MagicDNS (recommended)**
+   - In the Tailscale admin console, enable MagicDNS so the VPS has a stable name.
+4) **Use the tailnet hostname**
+   - SSH: `ssh user@your-vps.tailnet-xxxx.ts.net`
+   - Gateway WS: `ws://your-vps.tailnet-xxxx.ts.net:18789`
+
+If you want the Control UI without SSH, use Tailscale Serve on the VPS:
+```bash
+clawdbot gateway --tailscale serve
+```
+This keeps the gateway bound to loopback and exposes HTTPS via Tailscale. See [Tailscale](/gateway/tailscale).
+
+### How do I connect a Mac node to a remote Gateway (Tailscale Serve)?
+
+Serve only exposes the **Gateway Control UI**. Nodes use the **bridge port**.
+
+Recommended setup:
+1) **Enable the bridge on the gateway host**:
+   ```json5
+   {
+     bridge: { enabled: true, bind: "auto" }
+   }
+   ```
+   `auto` prefers a tailnet IP when Tailscale is present.
+2) **Make sure the VPS + Mac are on the same tailnet**.
+3) **Use the macOS app in Remote mode** (SSH target can be the tailnet hostname).
+   The app will tunnel the bridge port and connect as a node.
+4) **Approve the node** on the gateway:
+   ```bash
+   clawdbot nodes pending
+   clawdbot nodes approve <requestId>
+   ```
+
+Docs: [Bridge protocol](/gateway/bridge-protocol), [Discovery](/gateway/discovery), [macOS remote mode](/platforms/mac/remote).
 
 ## Env vars and .env loading
 
@@ -578,6 +702,30 @@ Two common fixes:
 This runs your login shell and imports only missing expected keys (never overrides). Env var equivalents:
 `CLAWDBOT_LOAD_SHELL_ENV=1`, `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`.
 
+### I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?
+
+`clawdbot models status` reports whether **shell env import** is enabled. “Shell env: off”
+does **not** mean your env vars are missing — it just means Clawdbot won’t load
+your login shell automatically.
+
+If the Gateway runs as a daemon (launchd/systemd), it won’t inherit your shell
+environment. Fix by doing one of these:
+
+1) Put the token in `~/.clawdbot/.env`:
+   ```
+   COPILOT_GITHUB_TOKEN=...
+   ```
+2) Or enable shell import (`env.shellEnv.enabled: true`).
+3) Or add it to your config `env` block (applies only if missing).
+
+Then restart the gateway and recheck:
+```bash
+clawdbot models status
+```
+
+Copilot tokens are read from `COPILOT_GITHUB_TOKEN` (also `GH_TOKEN` / `GITHUB_TOKEN`).
+See [/concepts/model-providers](/concepts/model-providers) and [/environment](/environment).
+
 ## Sessions & multiple chats
 
 ### How do I start a fresh conversation?
@@ -608,6 +756,28 @@ Notes:
 - The onboarding wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
 - If you used profiles (`--profile` / `CLAWDBOT_PROFILE`), reset each state dir (defaults are `~/.clawdbot-<profile>`).
 - Dev reset: `clawdbot gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
+
+### I’m getting “context too large” errors — how do I reset or compact?
+
+Use one of these:
+
+- **Compact** (keeps the conversation but summarizes older turns):
+  ```
+  /compact
+  ```
+  or `/compact <instructions>` to guide the summary.
+
+- **Reset** (fresh session ID for the same chat key):
+  ```
+  /new
+  /reset
+  ```
+
+If it keeps happening:
+- Enable or tune **session pruning** (`agents.defaults.contextPruning`) to trim old tool output.
+- Use a model with a larger context window.
+
+Docs: [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning), [Session management](/concepts/session).
 
 ### Do I need to add a “bot account” to a WhatsApp group?
 
@@ -692,6 +862,59 @@ Model "provider/model" is not allowed. Use /model to list available models.
 
 That error is returned **instead of** a normal reply. Fix: add the model to
 `agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
+
+### Why do I see “Unknown model: minimax/MiniMax-M2.1”?
+
+This means the **provider isn’t configured** (no MiniMax provider config or auth
+profile was found), so the model can’t be resolved. A fix for this detection is
+in **2026.1.12** (unreleased at the time of writing).
+
+Fix checklist:
+1) Upgrade to **2026.1.12** (or run from source `main`), then restart the gateway.
+2) Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
+   exists in env/auth profiles so the provider can be injected.
+3) Use the exact model id (case‑sensitive): `minimax/MiniMax-M2.1` or
+   `minimax/MiniMax-M2.1-lightning`.
+4) Run:
+   ```bash
+   clawdbot models list
+   ```
+   and pick from the list (or `/model list` in chat).
+
+See [MiniMax](/providers/minimax) and [Models](/concepts/models).
+
+### Can I use MiniMax as my default and OpenAI for complex tasks?
+
+Yes. Use **MiniMax as the default** and switch models **per session** when needed.
+Fallbacks are for **errors**, not “hard tasks,” so use `/model` or a separate agent.
+
+**Option A: switch per session**
+```json5
+{
+  env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "minimax/MiniMax-M2.1" },
+      models: {
+        "minimax/MiniMax-M2.1": { alias: "minimax" },
+        "openai/gpt-5.2": { alias: "gpt" }
+      }
+    }
+  }
+}
+```
+
+Then:
+```
+/model gpt
+```
+
+**Option B: separate agents**
+- Agent A default: MiniMax
+- Agent B default: OpenAI
+- Route by agent or use `/agent` to switch
+
+Docs: [Models](/concepts/models), [Multi-Agent Routing](/concepts/multi-agent), [MiniMax](/providers/minimax), [OpenAI](/providers/openai).
 
 ### Are opus / sonnet / gpt built‑in shortcuts?
 
@@ -932,6 +1155,8 @@ Fix:
 Fix:
 - Start Tailscale on that host (so it has a 100.x address), or
 - Switch to `gateway.bind: "loopback"` / `"lan"`.
+  
+Note: `tailnet` is legacy and is migrated to `auto` by Doctor. Prefer `gateway.bind: "auto"` when using Tailscale.
 
 ### Can I run multiple Gateways on the same host?
 
@@ -950,6 +1175,29 @@ Quick setup (recommended):
 - Install a per-profile daemon: `clawdbot --profile <name> daemon install`.
 
 Profiles also suffix service names (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`, `Clawdbot Gateway (<profile>)`).
+
+### What does “invalid handshake” / code 1008 mean?
+
+The Gateway is a **WebSocket server**, and it expects the very first message to
+be a `connect` frame. If it receives anything else, it closes the connection
+with **code 1008** (policy violation).
+
+Common causes:
+- You opened the **HTTP** URL in a browser (`http://...`) instead of a WS client.
+- You used the wrong port or path.
+- A proxy or tunnel stripped auth headers or sent a non‑Gateway request.
+
+Quick fixes:
+1) Use the WS URL: `ws://<host>:18789` (or `wss://...` if HTTPS).
+2) Don’t open the WS port in a normal browser tab.
+3) If auth is on, include the token/password in the `connect` frame.
+
+If you’re using the CLI or TUI, the URL should look like:
+```
+clawdbot tui --url ws://<host>:18789 --token <token>
+```
+
+Protocol details: [Gateway protocol](/gateway/protocol).
 
 ## Logging and debugging
 
@@ -1114,6 +1362,94 @@ clawdbot providers login
 2) `pnpm clawdbot doctor`
 3) Check GitHub issues or Discord
 4) Temporary workaround: check out an older commit
+
+### npm install fails (allow-build-scripts / missing tar or yargs). What now?
+
+If you’re running from source, use the repo’s package manager: **pnpm** (preferred).
+The repo declares `packageManager: "pnpm@…"`, and pnpm patches are tracked in `pnpm.patchedDependencies`.
+
+Typical recovery:
+```bash
+git status   # ensure you’re in the repo root
+pnpm install
+pnpm build
+pnpm clawdbot doctor
+clawdbot daemon restart
+```
+
+Why: pnpm is the configured package manager for this repo, and the dependency
+patching workflow relies on it.
+
+### How do I switch between git installs and npm installs?
+
+Use the **website installer** and select the install method with a flag. It
+upgrades in place and rewrites the gateway service to point at the new install.
+
+Switch **to git install**:
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --no-onboard
+```
+
+Switch **to npm global**:
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash
+```
+
+Notes:
+- The git flow only rebases if the repo is clean. Commit or stash changes first.
+- After switching, run:
+  ```bash
+  clawdbot doctor
+  clawdbot daemon restart
+  ```
+
+### Telegram block streaming isn’t splitting text between tool calls. Why?
+
+Block streaming only sends **completed text blocks**. Common reasons you see a single message:
+- `agents.defaults.blockStreamingDefault` is still `"off"`.
+- `telegram.blockStreaming` is set to `false`.
+- `telegram.streamMode` is `partial` or `block` **and draft streaming is active**
+  (private chat + topics). Draft streaming disables block streaming in that case.
+- Your `minChars` / coalesce settings are too high, so chunks get merged.
+- The model emits one large text block (no mid‑reply flush points).
+
+Fix checklist:
+1) Put block streaming settings under `agents.defaults`, not the root.
+2) Set `telegram.streamMode: "off"` if you want real multi‑message block replies.
+3) Use smaller chunk/coalesce thresholds while debugging.
+
+See [Streaming](/concepts/streaming).
+
+### Discord doesn’t reply in my server even with `requireMention: false`. Why?
+
+`requireMention` only controls mention‑gating **after** the channel passes allowlists.
+By default `discord.groupPolicy` is **allowlist**, so guild channels must be explicitly enabled.
+
+Fix checklist:
+1) Set `discord.groupPolicy: "open"` **or** add the guild/channel allowlist.
+2) Use **numeric channel IDs** in `discord.guilds.<guildId>.channels`.
+3) Ensure the bot has **Message Content Intent** and channel permissions.
+4) Run `clawdbot providers status --probe` for audit hints.
+
+Docs: [Discord](/providers/discord), [Providers troubleshooting](/providers/troubleshooting).
+
+### Cloud Code Assist API error: invalid tool schema (400). What now?
+
+This is almost always a **tool schema compatibility** issue. The Cloud Code Assist
+endpoint accepts a strict subset of JSON Schema. Clawdbot scrubs/normalizes tool
+schemas in current `main`, but the fix is not in the last release yet (as of
+January 13, 2026).
+
+Fix checklist:
+1) **Update Clawdbot**:
+   - If you can run from source, pull `main` and restart the gateway.
+   - Otherwise, wait for the next release that includes the schema scrubber.
+2) Avoid unsupported keywords like `anyOf/oneOf/allOf`, `patternProperties`,
+   `additionalProperties`, `minLength`, `maxLength`, `format`, etc.
+3) If you define custom tools, keep the top‑level schema as `type: "object"` with
+   `properties` and simple enums.
+
+See [Tools](/tools) and [TypeBox schemas](/concepts/typebox).
 
 ## Answer the exact question from the screenshot/chat log
 

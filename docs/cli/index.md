@@ -257,12 +257,12 @@ Options:
 - `--tailscale-reset-on-exit`
 - `--install-daemon`
 - `--no-install-daemon` (alias: `--skip-daemon`)
-- `--daemon-runtime <node|bun>`
+- `--daemon-runtime <node|bun>` (bun not recommended for WhatsApp/Telegram)
 - `--skip-providers`
 - `--skip-skills`
 - `--skip-health`
 - `--skip-ui`
-- `--node-manager <npm|pnpm|bun>`
+- `--node-manager <npm|pnpm|bun>` (pnpm recommended; bun not recommended for Gateway runtime)
 - `--json`
 
 ### `configure` / `config`
@@ -549,7 +549,7 @@ Notes:
 - `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
 - `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named Clawdbot services are treated as first-class and aren't flagged as "extra".
 - `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
-- `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
+- `daemon install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `daemon install` options: `--port`, `--runtime`, `--token`, `--force`.
 
 ### `logs`

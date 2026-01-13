@@ -67,3 +67,6 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 ## Notes
 - The TUI shows Gateway chat deltas (`event: chat`) and agent tool events.
 - It registers as a Gateway client with `mode: "tui"` for presence and debugging.
+- The TUI uses the **Gateway’s** model/auth config and environment. If a model
+  token works in your shell but not in TUI, put it in `~/.clawdbot/.env` or
+  enable `env.shellEnv.enabled`, then restart the Gateway.

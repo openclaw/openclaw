@@ -174,6 +174,8 @@ Notes:
   - The bot lacks channel permissions (View/Send/Read History), or
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
+- **`requireMention: false` but still no replies**:
+  - `discord.groupPolicy` defaults to **allowlist**; you must either set it to `"open"` or explicitly list the channel under `discord.guilds.<id>.channels`.
 - **Permission audits** (`providers status --probe`) only check numeric channel IDs. If you use slugs/names as `discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `discord.dm.enabled=false`, `discord.dm.policy="disabled"`, or you haven’t been approved yet (`discord.dm.policy="pairing"`).
 

@@ -73,6 +73,8 @@ clawdbot gateway --tailscale funnel --auth password
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password` to avoid public exposure.
 - Set `gateway.tailscale.resetOnExit` if you want Clawdbot to undo `tailscale serve`
   or `tailscale funnel` configuration on shutdown.
+- Serve/Funnel only expose the **Gateway control UI + WS**. Node **bridge** traffic
+  uses the separate bridge port (default `18790`) and is **not** proxied by Serve.
 
 ## Tailscale prerequisites + limits
 
