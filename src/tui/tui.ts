@@ -39,6 +39,17 @@ export type TuiOptions = {
   message?: string;
 };
 
+export function resolveFinalAssistantText(params: {
+  finalText?: string | null;
+  streamedText?: string | null;
+}) {
+  const finalText = params.finalText ?? "";
+  if (finalText.trim()) return finalText;
+  const streamedText = params.streamedText ?? "";
+  if (streamedText.trim()) return streamedText;
+  return "(no output)";
+}
+
 type ChatEvent = {
   runId: string;
   sessionKey: string;
@@ -642,7 +653,11 @@ export async function runTui(opts: TuiOptions) {
       const text = extractTextFromMessage(evt.message, {
         includeThinking: showThinking,
       });
-      chatLog.finalizeAssistant(text || "(no output)", evt.runId);
+      const finalText = resolveFinalAssistantText({
+        finalText: text,
+        streamedText: chatLog.getStreamingText(evt.runId),
+      });
+      chatLog.finalizeAssistant(finalText, evt.runId);
       noteFinalizedRun(evt.runId);
       activeChatRunId = null;
       setActivityStatus("idle");

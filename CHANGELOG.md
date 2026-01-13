@@ -7,6 +7,7 @@
 - Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
 
 ### Fixes
+- TUI: keep the last streamed response instead of replacing it with “(no output)”. (#747 — thanks @thewilloftheshadow)
 - Slack: accept slash commands with or without leading `/` for custom command configs. (#798 — thanks @thewilloftheshadow)
 - Onboarding/Configure: refuse to proceed with invalid configs; run `clawdbot doctor` first to avoid wiping custom fields. (#764 — thanks @mukhtharcm)
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
