@@ -1,4 +1,4 @@
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
@@ -103,7 +103,7 @@ function buildMoonshotModelDefinition(): ModelDefinitionConfig {
 }
 
 export async function writeOAuthCredentials(
-  provider: OAuthProvider,
+  provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
 ): Promise<void> {

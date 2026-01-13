@@ -1,8 +1,4 @@
-import {
-  loginOpenAICodex,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai";
+import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
@@ -52,7 +48,6 @@ import {
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyZaiConfig,
-  MINIMAX_HOSTED_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
@@ -104,6 +99,56 @@ function normalizeApiKeyInput(raw: string): string {
 
 const validateApiKeyInput = (value: unknown) =>
   normalizeApiKeyInput(String(value ?? "")).length > 0 ? undefined : "Required";
+
+const validateRequiredInput = (value: string) =>
+  value.trim().length > 0 ? undefined : "Required";
+
+function createVpsAwareOAuthHandlers(params: {
+  isRemote: boolean;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  spin: ReturnType<WizardPrompter["progress"]>;
+  localBrowserMessage: string;
+}): {
+  onAuth: (event: { url: string }) => Promise<void>;
+  onPrompt: (prompt: {
+    message: string;
+    placeholder?: string;
+  }) => Promise<string>;
+} {
+  let manualCodePromise: Promise<string> | undefined;
+
+  return {
+    onAuth: async ({ url }) => {
+      if (params.isRemote) {
+        params.spin.stop("OAuth URL ready");
+        params.runtime.log(
+          `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
+        );
+        manualCodePromise = params.prompter
+          .text({
+            message: "Paste the redirect URL (or authorization code)",
+            validate: validateRequiredInput,
+          })
+          .then((value) => String(value));
+        return;
+      }
+
+      params.spin.update(params.localBrowserMessage);
+      await openUrl(url);
+      params.runtime.log(`Open: ${url}`);
+    },
+    onPrompt: async (prompt) => {
+      if (manualCodePromise) return manualCodePromise;
+      const code = await params.prompter.text({
+        message: prompt.message,
+        placeholder: prompt.placeholder,
+        validate: validateRequiredInput,
+      });
+      return String(code);
+    },
+  };
+}
 
 function formatApiKeyPreview(
   raw: string,
@@ -574,43 +619,25 @@ export async function applyAuthChoice(params: {
     );
 
     const spin = params.prompter.progress("Starting OAuth flow…");
-    let manualCodePromise: Promise<string> | undefined;
     try {
+      const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+        isRemote,
+        prompter: params.prompter,
+        runtime: params.runtime,
+        spin,
+        localBrowserMessage: "Complete sign-in in browser…",
+      });
+
       const creds = await loginChutes({
         app: {
           clientId,
           clientSecret,
           redirectUri,
-          scopes: scopes.split(/\\s+/).filter(Boolean),
+          scopes: scopes.split(/\s+/).filter(Boolean),
         },
         manual: isRemote,
-        onAuth: async ({ url }) => {
-          if (isRemote) {
-            spin.stop("OAuth URL ready");
-            params.runtime.log(
-              `\\nOpen this URL in your LOCAL browser:\\n\\n${url}\\n`,
-            );
-            manualCodePromise = params.prompter
-              .text({
-                message: "Paste the redirect URL (or authorization code)",
-                validate: (value) => (value?.trim() ? undefined : "Required"),
-              })
-              .then((value) => String(value));
-          } else {
-            spin.update("Complete sign-in in browser…");
-            await openUrl(url);
-            params.runtime.log(`Open: ${url}`);
-          }
-        },
-        onPrompt: async (prompt) => {
-          if (manualCodePromise) return manualCodePromise;
-          const code = await params.prompter.text({
-            message: prompt.message,
-            placeholder: prompt.placeholder,
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
+        onAuth,
+        onPrompt,
         onProgress: (msg) => spin.update(msg),
       });
 
@@ -618,11 +645,7 @@ export async function applyAuthChoice(params: {
       const email = creds.email?.trim() || "default";
       const profileId = `chutes:${email}`;
 
-      await writeOAuthCredentials(
-        "chutes" as unknown as OAuthProvider,
-        creds,
-        params.agentDir,
-      );
+      await writeOAuthCredentials("chutes", creds, params.agentDir);
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
         provider: "chutes",
@@ -637,7 +660,7 @@ export async function applyAuthChoice(params: {
           "Verify CHUTES_CLIENT_ID (and CHUTES_CLIENT_SECRET if required).",
           `Verify the OAuth app redirect URI includes: ${redirectUri}`,
           "Chutes docs: https://chutes.ai/docs/sign-in-with-chutes/overview",
-        ].join("\\n"),
+        ].join("\n"),
         "OAuth help",
       );
     }
@@ -658,47 +681,23 @@ export async function applyAuthChoice(params: {
       "OpenAI Codex OAuth",
     );
     const spin = params.prompter.progress("Starting OAuth flow…");
-    let manualCodePromise: Promise<string> | undefined;
     try {
+      const { onAuth, onPrompt } = createVpsAwareOAuthHandlers({
+        isRemote,
+        prompter: params.prompter,
+        runtime: params.runtime,
+        spin,
+        localBrowserMessage: "Complete sign-in in browser…",
+      });
+
       const creds = await loginOpenAICodex({
-        onAuth: async ({ url }) => {
-          if (isRemote) {
-            spin.stop("OAuth URL ready");
-            params.runtime.log(
-              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
-            );
-            manualCodePromise = params.prompter
-              .text({
-                message: "Paste the redirect URL (or authorization code)",
-                validate: (value) => (value?.trim() ? undefined : "Required"),
-              })
-              .then((value) => String(value));
-          } else {
-            spin.update("Complete sign-in in browser…");
-            await openUrl(url);
-            params.runtime.log(`Open: ${url}`);
-          }
-        },
-        onPrompt: async (prompt) => {
-          if (manualCodePromise) {
-            return manualCodePromise;
-          }
-          const code = await params.prompter.text({
-            message: prompt.message,
-            placeholder: prompt.placeholder,
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
+        onAuth,
+        onPrompt,
         onProgress: (msg) => spin.update(msg),
       });
       spin.stop("OpenAI OAuth complete");
       if (creds) {
-        await writeOAuthCredentials(
-          "openai-codex" as unknown as OAuthProvider,
-          creds,
-          params.agentDir,
-        );
+        await writeOAuthCredentials("openai-codex", creds, params.agentDir);
         nextConfig = applyAuthProfileConfig(nextConfig, {
           profileId: "openai-codex:default",
           provider: "openai-codex",

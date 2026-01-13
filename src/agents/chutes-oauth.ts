@@ -26,7 +26,6 @@ export type ChutesOAuthAppConfig = {
 
 export type ChutesStoredOAuth = OAuthCredentials & {
   clientId?: string;
-  clientSecret?: string;
 };
 
 export function generateChutesPkce(): ChutesPkce {
@@ -45,7 +44,7 @@ export function parseOAuthCallbackInput(
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? expectedState;
+    const state = url.searchParams.get("state");
     if (!code) return { error: "Missing 'code' parameter in URL" };
     if (!state) {
       return { error: "Missing 'state' parameter. Paste the full URL." };
@@ -138,7 +137,6 @@ export async function exchangeChutesCodeForTokens(params: {
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
-    clientSecret: params.app.clientSecret,
   } as unknown as ChutesStoredOAuth;
 }
 
@@ -162,10 +160,7 @@ export async function refreshChutesTokens(params: {
       "Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).",
     );
   }
-  const clientSecret =
-    params.credential.clientSecret?.trim() ??
-    process.env.CHUTES_CLIENT_SECRET?.trim() ??
-    undefined;
+  const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
 
   const body = new URLSearchParams({
     grant_type: "refresh_token",
@@ -201,6 +196,5 @@ export async function refreshChutesTokens(params: {
     refresh: newRefresh || refreshToken,
     expires: coerceExpiresAt(expiresIn, now),
     clientId,
-    clientSecret,
   } as unknown as ChutesStoredOAuth;
 }
