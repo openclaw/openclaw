@@ -34,9 +34,9 @@ describe("telegram update offset store", () => {
         updateId: 421,
       });
 
-      expect(
-        await readTelegramUpdateOffset({ accountId: "primary" }),
-      ).toBe(421);
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(
+        421,
+      );
     });
   });
 });

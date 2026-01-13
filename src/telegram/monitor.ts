@@ -6,11 +6,11 @@ import { formatDurationMs } from "../infra/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramBot } from "./bot.js";
+import { makeProxyFetch } from "./proxy.js";
 import {
   readTelegramUpdateOffset,
   writeTelegramUpdateOffset,
 } from "./update-offset-store.js";
-import { makeProxyFetch } from "./proxy.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
