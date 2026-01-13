@@ -159,14 +159,16 @@ describe("partial reply gating", () => {
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
     const mockConfig: ClawdbotConfig = {
-      whatsapp: {
-        allowFrom: ["*"],
+      channels: {
+        whatsapp: {
+          allowFrom: ["*"],
+        },
       },
     };
 
     setLoadConfigMock(mockConfig);
 
-    await monitorWebProvider(
+    await monitorWebChannel(
       false,
       async ({ onMessage }) => {
         await onMessage({

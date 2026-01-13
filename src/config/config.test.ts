@@ -2003,11 +2003,14 @@ describe("config preservation on validation failure", () => {
       const { readConfigFileSnapshot } = await import("./config.js");
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(false);
-      expect(snap.legacyIssues.length).toBeGreaterThan(0);
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues).toHaveLength(0);
       expect((snap.config as Record<string, unknown>).customData).toEqual({
         preserved: true,
       });
+      expect(snap.config.channels?.whatsapp?.allowFrom).toEqual([
+        "+15555550123",
+      ]);
     });
   });
 });
