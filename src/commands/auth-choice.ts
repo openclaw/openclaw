@@ -51,7 +51,6 @@ import {
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyZaiConfig,
-  MINIMAX_HOSTED_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,

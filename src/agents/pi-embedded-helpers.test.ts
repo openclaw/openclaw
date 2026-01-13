@@ -68,9 +68,7 @@ describe("buildBootstrapContextFiles", () => {
     );
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.startsWith(long.slice(0, 120))).toBe(true);
-    expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(
-      true,
-    );
+    expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("TOOLS.md");
     expect(warnings[0]).toContain("limit 200");
