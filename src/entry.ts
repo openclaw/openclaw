@@ -26,10 +26,14 @@ function ensureExperimentalWarningSuppressed(): void {
   process.env.CLAWDBOT_NODE_OPTIONS_READY = "1";
   process.env.NODE_OPTIONS =
     `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
-  const result = spawnSync(process.execPath, process.argv.slice(1), {
+  const result = spawnSync(
+    process.execPath,
+    [...process.execArgv, ...process.argv.slice(1)],
+    {
     stdio: "inherit",
     env: process.env,
-  });
+    },
+  );
   if (result.signal) process.exit(1);
   process.exit(result.status ?? 1);
 }
