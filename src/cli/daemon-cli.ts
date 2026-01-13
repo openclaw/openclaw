@@ -436,10 +436,7 @@ async function gatherDaemonStatus(opts: {
     | "loopback"
     | "custom";
   const customBindHost = daemonCfg.gateway?.customBindHost;
-  const bindHost = await resolveGatewayBindHost(
-    bindMode,
-    customBindHost,
-  );
+  const bindHost = await resolveGatewayBindHost(bindMode, customBindHost);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride =
