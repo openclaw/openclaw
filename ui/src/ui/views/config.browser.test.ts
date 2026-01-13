@@ -173,6 +173,12 @@ describe("config view", () => {
     const raw = String(onRawChange.mock.calls.at(-1)?.[0] ?? "");
     expect(raw).toContain("https://api.moonshot.ai/v1");
     expect(raw).toContain("moonshot/kimi-k2-0905-preview");
+    expect(raw).toContain("moonshot/kimi-k2-turbo-preview");
+    expect(raw).toContain("moonshot/kimi-k2-thinking");
+    expect(raw).toContain("moonshot/kimi-k2-thinking-turbo");
+    expect(raw).toContain("Kimi K2 Turbo");
+    expect(raw).toContain("Kimi K2 Thinking");
+    expect(raw).toContain("Kimi K2 Thinking Turbo");
     expect(raw).toContain("MOONSHOT_API_KEY");
     expect(onFormPatch).toHaveBeenCalledWith(
       ["agents", "defaults", "model", "primary"],
