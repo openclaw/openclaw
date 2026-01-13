@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.12-2
+
+### Fixes
+- Packaging: include `dist/memory/**` in the npm tarball (fixes `ERR_MODULE_NOT_FOUND` for `dist/memory/index.js`).
+
 ## 2026.1.12-1
 
 ### Fixes
