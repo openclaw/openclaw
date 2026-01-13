@@ -5,6 +5,7 @@
 ### Fixes
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
 - Discord/Slack: centralize reply-thread planning so auto-thread replies stay in the created thread without parent reply refs.
+- Update: run `clawdbot doctor --non-interactive` during updates to avoid TTY hangs. (#781 — thanks @ronyrus)
 
 ## 2026.1.12-3
 
