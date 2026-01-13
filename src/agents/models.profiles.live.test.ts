@@ -281,7 +281,11 @@ describeLive("live models (profile keys)", () => {
 
               // Occasional flake: model answers in text instead of tool call (or adds text).
               // Retry a couple times with a stronger instruction so we still exercise the tool-only replay path.
-              for (let i = 0; i < 2 && (!toolCall || firstText.length > 0); i += 1) {
+              for (
+                let i = 0;
+                i < 2 && (!toolCall || firstText.length > 0);
+                i += 1
+              ) {
                 firstUserContent =
                   "Call the tool `noop` with {}. IMPORTANT: respond ONLY with the tool call; no other text.";
                 firstUser = {
@@ -335,15 +339,15 @@ describeLive("live models (profile keys)", () => {
                       timestamp: Date.now(),
                     },
                   ],
-                  },
-                  {
-                    apiKey,
-                    reasoning: resolveTestReasoning(model),
-                    // Headroom: reasoning summary can consume most of the output budget.
-                    maxTokens: 256,
-                  },
-                  perModelTimeoutMs,
-                );
+                },
+                {
+                  apiKey,
+                  reasoning: resolveTestReasoning(model),
+                  // Headroom: reasoning summary can consume most of the output budget.
+                  maxTokens: 256,
+                },
+                perModelTimeoutMs,
+              );
 
               const secondText = second.content
                 .filter((b) => b.type === "text")
