@@ -20,6 +20,11 @@ export type EmbeddingProviderOptions = {
   config: ClawdbotConfig;
   agentDir?: string;
   provider: "openai" | "local";
+  remote?: {
+    baseUrl?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  };
   model: string;
   fallback: "openai" | "none";
   local?: {
@@ -42,16 +47,27 @@ function normalizeOpenAiModel(model: string): string {
 async function createOpenAiEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
-  const { apiKey } = await resolveApiKeyForProvider({
-    provider: "openai",
-    cfg: options.config,
-    agentDir: options.agentDir,
-  });
+  const remote = options.remote;
+  const remoteApiKey = remote?.apiKey?.trim();
+  const remoteBaseUrl = remote?.baseUrl?.trim();
+
+  const { apiKey } = remoteApiKey
+    ? { apiKey: remoteApiKey }
+    : await resolveApiKeyForProvider({
+        provider: "openai",
+        cfg: options.config,
+        agentDir: options.agentDir,
+      });
 
   const providerConfig = options.config.models?.providers?.openai;
-  const baseUrl = providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
+  const baseUrl =
+    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
   const url = `${baseUrl.replace(/\/$/, "")}/embeddings`;
-  const headerOverrides = providerConfig?.headers ?? {};
+  const headerOverrides = Object.assign(
+    {},
+    providerConfig?.headers,
+    remote?.headers,
+  );
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
