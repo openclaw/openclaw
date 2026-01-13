@@ -10,14 +10,15 @@ import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
  */
 function stripMinimaxToolCallXml(text: string): string {
   if (!text) return text;
+  if (!/minimax:tool_call/i.test(text)) return text;
 
-  // Remove <invoke name="...">...</invoke> blocks (non-greedy to handle multiple)
-  let cleaned = text.replace(/<invoke\s+name="[^"]*">[\s\S]*?<\/invoke>/gi, "");
+  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
+  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
 
-  // Remove stray </minimax:tool_call> tags
-  cleaned = cleaned.replace(/<\/minimax:tool_call>/gi, "");
+  // Remove stray minimax tool tags.
+  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
 
-  return cleaned.trim();
+  return cleaned;
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
