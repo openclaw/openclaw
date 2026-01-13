@@ -4,6 +4,7 @@
 
 ### Changes
 - Cron: accept ISO timestamps for one-shot schedules (UTC) and allow optional delete-after-run; wired into CLI + macOS editor.
+- Gateway: add Tailscale binary discovery, custom bind mode, and probe auth retry for password changes. (#740 — thanks @jeffersonwarrior)
 
 ## 2026.1.12-4
 

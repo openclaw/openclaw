@@ -263,7 +263,9 @@ async function promptGatewayConfig(
           if (
             parts.every((part) => {
               const n = parseInt(part, 10);
-              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
+              return (
+                !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n)
+              );
             })
           )
             return undefined;
