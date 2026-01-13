@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
   classifyFailoverReason,
+  DEFAULT_BOOTSTRAP_MAX_CHARS,
   formatAssistantErrorText,
   isAuthErrorMessage,
   isBillingErrorMessage,
@@ -13,6 +15,7 @@ import {
   isMessagingToolDuplicate,
   isFailoverErrorMessage,
   normalizeTextForComparison,
+  resolveBootstrapMaxChars,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   sanitizeToolCallId,
@@ -49,17 +52,58 @@ describe("buildBootstrapContextFiles", () => {
   });
 
   it("truncates large bootstrap content", () => {
-    const head = `HEAD-${"a".repeat(6000)}`;
-    const tail = `${"b".repeat(3000)}-TAIL`;
+    const head = `HEAD-${"a".repeat(600)}`;
+    const tail = `${"b".repeat(300)}-TAIL`;
     const long = `${head}${tail}`;
-    const files = [makeFile({ content: long })];
-    const [result] = buildBootstrapContextFiles(files);
+    const files = [makeFile({ name: "TOOLS.md", content: long })];
+    const warnings: string[] = [];
+    const maxChars = 200;
+    const expectedTailChars = Math.floor(maxChars * 0.2);
+    const [result] = buildBootstrapContextFiles(files, {
+      maxChars,
+      warn: (message) => warnings.push(message),
+    });
     expect(result?.content).toContain(
-      "[...truncated, read AGENTS.md for full content...]",
+      "[...truncated, read TOOLS.md for full content...]",
     );
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.startsWith(long.slice(0, 120))).toBe(true);
-    expect(result?.content.endsWith(long.slice(-120))).toBe(true);
+    expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(
+      true,
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("TOOLS.md");
+    expect(warnings[0]).toContain("limit 200");
+  });
+
+  it("keeps content under the default limit", () => {
+    const long = "a".repeat(DEFAULT_BOOTSTRAP_MAX_CHARS - 10);
+    const files = [makeFile({ content: long })];
+    const [result] = buildBootstrapContextFiles(files);
+    expect(result?.content).toBe(long);
+    expect(result?.content).not.toContain(
+      "[...truncated, read AGENTS.md for full content...]",
+    );
+  });
+});
+
+describe("resolveBootstrapMaxChars", () => {
+  it("returns default when unset", () => {
+    expect(resolveBootstrapMaxChars()).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
+  });
+
+  it("uses configured value when valid", () => {
+    const cfg = {
+      agents: { defaults: { bootstrapMaxChars: 12345 } },
+    } as ClawdbotConfig;
+    expect(resolveBootstrapMaxChars(cfg)).toBe(12345);
+  });
+
+  it("falls back when invalid", () => {
+    const cfg = {
+      agents: { defaults: { bootstrapMaxChars: -1 } },
+    } as ClawdbotConfig;
+    expect(resolveBootstrapMaxChars(cfg)).toBe(DEFAULT_BOOTSTRAP_MAX_CHARS);
   });
 });
 
