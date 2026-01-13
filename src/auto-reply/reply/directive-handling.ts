@@ -1,6 +1,6 @@
 import {
-  resolveAgentConfig,
   resolveAgentDir,
+  resolveAgentModelPrimary,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
@@ -1629,7 +1629,7 @@ export function resolveDefaultModel(params: {
   aliasIndex: ModelAliasIndex;
 } {
   const agentModelOverride = params.agentId
-    ? resolveAgentConfig(params.cfg, params.agentId)?.model?.trim()
+    ? resolveAgentModelPrimary(params.cfg, params.agentId)
     : undefined;
   const cfg =
     agentModelOverride && agentModelOverride.length > 0
