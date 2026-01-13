@@ -15,6 +15,7 @@
 - Onboarding/Configure: refuse to proceed with invalid configs; run `clawdbot doctor` first to avoid wiping custom fields. (#764 — thanks @mukhtharcm)
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
 - Discord/Slack: centralize reply-thread planning so auto-thread replies stay in the created thread without parent reply refs.
+- Telegram: respect account-scoped bindings when webhook mode is enabled. (#821 — thanks @gumadeiras)
 - Update: run `clawdbot doctor --non-interactive` during updates to avoid TTY hangs. (#781 — thanks @ronyrus)
 - Browser tools: treat explicit `maxChars: 0` as unlimited while keeping the default limit only when omitted. (#796 — thanks @gabriel-trigo)
 - Tools: allow Claude/Gemini tool param aliases (`file_path`, `old_string`, `new_string`) while enforcing required params at runtime. (#793 — thanks @hsrvc)
