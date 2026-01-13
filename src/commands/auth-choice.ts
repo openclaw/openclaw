@@ -97,8 +97,11 @@ function normalizeApiKeyInput(raw: string): string {
   return withoutSemicolon.trim();
 }
 
-const validateApiKeyInput = (value: unknown) =>
-  normalizeApiKeyInput(String(value ?? "")).length > 0 ? undefined : "Required";
+const validateApiKeyInput = (value: unknown) => {
+  const normalized =
+    typeof value === "string" ? normalizeApiKeyInput(value) : "";
+  return normalized.length > 0 ? undefined : "Required";
+};
 
 const validateRequiredInput = (value: string) =>
   value.trim().length > 0 ? undefined : "Required";
