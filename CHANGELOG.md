@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.13 (Unreleased)
+
+### Fixes
+- Postinstall: treat already-applied pnpm patches as no-ops to avoid npm/bun install failures.
+
 ## 2026.1.12-2
 
 ### Fixes
