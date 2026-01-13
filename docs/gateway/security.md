@@ -145,6 +145,20 @@ Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
 Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
 
+### 0.6) Tailscale Serve identity headers
+
+When `gateway.auth.allowTailscale` is `true` (default for Serve), Clawdbot
+accepts Tailscale Serve identity headers (`tailscale-user-login`) as
+authentication. This only triggers for requests that hit loopback and include
+`x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by
+Tailscale.
+
+**Security rule:** do not forward these headers from your own reverse proxy. If
+you terminate TLS or proxy in front of the gateway, disable
+`gateway.auth.allowTailscale` and use token/password auth instead.
+
+See [Tailscale](/gateway/tailscale) and [Web overview](/web).
+
 ### 1) DMs: pairing by default
 
 ```json5

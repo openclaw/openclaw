@@ -2191,7 +2191,12 @@ Auth and Tailscale:
 - `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
 - `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
-- `gateway.auth.allowTailscale` controls whether Tailscale identity headers can satisfy auth.
+- `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
+  (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
+  with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. When
+  `true`, Serve requests do not need a token/password; set `false` to require
+  explicit credentials. Defaults to `true` when `tailscale.mode = "serve"` and
+  auth mode is not `password`.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.
