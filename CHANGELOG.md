@@ -1,128 +1,47 @@
 # Changelog
 
-## 2026.1.13-2
+## 2025.1.12 (Unreleased)
 
-### Changes
+### Highlights
+- Memory: add vector search for agent memories (Markdown-only) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
+- Plugins: restore full voice-call plugin parity (Telnyx/Twilio, streaming, inbound policies, tools/CLI).
+- Models: add Synthetic provider plus Moonshot Kimi K2 0905 + turbo/thinking variants (with docs).
+- Cron: one-shot schedules accept ISO timestamps (UTC) with optional delete-after-run; cron jobs can target a specific agent (CLI + macOS/Control UI).
+- Agents: add compaction mode config with optional safeguard summarization and per-agent model fallbacks.
+
+### New & Improved
+- Memory: add custom OpenAI-compatible embedding endpoints; support OpenAI/local `node-llama-cpp` embeddings with per-agent overrides and provider metadata in tools/CLI.
+- Memory: new `clawdbot memory` CLI plus `memory_search`/`memory_get` tools with snippets + line ranges; index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default.
+- Agents: strengthen memory recall guidance; make workspace bootstrap truncation configurable (default 20k) with warnings; add default sub-agent model config.
+- Tools/Sandbox: add tool profiles + group shorthands; support tool-policy groups in `tools.sandbox.tools`; drop legacy `memory` shorthand; allow Docker bind mounts via `docker.binds`.
+- Tools: add browser `scrollintoview` action; allow Claude/Gemini tool param aliases; allow thinking `xhigh` for GPT-5.2/Codex with safe downgrades.
+- Gateway/CLI: add Tailscale binary discovery, custom bind mode, and probe auth retry; add `clawdbot dashboard` auto-open flow; default native slash commands to `"auto"` with per-provider overrides.
+- Auth/Onboarding: add Chutes OAuth (PKCE + refresh + onboarding choice); normalize API key inputs; default TUI onboarding to `deliver: false`.
+- Providers: add `discord.allowBots`; trim legacy MiniMax M2 from default catalogs; route MiniMax vision to the Coding Plan VLM endpoint (also accepts `@/path/to/file.png` inputs).
+- Gateway: allow Tailscale Serve identity headers to satisfy token auth; rebuild Control UI assets when protocol schema is newer.
+- Heartbeat: default `ackMaxChars` to 300 so short `HEARTBEAT_OK` replies stay internal.
+
+### Fixes
+- Models/Providers: treat credential validation failures as auth errors to trigger fallback; normalize `${ENV_VAR}` apiKey values and auto-fill missing provider keys; preserve explicit GitHub Copilot provider config + agent-dir auth profiles.
+- Gemini: normalize Gemini 3 ids to preview variants; strip Gemini CLI tool call/response ids; downgrade missing `thought_signature`; strip Claude `msg_*` thought_signature fields to avoid base64 decode errors.
+- MiniMax: strip malformed tool invocation XML; include `MiniMax-VL-01` in implicit provider for image pairing.
+- Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid incorrect role errors.
+- Messaging: enforce context isolation for message tool sends; keep typing indicators alive during tool execution.
+- Auto-reply: `/status` allowlist behavior, reasoning-tag enforcement on fallback, and system-event enqueueing for elevated/reasoning toggles.
+- Auto-reply: resolve ambiguous `/model` matches; fix streaming block reply media handling; keep >300 char heartbeat replies instead of dropping.
+- Discord/Slack: centralize reply-thread planning; fix autoThread routing + add per-channel autoThread; avoid duplicate listeners; keep reasoning italics intact; allow clearing channel parents via message tool.
+- Telegram: preserve forum topic thread ids, persist polling offsets, respect account bindings in webhook mode, and show typing indicator in General topics.
+- Slack: accept slash commands with or without leading `/` for custom command configs.
+- Cron: persist disabled jobs correctly; accept `jobId` aliases for update/run/remove params.
+- Gateway/CLI: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides; `agents.list` respects explicit config; reduce noisy loopback WS logs during tests; run `clawdbot doctor --non-interactive` during updates.
+- Onboarding/Control UI: refuse invalid configs (run doctor first); quote Windows browser URLs for OAuth; keep chat scroll position unless the user is near the bottom.
+- Tools/UI: harden tool input schemas for strict providers; drop null-only union variants for Gemini schema cleanup; treat `maxChars: 0` as unlimited; keep TUI last streamed response instead of "(no output)".
+- Connections UI: polish multi-account account cards.
+
+### Maintenance
 - Dependencies: bump Pi packages to 0.45.3 and refresh patched pi-ai.
 - Testing: update Vitest + browser-playwright to 4.0.17.
 - Docs: add Amazon Bedrock provider notes and link from models/FAQ.
-
-## 2026.1.13-1
-
-### Changes
-- Cron: accept ISO timestamps for one-shot schedules (UTC) and allow optional delete-after-run; wired into CLI + macOS editor.
-- Gateway: add Tailscale binary discovery, custom bind mode, and probe auth retry for password changes. (#740 — thanks @jeffersonwarrior)
-- Agents: add compaction mode config with optional safeguard summarization for long histories. (#700 — thanks @thewilloftheshadow)
-- Agents: support per-agent model fallbacks via `agents.list[].model`. (#583 — thanks @mitschabaude-bot)
-- Tools: add tool profiles plus group shorthands for tool policy allow/deny (global, per-agent, sandbox).
-- Thinking: allow xhigh for GPT-5.2 + Codex models and downgrade on unsupported switches. (#444 — thanks @grp06)
-
-### Fixes
-- Gateway: honor `CLAWDBOT_LAUNCHD_LABEL` / `CLAWDBOT_SYSTEMD_UNIT` overrides when checking or restarting the daemon.
-- Tools: harden tool input schemas for strict providers (no unions; flattened actions; enum helpers + tests).
-- Discord: allow clearing channel parents via message tool without nullable schema inputs.
-
-## 2026.1.12-4
-
-### Changes
-- Models/Moonshot: add Kimi K2 0905 + turbo/thinking variants to the preset + docs. (#818 — thanks @mickahouan)
-- Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
-- Auth: add Chutes OAuth (PKCE + refresh + onboarding choice). (#726 — thanks @FrieSei)
-- Agents: make workspace bootstrap truncation configurable (default 20k) and warn when files are truncated.
-
-### Fixes
-- Typing: keep typing indicators alive during tool execution. (#450, #447 — thanks @thewilloftheshadow)
-- Cron: coerce enabled patches so disabling jobs persists correctly. (#205 — thanks @thewilloftheshadow)
-- Control UI: keep chat scroll position unless user is near the bottom. (#217 — thanks @thewilloftheshadow)
-- Fallback: treat credential validation failures ("no credentials found", "no API key found") as auth errors that trigger model fallback. (#822 — thanks @sebslight)
-- Telegram: preserve forum topic thread ids, including General topic replies. (#727 — thanks @thewilloftheshadow)
-- Telegram: persist polling update offsets across restarts to avoid duplicate updates. (#739 — thanks @thewilloftheshadow)
-- Discord: avoid duplicate message/reaction listeners on monitor reloads. (#744 — thanks @thewilloftheshadow)
-- System events: include local timestamps when events are injected into prompts. (#245 — thanks @thewilloftheshadow)
-- Cron: accept `jobId` aliases for cron update/run/remove params in gateway validation. (#252 — thanks @thewilloftheshadow)
-- Models/Google: normalize Gemini 3 model ids to preview variants before runtime selection. (#795 — thanks @thewilloftheshadow)
-- Models/Google: strip Gemini CLI tool call/response ids in patched provider handling. (#783 — thanks @ananth-vardhan-cn)
-- TUI: keep the last streamed response instead of replacing it with "(no output)". (#747 — thanks @thewilloftheshadow)
-- Slack: accept slash commands with or without leading `/` for custom command configs. (#798 — thanks @thewilloftheshadow)
-- Onboarding/Configure: refuse to proceed with invalid configs; run `clawdbot doctor` first to avoid wiping custom fields. (#764 — thanks @mukhtharcm)
-- Onboarding: quote Windows browser URLs when launching via `cmd start` to preserve OAuth query params. (#794 — thanks @roshanasingh4)
-- Gateway/Auth: allow Tailscale Serve identity headers to satisfy token auth when `allowTailscale` is enabled. (#823 — thanks @roshanasingh4)
-- Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
-- Discord/Slack: centralize reply-thread planning so auto-thread replies stay in the created thread without parent reply refs.
-- Telegram: respect account-scoped bindings when webhook mode is enabled. (#821 — thanks @gumadeiras)
-- Update: run `clawdbot doctor --non-interactive` during updates to avoid TTY hangs. (#781 — thanks @ronyrus)
-- Browser tools: treat explicit `maxChars: 0` as unlimited while keeping the default limit only when omitted. (#796 — thanks @gabriel-trigo)
-- Tools: allow Claude/Gemini tool param aliases (`file_path`, `old_string`, `new_string`) while enforcing required params at runtime. (#793 — thanks @hsrvc)
-- Gemini: downgrade tool-call history missing `thought_signature` to avoid INVALID_ARGUMENT errors. (#793 — thanks @hsrvc)
-- Messaging: enforce context isolation for message tool sends across providers (normalized targets + tests). (#793 — thanks @hsrvc)
-- Auto-reply: re-evaluate reasoning tag enforcement on fallback providers to prevent leaked reasoning. (#810 — thanks @mcinteerj)
-- Tools/Gemini: drop null-only union variants while cleaning tool schemas to avoid Cloud Code Assist schema errors. (#782 — thanks @AbhisekBasu1)
-- Connections UI: polish multi-account account cards in the Connections view. (#816 — thanks @steipete)
-- Gemini: strip Claude `msg_*` thought_signature fields from session history to avoid base64 decode errors. (#805 — thanks @marcmarg)
-
-## 2026.1.12-3
-
-### Changes
-- Sandbox: drop legacy `memory` tool-policy shorthand; require explicit `group:memory`.
-
-### Fixes
-- Telegram: tolerate mocked bots missing native-command APIs (`setMyCommands`, `command`) during tests.
-- Auto-reply: fix streaming block reply media handling (no redeclared/use-before-declare vars).
-
-## 2026.1.12-2
-
-### Changes
-- Subagents: add config to set default sub-agent model (`agents.defaults.subagents.model` + per-agent override); still overridden by `sessions_spawn.model`.
-- Plugins: restore full voice-call plugin parity (Telnyx/Twilio, streaming, inbound policies, tools/CLI).
-- Sandbox: support tool-policy groups in `tools.sandbox.tools` (e.g. `group:memory`, `group:fs`) to reduce config churn.
-
-### Fixes
-- Models/MiniMax: strip malformed tool invocation XML (`<invoke>...</invoke>` and `</minimax:tool_call>`) from assistant text to prevent tool call leaks into user messages. (#809 — thanks @latitudeki5223)
-- Tools/Models: MiniMax vision now uses the Coding Plan VLM endpoint (`/v1/coding_plan/vlm`) so the `image` tool works with MiniMax keys (also accepts `@/path/to/file.png`-style inputs).
-- Gateway/macOS: reduce noisy loopback WS "closed before connect" logs during tests.
-- Auto-reply: resolve ambiguous `/model` fuzzy matches by picking the best candidate instead of erroring.
-
-## 2026.1.12-1
-
-### Changes
-- Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
-- Onboarding: normalize API key inputs (strip `export KEY=...` wrappers) so shell-style entries paste cleanly.
-
-## 2026.1.12 (Unreleased)
-
-### Highlights
-- Memory: add vector search for agent memories (Markdown-only scope) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
-
-### Changes
-- Agents: strengthen memory recall guidance (memory_search mandatory for past work/preferences; system prompt injects conditional recall section; memory_get now described as safe snippet fetch).
-- Browser: add `scrollintoview` action to scroll refs into view before click/type.
-- Memory: embedding providers support OpenAI or local `node-llama-cpp`; config adds defaults + per-agent overrides, provider/fallback metadata surfaced in tools/CLI.
-- CLI/Tools: new `clawdbot memory` commands plus `memory_search`/`memory_get` tools returning snippets + line ranges and provider info.
-- Runtime: memory index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default; inline status replies now stay auth-gated while inline prompts continue to the agent.
-- Doctor: rebuild Control UI assets when protocol schema is newer to avoid stale UI connect errors. (#786) — thanks @meaningfool.
-- Cron: allow jobs to target a specific agent and expose agent selection in the macOS app + Control UI.
-- Discord: add `discord.allowBots` to permit bot-authored messages (still ignores its own messages) with docs warning about bot loops. (#802) — thanks @zknicker.
-- CLI/Onboarding: `clawdbot dashboard` prints/copies the tokenized Control UI link and opens it; onboarding now auto-opens the dashboard with your token and keeps the link in the summary.
-- Commands: native slash commands now default to `"auto"` (on for Discord/Telegram, off for Slack) with per-provider overrides (`discord/telegram/slack.commands.native`) and docs updated.
-- Sandbox: allow Docker bind mounts via `docker.binds`; merges global + per-agent binds (per-agent ignored under shared scope) for custom host paths. (#790 — thanks @akonyer)
-- Models: add Synthetic provider (Anthropic-compatible) and trim legacy MiniMax M2 from default catalogs. (#811 — thanks @siraht)
-
-### Fixes
-- Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
-- Models: normalize `${ENV_VAR}` apiKey config values and auto-fill missing provider `apiKey` from env/auth when custom provider models are configured (fixes MiniMax “Unknown model” on fresh installs).
-- Models/Tools: include `MiniMax-VL-01` in implicit MiniMax provider so image pairing uses a real vision model.
-- Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
-- Discord: keep reasoning italics intact when messages are chunked, so reasoning stays italic across multi-part sends.
-- Models: keep explicit GitHub Copilot provider config and honor agent-dir auth profiles for auto-injection. (#705) — thanks @TAGOOZ.
-- Auto-reply: restore 300-char heartbeat ack limit and keep >300 char replies instead of dropping them; adjust long heartbeat test content accordingly.
-- Gateway: `agents.list` now honors explicit `agents.list` config without pulling stray agents from disk; GitHub Copilot CLI auth path uses the updated provider build.
-- Google: apply patched pi-ai `google-gemini-cli` function call handling (strips ids) after upgrading to pi-ai 0.43.0.
-- Tools: allow Gemini/Claude-style aliases (`file_path`, `old_string`, `new_string`) in read/write/edit schemas while still enforcing required params at runtime to avoid validation loops.
-- Auto-reply: elevated/reasoning toggles now enqueue system events so the model sees the mode change immediately.
-- Tools: keep `image` available in sandbox and fail over when image models return empty output (fixes “(no text returned)”).
-- Discord: add per-channel `autoThread` to auto-create threads for top-level messages. (#800) — thanks @davidguttman.
-- Discord: fix autoThread routing so replies stay in the created thread and avoid reply references. (#807) — thanks @davidguttman.
-- Onboarding: TUI defaults to `deliver: false` to avoid cross-provider auto-delivery leaks; onboarding spawns the TUI with explicit `deliver: false`. (#791 — thanks @roshanasingh4)
 
 ## 2026.1.11
 
