@@ -11,7 +11,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -31,6 +31,37 @@ import {
 
 const log = createSubsystemLogger("agent/claude-cli");
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function cleanupResumeProcesses(
+  backend: CliBackendConfig,
+  sessionId: string,
+): Promise<void> {
+  if (process.platform === "win32") return;
+  const resumeArgs = backend.resumeArgs ?? [];
+  if (resumeArgs.length === 0) return;
+  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) return;
+  const commandToken = path.basename(backend.command ?? "").trim();
+  if (!commandToken) return;
+
+  const resumeTokens = resumeArgs.map((arg) =>
+    arg.replaceAll("{sessionId}", sessionId),
+  );
+  const pattern = [commandToken, ...resumeTokens]
+    .filter(Boolean)
+    .map((token) => escapeRegex(token))
+    .join(".*");
+  if (!pattern) return;
+
+  try {
+    await runExec("pkill", ["-f", pattern]);
+  } catch {
+    // ignore missing pkill or no matches
+  }
+}
 
 function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
@@ -601,6 +632,10 @@ export async function runCliAgent(params: {
         }
         return next;
       })();
+
+      if (useResume && cliSessionIdToSend) {
+        await cleanupResumeProcesses(backend, cliSessionIdToSend);
+      }
 
       const result = await runCommandWithTimeout([backend.command, ...args], {
         timeoutMs: params.timeoutMs,
