@@ -16,6 +16,7 @@ import {
   type ProviderMessageActionName,
 } from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -90,12 +91,17 @@ const MessageToolCommonSchema = {
   timeoutMs: Type.Optional(Type.Number()),
   name: Type.Optional(Type.String()),
   type: Type.Optional(Type.Number()),
-  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  parentId: Type.Optional(Type.String()),
   topic: Type.Optional(Type.String()),
   position: Type.Optional(Type.Number()),
   nsfw: Type.Optional(Type.Boolean()),
   rateLimitPerUser: Type.Optional(Type.Number()),
   categoryId: Type.Optional(Type.String()),
+  clearParent: Type.Optional(
+    Type.Boolean({
+      description: "Clear the parent/category when supported by the provider.",
+    }),
+  ),
 };
 
 function buildMessageToolSchemaFromActions(
@@ -105,31 +111,10 @@ function buildMessageToolSchemaFromActions(
   const props: Record<string, unknown> = { ...MessageToolCommonSchema };
   if (!options.includeButtons) delete props.buttons;
 
-  const schemas: Array<ReturnType<typeof Type.Object>> = [];
-  if (actions.includes("send")) {
-    schemas.push(
-      Type.Object({
-        action: Type.Literal("send"),
-        to: Type.String(),
-        message: Type.String(),
-        ...props,
-      }),
-    );
-  }
-
-  const nonSendActions = actions.filter((action) => action !== "send");
-  if (nonSendActions.length > 0) {
-    schemas.push(
-      Type.Object({
-        action: Type.Union(
-          nonSendActions.map((action) => Type.Literal(action)),
-        ),
-        ...props,
-      }),
-    );
-  }
-
-  return schemas.length === 1 ? schemas[0] : Type.Union(schemas);
+  return Type.Object({
+    action: stringEnum(actions),
+    ...props,
+  });
 }
 
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
