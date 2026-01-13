@@ -196,13 +196,27 @@ export function getTelegramSequentialKey(ctx: {
     ctx.update?.edited_message ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
-  const threadId = msg?.message_thread_id;
+  const isForum = (msg?.chat as { is_forum?: boolean } | undefined)?.is_forum;
+  const threadId = resolveTelegramForumThreadId({
+    isForum,
+    messageThreadId: msg?.message_thread_id,
+  });
   if (typeof chatId === "number") {
     return threadId != null
       ? `telegram:${chatId}:topic:${threadId}`
       : `telegram:${chatId}`;
   }
   return "telegram:unknown";
+}
+
+function resolveTelegramForumThreadId(params: {
+  isForum?: boolean;
+  messageThreadId?: number | null;
+}) {
+  if (params.isForum && params.messageThreadId == null) {
+    return TELEGRAM_GENERAL_TOPIC_ID;
+  }
+  return params.messageThreadId ?? undefined;
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
@@ -423,12 +437,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const messageThreadId = (msg as { message_thread_id?: number })
       .message_thread_id;
     const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+    const resolvedThreadId = resolveTelegramForumThreadId({
+      isForum,
+      messageThreadId,
+    });
     const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
       chatId,
-      messageThreadId,
+      resolvedThreadId,
     );
     const peerId = isGroup
-      ? buildTelegramGroupPeerId(chatId, messageThreadId)
+      ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
       : String(chatId);
     const route = resolveAgentRoute({
       cfg,
@@ -460,23 +478,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     if (isGroup && topicConfig?.enabled === false) {
       logVerbose(
-        `Blocked telegram topic ${chatId} (${messageThreadId ?? "unknown"}) (topic disabled)`,
+        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
       );
       return;
     }
 
     const sendTyping = async () => {
       try {
-        // In forums, the General topic has no message_thread_id in updates,
-        // but sendChatAction requires one to show typing.
-        const typingThreadId =
-          isForum && messageThreadId == null
-            ? TELEGRAM_GENERAL_TOPIC_ID
-            : messageThreadId;
         await bot.api.sendChatAction(
           chatId,
           "typing",
-          buildTelegramThreadParams(typingThreadId),
+          buildTelegramThreadParams(resolvedThreadId),
         );
       } catch (err) {
         logVerbose(
@@ -588,7 +600,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     );
     const activationOverride = resolveGroupActivation({
       chatId,
-      messageThreadId,
+      messageThreadId: resolvedThreadId,
       sessionKey: route.sessionKey,
       agentId: route.agentId,
     });
@@ -684,19 +696,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }]\n${replyTarget.body}\n[/Replying]`
       : "";
     const groupLabel = isGroup
-      ? buildGroupLabel(msg, chatId, messageThreadId)
+      ? buildGroupLabel(msg, chatId, resolvedThreadId)
       : undefined;
     const body = formatAgentEnvelope({
       provider: "Telegram",
       from: isGroup
-        ? buildGroupFromLabel(msg, chatId, senderId, messageThreadId)
+        ? buildGroupFromLabel(msg, chatId, senderId, resolvedThreadId)
         : buildSenderLabel(msg, senderId || chatId),
       timestamp: msg.date ? msg.date * 1000 : undefined,
       body: `${bodyText}${replySuffix}`,
     });
     let combinedBody = body;
     const historyKey = isGroup
-      ? buildTelegramGroupPeerId(chatId, messageThreadId)
+      ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
       : undefined;
     if (isGroup && historyKey && historyLimit > 0) {
       combinedBody = buildHistoryContextFromMap({
@@ -736,7 +748,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       RawBody: rawBody,
       CommandBody: commandBody,
       From: isGroup
-        ? buildTelegramGroupFrom(chatId, messageThreadId)
+        ? buildTelegramGroupFrom(chatId, resolvedThreadId)
         : `telegram:${chatId}`,
       To: `telegram:${chatId}`,
       SessionKey: route.sessionKey,
@@ -766,7 +778,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           : undefined,
       ...(locationData ? toLocationContext(locationData) : undefined),
       CommandAuthorized: commandAuthorized,
-      MessageThreadId: messageThreadId,
+      MessageThreadId: resolvedThreadId,
       IsForum: isForum,
       // Originating channel for reply routing.
       OriginatingChannel: "telegram" as const,
@@ -799,7 +811,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const mediaInfo =
         allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
       const topicInfo =
-        messageThreadId != null ? ` topic=${messageThreadId}` : "";
+        resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
       logVerbose(
         `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
       );
@@ -810,7 +822,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const canStreamDraft =
       streamMode !== "off" &&
       isPrivateChat &&
-      typeof messageThreadId === "number" &&
+      typeof resolvedThreadId === "number" &&
       (await resolveBotTopicsEnabled(primaryCtx));
     const draftStream = canStreamDraft
       ? createTelegramDraftStream({
@@ -818,7 +830,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           chatId,
           draftId: msg.message_id || Date.now(),
           maxChars: draftMaxChars,
-          messageThreadId,
+          messageThreadId: resolvedThreadId,
           log: logVerbose,
           warn: logVerbose,
         })
@@ -905,7 +917,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             bot,
             replyToMode,
             textLimit,
-            messageThreadId,
+            messageThreadId: resolvedThreadId,
           });
           didSendReply = true;
         },
@@ -999,12 +1011,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             .message_thread_id;
           const isForum =
             (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const resolvedThreadId = resolveTelegramForumThreadId({
+            isForum,
+            messageThreadId,
+          });
           const storeAllowFrom = await readTelegramAllowFromStore().catch(
             () => [],
           );
           const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
             chatId,
-            messageThreadId,
+            resolvedThreadId,
           );
           const groupAllowOverride = firstDefined(
             topicConfig?.allowFrom,
@@ -1116,7 +1132,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             peer: {
               kind: isGroup ? "group" : "dm",
               id: isGroup
-                ? buildTelegramGroupPeerId(chatId, messageThreadId)
+                ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
                 : String(chatId),
             },
           });
@@ -1135,7 +1151,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           const ctxPayload = {
             Body: prompt,
             From: isGroup
-              ? buildTelegramGroupFrom(chatId, messageThreadId)
+              ? buildTelegramGroupFrom(chatId, resolvedThreadId)
               : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",
@@ -1152,7 +1168,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             CommandSource: "native" as const,
             SessionKey: `telegram:slash:${senderId || chatId}`,
             CommandTargetSessionKey: route.sessionKey,
-            MessageThreadId: messageThreadId,
+            MessageThreadId: resolvedThreadId,
             IsForum: isForum,
           };
 
@@ -1176,7 +1192,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                   bot,
                   replyToMode,
                   textLimit,
-                  messageThreadId,
+                  messageThreadId: resolvedThreadId,
                 });
               },
               onError: (err, info) => {
@@ -1256,10 +1272,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         msg.chat.type === "group" || msg.chat.type === "supergroup";
       const messageThreadId = (msg as { message_thread_id?: number })
         .message_thread_id;
+      const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+      const resolvedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId,
+      });
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
       const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
         chatId,
-        messageThreadId,
+        resolvedThreadId,
       );
       const groupAllowOverride = firstDefined(
         topicConfig?.allowFrom,
@@ -1278,7 +1299,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
         if (topicConfig?.enabled === false) {
           logVerbose(
-            `Blocked telegram topic ${chatId} (${messageThreadId ?? "unknown"}) (topic disabled)`,
+            `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
           );
           return;
         }

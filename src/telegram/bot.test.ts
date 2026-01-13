@@ -213,6 +213,11 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
+        message: { chat: { id: 123, is_forum: true } },
+      }),
+    ).toBe("telegram:123:topic:1");
+    expect(
+      getTelegramSequentialKey({
         update: { message: { chat: { id: 555 } } },
       }),
     ).toBe("telegram:555");
@@ -1764,6 +1769,51 @@ describe("createTelegramBot", () => {
     expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
       message_thread_id: 1,
     });
+  });
+
+  it("routes General topic replies using thread id 1", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockResolvedValue({ text: "response" });
+
+    loadConfig.mockReturnValue({
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 12345, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      "-1001234567890",
+      expect.any(String),
+      expect.objectContaining({ message_thread_id: 1 }),
+    );
   });
 
   it("applies topic skill filters and system prompts", async () => {
