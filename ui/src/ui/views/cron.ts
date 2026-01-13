@@ -168,9 +168,9 @@ export function renderCron(props: CronProps) {
             rows="4"
           ></textarea>
         </label>
-        ${props.form.payloadKind === "agentTurn"
-          ? html`
-              <div class="form-grid" style="margin-top: 12px;">
+	          ${props.form.payloadKind === "agentTurn"
+	          ? html`
+	              <div class="form-grid" style="margin-top: 12px;">
                 <label class="field checkbox">
                   <span>Deliver</span>
                   <input
@@ -181,17 +181,17 @@ export function renderCron(props: CronProps) {
                         deliver: (e.target as HTMLInputElement).checked,
                       })}
                   />
-                </label>
-                <label class="field">
-                  <span>Provider</span>
-                  <select
-                    .value=${props.form.provider}
-                    @change=${(e: Event) =>
-                      props.onFormChange({
-                        provider: (e.target as HTMLSelectElement).value as CronFormState["provider"],
-                      })}
-                  >
-                    <option value="last">Last</option>
+	                </label>
+	                <label class="field">
+	                  <span>Channel</span>
+	                  <select
+	                    .value=${props.form.channel}
+	                    @change=${(e: Event) =>
+	                      props.onFormChange({
+	                        channel: (e.target as HTMLSelectElement).value as CronFormState["channel"],
+	                      })}
+	                  >
+	                    <option value="last">Last</option>
                     <option value="whatsapp">WhatsApp</option>
                     <option value="telegram">Telegram</option>
                     <option value="discord">Discord</option>

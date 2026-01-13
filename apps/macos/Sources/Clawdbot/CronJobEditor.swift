@@ -18,7 +18,7 @@ struct CronJobEditor: View {
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
-        "Isolated jobs always run an agent turn. The result can be delivered to a provider, "
+        "Isolated jobs always run an agent turn. The result can be delivered to a channel, "
             + "and a short summary is posted back to your main chat."
     static let mainPayloadNote =
         "System events are injected into the current main session. Agent turns require an isolated session target."
@@ -45,7 +45,7 @@ struct CronJobEditor: View {
     @State var systemEventText: String = ""
     @State var agentMessage: String = ""
     @State var deliver: Bool = false
-    @State var provider: GatewayAgentProvider = .last
+    @State var channel: GatewayAgentChannel = .last
     @State var to: String = ""
     @State var thinking: String = ""
     @State var timeoutSeconds: String = ""
@@ -323,7 +323,7 @@ struct CronJobEditor: View {
                 }
                 GridRow {
                     self.gridLabel("Deliver")
-                    Toggle("Deliver result to a provider", isOn: self.$deliver)
+                    Toggle("Deliver result to a channel", isOn: self.$deliver)
                         .toggleStyle(.switch)
                 }
             }
@@ -331,15 +331,15 @@ struct CronJobEditor: View {
             if self.deliver {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
-                        self.gridLabel("Provider")
-                        Picker("", selection: self.$provider) {
-                            Text("last").tag(GatewayAgentProvider.last)
-                            Text("whatsapp").tag(GatewayAgentProvider.whatsapp)
-                            Text("telegram").tag(GatewayAgentProvider.telegram)
-                            Text("discord").tag(GatewayAgentProvider.discord)
-                            Text("slack").tag(GatewayAgentProvider.slack)
-                            Text("signal").tag(GatewayAgentProvider.signal)
-                            Text("imessage").tag(GatewayAgentProvider.imessage)
+                        self.gridLabel("Channel")
+                        Picker("", selection: self.$channel) {
+                            Text("last").tag(GatewayAgentChannel.last)
+                            Text("whatsapp").tag(GatewayAgentChannel.whatsapp)
+                            Text("telegram").tag(GatewayAgentChannel.telegram)
+                            Text("discord").tag(GatewayAgentChannel.discord)
+                            Text("slack").tag(GatewayAgentChannel.slack)
+                            Text("signal").tag(GatewayAgentChannel.signal)
+                            Text("imessage").tag(GatewayAgentChannel.imessage)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)

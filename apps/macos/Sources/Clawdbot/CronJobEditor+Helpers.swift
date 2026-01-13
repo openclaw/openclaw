@@ -36,13 +36,13 @@ extension CronJobEditor {
         case let .systemEvent(text):
             self.payloadKind = .systemEvent
             self.systemEventText = text
-        case let .agentTurn(message, thinking, timeoutSeconds, deliver, provider, to, bestEffortDeliver):
+        case let .agentTurn(message, thinking, timeoutSeconds, deliver, channel, to, bestEffortDeliver):
             self.payloadKind = .agentTurn
             self.agentMessage = message
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
             self.deliver = deliver ?? false
-            self.provider = GatewayAgentProvider(raw: provider)
+            self.channel = GatewayAgentChannel(raw: channel)
             self.to = to ?? ""
             self.bestEffortDeliver = bestEffortDeliver ?? false
         }
@@ -204,7 +204,7 @@ extension CronJobEditor {
         if let n = Int(self.timeoutSeconds), n > 0 { payload["timeoutSeconds"] = n }
         payload["deliver"] = self.deliver
         if self.deliver {
-            payload["provider"] = self.provider.rawValue
+            payload["channel"] = self.channel.rawValue
             let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
             if !to.isEmpty { payload["to"] = to }
             payload["bestEffortDeliver"] = self.bestEffortDeliver

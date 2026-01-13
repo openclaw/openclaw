@@ -172,21 +172,21 @@ type WizardNextPayload = {
 
 describe("gateway wizard (e2e)", () => {
   it("runs wizard over ws and writes auth token config", async () => {
-    const prev = {
-      home: process.env.HOME,
-      stateDir: process.env.CLAWDBOT_STATE_DIR,
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-    };
+	    const prev = {
+	      home: process.env.HOME,
+	      stateDir: process.env.CLAWDBOT_STATE_DIR,
+	      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+	      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+	      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+	      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+	      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+	      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+	    };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+	    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+	    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+	    process.env.CLAWDBOT_SKIP_CRON = "1";
+	    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
 
     const tempHome = await fs.mkdtemp(
@@ -282,7 +282,7 @@ describe("gateway wizard (e2e)", () => {
       process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
       process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
       process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-      process.env.CLAWDBOT_SKIP_PROVIDERS = prev.skipProviders;
+	      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;

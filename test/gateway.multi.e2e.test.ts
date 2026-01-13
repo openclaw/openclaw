@@ -141,7 +141,7 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
           CLAWDBOT_STATE_DIR: stateDir,
           CLAWDBOT_GATEWAY_TOKEN: "",
           CLAWDBOT_GATEWAY_PASSWORD: "",
-          CLAWDBOT_SKIP_PROVIDERS: "1",
+          CLAWDBOT_SKIP_CHANNELS: "1",
           CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
           CLAWDBOT_SKIP_CANVAS_HOST: "1",
           CLAWDBOT_ENABLE_BRIDGE_IN_TESTS: "1",

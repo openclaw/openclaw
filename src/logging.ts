@@ -430,9 +430,9 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<
 > = {
   "gmail-watcher": "blue",
 };
-const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
+const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-const PROVIDER_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
+const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
 
 function pickSubsystemColor(
   color: ChalkInstance,
@@ -461,7 +461,7 @@ function formatSubsystemForConsole(subsystem: string): string {
     parts.shift();
   }
   if (parts.length === 0) return original;
-  if (PROVIDER_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {

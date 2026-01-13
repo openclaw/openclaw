@@ -22,15 +22,15 @@ echo "Creating Docker network..."
 docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
-docker run --rm -d \
-  --name "$GW_NAME" \
-  --network "$NET_NAME" \
-  -e "CLAWDBOT_GATEWAY_TOKEN=$TOKEN" \
-  -e "CLAWDBOT_SKIP_PROVIDERS=1" \
-  -e "CLAWDBOT_SKIP_GMAIL_WATCHER=1" \
-  -e "CLAWDBOT_SKIP_CRON=1" \
-  -e "CLAWDBOT_SKIP_CANVAS_HOST=1" \
-  "$IMAGE_NAME" \
+	docker run --rm -d \
+	  --name "$GW_NAME" \
+	  --network "$NET_NAME" \
+	  -e "CLAWDBOT_GATEWAY_TOKEN=$TOKEN" \
+	  -e "CLAWDBOT_SKIP_CHANNELS=1" \
+	  -e "CLAWDBOT_SKIP_GMAIL_WATCHER=1" \
+	  -e "CLAWDBOT_SKIP_CRON=1" \
+	  -e "CLAWDBOT_SKIP_CANVAS_HOST=1" \
+	  "$IMAGE_NAME" \
   bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."

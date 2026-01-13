@@ -14,7 +14,7 @@ extension CronJobEditor {
         self.payloadKind = .agentTurn
         self.agentMessage = "Run diagnostic"
         self.deliver = true
-        self.provider = .last
+        self.channel = .last
         self.to = "+15551230000"
         self.thinking = "low"
         self.timeoutSeconds = "90"

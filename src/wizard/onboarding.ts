@@ -249,14 +249,14 @@ export async function runOnboardingWizard(
           `Tailscale exposure: ${formatTailscale(
             quickstartGateway.tailscaleMode,
           )}`,
-          "Direct to chat providers.",
+          "Direct to chat channels.",
         ]
       : [
           `Gateway port: ${DEFAULT_GATEWAY_PORT}`,
           "Gateway bind: Loopback (127.0.0.1)",
           "Gateway auth: Token (default)",
           "Tailscale exposure: Off",
-          "Direct to chat providers.",
+          "Direct to chat channels.",
         ];
     await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }

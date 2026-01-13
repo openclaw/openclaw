@@ -11,9 +11,9 @@ extension ConnectionsSettings {
     }
 
     @ViewBuilder
-    func providerHeaderActions(_ provider: ConnectionProvider) -> some View {
+    func channelHeaderActions(_ channel: ConnectionChannel) -> some View {
         HStack(spacing: 8) {
-            if provider == .whatsapp {
+            if channel == .whatsapp {
                 Button("Logout") {
                     Task { await self.store.logoutWhatsApp() }
                 }
@@ -21,7 +21,7 @@ extension ConnectionsSettings {
                 .disabled(self.store.whatsappBusy)
             }
 
-            if provider == .telegram {
+            if channel == .telegram {
                 Button("Logout") {
                     Task { await self.store.logoutTelegram() }
                 }

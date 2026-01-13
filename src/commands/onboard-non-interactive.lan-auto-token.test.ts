@@ -106,21 +106,21 @@ describe("onboard (non-interactive): lan bind auto-token", () => {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
       return;
     }
-    const prev = {
-      home: process.env.HOME,
-      stateDir: process.env.CLAWDBOT_STATE_DIR,
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-    };
+	    const prev = {
+	      home: process.env.HOME,
+	      stateDir: process.env.CLAWDBOT_STATE_DIR,
+	      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+	      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+	      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+	      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+	      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+	      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+	    };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+	    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+	    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+	    process.env.CLAWDBOT_SKIP_CRON = "1";
+	    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
 
     const tempHome = await fs.mkdtemp(
@@ -215,7 +215,7 @@ describe("onboard (non-interactive): lan bind auto-token", () => {
     process.env.HOME = prev.home;
     process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
     process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-    process.env.CLAWDBOT_SKIP_PROVIDERS = prev.skipProviders;
+	    process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
     process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;

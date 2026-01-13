@@ -51,7 +51,7 @@ incompatible, update the global CLI to match the app version.
 ```bash
 clawdbot --version
 
-CLAWDBOT_SKIP_PROVIDERS=1 \
+CLAWDBOT_SKIP_CHANNELS=1 \
 CLAWDBOT_SKIP_CANVAS_HOST=1 \
 clawdbot gateway --port 18999 --bind loopback
 ```

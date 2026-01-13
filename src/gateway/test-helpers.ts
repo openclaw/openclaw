@@ -344,7 +344,7 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
 }));
 
-process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+process.env.CLAWDBOT_SKIP_CHANNELS = "1";
 
 let previousHome: string | undefined;
 let tempHome: string | undefined;

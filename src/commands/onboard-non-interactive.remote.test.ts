@@ -27,22 +27,22 @@ async function getFreePort(): Promise<number> {
 
 describe("onboard (non-interactive): remote gateway config", () => {
   it("writes gateway.remote url/token and callGateway uses them", async () => {
-    const prev = {
-      home: process.env.HOME,
-      stateDir: process.env.CLAWDBOT_STATE_DIR,
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      password: process.env.CLAWDBOT_GATEWAY_PASSWORD,
-    };
+	    const prev = {
+	      home: process.env.HOME,
+	      stateDir: process.env.CLAWDBOT_STATE_DIR,
+	      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+	      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+	      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+	      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+	      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+	      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+	      password: process.env.CLAWDBOT_GATEWAY_PASSWORD,
+	    };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+	    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+	    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+	    process.env.CLAWDBOT_SKIP_CRON = "1";
+	    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
 
@@ -104,16 +104,16 @@ describe("onboard (non-interactive): remote gateway config", () => {
       expect(health?.ok).toBe(true);
     } finally {
       await server.close({ reason: "non-interactive remote test complete" });
-      await fs.rm(tempHome, { recursive: true, force: true });
-      process.env.HOME = prev.home;
-      process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
-      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-      process.env.CLAWDBOT_SKIP_PROVIDERS = prev.skipProviders;
-      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
-      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
-      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
-      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-      process.env.CLAWDBOT_GATEWAY_PASSWORD = prev.password;
-    }
+	      await fs.rm(tempHome, { recursive: true, force: true });
+	      process.env.HOME = prev.home;
+	      process.env.CLAWDBOT_STATE_DIR = prev.stateDir;
+	      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
+	      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
+	      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
+	      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
+	      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+	      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
+	      process.env.CLAWDBOT_GATEWAY_PASSWORD = prev.password;
+	    }
   }, 60_000);
 });

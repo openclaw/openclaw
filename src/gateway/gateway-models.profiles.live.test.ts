@@ -352,7 +352,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const previous = {
     configPath: process.env.CLAWDBOT_CONFIG_PATH,
     token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-    skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+    skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
     skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
     skipCron: process.env.CLAWDBOT_SKIP_CRON,
     skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
@@ -363,7 +363,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   let tempAgentDir: string | undefined;
   let tempStateDir: string | undefined;
 
-  process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+  process.env.CLAWDBOT_SKIP_CHANNELS = "1";
   process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
   process.env.CLAWDBOT_SKIP_CRON = "1";
   process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
@@ -776,7 +776,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
     process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
     process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-    process.env.CLAWDBOT_SKIP_PROVIDERS = previous.skipProviders;
+    process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
     process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
@@ -895,13 +895,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const previous = {
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
       token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
     };
 
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
@@ -1035,7 +1035,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
       process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
       process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-      process.env.CLAWDBOT_SKIP_PROVIDERS = previous.skipProviders;
+      process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
       process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
       process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;

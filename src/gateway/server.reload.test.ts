@@ -166,21 +166,21 @@ vi.mock("./config-reload.js", () => ({
 installGatewayTestHooks();
 
 describe("gateway hot reload", () => {
-  let prevSkipProviders: string | undefined;
+  let prevSkipChannels: string | undefined;
   let prevSkipGmail: string | undefined;
 
   beforeEach(() => {
-    prevSkipProviders = process.env.CLAWDBOT_SKIP_PROVIDERS;
+    prevSkipChannels = process.env.CLAWDBOT_SKIP_CHANNELS;
     prevSkipGmail = process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
-    process.env.CLAWDBOT_SKIP_PROVIDERS = "0";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "0";
     delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
   });
 
   afterEach(() => {
-    if (prevSkipProviders === undefined) {
-      delete process.env.CLAWDBOT_SKIP_PROVIDERS;
+    if (prevSkipChannels === undefined) {
+      delete process.env.CLAWDBOT_SKIP_CHANNELS;
     } else {
-      process.env.CLAWDBOT_SKIP_PROVIDERS = prevSkipProviders;
+      process.env.CLAWDBOT_SKIP_CHANNELS = prevSkipChannels;
     }
     if (prevSkipGmail === undefined) {
       delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;

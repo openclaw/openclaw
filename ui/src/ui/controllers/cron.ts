@@ -73,7 +73,7 @@ export function buildCronPayload(form: CronFormState) {
     kind: "agentTurn";
     message: string;
     deliver?: boolean;
-    provider?:
+    channel?:
       | "last"
       | "whatsapp"
       | "telegram"
@@ -85,7 +85,7 @@ export function buildCronPayload(form: CronFormState) {
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };
   if (form.deliver) payload.deliver = true;
-  if (form.provider) payload.provider = form.provider;
+  if (form.channel) payload.channel = form.channel;
   if (form.to.trim()) payload.to = form.to.trim();
   const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
   if (timeoutSeconds > 0) payload.timeoutSeconds = timeoutSeconds;
