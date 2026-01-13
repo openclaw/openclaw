@@ -869,38 +869,75 @@ export const CronAddParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const CronUpdateParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    patch: Type.Partial(CronAddParamsSchema),
-  },
-  { additionalProperties: false },
-);
+export const CronUpdateParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      patch: Type.Partial(CronAddParamsSchema),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      patch: Type.Partial(CronAddParamsSchema),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRemoveParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
+export const CronRemoveParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRunParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    mode: Type.Optional(
-      Type.Union([Type.Literal("due"), Type.Literal("force")]),
-    ),
-  },
-  { additionalProperties: false },
-);
+export const CronRunParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      mode: Type.Optional(
+        Type.Union([Type.Literal("due"), Type.Literal("force")]),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      mode: Type.Optional(
+        Type.Union([Type.Literal("due"), Type.Literal("force")]),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
-export const CronRunsParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
-  },
-  { additionalProperties: false },
-);
+export const CronRunsParamsSchema = Type.Union([
+  Type.Object(
+    {
+      id: NonEmptyString,
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      jobId: NonEmptyString,
+      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const CronRunLogEntrySchema = Type.Object(
   {
