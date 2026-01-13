@@ -109,8 +109,11 @@ type TelegramUpdateKeyContext = {
   callbackQuery?: { id?: string; message?: TelegramMessage };
 };
 
+const resolveTelegramUpdateId = (ctx: TelegramUpdateKeyContext) =>
+  ctx.update?.update_id ?? ctx.update_id;
+
 const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
-  const updateId = ctx.update?.update_id ?? ctx.update_id;
+  const updateId = resolveTelegramUpdateId(ctx);
   if (typeof updateId === "number") return `update:${updateId}`;
   const callbackId = ctx.callbackQuery?.id;
   if (callbackId) return `callback:${callbackId}`;
@@ -172,6 +175,10 @@ export type TelegramBotOptions = {
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
   config?: ClawdbotConfig;
+  updateOffset?: {
+    lastUpdateId?: number | null;
+    onUpdateId?: (updateId: number) => void | Promise<void>;
+  };
 };
 
 export function getTelegramSequentialKey(ctx: {
@@ -220,7 +227,24 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.use(sequentialize(getTelegramSequentialKey));
 
   const recentUpdates = createTelegramUpdateDedupe();
+  let lastUpdateId =
+    typeof opts.updateOffset?.lastUpdateId === "number"
+      ? opts.updateOffset.lastUpdateId
+      : null;
+
+  const recordUpdateId = (ctx: TelegramUpdateKeyContext) => {
+    const updateId = resolveTelegramUpdateId(ctx);
+    if (typeof updateId !== "number") return;
+    if (lastUpdateId !== null && updateId <= lastUpdateId) return;
+    lastUpdateId = updateId;
+    void opts.updateOffset?.onUpdateId?.(updateId);
+  };
+
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
+    const updateId = resolveTelegramUpdateId(ctx);
+    if (typeof updateId === "number" && lastUpdateId !== null) {
+      if (updateId <= lastUpdateId) return true;
+    }
     const key = buildTelegramUpdateKey(ctx);
     const skipped = recentUpdates.check(key);
     if (skipped && key && shouldLogVerbose()) {
@@ -228,6 +252,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     return skipped;
   };
+
+  bot.use(async (ctx, next) => {
+    await next();
+    recordUpdateId(ctx);
+  });
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();

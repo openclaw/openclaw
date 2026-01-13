@@ -6,6 +6,10 @@ import { formatDurationMs } from "../infra/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramBot } from "./bot.js";
+import {
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { makeProxyFetch } from "./proxy.js";
 import { startTelegramWebhook } from "./webhook.js";
 
@@ -85,12 +89,34 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       ? makeProxyFetch(account.config.proxy as string)
       : undefined);
 
+  let lastUpdateId = await readTelegramUpdateOffset({
+    accountId: account.accountId,
+  });
+  const persistUpdateId = async (updateId: number) => {
+    if (lastUpdateId !== null && updateId <= lastUpdateId) return;
+    lastUpdateId = updateId;
+    try {
+      await writeTelegramUpdateOffset({
+        accountId: account.accountId,
+        updateId,
+      });
+    } catch (err) {
+      (opts.runtime?.error ?? console.error)(
+        `telegram: failed to persist update offset: ${String(err)}`,
+      );
+    }
+  };
+
   const bot = createTelegramBot({
     token,
     runtime: opts.runtime,
     proxyFetch,
     config: cfg,
     accountId: account.accountId,
+    updateOffset: {
+      lastUpdateId,
+      onUpdateId: persistUpdateId,
+    },
   });
 
   if (opts.useWebhook) {
