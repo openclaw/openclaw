@@ -128,6 +128,13 @@ export async function runNonInteractiveOnboarding(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    runtime.error(
+      "Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.",
+    );
+    runtime.exit(1);
+    return;
+  }
   const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {

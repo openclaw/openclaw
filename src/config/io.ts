@@ -287,6 +287,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       const legacyIssues = findLegacyConfigIssues(resolved);
+      const resolvedConfig =
+        typeof resolved === "object" && resolved !== null
+          ? (resolved as ClawdbotConfig)
+          : {};
 
       const validated = validateConfigObject(resolved);
       if (!validated.ok) {
@@ -296,7 +300,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: resolved as ClawdbotConfig,
+          config: resolvedConfig,
           issues: validated.issues,
           legacyIssues,
         };

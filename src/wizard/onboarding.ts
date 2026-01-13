@@ -96,6 +96,14 @@ export async function runOnboardingWizard(
       );
     }
 
+    if (!snapshot.valid) {
+      await prompter.outro(
+        "Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.",
+      );
+      runtime.exit(1);
+      return;
+    }
+
     const action = (await prompter.select({
       message: "Config handling",
       options: [
@@ -123,8 +131,6 @@ export async function runOnboardingWizard(
         ],
       })) as ResetScope;
       await handleReset(resetScope, resolveUserPath(workspaceDefault), runtime);
-      baseConfig = {};
-    } else if (action === "keep" && !snapshot.valid) {
       baseConfig = {};
     }
   }
