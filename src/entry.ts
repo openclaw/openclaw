@@ -30,8 +30,8 @@ function ensureExperimentalWarningSuppressed(): void {
     process.execPath,
     [...process.execArgv, ...process.argv.slice(1)],
     {
-    stdio: "inherit",
-    env: process.env,
+      stdio: "inherit",
+      env: process.env,
     },
   );
   if (result.signal) process.exit(1);
