@@ -4,6 +4,7 @@ import { formatAgo } from "../format";
 import type {
   DiscordStatus,
   IMessageStatus,
+  ProviderAccountSnapshot,
   ProvidersStatusSnapshot,
   SignalStatus,
   SlackStatus,
@@ -132,6 +133,7 @@ export function renderConnections(props: ConnectionsProps) {
           slack,
           signal,
           imessage,
+          providerAccounts: props.snapshot?.providerAccounts ?? null,
         }),
       )}
     </section>
@@ -216,6 +218,7 @@ function renderProvider(
     slack?: SlackStatus | null;
     signal?: SignalStatus | null;
     imessage?: IMessageStatus | null;
+    providerAccounts?: Record<string, ProviderAccountSnapshot[]> | null;
   },
 ) {
   switch (key) {
@@ -321,33 +324,76 @@ function renderProvider(
     }
     case "telegram": {
       const telegram = data.telegram;
+      const telegramAccounts = data.providerAccounts?.telegram ?? [];
+      const hasMultipleAccounts = telegramAccounts.length > 1;
+      
+      const renderAccountCard = (account: ProviderAccountSnapshot) => {
+        const probe = account.probe as { bot?: { username?: string } } | undefined;
+        const botUsername = probe?.bot?.username;
+        const label = account.name || account.accountId;
+        return html`
+          <div style="border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 8px;">
+            <div style="font-weight: 500; margin-bottom: 8px;">
+              ${botUsername ? `@${botUsername}` : label}
+              <span class="muted" style="font-weight: normal;">(${account.accountId})</span>
+            </div>
+            <div class="status-list" style="font-size: 13px;">
+              <div>
+                <span class="label">Running</span>
+                <span>${account.running ? "Yes" : "No"}</span>
+              </div>
+              <div>
+                <span class="label">Configured</span>
+                <span>${account.configured ? "Yes" : "No"}</span>
+              </div>
+              <div>
+                <span class="label">Last inbound</span>
+                <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+              </div>
+              ${account.lastError ? html`
+                <div style="color: var(--danger); margin-top: 4px;">
+                  ${account.lastError}
+                </div>
+              ` : nothing}
+            </div>
+          </div>
+        `;
+      };
+      
       return html`
         <div class="card">
           <div class="card-title">Telegram</div>
           <div class="card-sub">Bot token and delivery options.</div>
 
-          <div class="status-list" style="margin-top: 16px;">
-            <div>
-              <span class="label">Configured</span>
-              <span>${telegram?.configured ? "Yes" : "No"}</span>
+          ${hasMultipleAccounts ? html`
+            <div style="margin-top: 16px; margin-bottom: 8px;">
+              <div style="font-weight: 500; margin-bottom: 8px; color: var(--muted);">Accounts (${telegramAccounts.length})</div>
+              ${telegramAccounts.map((account) => renderAccountCard(account))}
             </div>
-            <div>
-              <span class="label">Running</span>
-              <span>${telegram?.running ? "Yes" : "No"}</span>
+          ` : html`
+            <div class="status-list" style="margin-top: 16px;">
+              <div>
+                <span class="label">Configured</span>
+                <span>${telegram?.configured ? "Yes" : "No"}</span>
+              </div>
+              <div>
+                <span class="label">Running</span>
+                <span>${telegram?.running ? "Yes" : "No"}</span>
+              </div>
+              <div>
+                <span class="label">Mode</span>
+                <span>${telegram?.mode ?? "n/a"}</span>
+              </div>
+              <div>
+                <span class="label">Last start</span>
+                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : "n/a"}</span>
+              </div>
+              <div>
+                <span class="label">Last probe</span>
+                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : "n/a"}</span>
+              </div>
             </div>
-            <div>
-              <span class="label">Mode</span>
-              <span>${telegram?.mode ?? "n/a"}</span>
-            </div>
-            <div>
-              <span class="label">Last start</span>
-              <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : "n/a"}</span>
-            </div>
-            <div>
-              <span class="label">Last probe</span>
-              <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : "n/a"}</span>
-            </div>
-          </div>
+          `}
 
           ${telegram?.lastError
             ? html`<div class="callout danger" style="margin-top: 12px;">
