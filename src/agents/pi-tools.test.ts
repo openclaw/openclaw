@@ -631,6 +631,17 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("expands group shorthands in global tool deny policy", () => {
+    const tools = createClawdbotCodingTools({
+      config: { tools: { deny: ["group:fs"] } },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(false);
+    expect(names.has("write")).toBe(false);
+    expect(names.has("edit")).toBe(false);
+    expect(names.has("exec")).toBe(true);
+  });
+
   it("lets agent profiles override global profiles", () => {
     const tools = createClawdbotCodingTools({
       sessionKey: "agent:work:main",
