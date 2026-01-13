@@ -483,7 +483,9 @@ describe("models config", () => {
           "https://api.synthetic.new/anthropic",
         );
         expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
-        const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
+        const ids = parsed.providers.synthetic?.models?.map(
+          (model) => model.id,
+        );
         expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
       } finally {
         if (prevKey === undefined) delete process.env.SYNTHETIC_API_KEY;

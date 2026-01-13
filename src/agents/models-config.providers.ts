@@ -5,9 +5,9 @@ import {
 } from "./auth-profiles.js";
 import { resolveEnvApiKey } from "./model-auth.js";
 import {
+  buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
-  buildSyntheticModelDefinition,
 } from "./synthetic-models.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
