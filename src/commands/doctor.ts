@@ -450,6 +450,7 @@ export async function doctorCommand(
     let loaded = false;
     try {
       loaded = await service.isLoaded({
+        env: process.env,
         profile: process.env.CLAWDBOT_PROFILE,
       });
     } catch {
@@ -575,6 +576,7 @@ export async function doctorCommand(
   if (!healthOk) {
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({
+      env: process.env,
       profile: process.env.CLAWDBOT_PROFILE,
     });
     let serviceRuntime:
@@ -676,6 +678,7 @@ export async function doctorCommand(
         });
         if (start) {
           await service.restart({
+            env: process.env,
             profile: process.env.CLAWDBOT_PROFILE,
             stdout: process.stdout,
           });
@@ -698,6 +701,7 @@ export async function doctorCommand(
         });
         if (restart) {
           await service.restart({
+            env: process.env,
             profile: process.env.CLAWDBOT_PROFILE,
             stdout: process.stdout,
           });

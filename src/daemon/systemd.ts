@@ -46,6 +46,14 @@ function resolveSystemdServiceName(
   return resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
 }
 
+function resolveSystemdServiceNameFromParams(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): string {
+  if (params?.env) return resolveSystemdServiceName(params.env);
+  return resolveGatewaySystemdServiceName(params?.profile);
+}
+
 function resolveSystemdUnitPath(
   env: Record<string, string | undefined>,
 ): string {
@@ -466,13 +474,15 @@ export async function uninstallSystemdService({
 
 export async function stopSystemdService({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "stop", unitName]);
   if (res.code !== 0) {
@@ -485,13 +495,15 @@ export async function stopSystemdService({
 
 export async function restartSystemdService({
   stdout,
+  env,
   profile,
 }: {
   stdout: NodeJS.WritableStream;
+  env?: Record<string, string | undefined>;
   profile?: string;
 }): Promise<void> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams({ env, profile });
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "restart", unitName]);
   if (res.code !== 0) {
@@ -502,11 +514,12 @@ export async function restartSystemdService({
   stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
-export async function isSystemdServiceEnabled(
-  profile?: string,
-): Promise<boolean> {
+export async function isSystemdServiceEnabled(params?: {
+  env?: Record<string, string | undefined>;
+  profile?: string;
+}): Promise<boolean> {
   await assertSystemdAvailable();
-  const serviceName = resolveGatewaySystemdServiceName(profile);
+  const serviceName = resolveSystemdServiceNameFromParams(params);
   const unitName = `${serviceName}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
   return res.code === 0;

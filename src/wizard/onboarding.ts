@@ -697,6 +697,7 @@ export async function runOnboardingWizard(
     }
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({
+      env: process.env,
       profile: process.env.CLAWDBOT_PROFILE,
     });
     if (loaded) {
@@ -710,6 +711,7 @@ export async function runOnboardingWizard(
       })) as "restart" | "reinstall" | "skip";
       if (action === "restart") {
         await service.restart({
+          env: process.env,
           profile: process.env.CLAWDBOT_PROFILE,
           stdout: process.stdout,
         });
@@ -721,8 +723,10 @@ export async function runOnboardingWizard(
     if (
       !loaded ||
       (loaded &&
-        (await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE })) ===
-          false)
+        (await service.isLoaded({
+          env: process.env,
+          profile: process.env.CLAWDBOT_PROFILE,
+        })) === false)
     ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&

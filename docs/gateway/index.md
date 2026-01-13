@@ -49,6 +49,8 @@ pnpm gateway:watch
 
 ## Multiple gateways (same host)
 
+Usually unnecessary: one Gateway can serve multiple messaging channels and agents. Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
+
 Supported if you isolate state + config and use unique ports.
 
 Service names are profile-aware:
@@ -95,6 +97,12 @@ Checklist per instance:
 - unique `CLAWDBOT_STATE_DIR`
 - unique `agents.defaults.workspace`
 - separate WhatsApp numbers (if using WA)
+
+Daemon install per profile:
+```bash
+clawdbot --profile main daemon install
+clawdbot --profile rescue daemon install
+```
 
 Example:
 ```bash

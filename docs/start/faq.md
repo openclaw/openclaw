@@ -829,6 +829,8 @@ Fix:
 
 ### Can I run multiple Gateways on the same host?
 
+Usually no — one Gateway can run multiple messaging channels and agents. Use multiple Gateways only when you need redundancy (ex: rescue bot) or hard isolation.
+
 Yes, but you must isolate:
 
 - `CLAWDBOT_CONFIG_PATH` (per‑instance config)
@@ -836,9 +838,12 @@ Yes, but you must isolate:
 - `agents.defaults.workspace` (workspace isolation)
 - `gateway.port` (unique ports)
 
-There are convenience CLI flags like `--dev` and `--profile <name>` that shift state dirs and ports.
-When using profiles, service names are suffixed (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`,
-`Clawdbot Gateway (<profile>)`).
+Quick setup (recommended):
+- Use `clawdbot --profile <name> …` per instance (auto-creates `~/.clawdbot-<name>`).
+- Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
+- Install a per-profile daemon: `clawdbot --profile <name> daemon install`.
+
+Profiles also suffix service names (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`, `Clawdbot Gateway (<profile>)`).
 
 ## Logging and debugging
 
