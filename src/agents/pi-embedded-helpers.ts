@@ -370,8 +370,8 @@ export function formatAssistantErrorText(
   // Check for context overflow (413) errors
   if (isContextOverflowError(raw)) {
     return (
-      "Context overflow: the conversation history is too large. " +
-      "Use /new or /reset to start a fresh session."
+      "Context overflow: prompt too large for the model. " +
+      "Try again with less input or a larger-context model."
     );
   }
 

@@ -834,6 +834,20 @@ export async function runReplyAgent(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+
+        // Some embedded runs surface context overflow as an error payload instead of throwing.
+        // Treat those as a session-level failure and auto-recover by starting a fresh session.
+        const embeddedError = runResult.meta?.error;
+        if (
+          embeddedError &&
+          isContextOverflowError(embeddedError.message) &&
+          !didResetAfterCompactionFailure &&
+          (await resetSessionAfterCompactionFailure(embeddedError.message))
+        ) {
+          didResetAfterCompactionFailure = true;
+          continue;
+        }
+
         break;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -894,7 +908,7 @@ export async function runReplyAgent(params: {
         defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
         return finalizeWithFollowup({
           text: isContextOverflow
-            ? "⚠️ Context overflow - conversation too long. Starting fresh might help!"
+            ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
         });
       }

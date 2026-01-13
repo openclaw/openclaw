@@ -362,6 +362,10 @@ export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
+  error?: {
+    kind: "context_overflow" | "compaction_failure";
+    message: string;
+  };
 };
 
 function buildModelAliasLines(cfg?: ClawdbotConfig) {
@@ -1976,12 +1980,15 @@ export async function runEmbeddedPiAgent(params: {
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
+              const kind = isCompactionFailureError(errorText)
+                ? "compaction_failure"
+                : "context_overflow";
               return {
                 payloads: [
                   {
                     text:
-                      "Context overflow: the conversation history is too large for the model. " +
-                      "Use /new or /reset to start a fresh session, or try a model with a larger context window.",
+                      "Context overflow: prompt too large for the model. " +
+                      "Try again with less input or a larger-context model.",
                     isError: true,
                   },
                 ],
@@ -1992,6 +1999,7 @@ export async function runEmbeddedPiAgent(params: {
                     provider,
                     model: model.id,
                   },
+                  error: { kind, message: errorText },
                 },
               };
             }
