@@ -209,6 +209,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("resource has been exhausted")).toBe(
       "rate_limit",
     );
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      ),
+    ).toBe("rate_limit");
     expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
@@ -263,6 +268,15 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain(
       "Message ordering conflict",
+    );
+  });
+
+  it("returns a friendly message for Anthropic overload errors", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
 });
