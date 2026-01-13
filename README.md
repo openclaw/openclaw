@@ -64,7 +64,7 @@ clawdbot gateway --port 18789 --verbose
 # Send a message
 clawdbot message send --to +1234567890 --message "Hello from Clawdbot"
 
-# Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
+# Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord/Microsoft Teams)
 clawdbot agent --message "Ship checklist" --thinking high
 ```
 
@@ -96,7 +96,7 @@ Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted i
 
 Full security guide: [Security](https://docs.clawd.bot/gateway/security)
 
-Default behavior on Telegram/WhatsApp/Signal/iMessage/Discord/Slack:
+Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Slack:
 - **DM pairing** (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
 - Approve with: `clawdbot pairing approve <provider> <code>` (then the sender is added to a local allowlist store).
 - Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the provider allowlist (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`).
@@ -128,7 +128,7 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 - [Media pipeline](https://docs.clawd.bot/nodes/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawd.bot/nodes/audio).
 
 ### Providers
-- [Providers](https://docs.clawd.bot/providers): [WhatsApp](https://docs.clawd.bot/providers/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/providers/telegram) (grammY), [Slack](https://docs.clawd.bot/providers/slack) (Bolt), [Discord](https://docs.clawd.bot/providers/discord) (discord.js), [Signal](https://docs.clawd.bot/providers/signal) (signal-cli), [iMessage](https://docs.clawd.bot/providers/imessage) (imsg), [WebChat](https://docs.clawd.bot/web/webchat).
+- [Providers](https://docs.clawd.bot/providers): [WhatsApp](https://docs.clawd.bot/providers/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/providers/telegram) (grammY), [Slack](https://docs.clawd.bot/providers/slack) (Bolt), [Discord](https://docs.clawd.bot/providers/discord) (discord.js), [Signal](https://docs.clawd.bot/providers/signal) (signal-cli), [iMessage](https://docs.clawd.bot/providers/imessage) (imsg), [Microsoft Teams](https://docs.clawd.bot/providers/msteams) (Bot Framework), [WebChat](https://docs.clawd.bot/web/webchat).
 - [Group routing](https://docs.clawd.bot/concepts/group-messages): mention gating, reply tags, per-provider chunking and routing. Provider rules: [Providers](https://docs.clawd.bot/providers).
 
 ### Apps + nodes
@@ -159,7 +159,7 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 ## How it works (short)
 
 ```
-WhatsApp / Telegram / Slack / Discord / Signal / iMessage / WebChat
+WhatsApp / Telegram / Slack / Discord / Signal / iMessage / Microsoft Teams / WebChat
                │
                ▼
 ┌───────────────────────────────┐
@@ -242,7 +242,7 @@ ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can searc
 
 ## Chat commands
 
-Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
+Send these in WhatsApp/Telegram/Slack/Microsoft Teams/WebChat (group commands are owner-only):
 
 - `/status` — compact session status (model + tokens, cost when available)
 - `/new` or `/reset` — reset the session
@@ -359,6 +359,11 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 
 - macOS only; Messages must be signed in.
 - If `imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
+
+### [Microsoft Teams](https://docs.clawd.bot/providers/msteams)
+
+- Configure a Teams app + Bot Framework, then add a `msteams` config section.
+- Allowlist who can talk via `msteams.allowFrom`; group access via `msteams.groupAllowFrom` or `msteams.groupPolicy: "open"`.
 
 ### [WebChat](https://docs.clawd.bot/web/webchat)
 
