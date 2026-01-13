@@ -293,7 +293,11 @@ export function registerCronCli(program: Command) {
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
-      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+      .option(
+        "--delete-after-run",
+        "Delete one-shot job after it succeeds",
+        false,
+      )
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)", "main")
       .option(
@@ -579,7 +583,11 @@ export function registerCronCli(program: Command) {
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
-      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+      .option(
+        "--delete-after-run",
+        "Delete one-shot job after it succeeds",
+        false,
+      )
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--session <target>", "Session target (main|isolated)")
       .option("--agent <id>", "Set agent id")
