@@ -1871,6 +1871,49 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("streams tool summaries for native slash commands", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    commandSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockImplementation(async (_ctx, opts) => {
+      await opts?.onToolResult?.({ text: "tool update" });
+      return { text: "final reply" };
+    });
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      telegram: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const verboseHandler = commandSpy.mock.calls.find(
+      (call) => call[0] === "verbose",
+    )?.[1] as ((ctx: Record<string, unknown>) => Promise<void>) | undefined;
+    if (!verboseHandler) throw new Error("verbose command handler missing");
+
+    await verboseHandler({
+      message: {
+        chat: { id: 12345, type: "private" },
+        from: { id: 12345, username: "testuser" },
+        text: "/verbose on",
+        date: 1736380800,
+        message_id: 42,
+      },
+      match: "on",
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("tool update");
+    expect(sendMessageSpy.mock.calls[1]?.[1]).toContain("final reply");
+  });
+
   it("dedupes duplicate message updates by update_id", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<
