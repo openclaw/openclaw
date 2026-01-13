@@ -1614,6 +1614,37 @@ Example (coding profile, but deny exec/process everywhere):
 }
 ```
 
+`tools.byProvider` lets you **further restrict** tools for specific providers (or a single `provider/model`).
+Per-agent override: `agents.list[].tools.byProvider`.
+
+Order: base profile → provider profile → allow/deny policies.
+Provider keys accept either `provider` (e.g. `google-antigravity`) or `provider/model`
+(e.g. `openai/gpt-5.2`).
+
+Example (keep global coding profile, but minimal tools for Google Antigravity):
+```json5
+{
+  tools: {
+    profile: "coding",
+    byProvider: {
+      "google-antigravity": { profile: "minimal" }
+    }
+  }
+}
+```
+
+Example (provider/model-specific allowlist):
+```json5
+{
+  tools: {
+    allow: ["group:fs", "group:runtime", "sessions_list"],
+    byProvider: {
+      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] }
+    }
+  }
+}
+```
+
 `tools.allow` / `tools.deny` configure a global tool allow/deny policy (deny wins).
 This is applied even when the Docker sandbox is **off**.
 
