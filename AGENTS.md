@@ -10,7 +10,9 @@ This folder is home. Treat it that way.
 - When Peter asks for links, reply with full `https://docs.clawd.bot/...` URLs (not root-relative).
 - When you touch docs, end the reply with the `https://docs.clawd.bot/...` URLs you referenced.
 - README (GitHub): keep absolute docs URLs (`https://docs.clawd.bot/...`) so links work on GitHub.
-- Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
+- Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and "gateway host".
+
+## First Run
 
 If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
 
