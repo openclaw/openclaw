@@ -499,33 +499,33 @@ export function scheduleFollowupDrain(
           if (forceIndividualCollect) {
             const next = queue.items.shift();
             if (!next) break;
-        await runFollowup(next);
-        continue;
-      }
+            await runFollowup(next);
+            continue;
+          }
 
-      // Check if messages span multiple channels.
-      // If so, process individually to preserve per-message routing.
-      const isCrossChannel = hasCrossChannelItems(queue.items);
+          // Check if messages span multiple channels.
+          // If so, process individually to preserve per-message routing.
+          const isCrossChannel = hasCrossChannelItems(queue.items);
 
-      if (isCrossChannel) {
-        forceIndividualCollect = true;
-        // Process one at a time to preserve per-message routing info.
-        const next = queue.items.shift();
-        if (!next) break;
-        await runFollowup(next);
-        continue;
-      }
+          if (isCrossChannel) {
+            forceIndividualCollect = true;
+            // Process one at a time to preserve per-message routing info.
+            const next = queue.items.shift();
+            if (!next) break;
+            await runFollowup(next);
+            continue;
+          }
 
-      // Same-channel messages can be safely collected.
-      const items = queue.items.splice(0, queue.items.length);
-      const summary = buildSummaryPrompt(queue);
-      const run = items.at(-1)?.run ?? queue.lastRun;
-      if (!run) break;
+          // Same-channel messages can be safely collected.
+          const items = queue.items.splice(0, queue.items.length);
+          const summary = buildSummaryPrompt(queue);
+          const run = items.at(-1)?.run ?? queue.lastRun;
+          if (!run) break;
 
-      // Preserve originating channel from items when collecting same-channel.
-      const originatingChannel = items.find(
-        (i) => i.originatingChannel,
-      )?.originatingChannel;
+          // Preserve originating channel from items when collecting same-channel.
+          const originatingChannel = items.find(
+            (i) => i.originatingChannel,
+          )?.originatingChannel;
           const originatingTo = items.find(
             (i) => i.originatingTo,
           )?.originatingTo;

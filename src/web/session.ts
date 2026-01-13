@@ -138,7 +138,7 @@ export async function createWaSocket(
           if (status === DisconnectReason.loggedOut) {
             console.error(
               danger(
-                "WhatsApp session logged out. Run: clawdbot providers login",
+                "WhatsApp session logged out. Run: clawdbot channels login",
               ),
             );
           }

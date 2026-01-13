@@ -341,7 +341,7 @@ public struct SendParams: Codable, Sendable {
     public let message: String
     public let mediaurl: String?
     public let gifplayback: Bool?
-    public let provider: String?
+    public let channel: String?
     public let accountid: String?
     public let idempotencykey: String
 
@@ -350,7 +350,7 @@ public struct SendParams: Codable, Sendable {
         message: String,
         mediaurl: String?,
         gifplayback: Bool?,
-        provider: String?,
+        channel: String?,
         accountid: String?,
         idempotencykey: String
     ) {
@@ -358,7 +358,7 @@ public struct SendParams: Codable, Sendable {
         self.message = message
         self.mediaurl = mediaurl
         self.gifplayback = gifplayback
-        self.provider = provider
+        self.channel = channel
         self.accountid = accountid
         self.idempotencykey = idempotencykey
     }
@@ -367,7 +367,7 @@ public struct SendParams: Codable, Sendable {
         case message
         case mediaurl = "mediaUrl"
         case gifplayback = "gifPlayback"
-        case provider
+        case channel
         case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
     }
@@ -379,7 +379,7 @@ public struct PollParams: Codable, Sendable {
     public let options: [String]
     public let maxselections: Int?
     public let durationhours: Int?
-    public let provider: String?
+    public let channel: String?
     public let accountid: String?
     public let idempotencykey: String
 
@@ -389,7 +389,7 @@ public struct PollParams: Codable, Sendable {
         options: [String],
         maxselections: Int?,
         durationhours: Int?,
-        provider: String?,
+        channel: String?,
         accountid: String?,
         idempotencykey: String
     ) {
@@ -398,7 +398,7 @@ public struct PollParams: Codable, Sendable {
         self.options = options
         self.maxselections = maxselections
         self.durationhours = durationhours
-        self.provider = provider
+        self.channel = channel
         self.accountid = accountid
         self.idempotencykey = idempotencykey
     }
@@ -408,7 +408,7 @@ public struct PollParams: Codable, Sendable {
         case options
         case maxselections = "maxSelections"
         case durationhours = "durationHours"
-        case provider
+        case channel
         case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
     }
@@ -422,7 +422,7 @@ public struct AgentParams: Codable, Sendable {
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
-    public let provider: String?
+    public let channel: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -438,7 +438,7 @@ public struct AgentParams: Codable, Sendable {
         thinking: String?,
         deliver: Bool?,
         attachments: [AnyCodable]?,
-        provider: String?,
+        channel: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -453,7 +453,7 @@ public struct AgentParams: Codable, Sendable {
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
-        self.provider = provider
+        self.channel = channel
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -469,7 +469,7 @@ public struct AgentParams: Codable, Sendable {
         case thinking
         case deliver
         case attachments
-        case provider
+        case channel
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"
@@ -1102,7 +1102,7 @@ public struct TalkModeParams: Codable, Sendable {
     }
 }
 
-public struct ProvidersStatusParams: Codable, Sendable {
+public struct ChannelsStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
 
@@ -1119,52 +1119,52 @@ public struct ProvidersStatusParams: Codable, Sendable {
     }
 }
 
-public struct ProvidersStatusResult: Codable, Sendable {
+public struct ChannelsStatusResult: Codable, Sendable {
     public let ts: Int
-    public let providerorder: [String]
-    public let providerlabels: [String: AnyCodable]
-    public let providers: [String: AnyCodable]
-    public let provideraccounts: [String: AnyCodable]
-    public let providerdefaultaccountid: [String: AnyCodable]
+    public let channelorder: [String]
+    public let channellabels: [String: AnyCodable]
+    public let channels: [String: AnyCodable]
+    public let channelaccounts: [String: AnyCodable]
+    public let channeldefaultaccountid: [String: AnyCodable]
 
     public init(
         ts: Int,
-        providerorder: [String],
-        providerlabels: [String: AnyCodable],
-        providers: [String: AnyCodable],
-        provideraccounts: [String: AnyCodable],
-        providerdefaultaccountid: [String: AnyCodable]
+        channelorder: [String],
+        channellabels: [String: AnyCodable],
+        channels: [String: AnyCodable],
+        channelaccounts: [String: AnyCodable],
+        channeldefaultaccountid: [String: AnyCodable]
     ) {
         self.ts = ts
-        self.providerorder = providerorder
-        self.providerlabels = providerlabels
-        self.providers = providers
-        self.provideraccounts = provideraccounts
-        self.providerdefaultaccountid = providerdefaultaccountid
+        self.channelorder = channelorder
+        self.channellabels = channellabels
+        self.channels = channels
+        self.channelaccounts = channelaccounts
+        self.channeldefaultaccountid = channeldefaultaccountid
     }
     private enum CodingKeys: String, CodingKey {
         case ts
-        case providerorder = "providerOrder"
-        case providerlabels = "providerLabels"
-        case providers
-        case provideraccounts = "providerAccounts"
-        case providerdefaultaccountid = "providerDefaultAccountId"
+        case channelorder = "channelOrder"
+        case channellabels = "channelLabels"
+        case channels
+        case channelaccounts = "channelAccounts"
+        case channeldefaultaccountid = "channelDefaultAccountId"
     }
 }
 
-public struct ProvidersLogoutParams: Codable, Sendable {
-    public let provider: String
+public struct ChannelsLogoutParams: Codable, Sendable {
+    public let channel: String
     public let accountid: String?
 
     public init(
-        provider: String,
+        channel: String,
         accountid: String?
     ) {
-        self.provider = provider
+        self.channel = channel
         self.accountid = accountid
     }
     private enum CodingKeys: String, CodingKey {
-        case provider
+        case channel
         case accountid = "accountId"
     }
 }

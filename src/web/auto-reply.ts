@@ -1848,7 +1848,7 @@ export async function monitorWebChannel(
 
     if (loggedOut) {
       runtime.error(
-        "WhatsApp session logged out. Run `clawdbot providers login --provider web` to relink.",
+        "WhatsApp session logged out. Run `clawdbot channels login --channel web` to relink.",
       );
       await closeListener();
       break;

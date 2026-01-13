@@ -271,15 +271,15 @@ async function connectClient(params: { url: string; token: string }) {
 
 describe("gateway (mock openai): tool calling", () => {
   it("runs a Read tool call end-to-end via gateway agent loop", async () => {
-	    const prev = {
-	      home: process.env.HOME,
-	      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-	      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-	      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-	      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-	      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-	      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-	    };
+    const prev = {
+      home: process.env.HOME,
+      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+    };
 
     const originalFetch = globalThis.fetch;
     const openaiResponsesUrl = "https://api.openai.com/v1/responses";
@@ -321,14 +321,14 @@ describe("gateway (mock openai): tool calling", () => {
     // TypeScript: Bun's fetch typing includes extra properties; keep this test portable.
     (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
 
-	    const tempHome = await fs.mkdtemp(
-	      path.join(os.tmpdir(), "clawdbot-gw-mock-home-"),
-	    );
-	    process.env.HOME = tempHome;
-	    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-	    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-	    process.env.CLAWDBOT_SKIP_CRON = "1";
-	    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    const tempHome = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-gw-mock-home-"),
+    );
+    process.env.HOME = tempHome;
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+    process.env.CLAWDBOT_SKIP_CRON = "1";
+    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
 
     const token = `test-${randomUUID()}`;
     process.env.CLAWDBOT_GATEWAY_TOKEN = token;
@@ -424,13 +424,13 @@ describe("gateway (mock openai): tool calling", () => {
       await server.close({ reason: "mock openai test complete" });
       await fs.rm(tempHome, { recursive: true, force: true });
       (globalThis as unknown as { fetch: unknown }).fetch = originalFetch;
-	      process.env.HOME = prev.home;
-	      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-	      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-	      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
-	      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
-	      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
-	      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
-	    }
+      process.env.HOME = prev.home;
+      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
+      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
+      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
+      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
+      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+    }
   }, 30_000);
 });

@@ -69,7 +69,7 @@ cat ~/.clawdbot/clawdbot.json
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
 - Gateway runtime checks (service installed but not running; cached launchd label).
-- Provider status warnings (probed from the running gateway).
+- Channel status warnings (probed from the running gateway).
 - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
 - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
 - Gateway port collision diagnostics (default `18789`).
@@ -209,8 +209,8 @@ creation in automation.
 Doctor runs a health check and offers to restart the gateway when it looks
 unhealthy.
 
-### 14) Provider status warnings
-If the gateway is healthy, doctor runs a provider status probe and reports
+### 14) Channel status warnings
+If the gateway is healthy, doctor runs a channel status probe and reports
 warnings with suggested fixes.
 
 ### 15) Supervisor config audit + repair
@@ -234,7 +234,7 @@ running, SSH tunnel).
 
 ### 17) Gateway runtime best practices
 Doctor warns when the gateway service runs on Bun or a version-managed Node path
-(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram providers require Node,
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node,
 and version-manager paths can break after upgrades because the daemon does not
 load your shell init. Doctor offers to migrate to a system Node install when
 available (Homebrew/apt/choco).

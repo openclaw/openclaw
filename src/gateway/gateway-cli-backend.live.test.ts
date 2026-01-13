@@ -199,21 +199,21 @@ async function connectClient(params: { url: string; token: string }) {
 
 describeLive("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
-	    const previous = {
-	      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-	      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-	      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-	      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-	      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-	      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+    const previous = {
+      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
       anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
     };
 
-	    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-	    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-	    process.env.CLAWDBOT_SKIP_CRON = "1";
-	    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+    process.env.CLAWDBOT_SKIP_CRON = "1";
+    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY_OLD;
 
@@ -444,9 +444,9 @@ describeLive("gateway live (cli backend)", () => {
       if (previous.token === undefined)
         delete process.env.CLAWDBOT_GATEWAY_TOKEN;
       else process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
-	      if (previous.skipChannels === undefined)
-	        delete process.env.CLAWDBOT_SKIP_CHANNELS;
-	      else process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
+      if (previous.skipChannels === undefined)
+        delete process.env.CLAWDBOT_SKIP_CHANNELS;
+      else process.env.CLAWDBOT_SKIP_CHANNELS = previous.skipChannels;
       if (previous.skipGmail === undefined)
         delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
       else process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
