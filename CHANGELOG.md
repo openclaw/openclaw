@@ -7,6 +7,7 @@
 - Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
 
 ### Fixes
+- Telegram: persist polling update offsets across restarts to avoid duplicate updates. (#739 — thanks @thewilloftheshadow)
 - Discord: avoid duplicate message/reaction listeners on monitor reloads. (#744 — thanks @thewilloftheshadow)
 - System events: include local timestamps when events are injected into prompts. (#245 — thanks @thewilloftheshadow)
 - Cron: accept `jobId` aliases for cron update/run/remove params in gateway validation. (#252 — thanks @thewilloftheshadow)
