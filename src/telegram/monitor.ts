@@ -96,6 +96,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   if (opts.useWebhook) {
     await startTelegramWebhook({
       token,
+      accountId: account.accountId,
+      config: cfg,
       path: opts.webhookPath,
       port: opts.webhookPort,
       secret: opts.webhookSecret,
