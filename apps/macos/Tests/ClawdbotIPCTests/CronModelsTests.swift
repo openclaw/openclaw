@@ -39,6 +39,27 @@ struct CronModelsTests {
         #expect(decoded == payload)
     }
 
+    @Test func jobEncodesAndDecodesDeleteAfterRun() throws {
+        let job = CronJob(
+            id: "job-1",
+            agentId: nil,
+            name: "One-shot",
+            description: nil,
+            enabled: true,
+            deleteAfterRun: true,
+            createdAtMs: 0,
+            updatedAtMs: 0,
+            schedule: .at(atMs: 1_700_000_000_000),
+            sessionTarget: .main,
+            wakeMode: .now,
+            payload: .systemEvent(text: "ping"),
+            isolation: nil,
+            state: CronJobState())
+        let data = try JSONEncoder().encode(job)
+        let decoded = try JSONDecoder().decode(CronJob.self, from: data)
+        #expect(decoded.deleteAfterRun == true)
+    }
+
     @Test func scheduleDecodeRejectsUnknownKind() {
         let json = """
         {"kind":"wat","atMs":1}
@@ -64,6 +85,7 @@ struct CronModelsTests {
             name: "  hello  ",
             description: nil,
             enabled: true,
+            deleteAfterRun: nil,
             createdAtMs: 0,
             updatedAtMs: 0,
             schedule: .at(atMs: 0),
@@ -86,6 +108,7 @@ struct CronModelsTests {
             name: "t",
             description: nil,
             enabled: true,
+            deleteAfterRun: nil,
             createdAtMs: 0,
             updatedAtMs: 0,
             schedule: .at(atMs: 0),
