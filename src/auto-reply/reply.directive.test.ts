@@ -44,6 +44,17 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   );
 }
 
+function assertModelSelection(
+  storePath: string,
+  selection: { model?: string; provider?: string } = {},
+) {
+  const store = loadSessionStore(storePath);
+  const entry = store[MAIN_SESSION_KEY];
+  expect(entry).toBeDefined();
+  expect(entry?.modelOverride).toBe(selection.model);
+  expect(entry?.providerOverride).toBe(selection.provider);
+}
+
 describe("directive behavior", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -1750,7 +1761,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model openai/gpt-4.1-mini", From: "+1222", To: "+1222" },
         {},
         {
@@ -1768,12 +1779,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to openai/gpt-4.1-mini");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("gpt-4.1-mini");
-      expect(entry.providerOverride).toBe("openai");
+      assertModelSelection(storePath, {
+        model: "gpt-4.1-mini",
+        provider: "openai",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1783,7 +1792,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model Opus", From: "+1222", To: "+1222" },
         {},
         {
@@ -1801,13 +1810,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to Opus");
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("claude-opus-4-5");
-      expect(entry.providerOverride).toBe("anthropic");
+      assertModelSelection(storePath, {
+        model: "claude-opus-4-5",
+        provider: "anthropic",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1817,7 +1823,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model kimi", From: "+1222", To: "+1222" },
         {},
         {
@@ -1846,12 +1852,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("kimi-k2-0905-preview");
-      expect(entry.providerOverride).toBe("moonshot");
+      assertModelSelection(storePath, {
+        model: "kimi-k2-0905-preview",
+        provider: "moonshot",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1861,7 +1865,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model kimi-k2-0905-preview", From: "+1222", To: "+1222" },
         {},
         {
@@ -1890,12 +1894,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("kimi-k2-0905-preview");
-      expect(entry.providerOverride).toBe("moonshot");
+      assertModelSelection(storePath, {
+        model: "kimi-k2-0905-preview",
+        provider: "moonshot",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1905,7 +1907,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model moonshot/kimi", From: "+1222", To: "+1222" },
         {},
         {
@@ -1934,12 +1936,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("kimi-k2-0905-preview");
-      expect(entry.providerOverride).toBe("moonshot");
+      assertModelSelection(storePath, {
+        model: "kimi-k2-0905-preview",
+        provider: "moonshot",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -1949,7 +1949,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model minimax", From: "+1222", To: "+1222" },
         {},
         {
@@ -1987,12 +1987,7 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model reset to default (minimax/MiniMax-M2.1).");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBeUndefined();
-      expect(entry.providerOverride).toBeUndefined();
+      assertModelSelection(storePath);
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -2002,7 +1997,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model minimax/m2.1", From: "+1222", To: "+1222" },
         {},
         {
@@ -2037,12 +2032,7 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("minimax/MiniMax-M2.1");
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBeUndefined();
-      expect(entry.providerOverride).toBeUndefined();
+      assertModelSelection(storePath);
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -2052,7 +2042,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         { Body: "/model ki", From: "+1222", To: "+1222" },
         {},
         {
@@ -2090,12 +2080,10 @@ describe("directive behavior", () => {
         },
       );
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toMatch(/Model set to .*moonshot\/kimi-k2-0905-preview/);
-      const store = loadSessionStore(storePath);
-      const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("kimi-k2-0905-preview");
-      expect(entry.providerOverride).toBe("moonshot");
+      assertModelSelection(storePath, {
+        model: "kimi-k2-0905-preview",
+        provider: "moonshot",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

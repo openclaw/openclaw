@@ -563,6 +563,22 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   return result;
 }
 
+function mergeConsecutiveUserTurns(
+  previous: Extract<AgentMessage, { role: "user" }>,
+  current: Extract<AgentMessage, { role: "user" }>,
+): Extract<AgentMessage, { role: "user" }> {
+  const mergedContent = [
+    ...(Array.isArray(previous.content) ? previous.content : []),
+    ...(Array.isArray(current.content) ? current.content : []),
+  ];
+
+  return {
+    ...current, // newest wins for metadata
+    content: mergedContent,
+    timestamp: current.timestamp ?? previous.timestamp,
+  };
+}
+
 /**
  * Validates and fixes conversation turn sequences for Anthropic API.
  * Anthropic requires strict alternating user→assistant pattern.
@@ -607,17 +623,7 @@ export function validateAnthropicTurns(
 
       if (lastMsg && typeof lastMsg === "object") {
         const lastUser = lastMsg as Extract<AgentMessage, { role: "user" }>;
-
-        const mergedContent = [
-          ...(Array.isArray(lastUser.content) ? lastUser.content : []),
-          ...(Array.isArray(currentMsg.content) ? currentMsg.content : []),
-        ];
-
-        const merged: Extract<AgentMessage, { role: "user" }> = {
-          ...currentMsg, // newest wins for metadata
-          content: mergedContent,
-          timestamp: currentMsg.timestamp ?? lastUser.timestamp,
-        };
+        const merged = mergeConsecutiveUserTurns(lastUser, currentMsg);
 
         // Replace the last message with merged version
         result[result.length - 1] = merged;
