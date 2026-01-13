@@ -20,6 +20,11 @@ const noopAsync = async () => {};
 const noop = () => {};
 const authProfilePathFor = (agentDir: string) =>
   path.join(agentDir, "auth-profiles.json");
+const requireAgentDir = () => {
+  const agentDir = process.env.CLAWDBOT_AGENT_DIR;
+  if (!agentDir) throw new Error("CLAWDBOT_AGENT_DIR not set");
+  return agentDir;
+};
 
 describe("applyAuthChoice", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -113,9 +118,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const authProfilePath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
@@ -168,9 +171,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const authProfilePath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
@@ -331,9 +332,7 @@ describe("applyAuthChoice", () => {
       "openrouter/auto",
     );
 
-    const authProfilePath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
@@ -416,9 +415,7 @@ describe("applyAuthChoice", () => {
       mode: "oauth",
     });
 
-    const authProfilePath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<

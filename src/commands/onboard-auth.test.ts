@@ -16,14 +16,19 @@ import {
   applySyntheticConfig,
   applySyntheticProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
-  setMinimaxApiKey,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 
 const authProfilePathFor = (agentDir: string) =>
   path.join(agentDir, "auth-profiles.json");
+const requireAgentDir = () => {
+  const agentDir = process.env.CLAWDBOT_AGENT_DIR;
+  if (!agentDir) throw new Error("CLAWDBOT_AGENT_DIR not set");
+  return agentDir;
+};
 
 describe("writeOAuthCredentials", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -68,9 +73,7 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds);
 
-    const authProfilePath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
@@ -83,7 +86,13 @@ describe("writeOAuthCredentials", () => {
 
     await expect(
       fs.readFile(
-        path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"),
+        path.join(
+          tempStateDir,
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        ),
         "utf8",
       ),
     ).rejects.toThrow();
@@ -119,19 +128,22 @@ describe("setMinimaxApiKey", () => {
   });
 
   it("writes to CLAWDBOT_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-minimax-"));
+    tempStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-minimax-"),
+    );
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "custom-agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
     await setMinimaxApiKey("sk-minimax-test");
 
-    const customAuthPath = authProfilePathFor(
-      process.env.CLAWDBOT_AGENT_DIR!,
-    );
+    const customAuthPath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(customAuthPath, "utf8");
     const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
+      profiles?: Record<
+        string,
+        { type?: string; provider?: string; key?: string }
+      >;
     };
     expect(parsed.profiles?.["minimax:default"]).toMatchObject({
       type: "api_key",
@@ -141,7 +153,13 @@ describe("setMinimaxApiKey", () => {
 
     await expect(
       fs.readFile(
-        path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"),
+        path.join(
+          tempStateDir,
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        ),
         "utf8",
       ),
     ).rejects.toThrow();

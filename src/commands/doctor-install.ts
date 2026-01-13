@@ -28,9 +28,7 @@ export function noteSourceInstallIssues(root: string | null) {
   }
 
   if (fs.existsSync(srcEntry) && !fs.existsSync(tsxBin)) {
-    warnings.push(
-      "- tsx binary is missing for source runs. Run: pnpm install",
-    );
+    warnings.push("- tsx binary is missing for source runs. Run: pnpm install");
   }
 
   if (warnings.length > 0) {

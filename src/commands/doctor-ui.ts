@@ -29,10 +29,7 @@ export async function maybeRepairUiProtocolFreshness(
 
     if (schemaStats && !uiStats) {
       note(
-        [
-          "- Control UI assets are missing.",
-          "- Run: pnpm ui:build",
-        ].join("\n"),
+        ["- Control UI assets are missing.", "- Run: pnpm ui:build"].join("\n"),
         "UI",
       );
 
