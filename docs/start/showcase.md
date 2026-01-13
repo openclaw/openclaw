@@ -196,6 +196,18 @@ Full setup walkthrough (28m) by VelvetShark.
   Searches job listings, matches against CV keywords, and returns relevant opportunities with links. Built in 30 minutes using JSearch API.
 </Card>
 
+<Card title="Jira Skill Builder" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
+  **@jdrhyne** • `automation` `jira` `skill` `devtools`
+
+  Clawdbot connected to Jira, then generated a new skill on the fly (before it existed on ClawdHub).
+</Card>
+
+<Card title="Todoist Skill via Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
+  **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
+
+  Automated Todoist tasks and had Clawdbot generate the skill directly in Telegram chat.
+</Card>
+
 <Card title="TradingView Analysis" icon="chart-line">
   **@bheem1798** • `finance` `browser` `automation`
 
