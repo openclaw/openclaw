@@ -410,6 +410,7 @@ export async function installLaunchAgent({
 
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
+  await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
     throw new Error(`launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim());
