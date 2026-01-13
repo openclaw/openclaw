@@ -542,6 +542,14 @@
       "destination": "/concepts/channel-routing"
     },
     {
+      "source": "/refactor/provider-plugin",
+      "destination": "/refactor/channel-plugin"
+    },
+    {
+      "source": "/refactor/provider-plugin/",
+      "destination": "/refactor/channel-plugin"
+    },
+    {
       "source": "/queue",
       "destination": "/concepts/queue"
     },

@@ -167,23 +167,23 @@ ENV NODE_ENV=production
 CMD ["node","dist/index.js"]
 ```
 
-### Provider setup (optional)
+### Channel setup (optional)
 
-Use the CLI container to configure providers, then restart the gateway if needed.
+Use the CLI container to configure channels, then restart the gateway if needed.
 
 WhatsApp (QR):
 ```bash
-docker compose run --rm clawdbot-cli providers login
+docker compose run --rm clawdbot-cli channels login
 ```
 
 Telegram (bot token):
 ```bash
-docker compose run --rm clawdbot-cli providers add --provider telegram --token "<token>"
+docker compose run --rm clawdbot-cli channels add --channel telegram --token "<token>"
 ```
 
 Discord (bot token):
 ```bash
-docker compose run --rm clawdbot-cli providers add --provider discord --token "<token>"
+docker compose run --rm clawdbot-cli channels add --channel discord --token "<token>"
 ```
 
 Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord)

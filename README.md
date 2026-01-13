@@ -204,7 +204,7 @@ Details: [Tailscale guide](https://docs.clawd.bot/gateway/tailscale) · [Web sur
 
 It’s perfectly fine to run the Gateway on a small Linux instance. Clients (macOS app, CLI, WebChat) can connect over **Tailscale Serve/Funnel** or **SSH tunnels**, and you can still pair device nodes (macOS/iOS/Android) to execute device‑local actions when needed.
 
-- **Gateway host** runs the exec tool and provider connections by default.
+- **Gateway host** runs the exec tool and channel connections by default.
 - **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
 In short: exec runs where the Gateway lives; device actions run where the device lives.
 
@@ -317,50 +317,54 @@ Details: [Security guide](https://docs.clawd.bot/gateway/security) · [Docker + 
 
 ### [WhatsApp](https://docs.clawd.bot/channels/whatsapp)
 
-- Link the device: `pnpm clawdbot providers login` (stores creds in `~/.clawdbot/credentials`).
-- Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
-- If `whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
+- Link the device: `pnpm clawdbot channels login` (stores creds in `~/.clawdbot/credentials`).
+- Allowlist who can talk to the assistant via `channels.whatsapp.allowFrom`.
+- If `channels.whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
 ### [Telegram](https://docs.clawd.bot/channels/telegram)
 
-- Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
-- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `telegram.allowFrom` or `telegram.webhookUrl` as needed.
+- Set `TELEGRAM_BOT_TOKEN` or `channels.telegram.botToken` (env wins).
+- Optional: set `channels.telegram.groups` (with `channels.telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `channels.telegram.allowFrom` or `channels.telegram.webhookUrl` as needed.
 
 ```json5
 {
-  telegram: {
-    botToken: "123456:ABCDEF"
+  channels: {
+    telegram: {
+      botToken: "123456:ABCDEF"
+    }
   }
 }
 ```
 
 ### [Slack](https://docs.clawd.bot/channels/slack)
 
-- Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `slack.botToken` + `slack.appToken`).
+- Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `channels.slack.botToken` + `channels.slack.appToken`).
 
 ### [Discord](https://docs.clawd.bot/channels/discord)
 
-- Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
+- Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
+- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.dm.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
 
 ```json5
 {
-  discord: {
-    token: "1234abcd"
+  channels: {
+    discord: {
+      token: "1234abcd"
+    }
   }
 }
 ```
 
 ### [Signal](https://docs.clawd.bot/channels/signal)
 
-- Requires `signal-cli` and a `signal` config section.
+- Requires `signal-cli` and a `channels.signal` config section.
 
 ### [iMessage](https://docs.clawd.bot/channels/imessage)
 
 - macOS only; Messages must be signed in.
-- If `imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
+- If `channels.imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [Microsoft Teams](https://docs.clawd.bot/providers/msteams)
+### [Microsoft Teams](https://docs.clawd.bot/channels/msteams)
 
 - Configure a Teams app + Bot Framework, then add a `msteams` config section.
 - Allowlist who can talk via `msteams.allowFrom`; group access via `msteams.groupAllowFrom` or `msteams.groupPolicy: "open"`.

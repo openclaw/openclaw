@@ -387,7 +387,7 @@ Subcommands:
 
 Examples:
 - `clawdbot message send --to +15555550123 --message "Hi"`
-- `clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
+- `clawdbot message poll --channel discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).
@@ -400,7 +400,7 @@ Options:
 - `--session-id <id>`
 - `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
 - `--verbose <on|off>`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
+- `--channel <whatsapp|telegram|discord|slack|signal|imessage>`
 - `--local`
 - `--deliver`
 - `--json`
@@ -443,7 +443,7 @@ Options:
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
 - `--deep` (probe channels)
-- `--usage` (show provider usage/quota)
+- `--usage` (show model provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`
 - `--debug` (alias for `--verbose`)

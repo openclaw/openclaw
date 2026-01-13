@@ -266,7 +266,7 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
-- Example: `clawdbot message send --provider telegram --to 123456789 --message "hi"`.
+- Example: `clawdbot message send --channel telegram --to 123456789 --message "hi"`.
 
 ## Troubleshooting
 

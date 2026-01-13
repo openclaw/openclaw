@@ -192,7 +192,7 @@ clawdbot cron add \
   --session isolated \
   --message "Summarize inbox + calendar for today." \
   --deliver \
-  --provider whatsapp \
+  --channel whatsapp \
   --to "+15551234567"
 ```
 
@@ -205,7 +205,7 @@ clawdbot cron add \
   --session isolated \
   --message "Summarize today; send to the nightly topic." \
   --deliver \
-  --provider telegram \
+  --channel telegram \
   --to "-1001234567890:topic:123"
 ```
 
@@ -220,7 +220,7 @@ clawdbot cron add \
   --model "opus" \
   --thinking high \
   --deliver \
-  --provider whatsapp \
+  --channel whatsapp \
   --to "+15551234567"
 
 Agent selection (multi-agent setups):
