@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.12-3
+
+### Fixes
+- Heartbeat: align the default heartbeat prompt with docs by instructing agents to read `HEARTBEAT.md` when present. (#PR)
+
 ## 2026.1.12-2
 
 ### Fixes
