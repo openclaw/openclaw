@@ -89,4 +89,17 @@ describe("browser tool snapshot maxChars", () => {
       }),
     );
   });
+
+  it("skips the default when maxChars is explicitly zero", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, {
+      action: "snapshot",
+      format: "ai",
+      maxChars: 0,
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
+    const [, opts] = browserClientMocks.browserSnapshot.mock.calls.at(-1) ?? [];
+    expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+  });
 });

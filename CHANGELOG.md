@@ -7,6 +7,7 @@
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
 - Discord/Slack: centralize reply-thread planning so auto-thread replies stay in the created thread without parent reply refs.
 - Update: run `clawdbot doctor --non-interactive` during updates to avoid TTY hangs. (#781 — thanks @ronyrus)
+- Browser tools: treat explicit `maxChars: 0` as unlimited while keeping the default limit only when omitted. (#796 — thanks @gabriel-trigo)
 - Tools: allow Claude/Gemini tool param aliases (`file_path`, `old_string`, `new_string`) while enforcing required params at runtime. (#793 — thanks @hsrvc)
 - Gemini: downgrade tool-call history missing `thought_signature` to avoid INVALID_ARGUMENT errors. (#793 — thanks @hsrvc)
 - Messaging: enforce context isolation for message tool sends across providers (normalized targets + tests). (#793 — thanks @hsrvc)
