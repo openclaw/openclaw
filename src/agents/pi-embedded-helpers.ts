@@ -392,6 +392,11 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  // Check for overloaded errors (Anthropic API capacity)
+  if (isOverloadedErrorMessage(raw)) {
+    return "The AI service is temporarily overloaded. Please try again in a moment.";
+  }
+
   // Keep it short for WhatsApp.
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
@@ -413,6 +418,10 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+  ],
+  overloaded: [
+    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    "overloaded",
   ],
   timeout: [
     "timeout",
@@ -496,6 +505,10 @@ export function isAuthErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
 }
 
+export function isOverloadedErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
@@ -517,6 +530,7 @@ export type FailoverReason =
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isRateLimitErrorMessage(raw)) return "rate_limit";
+  if (isOverloadedErrorMessage(raw)) return "rate_limit"; // Treat overloaded as rate limit for failover
   if (isCloudCodeAssistFormatError(raw)) return "format";
   if (isBillingErrorMessage(raw)) return "billing";
   if (isTimeoutErrorMessage(raw)) return "timeout";
