@@ -5,27 +5,6 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "com.clawdbot", category: "gateway.connection")
 
-enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
-    case last
-    case whatsapp
-    case telegram
-    case discord
-    case slack
-    case signal
-    case imessage
-    case msteams
-    case webchat
-
-    init(raw: String?) {
-        let normalized = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self = GatewayAgentChannel(rawValue: normalized) ?? .last
-    }
-
-    var isDeliverable: Bool { self != .webchat }
-
-    func shouldDeliver(_ deliver: Bool) -> Bool { deliver && self.isDeliverable }
-}
-
 struct GatewayAgentInvocation: Sendable {
     var message: String
     var sessionKey: String = "main"
