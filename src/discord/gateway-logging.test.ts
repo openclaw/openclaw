@@ -36,11 +36,11 @@ describe("attachDiscordGatewayLogging", () => {
     expect(runtime.log).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
-      "discord gateway: WebSocket connection closed with code 1001",
+      "gateway: WebSocket connection closed with code 1001",
     );
     expect(runtime.log).toHaveBeenNthCalledWith(
       2,
-      "discord gateway: Reconnecting with backoff: 1000ms after code 1001",
+      "gateway: Reconnecting with backoff: 1000ms after code 1001",
     );
 
     cleanup();
