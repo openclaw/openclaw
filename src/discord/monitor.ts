@@ -51,7 +51,6 @@ import {
   createReplyDispatcherWithTyping,
 } from "../auto-reply/reply/reply-dispatcher.js";
 import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   isNativeCommandsExplicitlyDisabled,
@@ -1603,7 +1602,7 @@ async function handleDiscordReactionEvent(params: {
   }
 }
 
-function createDiscordNativeCommand(params: {
+export function createDiscordNativeCommand(params: {
   command: {
     name: string;
     description: string;
@@ -1837,7 +1836,7 @@ function createDiscordNativeCommand(params: {
         responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
           .responsePrefix,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-        deliver: async (payload, _info) => {
+        deliver: async (payload) => {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
@@ -1849,24 +1848,23 @@ function createDiscordNativeCommand(params: {
           });
           didReply = true;
         },
-        onError: (err) => {
-          console.error(err);
+        onError: (err, info) => {
+          console.error(`discord slash ${info.kind} reply failed`, err);
         },
       });
 
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        { skillFilter: channelConfig?.skills },
+      await dispatchReplyFromConfig({
+        ctx: ctxPayload,
         cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      for (const reply of replies) {
-        dispatcher.sendFinalReply(reply);
-      }
+        dispatcher,
+        replyOptions: {
+          skillFilter: channelConfig?.skills,
+          disableBlockStreaming:
+            typeof discordConfig?.blockStreaming === "boolean"
+              ? !discordConfig.blockStreaming
+              : undefined,
+        },
+      });
       await dispatcher.waitForIdle();
     }
   })();

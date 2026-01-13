@@ -31,7 +31,6 @@ import {
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   isNativeCommandsExplicitlyDisabled,
@@ -1128,25 +1127,41 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             IsForum: isForum,
           };
 
-          const replyResult = await getReplyFromConfig(
-            ctxPayload,
-            { skillFilter },
+          const disableBlockStreaming =
+            typeof telegramCfg.blockStreaming === "boolean"
+              ? !telegramCfg.blockStreaming
+              : undefined;
+
+          await dispatchReplyWithBufferedBlockDispatcher({
+            ctx: ctxPayload,
             cfg,
-          );
-          const replies = replyResult
-            ? Array.isArray(replyResult)
-              ? replyResult
-              : [replyResult]
-            : [];
-          await deliverReplies({
-            replies,
-            chatId: String(chatId),
-            token: opts.token,
-            runtime,
-            bot,
-            replyToMode,
-            textLimit,
-            messageThreadId,
+            dispatcherOptions: {
+              responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+                .responsePrefix,
+              deliver: async (payload) => {
+                await deliverReplies({
+                  replies: [payload],
+                  chatId: String(chatId),
+                  token: opts.token,
+                  runtime,
+                  bot,
+                  replyToMode,
+                  textLimit,
+                  messageThreadId,
+                });
+              },
+              onError: (err, info) => {
+                runtime.error?.(
+                  danger(
+                    `telegram slash ${info.kind} reply failed: ${String(err)}`,
+                  ),
+                );
+              },
+            },
+            replyOptions: {
+              skillFilter,
+              disableBlockStreaming,
+            },
           });
         });
       }
