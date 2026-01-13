@@ -31,15 +31,19 @@ describe("startTelegramWebhook", () => {
   it("starts server, registers webhook, and serves health", async () => {
     createTelegramBotSpy.mockClear();
     const abort = new AbortController();
+    const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
       accountId: "opie",
-      config: { bindings: [] },
+      config: cfg,
       port: 0, // random free port
       abortSignal: abort.signal,
     });
     expect(createTelegramBotSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "opie" }),
+      expect.objectContaining({
+        accountId: "opie",
+        config: expect.objectContaining({ bindings: [] }),
+      }),
     );
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("no address");
@@ -56,14 +60,21 @@ describe("startTelegramWebhook", () => {
     handlerSpy.mockClear();
     createTelegramBotSpy.mockClear();
     const abort = new AbortController();
+    const cfg = { bindings: [] };
     const { server } = await startTelegramWebhook({
       token: "tok",
       accountId: "opie",
-      config: { bindings: [] },
+      config: cfg,
       port: 0,
       abortSignal: abort.signal,
       path: "/hook",
     });
+    expect(createTelegramBotSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "opie",
+        config: expect.objectContaining({ bindings: [] }),
+      }),
+    );
     const addr = server.address();
     if (!addr || typeof addr === "string") throw new Error("no addr");
     await fetch(`http://127.0.0.1:${addr.port}/hook`, { method: "POST" });
