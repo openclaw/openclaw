@@ -34,10 +34,8 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import {
-  createReplyDispatcher,
-  createReplyDispatcherWithTyping,
-} from "../auto-reply/reply/reply-dispatcher.js";
+import { dispatchReplyWithDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1923,31 +1921,28 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         OriginatingTo: `user:${command.user_id}`,
       };
 
-      const dispatcher = createReplyDispatcher({
-        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-          .responsePrefix,
-        deliver: async (payload) => {
-          await deliverSlackSlashReplies({
-            replies: [payload],
-            respond,
-            ephemeral: slashCommand.ephemeral,
-            textLimit,
-          });
-        },
-        onError: (err, info) => {
-          runtime.error?.(
-            danger(`slack slash ${info.kind} reply failed: ${String(err)}`),
-          );
-        },
-      });
-
-      const { counts } = await dispatchReplyFromConfig({
+      const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
-        dispatcher,
+        dispatcherOptions: {
+          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+            .responsePrefix,
+          deliver: async (payload) => {
+            await deliverSlackSlashReplies({
+              replies: [payload],
+              respond,
+              ephemeral: slashCommand.ephemeral,
+              textLimit,
+            });
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              danger(`slack slash ${info.kind} reply failed: ${String(err)}`),
+            );
+          },
+        },
         replyOptions: { skillFilter: channelConfig?.skills },
       });
-      await dispatcher.waitForIdle();
       if (counts.final + counts.tool + counts.block === 0) {
         await deliverSlackSlashReplies({
           replies: [],

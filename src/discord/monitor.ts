@@ -46,10 +46,8 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import {
-  createReplyDispatcher,
-  createReplyDispatcherWithTyping,
-} from "../auto-reply/reply/reply-dispatcher.js";
+import { dispatchReplyWithDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
@@ -1832,31 +1830,29 @@ export function createDiscordNativeCommand(params: {
       };
 
       let didReply = false;
-      const dispatcher = createReplyDispatcher({
-        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-          .responsePrefix,
-        humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-        deliver: async (payload) => {
-          await deliverDiscordInteractionReply({
-            interaction,
-            payload,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-              fallbackLimit: 2000,
-            }),
-            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-            preferFollowUp: didReply,
-          });
-          didReply = true;
-        },
-        onError: (err, info) => {
-          console.error(`discord slash ${info.kind} reply failed`, err);
-        },
-      });
-
-      await dispatchReplyFromConfig({
+      await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
-        dispatcher,
+        dispatcherOptions: {
+          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+            .responsePrefix,
+          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+          deliver: async (payload) => {
+            await deliverDiscordInteractionReply({
+              interaction,
+              payload,
+              textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+                fallbackLimit: 2000,
+              }),
+              maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+              preferFollowUp: didReply,
+            });
+            didReply = true;
+          },
+          onError: (err, info) => {
+            console.error(`discord slash ${info.kind} reply failed`, err);
+          },
+        },
         replyOptions: {
           skillFilter: channelConfig?.skills,
           disableBlockStreaming:
@@ -1865,7 +1861,6 @@ export function createDiscordNativeCommand(params: {
               : undefined,
         },
       });
-      await dispatcher.waitForIdle();
     }
   })();
 }
