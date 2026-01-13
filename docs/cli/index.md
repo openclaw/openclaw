@@ -29,7 +29,7 @@ This page describes the current CLI behavior. If commands change, update this do
 
 Clawdbot uses a lobster palette for CLI output.
 
-- `accent` (#FF5A2D): headings, provider labels, primary highlights.
+- `accent` (#FF5A2D): headings, labels, primary highlights.
 - `accentBright` (#FF7A3D): command names, emphasis.
 - `accentDim` (#D14A22): secondary highlight text.
 - `info` (#FF8A5B): informational values.

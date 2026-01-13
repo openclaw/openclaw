@@ -41,17 +41,17 @@ If you want...
 | Only you can trigger in groups | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
 
 ## Session keys
-- Group sessions use `agent:<agentId>:<provider>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
+- Group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
 - Telegram forum topics add `:topic:<threadId>` to the group id so each topic has its own session.
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
 
 ## Display labels
-- UI labels use `displayName` when available, formatted as `<provider>:<token>`.
+- UI labels use `displayName` when available, formatted as `<channel>:<token>`.
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
 ## Group policy
-Control how group/room messages are handled per provider:
+Control how group/room messages are handled per channel:
 
 ```json5
 {
@@ -107,7 +107,7 @@ Notes:
 
 Quick mental model (evaluation order for group messages):
 1) `groupPolicy` (open/disabled/allowlist)
-2) group allowlists (`*.groups`, `*.groupAllowFrom`, provider-specific allowlist)
+2) group allowlists (`*.groups`, `*.groupAllowFrom`, channel-specific allowlist)
 3) mention gating (`requireMention`, `/activation`)
 
 ## Mention gating (default)
@@ -155,7 +155,7 @@ Notes:
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
-- Group history context is wrapped uniformly across providers; use `messages.groupChat.historyLimit` for the global default and `<provider>.historyLimit` (or `<provider>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
+- Group history context is wrapped uniformly across channels; use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 
 ## Group allowlists
 When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.

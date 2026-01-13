@@ -10,8 +10,8 @@ read_when:
 This app now ships Sparkle auto-updates. Release builds must be Developer ID–signed, zipped, and published with a signed appcast entry.
 
 ## Prereqs
-- Developer ID Application cert installed (`Developer ID Application: Peter Steinberger (Y5PE65HELJ)` is expected).
-- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE`; key lives in `/Users/steipete/Library/CloudStorage/Dropbox/Backup/Sparkle` (same key as Trimmy; public key baked into Info.plist).
+- Developer ID Application cert installed (example: `Developer ID Application: <Developer Name> (<TEAMID>)`).
+- Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE` (path to your Sparkle ed25519 private key; public key baked into Info.plist).
 - Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
   - We use a Keychain profile named `clawdbot-notary`, created from App Store Connect API key env vars in your shell profile:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -32,7 +32,7 @@ BUNDLE_ID=com.clawdbot.mac \
 APP_VERSION=2026.1.11-4 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
-SIGN_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)" \
+SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-app.sh
 
 # Zip for distribution (includes resource forks for Sparkle delta support)
@@ -50,7 +50,7 @@ BUNDLE_ID=com.clawdbot.mac \
 APP_VERSION=2026.1.11-4 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
-SIGN_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)" \
+SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
 
 # Optional: ship dSYM alongside the release
@@ -60,7 +60,7 @@ ditto -c -k --keepParent apps/macos/.build/release/Clawdbot.app.dSYM dist/Clawdb
 ## Appcast entry
 Use the release note generator so Sparkle renders formatted HTML notes:
 ```bash
-SPARKLE_PRIVATE_KEY_FILE=/Users/steipete/Library/CloudStorage/Dropbox/Backup/Sparkle/ed25519-private-key scripts/make_appcast.sh dist/Clawdbot-2026.1.11-4.zip   https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml
+SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/Clawdbot-2026.1.11-4.zip https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml
 ```
 Generates HTML release notes from `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/changelog-to-html.sh)) and embeds them in the appcast entry.
 Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing.

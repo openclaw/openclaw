@@ -62,7 +62,7 @@ WhatsApp / Telegram / Discord
               └─ Android node via Bridge + pairing
 ```
 
-Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
+Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns channel connections and the WebSocket control plane.
 
 ## Network model
 

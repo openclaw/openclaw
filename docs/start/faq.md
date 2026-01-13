@@ -1256,7 +1256,7 @@ If you run the gateway manually, `clawdbot gateway --force` can reclaim the port
 
 ### What’s the fastest way to get more details when something fails?
 
-Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for provider auth, model routing, and RPC errors.
+Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for channel auth, model routing, and RPC errors.
 
 ## Media & attachments
 
@@ -1280,8 +1280,8 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 - Default behavior on DM‑capable channels is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
-  - Approve with: `clawdbot pairing approve <provider> <code>`
-  - Pending requests are capped at **3 per provider**; check `clawdbot pairing list <provider>` if a code didn’t arrive.
+  - Approve with: `clawdbot pairing approve <channel> <code>`
+  - Pending requests are capped at **3 per channel**; check `clawdbot pairing list <channel>` if a code didn’t arrive.
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.

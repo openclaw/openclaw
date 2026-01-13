@@ -30,7 +30,7 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 ## What it can do (today)
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Connections: WhatsApp/Telegram status + QR login + Telegram config (`providers.status`, `web.login.*`, `config.set`)
+- Connections: WhatsApp/Telegram status + QR login + Telegram config (`channels.status`, `web.login.*`, `config.set`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)

@@ -68,9 +68,9 @@ clawdbot doctor
 The Control UI’s **Logs** tab tails the same file using `logs.tail`.
 See [/web/control-ui](/web/control-ui) for how to open it.
 
-### Provider-only logs
+### Channel-only logs
 
-To filter provider activity (WhatsApp/Telegram/etc), use:
+To filter channel activity (WhatsApp/Telegram/etc), use:
 
 ```bash
 clawdbot channels logs --channel whatsapp

@@ -80,7 +80,7 @@ Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - A summary is posted to the main session (prefix `Cron`, configurable).
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
-- If `payload.deliver: true`, output is delivered to a provider; otherwise it stays internal.
+- If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
@@ -94,9 +94,9 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
-- `deliver`: `true` to send output to a provider target.
-- `provider`: `last` or a specific provider.
-- `to`: provider-specific target (phone/chat/channel id).
+- `deliver`: `true` to send output to a channel target.
+- `channel`: `last` or a specific channel.
+- `to`: channel-specific target (phone/chat/channel id).
 - `bestEffortDeliver`: avoid failing the job if delivery fails.
 
 Isolation options (only for `session=isolated`):
@@ -116,12 +116,12 @@ Resolution priority:
 2. Hook-specific defaults (e.g., `hooks.gmail.model`)
 3. Agent config default
 
-### Delivery (provider + target)
-Isolated jobs can deliver output to a provider. The job payload can specify:
-- `provider`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
-- `to`: provider-specific recipient target
+### Delivery (channel + target)
+Isolated jobs can deliver output to a channel. The job payload can specify:
+- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
+- `to`: channel-specific recipient target
 
-If `provider` or `to` is omitted, cron can fall back to the main session’s “last route”
+If `channel` or `to` is omitted, cron can fall back to the main session’s “last route”
 (the last place the agent replied).
 
 Target format reminders:
