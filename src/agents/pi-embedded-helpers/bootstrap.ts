@@ -9,8 +9,31 @@ import type { EmbeddedContextFile } from "./types.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;
+  thoughtSignature?: unknown;
   [key: string]: unknown;
 };
+
+type ThoughtSignatureSanitizeOptions = {
+  allowBase64Only?: boolean;
+  includeCamelCase?: boolean;
+};
+
+function isBase64Signature(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const compact = trimmed.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/=_-]+$/.test(compact)) return false;
+  const isUrl = compact.includes("-") || compact.includes("_");
+  try {
+    const buf = Buffer.from(compact, isUrl ? "base64url" : "base64");
+    if (buf.length === 0) return false;
+    const encoded = buf.toString(isUrl ? "base64url" : "base64");
+    const normalize = (input: string) => input.replace(/=+$/g, "");
+    return normalize(encoded) === normalize(compact);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Strips Claude-style thought_signature fields from content blocks.
@@ -18,17 +41,33 @@ type ContentBlockWithSignature = {
  * Gemini expects thought signatures as base64-encoded bytes, but Claude stores message ids
  * like "msg_abc123...". We only strip "msg_*" to preserve any provider-valid signatures.
  */
-export function stripThoughtSignatures<T>(content: T): T {
+export function stripThoughtSignatures<T>(
+  content: T,
+  options?: ThoughtSignatureSanitizeOptions,
+): T {
   if (!Array.isArray(content)) return content;
+  const allowBase64Only = options?.allowBase64Only ?? false;
+  const includeCamelCase = options?.includeCamelCase ?? false;
+  const shouldStripSignature = (value: unknown): boolean => {
+    if (!allowBase64Only) {
+      return typeof value === "string" && value.startsWith("msg_");
+    }
+    return typeof value !== "string" || !isBase64Signature(value);
+  };
   return content.map((block) => {
     if (!block || typeof block !== "object") return block;
     const rec = block as ContentBlockWithSignature;
-    const signature = rec.thought_signature;
-    if (typeof signature !== "string" || !signature.startsWith("msg_")) {
+    const stripSnake = shouldStripSignature(rec.thought_signature);
+    const stripCamel = includeCamelCase
+      ? shouldStripSignature(rec.thoughtSignature)
+      : false;
+    if (!stripSnake && !stripCamel) {
       return block;
     }
-    const { thought_signature: _signature, ...rest } = rec;
-    return rest;
+    const next = { ...rec };
+    if (stripSnake) delete next.thought_signature;
+    if (stripCamel) delete next.thoughtSignature;
+    return next;
   }) as T;
 }
 

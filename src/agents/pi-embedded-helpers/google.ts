@@ -23,6 +23,7 @@ export { sanitizeGoogleTurnOrdering };
 type GeminiToolCallBlock = {
   type?: unknown;
   thought_signature?: unknown;
+  thoughtSignature?: unknown;
   id?: unknown;
   toolCallId?: unknown;
   name?: unknown;
@@ -118,7 +119,8 @@ export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[]
         const blockRecord = block as GeminiToolCallBlock;
         const type = blockRecord.type;
         if (type === "toolCall" || type === "functionCall" || type === "toolUse") {
-          const hasSignature = Boolean(blockRecord.thought_signature);
+          const signature = blockRecord.thought_signature ?? blockRecord.thoughtSignature;
+          const hasSignature = Boolean(signature);
           if (!hasSignature) {
             const id =
               typeof blockRecord.id === "string"
