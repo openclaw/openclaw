@@ -2,13 +2,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  FileOperations,
 } from "@mariozechner/pi-coding-agent";
-import {
-  computeFileLists,
-  formatFileOperations,
-  generateSummary,
-  estimateTokens,
-} from "@mariozechner/pi-coding-agent";
+import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 
@@ -16,10 +12,40 @@ const MAX_CHUNK_RATIO = 0.4;
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
-  "This summary covers the prefix of a split turn. Focus on the original request,"
-  + " early progress, and any details needed to understand the retained suffix.";
+  "This summary covers the prefix of a split turn. Focus on the original request," +
+  " early progress, and any details needed to understand the retained suffix.";
 
-function chunkMessages(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
+function computeFileLists(fileOps: FileOperations): {
+  readFiles: string[];
+  modifiedFiles: string[];
+} {
+  const modified = new Set([...fileOps.edited, ...fileOps.written]);
+  const readFiles = [...fileOps.read].filter((f) => !modified.has(f)).sort();
+  const modifiedFiles = [...modified].sort();
+  return { readFiles, modifiedFiles };
+}
+
+function formatFileOperations(
+  readFiles: string[],
+  modifiedFiles: string[],
+): string {
+  const sections: string[] = [];
+  if (readFiles.length > 0) {
+    sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+  }
+  if (modifiedFiles.length > 0) {
+    sections.push(
+      `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`,
+    );
+  }
+  if (sections.length === 0) return "";
+  return `\n\n${sections.join("\n\n")}`;
+}
+
+function chunkMessages(
+  messages: AgentMessage[],
+  maxTokens: number,
+): AgentMessage[][] {
   if (messages.length === 0) return [];
 
   const chunks: AgentMessage[][] = [];
@@ -28,10 +54,7 @@ function chunkMessages(messages: AgentMessage[], maxTokens: number): AgentMessag
 
   for (const message of messages) {
     const messageTokens = estimateTokens(message);
-    if (
-      currentChunk.length > 0 &&
-      currentTokens + messageTokens > maxTokens
-    ) {
+    if (currentChunk.length > 0 && currentTokens + messageTokens > maxTokens) {
       chunks.push(currentChunk);
       currentChunk = [];
       currentTokens = 0;
@@ -144,7 +167,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
 
       let summary = historySummary;
-      if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
+      if (
+        preparation.isSplitTurn &&
+        preparation.turnPrefixMessages.length > 0
+      ) {
         const prefixSummary = await summarizeChunks({
           messages: preparation.turnPrefixMessages,
           model,
