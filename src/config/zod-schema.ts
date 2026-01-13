@@ -1169,6 +1169,7 @@ const AgentDefaultsSchema = z
       .optional(),
     workspace: z.string().optional(),
     skipBootstrap: z.boolean().optional(),
+    bootstrapMaxChars: z.number().int().positive().optional(),
     userTimezone: z.string().optional(),
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),

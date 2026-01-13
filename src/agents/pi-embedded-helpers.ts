@@ -53,23 +53,57 @@ export function stripThoughtSignatures<T>(content: T): T {
   }) as T;
 }
 
-const MAX_BOOTSTRAP_CHARS = 4000;
-const BOOTSTRAP_HEAD_CHARS = 2800;
-const BOOTSTRAP_TAIL_CHARS = 800;
+export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
+const BOOTSTRAP_HEAD_RATIO = 0.7;
+const BOOTSTRAP_TAIL_RATIO = 0.2;
 
-function trimBootstrapContent(content: string, fileName: string): string {
+type TrimBootstrapResult = {
+  content: string;
+  truncated: boolean;
+  maxChars: number;
+  originalLength: number;
+};
+
+export function resolveBootstrapMaxChars(cfg?: ClawdbotConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_MAX_CHARS;
+}
+
+function trimBootstrapContent(
+  content: string,
+  fileName: string,
+  maxChars: number,
+): TrimBootstrapResult {
   const trimmed = content.trimEnd();
-  if (trimmed.length <= MAX_BOOTSTRAP_CHARS) return trimmed;
+  if (trimmed.length <= maxChars) {
+    return {
+      content: trimmed,
+      truncated: false,
+      maxChars,
+      originalLength: trimmed.length,
+    };
+  }
 
-  const head = trimmed.slice(0, BOOTSTRAP_HEAD_CHARS);
-  const tail = trimmed.slice(-BOOTSTRAP_TAIL_CHARS);
-  return [
+  const headChars = Math.max(1, Math.floor(maxChars * BOOTSTRAP_HEAD_RATIO));
+  const tailChars = Math.max(1, Math.floor(maxChars * BOOTSTRAP_TAIL_RATIO));
+  const head = trimmed.slice(0, headChars);
+  const tail = trimmed.slice(-tailChars);
+  const contentWithMarker = [
     head,
     "",
     `[...truncated, read ${fileName} for full content...]`,
     "",
     tail,
   ].join("\n");
+  return {
+    content: contentWithMarker,
+    truncated: true,
+    maxChars,
+    originalLength: trimmed.length,
+  };
 }
 
 export async function ensureSessionHeader(params: {
@@ -254,7 +288,9 @@ export function sanitizeGoogleTurnOrdering(
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
+  opts?: { warn?: (message: string) => void; maxChars?: number },
 ): EmbeddedContextFile[] {
+  const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
     if (file.missing) {
@@ -264,11 +300,20 @@ export function buildBootstrapContextFiles(
       });
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name);
-    if (!trimmed) continue;
+    const trimmed = trimBootstrapContent(
+      file.content ?? "",
+      file.name,
+      maxChars,
+    );
+    if (!trimmed.content) continue;
+    if (trimmed.truncated) {
+      opts?.warn?.(
+        `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
+      );
+    }
     result.push({
       path: file.name,
-      content: trimmed,
+      content: trimmed.content,
     });
   }
   return result;

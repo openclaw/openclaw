@@ -99,6 +99,7 @@ import {
   isRateLimitAssistantError,
   isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
+  resolveBootstrapMaxChars,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   validateAnthropicTurns,
@@ -1152,7 +1153,12 @@ export async function compactEmbeddedPiSession(params: {
           await loadWorkspaceBootstrapFiles(effectiveWorkspace),
           params.sessionKey ?? params.sessionId,
         );
-        const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+        const sessionLabel = params.sessionKey ?? params.sessionId;
+        const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+          maxChars: resolveBootstrapMaxChars(params.config),
+          warn: (message) =>
+            log.warn(`${message} (sessionKey=${sessionLabel})`),
+        });
         const runAbortController = new AbortController();
         const tools = createClawdbotCodingTools({
           exec: {
@@ -1584,7 +1590,12 @@ export async function runEmbeddedPiAgent(params: {
             await loadWorkspaceBootstrapFiles(effectiveWorkspace),
             params.sessionKey ?? params.sessionId,
           );
-          const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+          const sessionLabel = params.sessionKey ?? params.sessionId;
+          const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+            maxChars: resolveBootstrapMaxChars(params.config),
+            warn: (message) =>
+              log.warn(`${message} (sessionKey=${sessionLabel})`),
+          });
           // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
           // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
           const tools = createClawdbotCodingTools({

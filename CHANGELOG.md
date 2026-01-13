@@ -5,6 +5,7 @@
 ### Changes
 - Models/Moonshot: add Kimi K2 0905 + turbo/thinking variants to the preset + docs. (#818 — thanks @mickahouan)
 - Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
+- Agents: make workspace bootstrap truncation configurable (default 20k) and warn when files are truncated.
 
 ### Fixes
 - Typing: keep typing indicators alive during tool execution. (#450, #447 — thanks @thewilloftheshadow)

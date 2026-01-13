@@ -21,6 +21,7 @@ import {
   classifyFailoverReason,
   type EmbeddedContextFile,
   isFailoverErrorMessage,
+  resolveBootstrapMaxChars,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -493,7 +494,11 @@ export async function runCliAgent(params: {
     await loadWorkspaceBootstrapFiles(workspaceDir),
     params.sessionKey ?? params.sessionId,
   );
-  const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+  const sessionLabel = params.sessionKey ?? params.sessionId;
+  const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+    maxChars: resolveBootstrapMaxChars(params.config),
+    warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+  });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,

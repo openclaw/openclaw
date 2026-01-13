@@ -1075,6 +1075,20 @@ Use this for pre-seeded deployments where your workspace files come from a repo.
 }
 ```
 
+### `agents.defaults.bootstrapMaxChars`
+
+Max characters of each workspace bootstrap file injected into the system prompt
+before truncation. Default: `20000`.
+
+When a file exceeds this limit, Clawdbot logs a warning and injects a truncated
+head/tail with a marker.
+
+```json5
+{
+  agents: { defaults: { bootstrapMaxChars: 20000 } }
+}
+```
+
 ### `agents.defaults.userTimezone`
 
 Sets the user’s timezone for **system prompt context** (not for timestamps in
