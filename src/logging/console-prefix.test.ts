@@ -9,6 +9,12 @@ describe("stripRedundantSubsystemPrefixForConsole", () => {
     ).toBe("hello");
   });
 
+  it("drops '<Subsystem>:' prefix case-insensitively", () => {
+    expect(
+      stripRedundantSubsystemPrefixForConsole("WhatsApp: hello", "whatsapp"),
+    ).toBe("hello");
+  });
+
   it("drops '<subsystem> ' prefix", () => {
     expect(
       stripRedundantSubsystemPrefixForConsole(
@@ -16,6 +22,15 @@ describe("stripRedundantSubsystemPrefixForConsole", () => {
         "discord",
       ),
     ).toBe("gateway: closed");
+  });
+
+  it("drops '[subsystem]' prefix", () => {
+    expect(
+      stripRedundantSubsystemPrefixForConsole(
+        "[discord] connection stalled",
+        "discord",
+      ),
+    ).toBe("connection stalled");
   });
 
   it("keeps messages that do not start with the subsystem", () => {
