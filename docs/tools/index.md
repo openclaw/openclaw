@@ -179,6 +179,7 @@ Core actions:
 Notes:
 - `send` routes WhatsApp via the Gateway; other providers go direct.
 - `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
+- When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
 
 ### `cron`
 Manage Gateway cron jobs and wakeups.

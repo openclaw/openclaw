@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { normalizeTargetForProvider } from "../../agents/pi-embedded-messaging.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -125,6 +126,56 @@ function parseButtonsParam(params: Record<string, unknown>): void {
   }
 }
 
+const CONTEXT_GUARDED_ACTIONS = new Set<ProviderMessageActionName>([
+  "send",
+  "poll",
+  "thread-create",
+  "thread-reply",
+  "sticker",
+]);
+
+function resolveContextGuardTarget(
+  action: ProviderMessageActionName,
+  params: Record<string, unknown>,
+): string | undefined {
+  if (!CONTEXT_GUARDED_ACTIONS.has(action)) return undefined;
+
+  if (action === "thread-reply" || action === "thread-create") {
+    return (
+      readStringParam(params, "channelId") ?? readStringParam(params, "to")
+    );
+  }
+
+  return readStringParam(params, "to") ?? readStringParam(params, "channelId");
+}
+
+function enforceContextIsolation(params: {
+  provider: ProviderId;
+  action: ProviderMessageActionName;
+  params: Record<string, unknown>;
+  toolContext?: ProviderThreadingToolContext;
+}): void {
+  const currentTarget = params.toolContext?.currentChannelId?.trim();
+  if (!currentTarget) return;
+  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) return;
+
+  const target = resolveContextGuardTarget(params.action, params.params);
+  if (!target) return;
+
+  const normalizedTarget =
+    normalizeTargetForProvider(params.provider, target) ?? target.toLowerCase();
+  const normalizedCurrent =
+    normalizeTargetForProvider(params.provider, currentTarget) ??
+    currentTarget.toLowerCase();
+
+  if (!normalizedTarget || !normalizedCurrent) return;
+  if (normalizedTarget === normalizedCurrent) return;
+
+  throw new Error(
+    `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (provider=${params.provider}).`,
+  );
+}
+
 async function resolveProvider(
   cfg: ClawdbotConfig,
   params: Record<string, unknown>,
@@ -149,6 +200,13 @@ export async function runMessageAction(
   const accountId =
     readStringParam(params, "accountId") ?? input.defaultAccountId;
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  enforceContextIsolation({
+    provider,
+    action,
+    params,
+    toolContext: input.toolContext,
+  });
 
   const gateway = input.gateway
     ? {

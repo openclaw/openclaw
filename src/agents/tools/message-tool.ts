@@ -2,6 +2,10 @@ import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../gateway/protocol/client-info.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import {
   listProviderMessageActions,
@@ -12,10 +16,6 @@ import {
   type ProviderMessageActionName,
 } from "../../providers/plugins/types.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../utils/message-provider.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -184,7 +184,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         url: readStringParam(params, "gatewayUrl", { trim: false }),
         token: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: readNumberParam(params, "timeoutMs"),
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         clientDisplayName: "agent",
         mode: GATEWAY_CLIENT_MODES.BACKEND,
       };

@@ -102,6 +102,11 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.telegram?.replyToMode ?? "first",
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
     },
   },
   whatsapp: {
@@ -142,6 +147,13 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
         return [escaped, `@${escaped}`];
       },
     },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
+    },
   },
   discord: {
     id: "discord",
@@ -175,6 +187,11 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.discord?.replyToMode ?? "off",
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
     },
   },
   slack: {
@@ -246,6 +263,13 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
           )
           .filter(Boolean),
     },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
+    },
   },
   imessage: {
     id: "imessage",
@@ -266,6 +290,13 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
     groups: {
       resolveRequireMention: resolveIMessageGroupRequireMention,
     },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
+    },
   },
   msteams: {
     id: "msteams",
@@ -279,6 +310,13 @@ const DOCKS: Record<ProviderId, ProviderDock> = {
     config: {
       resolveAllowFrom: ({ cfg }) => cfg.msteams?.allowFrom ?? [],
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+    },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => ({
+        currentChannelId: context.To?.trim() || undefined,
+        currentThreadTs: context.ReplyToId,
+        hasRepliedRef,
+      }),
     },
   },
 };
