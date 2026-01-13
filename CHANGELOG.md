@@ -1,9 +1,10 @@
 # Changelog
 
-## 2026.1.13 (Unreleased)
+## 2026.1.13
 
 ### Fixes
 - Postinstall: treat already-applied pnpm patches as no-ops to avoid npm/bun install failures.
+- Packaging: pin `@mariozechner/pi-ai` to 0.45.7 and refresh patched dependency to match npm resolution.
 
 ## 2026.1.12-2
 

@@ -8,9 +8,9 @@ overrides:
   '@sinclair/typebox': 0.34.47
 
 patchedDependencies:
-  '@mariozechner/pi-ai@0.45.3':
-    hash: c8bf66c9ab4dc6fb8cb630102c7dad4a9c288ee4c9edb9538d69d6a1eadf5f94
-    path: patches/@mariozechner__pi-ai@0.45.3.patch
+  '@mariozechner/pi-ai@0.45.7':
+    hash: 899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd
+    path: patches/@mariozechner__pi-ai@0.45.7.patch
 
 importers:
 
@@ -35,8 +35,8 @@ importers:
         specifier: ^0.45.3
         version: 0.45.3(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
-        specifier: ^0.45.3
-        version: 0.45.3(patch_hash=c8bf66c9ab4dc6fb8cb630102c7dad4a9c288ee4c9edb9538d69d6a1eadf5f94)(ws@8.19.0)(zod@4.3.5)
+        specifier: 0.45.7
+        version: 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.45.3
         version: 0.45.3(ws@8.19.0)(zod@4.3.5)
@@ -1009,8 +1009,8 @@ packages:
     resolution: {integrity: sha512-yWgIKuhhCOxLdbNUcX5oNELdUSqkvnoYsXWOq6/IDiolvQMag4fWNsabeAd2OqiueH8k9sFx3G5cFR53PtHLEw==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.45.3':
-    resolution: {integrity: sha512-PVL4xrDfP24v86ZZBAw+3HMqqDjq/RyIpQc+0c/QKp2Ldu4SlX7zYqzDDeXR1PWNvxVPdHwIihMnoXOh/361iA==}
+  '@mariozechner/pi-ai@0.45.7':
+    resolution: {integrity: sha512-RsOLVYdR3gpREx35cDPIIM3z2KyJb/4NOWSN/CP+HRUJ4sJR+W4yo6k/6mpmDncSM+eB8NJZ8wi+WYFJVEbUVw==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -5106,7 +5106,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.45.3(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.45.3(patch_hash=c8bf66c9ab4dc6fb8cb630102c7dad4a9c288ee4c9edb9538d69d6a1eadf5f94)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.45.3
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -5117,7 +5117,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.45.3(patch_hash=c8bf66c9ab4dc6fb8cb630102c7dad4a9c288ee4c9edb9538d69d6a1eadf5f94)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@aws-sdk/client-bedrock-runtime': 3.967.0
@@ -5144,7 +5144,7 @@ snapshots:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.2
       '@mariozechner/pi-agent-core': 0.45.3(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.45.3(patch_hash=c8bf66c9ab4dc6fb8cb630102c7dad4a9c288ee4c9edb9538d69d6a1eadf5f94)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.45.3
       chalk: 5.6.2
       cli-highlight: 2.1.11
