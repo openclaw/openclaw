@@ -65,7 +65,14 @@ function mergeConfig(
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
-  const remote = overrides?.remote ?? defaults?.remote;
+  const hasRemote = Boolean(defaults?.remote || overrides?.remote);
+  const remote = hasRemote
+    ? {
+        baseUrl: overrides?.remote?.baseUrl ?? defaults?.remote?.baseUrl,
+        apiKey: overrides?.remote?.apiKey ?? defaults?.remote?.apiKey,
+        headers: overrides?.remote?.headers ?? defaults?.remote?.headers,
+      }
+    : undefined;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "openai";
   const model = overrides?.model ?? defaults?.model ?? DEFAULT_MODEL;
   const local = {

@@ -120,6 +120,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
+  "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
@@ -242,6 +243,8 @@ const FIELD_HELP: Record<string, string> = {
     "Custom OpenAI-compatible base URL (e.g. for Gemini/OpenRouter proxies).",
   "agents.defaults.memorySearch.remote.apiKey":
     "Custom API key for the remote embedding provider.",
+  "agents.defaults.memorySearch.remote.headers":
+    "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.local.modelPath":
     "Local GGUF model path or hf: URI (node-llama-cpp).",
   "agents.defaults.memorySearch.fallback":
