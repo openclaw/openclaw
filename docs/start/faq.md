@@ -231,6 +231,14 @@ Clawdbot also runs a **silent pre-compaction memory flush** to remind the model
 to write durable notes before auto-compaction. This only runs when the workspace
 is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
 
+### Why does memory search need an OpenAI API key if I already signed in with Codex?
+
+Vector memory search uses **embeddings**. Codex OAuth only covers
+chat/completions and does **not** grant embeddings access, so the upstream
+memory indexer needs a real OpenAI API key (`OPENAI_API_KEY` or
+`models.providers.openai.apiKey`). If you don’t want to set a key, switch to
+`memorySearch.provider = "local"` or set `memorySearch.fallback = "none"`.
+
 ## Where things live on disk
 
 ### Where does Clawdbot store its data?
