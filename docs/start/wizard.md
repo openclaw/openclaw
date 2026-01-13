@@ -119,7 +119,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - Linux (and Windows via WSL2): systemd user unit
      - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
-   - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
+   - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
@@ -127,7 +127,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 8) **Skills (recommended)**
    - Reads the available skills and checks requirements.
-   - Lets you choose a node manager: **npm / pnpm / bun**.
+   - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
    - Installs optional dependencies (some use Homebrew on macOS).
 
 9) **Finish**

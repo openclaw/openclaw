@@ -79,7 +79,7 @@ What you’ll choose:
 - **Auth**: OpenAI Code (Codex) subscription (OAuth) or API keys. For Anthropic we recommend an API key; `claude setup-token` is also supported.
 - **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, etc.
 - **Daemon**: background install (launchd/systemd; WSL2 uses systemd)
-  - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
+  - **Runtime**: Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 - **Gateway token**: the wizard generates one by default (even on loopback) and stores it in `gateway.auth.token`.
 
 Wizard doc: [Wizard](/start/wizard)
@@ -110,11 +110,8 @@ clawdbot gateway --port 18789 --verbose
 Dashboard (local loopback): `http://127.0.0.1:18789/`
 If a token is configured, paste it into the Control UI settings (stored as `connect.params.auth.token`).
 
-⚠️ **WhatsApp + Bun warning:** Baileys (WhatsApp Web library) uses a WebSocket
-path that is currently incompatible with Bun and can cause memory corruption on
-reconnect. If you use WhatsApp, run the Gateway with **Node** until this is
-resolved. Baileys: https://github.com/WhiskeySockets/Baileys · Bun issue:
-https://github.com/oven-sh/bun/issues/5951
+⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
+providers. If you use WhatsApp or Telegram, run the Gateway with **Node**.
 
 ## 4) Pair + connect your first chat surface
 

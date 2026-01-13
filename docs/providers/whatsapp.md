@@ -310,4 +310,5 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 - Fix: `clawdbot doctor` (or restart the gateway). If it persists, relink via `providers login` and inspect `clawdbot logs --follow`.
 
 **Bun runtime**
-- WhatsApp uses Baileys; run the gateway with **Node** for WhatsApp. (See Getting Started runtime note.)
+- Bun is **not recommended**. WhatsApp (Baileys) and Telegram are unreliable on Bun.
+  Run the gateway with **Node**. (See Getting Started runtime note.)

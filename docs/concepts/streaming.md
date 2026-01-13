@@ -92,6 +92,9 @@ This maps to:
 `*.blockStreaming` is explicitly set to `true`. Telegram can stream drafts
 (`telegram.streamMode`) without block replies.
 
+Config location reminder: the `blockStreaming*` defaults live under
+`agents.defaults`, not the root config.
+
 ## Telegram draft streaming (token-ish)
 
 Telegram is the only provider with draft streaming:

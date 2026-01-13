@@ -42,10 +42,6 @@ npm i -g clawdhub
 pnpm add -g clawdhub
 ```
 
-```bash
-bun add -g clawdhub
-```
-
 ## How it fits into Clawdbot
 
 By default, the CLI installs skills into `./skills` under your current working directory. If a Clawdbot workspace is configured, `clawdhub` falls back to that workspace unless you override `--workdir` (or `CLAWDHUB_WORKDIR`). Clawdbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
