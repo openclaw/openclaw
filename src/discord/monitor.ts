@@ -661,7 +661,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (!gateway?.isConnected) {
         runtime.log?.(
           danger(
-            `[discord] connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
           ),
         );
         gateway?.disconnect();
@@ -681,7 +681,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         : undefined,
       abortSignal: opts.abortSignal,
       onGatewayError: (err) => {
-        runtime.error?.(danger(`gateway error: ${String(err)}`));
+        runtime.error?.(danger(`discord gateway error: ${String(err)}`));
       },
       shouldStopOnError: (err) => {
         const message = String(err);
