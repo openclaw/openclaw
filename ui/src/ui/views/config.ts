@@ -278,12 +278,54 @@ function buildModelPresetPatches(base: Record<string, unknown>): Array<{
           contextWindow: 256000,
           maxTokens: 8192,
         },
+        {
+          id: "kimi-k2-turbo-preview",
+          name: "Kimi K2 Turbo",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 256000,
+          maxTokens: 8192,
+        },
+        {
+          id: "kimi-k2-thinking",
+          name: "Kimi K2 Thinking",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 256000,
+          maxTokens: 8192,
+        },
+        {
+          id: "kimi-k2-thinking-turbo",
+          name: "Kimi K2 Thinking Turbo",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 256000,
+          maxTokens: 8192,
+        },
       ],
     });
   }
   moonshot.push(setPrimary("moonshot/kimi-k2-0905-preview"));
   const moonshotAlias = safeAlias("moonshot/kimi-k2-0905-preview", "Kimi K2");
   if (moonshotAlias) moonshot.push(moonshotAlias);
+  const moonshotTurboAlias = safeAlias(
+    "moonshot/kimi-k2-turbo-preview",
+    "Kimi K2 Turbo",
+  );
+  if (moonshotTurboAlias) moonshot.push(moonshotTurboAlias);
+  const moonshotThinkingAlias = safeAlias(
+    "moonshot/kimi-k2-thinking",
+    "Kimi K2 Thinking",
+  );
+  if (moonshotThinkingAlias) moonshot.push(moonshotThinkingAlias);
+  const moonshotThinkingTurboAlias = safeAlias(
+    "moonshot/kimi-k2-thinking-turbo",
+    "Kimi K2 Thinking Turbo",
+  );
+  if (moonshotThinkingTurboAlias) moonshot.push(moonshotThinkingTurboAlias);
 
   return [
     {
@@ -302,7 +344,8 @@ function buildModelPresetPatches(base: Record<string, unknown>): Array<{
     {
       id: "moonshot",
       title: "Kimi (Moonshot)",
-      description: "Adds Moonshot provider config + sets default model to kimi-k2-0905-preview.",
+      description:
+        "Adds Moonshot provider config + sets default model to kimi-k2-0905-preview (includes Kimi K2 turbo/thinking variants).",
       patches: moonshot,
     },
   ];

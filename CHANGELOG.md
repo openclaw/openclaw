@@ -2,6 +2,9 @@
 
 ## 2026.1.12-4
 
+### Changes
+- Models/Moonshot: add Kimi K2 turbo + thinking variants to the preset + docs. (#818 — thanks @mickahouan)
+
 ### Fixes
 - Onboarding/Configure: refuse to proceed with invalid configs; run `clawdbot doctor` first to avoid wiping custom fields. (#764 — thanks @mukhtharcm)
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)

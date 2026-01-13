@@ -117,6 +117,8 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2-0905-preview`
+- Other Kimi K2 model IDs: `moonshot/kimi-k2-turbo-preview`, `moonshot/kimi-k2-thinking`,
+  `moonshot/kimi-k2-thinking-turbo`
 - CLI: `clawdbot onboard --auth-choice moonshot-api-key`
 
 ```json5
