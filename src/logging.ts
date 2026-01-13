@@ -430,7 +430,11 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<
 > = {
   "gmail-watcher": "blue",
 };
-const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
+const SUBSYSTEM_PREFIXES_TO_DROP = [
+  "gateway",
+  "channels",
+  "providers",
+] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
 

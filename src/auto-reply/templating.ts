@@ -1,7 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 
-/** Valid provider channels for message routing. */
+/** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
 
 export type MsgContext = {

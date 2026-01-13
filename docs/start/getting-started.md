@@ -111,7 +111,7 @@ Dashboard (local loopback): `http://127.0.0.1:18789/`
 If a token is configured, paste it into the Control UI settings (stored as `connect.params.auth.token`).
 
 ⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
-providers. If you use WhatsApp or Telegram, run the Gateway with **Node**.
+channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
 
 ## 4) Pair + connect your first chat surface
 

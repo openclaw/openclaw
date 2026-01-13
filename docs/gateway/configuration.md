@@ -1148,7 +1148,7 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 ```
 
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
-streaming, final replies) across providers unless already present.
+streaming, final replies) across channels unless already present.
 
 If `messages.responsePrefix` is unset, no prefix is applied by default.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
@@ -1160,7 +1160,7 @@ WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (dep
 agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
-on providers that support reactions (Slack/Discord/Telegram). Defaults to the
+on channels that support reactions (Slack/Discord/Telegram). Defaults to the
 active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
 
 `ackReactionScope` controls when reactions fire:

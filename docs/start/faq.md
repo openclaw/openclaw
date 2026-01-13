@@ -1428,15 +1428,15 @@ Notes:
 
 Block streaming only sends **completed text blocks**. Common reasons you see a single message:
 - `agents.defaults.blockStreamingDefault` is still `"off"`.
-- `telegram.blockStreaming` is set to `false`.
-- `telegram.streamMode` is `partial` or `block` **and draft streaming is active**
+- `channels.telegram.blockStreaming` is set to `false`.
+- `channels.telegram.streamMode` is `partial` or `block` **and draft streaming is active**
   (private chat + topics). Draft streaming disables block streaming in that case.
 - Your `minChars` / coalesce settings are too high, so chunks get merged.
 - The model emits one large text block (no mid‑reply flush points).
 
 Fix checklist:
 1) Put block streaming settings under `agents.defaults`, not the root.
-2) Set `telegram.streamMode: "off"` if you want real multi‑message block replies.
+2) Set `channels.telegram.streamMode: "off"` if you want real multi‑message block replies.
 3) Use smaller chunk/coalesce thresholds while debugging.
 
 See [Streaming](/concepts/streaming).
@@ -1444,17 +1444,17 @@ See [Streaming](/concepts/streaming).
 ### Discord doesn’t reply in my server even with `requireMention: false`. Why?
 
 `requireMention` only controls mention‑gating **after** the channel passes allowlists.
-By default `discord.groupPolicy` is **allowlist**, so guild channels must be explicitly enabled.
+By default `channels.discord.groupPolicy` is **allowlist**, so guild channels must be explicitly enabled.
 
 Fix checklist:
-1) Set `discord.groupPolicy: "open"` **or** add the guild/channel allowlist.
-2) Use **numeric channel IDs** in `discord.guilds.<guildId>.channels`.
-3) Put `requireMention: false` **under** `discord.guilds` (global or per‑channel).
-   Top‑level `discord.requireMention` is not a supported key.
+1) Set `channels.discord.groupPolicy: "open"` **or** add the guild/channel allowlist.
+2) Use **numeric channel IDs** in `channels.discord.guilds.<guildId>.channels`.
+3) Put `requireMention: false` **under** `channels.discord.guilds` (global or per‑channel).
+   Top‑level `channels.discord.requireMention` is not a supported key.
 4) Ensure the bot has **Message Content Intent** and channel permissions.
-5) Run `clawdbot providers status --probe` for audit hints.
+5) Run `clawdbot channels status --probe` for audit hints.
 
-Docs: [Discord](/providers/discord), [Providers troubleshooting](/providers/troubleshooting).
+Docs: [Discord](/channels/discord), [Channels troubleshooting](/channels/troubleshooting).
 
 ### Cloud Code Assist API error: invalid tool schema (400). What now?
 
