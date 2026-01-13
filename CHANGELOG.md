@@ -7,6 +7,7 @@
 - Memory: allow custom OpenAI-compatible embedding endpoints for memory search (remote baseUrl/apiKey/headers). (#819 — thanks @mukhtharcm)
 
 ### Fixes
+- System events: include local timestamps when events are injected into prompts. (#245 — thanks @thewilloftheshadow)
 - Cron: accept `jobId` aliases for cron update/run/remove params in gateway validation. (#252 — thanks @thewilloftheshadow)
 - Models/Google: normalize Gemini 3 model ids to preview variants before runtime selection. (#795 — thanks @thewilloftheshadow)
 - TUI: keep the last streamed response instead of replacing it with “(no output)”. (#747 — thanks @thewilloftheshadow)
