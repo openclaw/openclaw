@@ -40,6 +40,7 @@ import { getProviderDock } from "../../providers/dock.js";
 import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
 import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import {
   estimateUsageCost,
   formatTokenCount,
@@ -411,7 +412,9 @@ export async function runReplyAgent(params: {
             prompt: memoryFlushSettings.prompt,
             extraSystemPrompt: flushSystemPrompt,
             ownerNumbers: followupRun.run.ownerNumbers,
-            enforceFinalTag: followupRun.run.enforceFinalTag,
+            enforceFinalTag:
+              followupRun.run.enforceFinalTag ||
+              isReasoningTagProvider(provider),
             provider,
             model,
             authProfileId: followupRun.run.authProfileId,
@@ -659,7 +662,9 @@ export async function runReplyAgent(params: {
               prompt: commandBody,
               extraSystemPrompt: followupRun.run.extraSystemPrompt,
               ownerNumbers: followupRun.run.ownerNumbers,
-              enforceFinalTag: followupRun.run.enforceFinalTag,
+              enforceFinalTag:
+                followupRun.run.enforceFinalTag ||
+                isReasoningTagProvider(provider),
               provider,
               model,
               authProfileId: followupRun.run.authProfileId,
