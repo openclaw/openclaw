@@ -21,7 +21,11 @@
 - Gateway: allow Tailscale Serve identity headers to satisfy token auth; rebuild Control UI assets when protocol schema is newer.
 - Heartbeat: default `ackMaxChars` to 300 so short `HEARTBEAT_OK` replies stay internal.
 
+### Installer
+- Install: run `clawdbot doctor --non-interactive` after git installs/updates and nudge daemon restarts when detected.
+
 ### Fixes
+- Doctor: warn on pnpm workspace mismatches, missing Control UI assets, and missing tsx binaries; offer UI rebuilds.
 - Models/Providers: treat credential validation failures as auth errors to trigger fallback; normalize `${ENV_VAR}` apiKey values and auto-fill missing provider keys; preserve explicit GitHub Copilot provider config + agent-dir auth profiles.
 - Gemini: normalize Gemini 3 ids to preview variants; strip Gemini CLI tool call/response ids; downgrade missing `thought_signature`; strip Claude `msg_*` thought_signature fields to avoid base64 decode errors.
 - MiniMax: strip malformed tool invocation XML; include `MiniMax-VL-01` in implicit provider for image pairing.
