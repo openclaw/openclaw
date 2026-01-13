@@ -302,7 +302,11 @@ export function buildAgentSystemPrompt(params: {
     "These user-editable files are loaded by Clawdbot and included below in Project Context.",
     "",
     userTimezone || userTime
-      ? `Time: assume UTC unless stated. User TZ=${userTimezone ?? "unknown"}. Current user time (converted)=${userTime ?? "unknown"}.`
+      ? `Time: assume UTC unless stated. User time zone: ${
+          userTimezone ?? "unknown"
+        }. Current user time (local, 24-hour): ${userTime ?? "unknown"} (${
+          userTimezone ?? "unknown"
+        }).`
       : "",
     userTimezone || userTime ? "" : "",
     "## Reply Tags",
