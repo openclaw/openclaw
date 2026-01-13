@@ -67,56 +67,37 @@ function tryFlattenLiteralAnyOf(
   return null;
 }
 
-const TYPE_UNION_IGNORED_KEYS = new Set([
-  ...UNSUPPORTED_SCHEMA_KEYWORDS,
-  "description",
-  "title",
-  "default",
-]);
-
-function tryFlattenTypeUnion(variants: unknown[]): { type: string } | null {
-  if (variants.length === 0) return null;
-
-  const types = new Set<string>();
-  for (const variant of variants) {
-    if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
-      return null;
-    }
-    const record = variant as Record<string, unknown>;
-    const keys = Object.keys(record).filter(
-      (key) => !TYPE_UNION_IGNORED_KEYS.has(key),
-    );
-    if (keys.length !== 1 || keys[0] !== "type") return null;
-
-    const typeValue = record.type;
-    if (typeof typeValue === "string") {
-      types.add(typeValue);
-      continue;
-    }
-    if (
-      Array.isArray(typeValue) &&
-      typeValue.every((entry) => typeof entry === "string")
-    ) {
-      for (const entry of typeValue) types.add(entry);
-      continue;
-    }
-    return null;
+function isNullSchema(variant: unknown): boolean {
+  if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+    return false;
   }
+  const record = variant as Record<string, unknown>;
+  if ("const" in record && record.const === null) return true;
+  if (Array.isArray(record.enum) && record.enum.length === 1) {
+    return record.enum[0] === null;
+  }
+  const typeValue = record.type;
+  if (typeValue === "null") return true;
+  if (
+    Array.isArray(typeValue) &&
+    typeValue.length === 1 &&
+    typeValue[0] === "null"
+  ) {
+    return true;
+  }
+  return false;
+}
 
-  if (types.size === 0) return null;
-
-  const pickType = () => {
-    if (types.has("string")) return "string";
-    if (types.has("number")) return "number";
-    if (types.has("integer")) return "number";
-    if (types.has("boolean")) return "boolean";
-    if (types.has("object")) return "object";
-    if (types.has("array")) return "array";
-    const nonNull = Array.from(types).find((value) => value !== "null");
-    return nonNull ?? "string";
+function stripNullVariants(variants: unknown[]): {
+  variants: unknown[];
+  stripped: boolean;
+} {
+  if (variants.length === 0) return { variants, stripped: false };
+  const nonNull = variants.filter((variant) => !isNullSchema(variant));
+  return {
+    variants: nonNull,
+    stripped: nonNull.length !== variants.length,
   };
-
-  return { type: pickType() };
 }
 
 type SchemaDefs = Map<string, unknown>;
@@ -218,19 +199,24 @@ function cleanSchemaForGeminiWithDefs(
 
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
   const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
-  const cleanedAnyOf = hasAnyOf
+  let cleanedAnyOf = hasAnyOf
     ? (obj.anyOf as unknown[]).map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
       )
     : undefined;
-  const cleanedOneOf = hasOneOf
+  let cleanedOneOf = hasOneOf
     ? (obj.oneOf as unknown[]).map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
       )
     : undefined;
 
   if (hasAnyOf) {
-    const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
+    const { variants: nonNullVariants, stripped } = stripNullVariants(
+      cleanedAnyOf ?? [],
+    );
+    if (stripped) cleanedAnyOf = nonNullVariants;
+
+    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
     if (flattened) {
       const result: Record<string, unknown> = {
         type: flattened.type,
@@ -241,19 +227,28 @@ function cleanSchemaForGeminiWithDefs(
       }
       return result;
     }
-
-    const flattenedTypes = tryFlattenTypeUnion(cleanedAnyOf ?? []);
-    if (flattenedTypes) {
-      const result: Record<string, unknown> = { ...flattenedTypes };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+    if (stripped && nonNullVariants.length === 1) {
+      const lone = nonNullVariants[0];
+      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
+        const result: Record<string, unknown> = {
+          ...(lone as Record<string, unknown>),
+        };
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+        }
+        return result;
       }
-      return result;
+      return lone;
     }
   }
 
   if (hasOneOf) {
-    const flattened = tryFlattenLiteralAnyOf(obj.oneOf as unknown[]);
+    const { variants: nonNullVariants, stripped } = stripNullVariants(
+      cleanedOneOf ?? [],
+    );
+    if (stripped) cleanedOneOf = nonNullVariants;
+
+    const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
     if (flattened) {
       const result: Record<string, unknown> = {
         type: flattened.type,
@@ -264,14 +259,18 @@ function cleanSchemaForGeminiWithDefs(
       }
       return result;
     }
-
-    const flattenedTypes = tryFlattenTypeUnion(cleanedOneOf ?? []);
-    if (flattenedTypes) {
-      const result: Record<string, unknown> = { ...flattenedTypes };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+    if (stripped && nonNullVariants.length === 1) {
+      const lone = nonNullVariants[0];
+      if (lone && typeof lone === "object" && !Array.isArray(lone)) {
+        const result: Record<string, unknown> = {
+          ...(lone as Record<string, unknown>),
+        };
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+        }
+        return result;
       }
-      return result;
+      return lone;
     }
   }
 
@@ -286,6 +285,15 @@ function cleanSchemaForGeminiWithDefs(
     }
 
     if (key === "type" && (hasAnyOf || hasOneOf)) continue;
+    if (
+      key === "type" &&
+      Array.isArray(value) &&
+      value.every((entry) => typeof entry === "string")
+    ) {
+      const types = value.filter((entry) => entry !== "null");
+      cleaned.type = types.length === 1 ? types[0] : types;
+      continue;
+    }
 
     if (key === "properties" && value && typeof value === "object") {
       const props = value as Record<string, unknown>;
