@@ -5,6 +5,7 @@ import {
   buildBootstrapContextFiles,
   classifyFailoverReason,
   formatAssistantErrorText,
+  isAuthErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
@@ -122,6 +123,23 @@ describe("isBillingErrorMessage", () => {
   });
 });
 
+describe("isAuthErrorMessage", () => {
+  it("matches credential validation errors", () => {
+    const samples = [
+      'No credentials found for profile "anthropic:claude-cli".',
+      "No API key found for profile openai.",
+    ];
+    for (const sample of samples) {
+      expect(isAuthErrorMessage(sample)).toBe(true);
+    }
+  });
+
+  it("ignores unrelated errors", () => {
+    expect(isAuthErrorMessage("rate limit exceeded")).toBe(false);
+    expect(isAuthErrorMessage("billing issue detected")).toBe(false);
+  });
+});
+
 describe("isFailoverErrorMessage", () => {
   it("matches auth/rate/billing/timeout", () => {
     const samples = [
@@ -140,6 +158,8 @@ describe("isFailoverErrorMessage", () => {
 describe("classifyFailoverReason", () => {
   it("returns a stable reason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
+    expect(classifyFailoverReason("no credentials found")).toBe("auth");
+    expect(classifyFailoverReason("no api key found")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe(
       "rate_limit",
