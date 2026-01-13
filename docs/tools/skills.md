@@ -58,7 +58,8 @@ Common flows:
   - `clawdhub sync --all`
 
 By default, `clawdhub` installs into `./skills` under your current working
-directory; Clawdbot picks that up as `<workspace>/skills` on the next session.
+directory (or falls back to the configured Clawdbot workspace). Clawdbot picks
+that up as `<workspace>/skills` on the next session.
 
 ## Format (AgentSkills + Pi-compatible)
 
