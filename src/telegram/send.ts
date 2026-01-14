@@ -54,6 +54,10 @@ type TelegramReactionOpts = {
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
+// Telegram limits media captions to 1024 characters.
+// Text beyond this must be sent as a separate follow-up message.
+const TELEGRAM_MAX_CAPTION_LENGTH = 1024;
+
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
   if (explicit?.trim()) return explicit.trim();
   if (!params.token) {
@@ -195,16 +199,22 @@ export async function sendMessageTelegram(
     });
     const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
     const file = new InputFile(media.buffer, fileName);
-    const caption = text?.trim() || undefined;
+    const trimmedText = text?.trim() || "";
+    // If text exceeds Telegram's caption limit, send media without caption
+    // then send text as a separate follow-up message.
+    const needsSeparateText = trimmedText.length > TELEGRAM_MAX_CAPTION_LENGTH;
+    const caption = needsSeparateText ? undefined : trimmedText || undefined;
+    // When splitting, put reply_markup only on the follow-up text (the "main" content),
+    // not on the media message.
     const mediaParams = hasThreadParams
       ? {
           caption,
           ...threadParams,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
         }
       : {
           caption,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+          ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
         };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
@@ -258,13 +268,41 @@ export async function sendMessageTelegram(
         },
       );
     }
-    const messageId = String(result?.message_id ?? "unknown");
+    const mediaMessageId = String(result?.message_id ?? "unknown");
+    const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
       direction: "outbound",
     });
-    return { messageId, chatId: String(result?.chat?.id ?? chatId) };
+
+    // If text was too long for a caption, send it as a separate follow-up message.
+    // Use plain text to match caption behavior (captions don't use HTML conversion).
+    if (needsSeparateText && trimmedText) {
+      const textParams =
+        hasThreadParams || replyMarkup
+          ? {
+              ...threadParams,
+              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+            }
+          : undefined;
+      const textRes = await request(
+        () =>
+          textParams
+            ? api.sendMessage(chatId, trimmedText, textParams)
+            : api.sendMessage(chatId, trimmedText),
+        "message",
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
+      // Return the text message ID as the "main" message (it's the actual content).
+      return {
+        messageId: String(textRes?.message_id ?? mediaMessageId),
+        chatId: resolvedChatId,
+      };
+    }
+
+    return { messageId: mediaMessageId, chatId: resolvedChatId };
   }
 
   if (!text || !text.trim()) {
