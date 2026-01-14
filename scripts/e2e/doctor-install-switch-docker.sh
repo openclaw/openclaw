@@ -11,6 +11,11 @@ echo "Running doctor install switch E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 
+  # Keep logs focused; the npm global install step can emit noisy deprecation warnings.
+  export npm_config_loglevel=error
+  export npm_config_fund=false
+  export npm_config_audit=false
+
   # Stub systemd/loginctl so doctor + daemon flows work in Docker.
   export PATH="/tmp/clawdbot-bin:$PATH"
   mkdir -p /tmp/clawdbot-bin
