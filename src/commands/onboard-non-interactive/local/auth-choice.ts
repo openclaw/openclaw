@@ -2,10 +2,17 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
+  upsertAuthProfile,
 } from "../../../agents/auth-profiles.js";
+import { normalizeProviderId } from "../../../agents/model-selection.js";
+import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
@@ -27,7 +34,6 @@ import {
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { applyOpenAICodexModelDefault } from "../../openai-codex-model-default.js";
-
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 
 export async function applyNonInteractiveAuthChoice(params: {
@@ -55,6 +61,66 @@ export async function applyNonInteractiveAuthChoice(params: {
       profileId: "anthropic:default",
       provider: "anthropic",
       mode: "api_key",
+    });
+  }
+
+  if (authChoice === "token") {
+    const providerRaw = opts.tokenProvider?.trim();
+    if (!providerRaw) {
+      runtime.error("Missing --token-provider for --auth-choice token.");
+      runtime.exit(1);
+      return null;
+    }
+    const provider = normalizeProviderId(providerRaw);
+    if (provider !== "anthropic") {
+      runtime.error(
+        "Only --token-provider anthropic is supported for --auth-choice token.",
+      );
+      runtime.exit(1);
+      return null;
+    }
+    const tokenRaw = opts.token?.trim();
+    if (!tokenRaw) {
+      runtime.error("Missing --token for --auth-choice token.");
+      runtime.exit(1);
+      return null;
+    }
+    const tokenError = validateAnthropicSetupToken(tokenRaw);
+    if (tokenError) {
+      runtime.error(tokenError);
+      runtime.exit(1);
+      return null;
+    }
+
+    let expires: number | undefined;
+    const expiresInRaw = opts.tokenExpiresIn?.trim();
+    if (expiresInRaw) {
+      try {
+        expires =
+          Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+      } catch (err) {
+        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
+        runtime.exit(1);
+        return null;
+      }
+    }
+
+    const profileId =
+      opts.tokenProfileId?.trim() ||
+      buildTokenProfileId({ provider, name: "" });
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token: tokenRaw.trim(),
+        ...(expires ? { expires } : {}),
+      },
+    });
+    return applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider,
+      mode: "token",
     });
   }
 
@@ -255,18 +321,12 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (
-    authChoice === "token" ||
     authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "antigravity"
   ) {
-    const label =
-      authChoice === "antigravity"
-        ? "Antigravity"
-        : authChoice === "token"
-          ? "Token"
-          : "OAuth";
+    const label = authChoice === "antigravity" ? "Antigravity" : "OAuth";
     runtime.error(`${label} requires interactive mode.`);
     runtime.exit(1);
     return null;

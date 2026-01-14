@@ -1,0 +1,363 @@
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  formatApiKeyPreview,
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
+import type {
+  ApplyAuthChoiceParams,
+  ApplyAuthChoiceResult,
+} from "./auth-choice.apply.js";
+import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
+import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
+import {
+  applyAuthProfileConfig,
+  applyMoonshotConfig,
+  applyMoonshotProviderConfig,
+  applyOpencodeZenConfig,
+  applyOpencodeZenProviderConfig,
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
+  applySyntheticConfig,
+  applySyntheticProviderConfig,
+  applyZaiConfig,
+  MOONSHOT_DEFAULT_MODEL_REF,
+  OPENROUTER_DEFAULT_MODEL_REF,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+  setGeminiApiKey,
+  setMoonshotApiKey,
+  setOpencodeZenApiKey,
+  setOpenrouterApiKey,
+  setSyntheticApiKey,
+  setZaiApiKey,
+  ZAI_DEFAULT_MODEL_REF,
+} from "./onboard-auth.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
+
+export async function applyAuthChoiceApiProviders(
+  params: ApplyAuthChoiceParams,
+): Promise<ApplyAuthChoiceResult | null> {
+  let nextConfig = params.config;
+  let agentModelOverride: string | undefined;
+  const noteAgentModel = async (model: string) => {
+    if (!params.agentId) return;
+    await params.prompter.note(
+      `Default model set to ${model} for agent "${params.agentId}".`,
+      "Model configured",
+    );
+  };
+
+  if (params.authChoice === "openrouter-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "openrouter",
+    });
+    const existingProfileId = profileOrder.find((profileId) =>
+      Boolean(store.profiles[profileId]),
+    );
+    const existingCred = existingProfileId
+      ? store.profiles[existingProfileId]
+      : undefined;
+    let profileId = "openrouter:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("openrouter");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing OPENROUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setOpenrouterApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter OpenRouter API key",
+        validate: validateApiKeyInput,
+      });
+      await setOpenrouterApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "openrouter",
+        mode,
+      });
+    }
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: OPENROUTER_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyOpenrouterConfig,
+        applyProviderConfig: applyOpenrouterProviderConfig,
+        noteDefault: OPENROUTER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "moonshot-api-key") {
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("moonshot");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Moonshot API key",
+        validate: validateApiKeyInput,
+      });
+      await setMoonshotApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyMoonshotConfig,
+        applyProviderConfig: applyMoonshotProviderConfig,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "gemini-api-key") {
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("google");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing GEMINI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setGeminiApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Gemini API key",
+        validate: validateApiKeyInput,
+      });
+      await setGeminiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyGoogleGeminiModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+          "Model configured",
+        );
+      }
+    } else {
+      agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
+      await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "zai-api-key") {
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("zai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing ZAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setZaiApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Z.AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setZaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai:default",
+      provider: "zai",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: ZAI_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyZaiConfig,
+        applyProviderConfig: (config) => ({
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              models: {
+                ...config.agents?.defaults?.models,
+                [ZAI_DEFAULT_MODEL_REF]: {
+                  ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
+                  alias:
+                    config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]
+                      ?.alias ?? "GLM",
+                },
+              },
+            },
+          },
+        }),
+        noteDefault: ZAI_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "synthetic-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter Synthetic API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setSyntheticApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "synthetic:default",
+      provider: "synthetic",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: SYNTHETIC_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applySyntheticConfig,
+        applyProviderConfig: applySyntheticProviderConfig,
+        noteDefault: SYNTHETIC_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "opencode-zen") {
+    await params.prompter.note(
+      [
+        "OpenCode Zen provides access to Claude, GPT, Gemini, and more models.",
+        "Get your API key at: https://opencode.ai/auth",
+        "Requires an active OpenCode Zen subscription.",
+      ].join("\n"),
+      "OpenCode Zen",
+    );
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("opencode");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setOpencodeZenApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter OpenCode Zen API key",
+        validate: validateApiKeyInput,
+      });
+      await setOpencodeZenApiKey(
+        normalizeApiKeyInput(String(key)),
+        params.agentDir,
+      );
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "opencode:default",
+      provider: "opencode",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: OPENCODE_ZEN_DEFAULT_MODEL,
+        applyDefaultConfig: applyOpencodeZenConfig,
+        applyProviderConfig: applyOpencodeZenProviderConfig,
+        noteDefault: OPENCODE_ZEN_DEFAULT_MODEL,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  return null;
+}
