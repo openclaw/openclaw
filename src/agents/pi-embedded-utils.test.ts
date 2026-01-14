@@ -257,4 +257,105 @@ describe("extractAssistantText", () => {
     const result = extractAssistantText(msg);
     expect(result).toBe("First block.\nThird block.");
   });
+
+  it("strips downgraded Gemini tool call text representations", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[Tool Call: exec (ID: toolu_vrtx_014w1P6B6w4V92v4VzG7Qk12)]
+Arguments: { "command": "git status", "timeout": 120000 }`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("strips multiple downgraded tool calls", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[Tool Call: read (ID: toolu_1)]
+Arguments: { "path": "/some/file.txt" }
+[Tool Call: exec (ID: toolu_2)]
+Arguments: { "command": "ls -la" }`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("strips tool results for downgraded calls", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `[Tool Result for ID toolu_123]
+{"status": "ok", "data": "some result"}`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("preserves text around downgraded tool calls", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Let me check that for you.
+[Tool Call: browser (ID: toolu_abc)]
+Arguments: { "action": "act", "request": "click button" }`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Let me check that for you.");
+  });
+
+  it("handles multiple text blocks with tool calls and results", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Here's what I found:",
+        },
+        {
+          type: "text",
+          text: `[Tool Call: read (ID: toolu_1)]
+Arguments: { "path": "/test.txt" }`,
+        },
+        {
+          type: "text",
+          text: `[Tool Result for ID toolu_1]
+File contents here`,
+        },
+        {
+          type: "text",
+          text: "Done checking.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Here's what I found:\nDone checking.");
+  });
 });
