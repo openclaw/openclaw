@@ -358,4 +358,84 @@ File contents here`,
     const result = extractAssistantText(msg);
     expect(result).toBe("Here's what I found:\nDone checking.");
   });
+
+  it("strips thinking tags from text content", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>El usuario quiere retomar una tarea...</think>Aquí está tu respuesta.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Aquí está tu respuesta.");
+  });
+
+  it("strips thinking tags without closing tag", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>Pensando sobre el problema...",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("strips thinking tags with various formats", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before<thinking>internal reasoning</thinking>After",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips antthinking tags", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<antthinking>Some reasoning</antthinking>The actual answer.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("The actual answer.");
+  });
+
+  it("handles nested or multiple thinking blocks", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Start<think>first thought</think>Middle<think>second thought</think>End",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("StartMiddleEnd");
+  });
 });
