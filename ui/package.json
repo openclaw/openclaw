@@ -19,8 +19,5 @@
     "playwright": "^1.57.0",
     "typescript": "^5.9.3",
     "vitest": "4.0.17"
-  },
-  "pnpm": {
-    "minimumReleaseAge": 2880
   }
 }
