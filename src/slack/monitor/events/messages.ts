@@ -19,8 +19,10 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  ctx.app.event("message", async ({ event }: SlackEventMiddlewareArgs<"message">) => {
+  ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     try {
+      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+
       const message = event as SlackMessageEvent;
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
@@ -108,14 +110,17 @@ export function registerSlackMessageEvents(params: {
         });
         return;
       }
+
       await handleSlackMessage(message, { source: "message" });
     } catch (err) {
       ctx.runtime.error?.(danger(`slack handler failed: ${String(err)}`));
     }
   });
 
-  ctx.app.event("app_mention", async ({ event }: SlackEventMiddlewareArgs<"app_mention">) => {
+  ctx.app.event("app_mention", async ({ event, body }: SlackEventMiddlewareArgs<"app_mention">) => {
     try {
+      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+
       const mention = event as SlackAppMentionEvent;
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",

@@ -18,6 +18,13 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 
 import type { MonitorSlackOpts } from "./types.js";
 
+function parseApiAppIdFromAppToken(raw?: string) {
+  const token = raw?.trim();
+  if (!token) return undefined;
+  const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
+  return match?.[1]?.toUpperCase();
+}
+
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
 
@@ -81,12 +88,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   let botUserId = "";
   let teamId = "";
+  let apiAppId = "";
+  const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
   try {
     const auth = await app.client.auth.test({ token: botToken });
     botUserId = auth.user_id ?? "";
     teamId = auth.team_id ?? "";
+    apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
   } catch {
     // auth test failing is non-fatal; message handler falls back to regex mentions.
+  }
+
+  if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {
+    runtime.error?.(
+      `slack token mismatch: bot token api_app_id=${apiAppId} but app token looks like api_app_id=${expectedApiAppIdFromAppToken}`,
+    );
   }
 
   const ctx = createSlackMonitorContext({
@@ -97,6 +113,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     runtime,
     botUserId,
     teamId,
+    apiAppId,
     historyLimit,
     sessionScope,
     mainKey,

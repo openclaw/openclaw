@@ -158,6 +158,46 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
   });
 
+  it("drops events with mismatched api_app_id", async () => {
+    const client = getSlackClient();
+    if (!client) throw new Error("Slack client not registered");
+    (client.auth as { test: ReturnType<typeof vi.fn> }).test.mockResolvedValue({
+      user_id: "bot-user",
+      team_id: "T1",
+      api_app_id: "A1",
+    });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "xapp-1-A1-abc",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      body: { api_app_id: "A2", team_id: "T1" },
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "123",
+        channel: "C1",
+        channel_type: "im",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
   it("does not derive responsePrefix from routed agent identity when unset", async () => {
     config = {
       agents: {

@@ -10,8 +10,10 @@ import type { SlackPinEvent } from "../types.js";
 export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
-  ctx.app.event("pin_added", async ({ event }: SlackEventMiddlewareArgs<"pin_added">) => {
+  ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
     try {
+      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+
       const payload = event as SlackPinEvent;
       const channelId = payload.channel_id;
       const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
@@ -45,8 +47,10 @@ export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
     }
   });
 
-  ctx.app.event("pin_removed", async ({ event }: SlackEventMiddlewareArgs<"pin_removed">) => {
+  ctx.app.event("pin_removed", async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
     try {
+      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+
       const payload = event as SlackPinEvent;
       const channelId = payload.channel_id;
       const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
