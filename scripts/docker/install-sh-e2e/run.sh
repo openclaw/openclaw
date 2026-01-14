@@ -5,6 +5,9 @@ INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
 MODELS_MODE="${CLAWDBOT_E2E_MODELS:-both}" # both|openai|anthropic
 E2E_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}"
 SKIP_PREVIOUS="${CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS:-0}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
 
 if [[ "$MODELS_MODE" != "both" && "$MODELS_MODE" != "openai" && "$MODELS_MODE" != "anthropic" ]]; then
   echo "ERROR: CLAWDBOT_E2E_MODELS must be one of: both|openai|anthropic" >&2
@@ -12,15 +15,19 @@ if [[ "$MODELS_MODE" != "both" && "$MODELS_MODE" != "openai" && "$MODELS_MODE" !
 fi
 
 if [[ "$MODELS_MODE" == "both" ]]; then
-  if [[ -z "${OPENAI_API_KEY:-}" || -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires OPENAI_API_KEY and ANTHROPIC_API_KEY." >&2
+  if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires OPENAI_API_KEY." >&2
     exit 2
   fi
-elif [[ "$MODELS_MODE" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
+  if [[ -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHROPIC_API_KEY" ]]; then
+    echo "ERROR: CLAWDBOT_E2E_MODELS=both requires ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY." >&2
+    exit 2
+  fi
+elif [[ "$MODELS_MODE" == "openai" && -z "$OPENAI_API_KEY" ]]; then
   echo "ERROR: CLAWDBOT_E2E_MODELS=openai requires OPENAI_API_KEY." >&2
   exit 2
-elif [[ "$MODELS_MODE" == "anthropic" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "ERROR: CLAWDBOT_E2E_MODELS=anthropic requires ANTHROPIC_API_KEY." >&2
+elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHROPIC_API_KEY" ]]; then
+  echo "ERROR: CLAWDBOT_E2E_MODELS=anthropic requires ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY." >&2
   exit 2
 fi
 
@@ -323,6 +330,18 @@ run_profile() {
       --flow quickstart \
       --auth-choice openai-api-key \
       --openai-api-key "$OPENAI_API_KEY" \
+      --gateway-port "$port" \
+      --gateway-bind loopback \
+      --gateway-auth token \
+      --workspace "$workspace" \
+      --skip-health
+  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
+    clawdbot --profile "$profile" onboard \
+      --non-interactive \
+      --flow quickstart \
+      --auth-choice token \
+      --token-provider anthropic \
+      --token "$ANTHROPIC_API_TOKEN" \
       --gateway-port "$port" \
       --gateway-bind loopback \
       --gateway-auth token \

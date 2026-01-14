@@ -5,8 +5,11 @@ import {
   ensureAuthProfileStore,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
@@ -28,6 +31,10 @@ import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
@@ -206,7 +213,65 @@ export async function runNonInteractiveOnboarding(
   };
 
   const authChoice: AuthChoice = opts.authChoice ?? "skip";
-  if (authChoice === "apiKey") {
+  if (authChoice === "token") {
+    const providerRaw = opts.tokenProvider?.trim();
+    if (!providerRaw) {
+      runtime.error("Missing --token-provider for --auth-choice token.");
+      runtime.exit(1);
+      return;
+    }
+    const provider = normalizeProviderId(providerRaw);
+    if (provider !== "anthropic") {
+      runtime.error(
+        "Only --token-provider anthropic is supported for --auth-choice token.",
+      );
+      runtime.exit(1);
+      return;
+    }
+    const tokenRaw = opts.token?.trim();
+    if (!tokenRaw) {
+      runtime.error("Missing --token for --auth-choice token.");
+      runtime.exit(1);
+      return;
+    }
+    const tokenError = validateAnthropicSetupToken(tokenRaw);
+    if (tokenError) {
+      runtime.error(tokenError);
+      runtime.exit(1);
+      return;
+    }
+
+    let expires: number | undefined;
+    const expiresInRaw = opts.tokenExpiresIn?.trim();
+    if (expiresInRaw) {
+      try {
+        expires =
+          Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+      } catch (err) {
+        runtime.error(`Invalid --token-expires-in: ${String(err)}`);
+        runtime.exit(1);
+        return;
+      }
+    }
+
+    const profileId =
+      opts.tokenProfileId?.trim() ||
+      buildTokenProfileId({ provider, name: "" });
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token: tokenRaw.trim(),
+        ...(expires ? { expires } : {}),
+      },
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider,
+      mode: "token",
+    });
+  } else if (authChoice === "apiKey") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "anthropic",
       cfg: baseConfig,
@@ -417,18 +482,12 @@ export async function runNonInteractiveOnboarding(
     });
     nextConfig = applyOpencodeZenConfig(nextConfig);
   } else if (
-    authChoice === "token" ||
     authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
     authChoice === "antigravity"
   ) {
-    const label =
-      authChoice === "antigravity"
-        ? "Antigravity"
-        : authChoice === "token"
-          ? "Token"
-          : "OAuth";
+    const label = authChoice === "antigravity" ? "Antigravity" : "OAuth";
     runtime.error(`${label} requires interactive mode.`);
     runtime.exit(1);
     return;
