@@ -134,7 +134,8 @@ export class GatewayBrowserClient {
         this.opts.onHello?.(hello);
       })
       .catch(() => {
-        this.ws?.close(1008, "connect failed");
+        // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
+        this.ws?.close(4008, "connect failed");
       });
   }
 
