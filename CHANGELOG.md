@@ -4,6 +4,7 @@
 
 ### Changes
 - Usage: add MiniMax coding plan usage tracking.
+- Auth: rename “Claude CLI” to “Claude Code CLI” in auth options. (#915) — thanks @SeanZoR.
 
 ### Fixes
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
