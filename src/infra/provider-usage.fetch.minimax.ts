@@ -220,7 +220,7 @@ export async function fetchMinimaxUsage(
   const baseResp = isRecord(data.base_resp)
     ? (data.base_resp as MinimaxBaseResp)
     : undefined;
-  if (baseResp && baseResp.status_code && baseResp.status_code !== 0) {
+  if (baseResp?.status_code && baseResp.status_code !== 0) {
     return {
       provider: "minimax",
       displayName: PROVIDER_LABELS.minimax,
@@ -240,7 +240,8 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const resetAt = parseEpoch(pickString(payload, RESET_KEYS)) ??
+  const resetAt =
+    parseEpoch(pickString(payload, RESET_KEYS)) ??
     parseEpoch(pickNumber(payload, RESET_KEYS));
   const windows: UsageWindow[] = [
     {
