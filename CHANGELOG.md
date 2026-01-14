@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.14
+
+### Fixes
+- Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
+
 ## 2026.1.13
 
 ### Fixes
