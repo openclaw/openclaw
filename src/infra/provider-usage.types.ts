@@ -22,5 +22,6 @@ export type UsageProviderId =
   | "github-copilot"
   | "google-gemini-cli"
   | "google-antigravity"
+  | "minimax"
   | "openai-codex"
   | "zai";

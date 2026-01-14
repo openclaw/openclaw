@@ -114,6 +114,17 @@ describe("provider usage loading", () => {
             },
           });
         }
+        if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+          return makeResponse(200, {
+            base_resp: { status_code: 0, status_msg: "ok" },
+            data: {
+              total: 200,
+              remain: 50,
+              reset_at: "2026-01-07T05:00:00Z",
+              plan_name: "Coding Plan",
+            },
+          });
+        }
         return makeResponse(404, "not found");
       },
     );
@@ -122,15 +133,18 @@ describe("provider usage loading", () => {
       now: Date.UTC(2026, 0, 7, 0, 0, 0),
       auth: [
         { provider: "anthropic", token: "token-1" },
+        { provider: "minimax", token: "token-1b" },
         { provider: "zai", token: "token-2" },
       ],
       fetch: mockFetch,
     });
 
-    expect(summary.providers).toHaveLength(2);
+    expect(summary.providers).toHaveLength(3);
     const claude = summary.providers.find((p) => p.provider === "anthropic");
+    const minimax = summary.providers.find((p) => p.provider === "minimax");
     const zai = summary.providers.find((p) => p.provider === "zai");
     expect(claude?.windows[0]?.label).toBe("5h");
+    expect(minimax?.windows[0]?.usedPercent).toBe(75);
     expect(zai?.plan).toBe("Pro");
     expect(mockFetch).toHaveBeenCalled();
   });

@@ -7,6 +7,7 @@ import {
   fetchCodexUsage,
   fetchCopilotUsage,
   fetchGeminiUsage,
+  fetchMinimaxUsage,
   fetchZaiUsage,
 } from "./provider-usage.fetch.js";
 import {
@@ -70,6 +71,8 @@ export async function loadProviderUsageSummary(
               timeoutMs,
               fetchFn,
             );
+          case "minimax":
+            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
           case "zai":
             return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
           default:
