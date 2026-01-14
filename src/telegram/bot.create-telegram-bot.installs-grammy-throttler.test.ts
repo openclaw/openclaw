@@ -211,6 +211,27 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+  it("prefers per-account timeoutSeconds overrides", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          timeoutSeconds: 60,
+          accounts: {
+            foo: { timeoutSeconds: 61 },
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok", accountId: "foo" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 61 }),
+      }),
+    );
+  });
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);

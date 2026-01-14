@@ -104,6 +104,23 @@ describe("sendMessageTelegram", () => {
       }),
     );
   });
+  it("prefers per-account timeoutSeconds overrides", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          timeoutSeconds: 60,
+          accounts: { foo: { timeoutSeconds: 61 } },
+        },
+      },
+    });
+    await sendMessageTelegram("123", "hi", { token: "tok", accountId: "foo" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 61 }),
+      }),
+    );
+  });
 
   it("falls back to plain text when Telegram rejects HTML", async () => {
     const chatId = "123";
