@@ -261,8 +261,8 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
       runtime.error(
         process.platform === "darwin"
-          ? 'No Claude CLI credentials found. Run interactive onboarding to approve Keychain access for "Claude Code-credentials".'
-          : "No Claude CLI credentials found at ~/.claude/.credentials.json",
+          ? 'No Claude Code CLI credentials found. Run interactive onboarding to approve Keychain access for "Claude Code-credentials".'
+          : "No Claude Code CLI credentials found at ~/.claude/.credentials.json",
       );
       runtime.exit(1);
       return null;

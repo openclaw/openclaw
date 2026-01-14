@@ -83,7 +83,7 @@ export async function modelsAuthSetupTokenCommand(
   const synced = store.profiles[CLAUDE_CLI_PROFILE_ID];
   if (!synced) {
     throw new Error(
-      `No Claude CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
+      `No Claude Code CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
     );
   }
 
