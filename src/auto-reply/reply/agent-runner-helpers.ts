@@ -1,0 +1,60 @@
+import { loadSessionStore } from "../../config/sessions.js";
+import { isAudioFileName } from "../../media/mime.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
+import { scheduleFollowupDrain } from "./queue.js";
+import type { TypingSignaler } from "./typing-mode.js";
+
+const hasAudioMedia = (urls?: string[]): boolean =>
+  Boolean(urls?.some((url) => isAudioFileName(url)));
+
+export const isAudioPayload = (payload: ReplyPayload): boolean =>
+  hasAudioMedia(
+    payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+  );
+
+export const createShouldEmitToolResult = (params: {
+  sessionKey?: string;
+  storePath?: string;
+  resolvedVerboseLevel: VerboseLevel;
+}): (() => boolean) => {
+  return () => {
+    if (!params.sessionKey || !params.storePath) {
+      return params.resolvedVerboseLevel === "on";
+    }
+    try {
+      const store = loadSessionStore(params.storePath);
+      const entry = store[params.sessionKey];
+      const current = normalizeVerboseLevel(entry?.verboseLevel);
+      if (current) return current === "on";
+    } catch {
+      // ignore store read failures
+    }
+    return params.resolvedVerboseLevel === "on";
+  };
+};
+
+export const finalizeWithFollowup = <T>(
+  value: T,
+  queueKey: string,
+  runFollowupTurn: Parameters<typeof scheduleFollowupDrain>[1],
+): T => {
+  scheduleFollowupDrain(queueKey, runFollowupTurn);
+  return value;
+};
+
+export const signalTypingIfNeeded = async (
+  payloads: ReplyPayload[],
+  typingSignals: TypingSignaler,
+): Promise<void> => {
+  const shouldSignalTyping = payloads.some((payload) => {
+    const trimmed = payload.text?.trim();
+    if (trimmed) return true;
+    if (payload.mediaUrl) return true;
+    if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
+    return false;
+  });
+  if (shouldSignalTyping) {
+    await typingSignals.signalRunStart();
+  }
+};

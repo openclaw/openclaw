@@ -1,0 +1,252 @@
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { saveSessionStore } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  triggerClawdbotRestart,
+} from "../../infra/restart.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseActivationCommand } from "../group-activation.js";
+import { parseSendPolicyCommand } from "../send-policy.js";
+import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import type { CommandHandler } from "./commands-types.js";
+
+function resolveSessionEntryForKey(
+  store: Record<string, SessionEntry> | undefined,
+  sessionKey: string | undefined,
+) {
+  if (!store || !sessionKey) return {};
+  const direct = store[sessionKey];
+  if (direct) return { entry: direct, key: sessionKey };
+  const parsed = parseAgentSessionKey(sessionKey);
+  const legacyKey = parsed?.rest;
+  if (legacyKey && store[legacyKey]) {
+    return { entry: store[legacyKey], key: legacyKey };
+  }
+  return {};
+}
+
+function resolveAbortTarget(params: {
+  ctx: { CommandTargetSessionKey?: string | null };
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}) {
+  const targetSessionKey =
+    params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const { entry, key } = resolveSessionEntryForKey(
+    params.sessionStore,
+    targetSessionKey,
+  );
+  if (entry && key) return { entry, key, sessionId: entry.sessionId };
+  if (params.sessionEntry && params.sessionKey) {
+    return {
+      entry: params.sessionEntry,
+      key: params.sessionKey,
+      sessionId: params.sessionEntry.sessionId,
+    };
+  }
+  return { entry: undefined, key: targetSessionKey, sessionId: undefined };
+}
+
+export const handleActivationCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
+  if (!allowTextCommands) return null;
+  const activationCommand = parseActivationCommand(
+    params.command.commandBodyNormalized,
+  );
+  if (!activationCommand.hasCommand) return null;
+  if (!params.isGroup) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Group activation only applies to group chats." },
+    };
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /activation from unauthorized sender in group: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!activationCommand.mode) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /activation mention|always" },
+    };
+  }
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    params.sessionEntry.groupActivation = activationCommand.mode;
+    params.sessionEntry.groupActivationNeedsSystemIntro = true;
+    params.sessionEntry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+    if (params.storePath) {
+      await saveSessionStore(params.storePath, params.sessionStore);
+    }
+  }
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ Group activation set to ${activationCommand.mode}.`,
+    },
+  };
+};
+
+export const handleSendPolicyCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
+  if (!allowTextCommands) return null;
+  const sendPolicyCommand = parseSendPolicyCommand(
+    params.command.commandBodyNormalized,
+  );
+  if (!sendPolicyCommand.hasCommand) return null;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /send from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!sendPolicyCommand.mode) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /send on|off|inherit" },
+    };
+  }
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    if (sendPolicyCommand.mode === "inherit") {
+      delete params.sessionEntry.sendPolicy;
+    } else {
+      params.sessionEntry.sendPolicy = sendPolicyCommand.mode;
+    }
+    params.sessionEntry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+    if (params.storePath) {
+      await saveSessionStore(params.storePath, params.sessionStore);
+    }
+  }
+  const label =
+    sendPolicyCommand.mode === "inherit"
+      ? "inherit"
+      : sendPolicyCommand.mode === "allow"
+        ? "on"
+        : "off";
+  return {
+    shouldContinue: false,
+    reply: { text: `⚙️ Send policy set to ${label}.` },
+  };
+};
+
+export const handleRestartCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
+  if (!allowTextCommands) return null;
+  if (params.command.commandBodyNormalized !== "/restart") return null;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /restart from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (params.cfg.commands?.restart !== true) {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /restart is disabled. Set commands.restart=true to enable.",
+      },
+    };
+  }
+  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  if (hasSigusr1Listener) {
+    scheduleGatewaySigusr1Restart({ reason: "/restart" });
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Restarting clawdbot in-process (SIGUSR1); back in a few seconds.",
+      },
+    };
+  }
+  const restartMethod = triggerClawdbotRestart();
+  if (!restartMethod.ok) {
+    const detail = restartMethod.detail
+      ? ` Details: ${restartMethod.detail}`
+      : "";
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
+      },
+    };
+  }
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ Restarting clawdbot via ${restartMethod.method}; give me a few seconds to come back online.`,
+    },
+  };
+};
+
+export const handleStopCommand: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
+  if (!allowTextCommands) return null;
+  if (params.command.commandBodyNormalized !== "/stop") return null;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /stop from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  const abortTarget = resolveAbortTarget({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+  });
+  if (abortTarget.sessionId) {
+    abortEmbeddedPiRun(abortTarget.sessionId);
+  }
+  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
+    abortTarget.entry.abortedLastRun = true;
+    abortTarget.entry.updatedAt = Date.now();
+    params.sessionStore[abortTarget.key] = abortTarget.entry;
+    if (params.storePath) {
+      await saveSessionStore(params.storePath, params.sessionStore);
+    }
+  } else if (params.command.abortKey) {
+    setAbortMemory(params.command.abortKey, true);
+  }
+  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+};
+
+export const handleAbortTrigger: CommandHandler = async (
+  params,
+  allowTextCommands,
+) => {
+  if (!allowTextCommands) return null;
+  if (!isAbortTrigger(params.command.rawBodyNormalized)) return null;
+  const abortTarget = resolveAbortTarget({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+  });
+  if (abortTarget.sessionId) {
+    abortEmbeddedPiRun(abortTarget.sessionId);
+  }
+  if (abortTarget.entry && params.sessionStore && abortTarget.key) {
+    abortTarget.entry.abortedLastRun = true;
+    abortTarget.entry.updatedAt = Date.now();
+    params.sessionStore[abortTarget.key] = abortTarget.entry;
+    if (params.storePath) {
+      await saveSessionStore(params.storePath, params.sessionStore);
+    }
+  } else if (params.command.abortKey) {
+    setAbortMemory(params.command.abortKey, true);
+  }
+  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+};
