@@ -25,9 +25,7 @@ import {
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
-  maybeCreateDiscordAutoThread,
-  resolveDiscordAutoThreadContext,
-  resolveDiscordReplyDeliveryPlan,
+  resolveDiscordAutoThreadReplyPlan,
   resolveDiscordThreadStarter,
 } from "./threading.js";
 import { sendTyping } from "./typing.js";
@@ -201,35 +199,22 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 	    parentSessionKey,
 	    useSuffix: false,
 	  });
-	  const inboundTarget = `channel:${message.channelId}`;
-	  const createdThreadId = await maybeCreateDiscordAutoThread({
+	  const replyPlan = await resolveDiscordAutoThreadReplyPlan({
 	    client,
 	    message,
 	    isGuildMessage,
 	    channelConfig,
-    threadChannel,
+	    threadChannel,
 	    baseText: baseText ?? "",
 	    combinedBody,
-	  });
-	  const replyPlan = resolveDiscordReplyDeliveryPlan({
-	    replyTarget: inboundTarget,
 	    replyToMode,
-	    messageId: message.id,
-	    threadChannel,
-	    createdThreadId,
+	    agentId: route.agentId,
+	    channel: route.channel,
 	  });
 	  const deliverTarget = replyPlan.deliverTarget;
 	  const replyTarget = replyPlan.replyTarget;
 	  const replyReference = replyPlan.replyReference;
-
-	  const autoThreadContext = isGuildMessage
-	    ? resolveDiscordAutoThreadContext({
-	        agentId: route.agentId,
-	        channel: route.channel,
-	        messageChannelId: message.channelId,
-	        createdThreadId,
-	      })
-	    : null;
+	  const autoThreadContext = replyPlan.autoThreadContext;
 
 	  const effectiveFrom = isDirectMessage
 	    ? `discord:${author.id}`
