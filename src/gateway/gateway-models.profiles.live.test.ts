@@ -11,6 +11,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { describe, it } from "vitest";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -30,7 +31,6 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../utils/message-channel.js";
-import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
@@ -377,6 +377,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const token = `test-${randomUUID()}`;
   process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+  const agentId = "dev";
 
   const hostAgentDir = resolveClawdbotAgentDir();
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
@@ -400,9 +401,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 
-  const workspaceDir = resolveUserPath(
-    params.cfg.agents?.defaults?.workspace ?? path.join(os.homedir(), "clawd"),
-  );
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
   const nonceA = randomUUID();
   const nonceB = randomUUID();
@@ -452,7 +451,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`,
       );
     }
-    const sessionKey = `agent:dev:${params.label}`;
+    const sessionKey = `agent:${agentId}:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
     let skippedCount = 0;
     const total = params.candidates.length;
@@ -996,9 +995,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       return;
     }
 
-    const workspaceDir = resolveUserPath(
-      cfg.agents?.defaults?.workspace ?? path.join(os.homedir(), "clawd"),
-    );
+    const agentId = "dev";
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     await fs.mkdir(workspaceDir, { recursive: true });
     const nonceA = randomUUID();
     const nonceB = randomUUID();
@@ -1021,7 +1019,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     });
 
     try {
-      const sessionKey = "agent:dev:live-zai-fallback";
+      const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
       await client.request<Record<string, unknown>>("sessions.patch", {
         key: sessionKey,

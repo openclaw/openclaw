@@ -15,6 +15,7 @@ import {
 import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
+import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const DIRECT_ENABLED = Boolean(process.env.CLAWDBOT_LIVE_MODELS?.trim());
@@ -438,6 +439,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (minimax empty response)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "opencode" &&
+              isRateLimitErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (rate limit)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);
