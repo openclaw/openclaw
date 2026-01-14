@@ -132,7 +132,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     body: text,
   });
   let shouldClearHistory = false;
-  if (!isDirectMessage) {
+  const shouldIncludeChannelHistory =
+    !isDirectMessage &&
+    !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+  if (shouldIncludeChannelHistory) {
     combinedBody = buildHistoryContextFromMap({
       historyMap: guildHistories,
       historyKey: message.channelId,
@@ -147,10 +150,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
         }),
     });
+    shouldClearHistory = true;
+  }
+  if (!isDirectMessage) {
     const name = formatDiscordUserTag(author);
     const id = author.id;
     combinedBody = `${combinedBody}\n[from: ${name} user id:${id}]`;
-    shouldClearHistory = true;
   }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   if (replyContext) {
@@ -197,7 +202,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     parentSessionKey,
     useSuffix: false,
   });
-  const ctxPayload = {
+  let ctxPayload = {
     Body: combinedBody,
     RawBody: baseText,
     CommandBody: baseText,
@@ -253,6 +258,35 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const deliverTarget = replyPlan.deliverTarget;
   replyTarget = replyPlan.replyTarget;
   const replyReference = replyPlan.replyReference;
+
+  // If autoThread created a new thread, ensure we also isolate session context to that thread.
+  if (createdThreadId && replyTarget === `channel:${createdThreadId}`) {
+    const threadSessionKey = buildAgentSessionKey({
+      agentId: route.agentId,
+      channel: route.channel,
+      peer: { kind: "channel", id: createdThreadId },
+    });
+    const autoParentSessionKey = buildAgentSessionKey({
+      agentId: route.agentId,
+      channel: route.channel,
+      peer: { kind: "channel", id: message.channelId },
+    });
+    const autoThreadKeys = resolveThreadSessionKeys({
+      baseSessionKey: threadSessionKey,
+      threadId: createdThreadId,
+      parentSessionKey: autoParentSessionKey,
+      useSuffix: false,
+    });
+
+    ctxPayload = {
+      ...ctxPayload,
+      From: `group:${createdThreadId}`,
+      To: `channel:${createdThreadId}`,
+      OriginatingTo: `channel:${createdThreadId}`,
+      SessionKey: autoThreadKeys.sessionKey,
+      ParentSessionKey: autoThreadKeys.parentSessionKey,
+    };
+  }
 
   if (isDirectMessage) {
     const sessionCfg = cfg.session;
