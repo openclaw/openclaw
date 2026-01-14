@@ -8,8 +8,8 @@
 - Docs: standardize Claude Code CLI naming across docs and prompts. (follow-up to #915)
 
 ### Fixes
-- Mac: pass auth token/password to dashboard URL for authenticated access.
-- UI: use application-defined WebSocket close code (browser compatibility).
+ - Mac: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
+ - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
 - macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
