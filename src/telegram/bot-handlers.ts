@@ -1,5 +1,7 @@
 // @ts-nocheck
-import { danger, logVerbose } from "../globals.js";
+import { loadConfig } from "../config/config.js";
+import { writeConfigFile } from "../config/io.js";
+import { danger, logVerbose, warn } from "../globals.js";
 import { resolveMedia } from "./bot/delivery.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
@@ -72,6 +74,58 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
     } finally {
       await bot.api.answerCallbackQuery(callback.id).catch(() => {});
+    }
+  });
+
+  // Handle group migration to supergroup (chat ID changes)
+  bot.on("message:migrate_to_chat_id", async (ctx) => {
+    try {
+      const msg = ctx.message;
+      if (!msg?.migrate_to_chat_id) return;
+
+      const oldChatId = String(msg.chat.id);
+      const newChatId = String(msg.migrate_to_chat_id);
+      const chatTitle = (msg.chat as { title?: string }).title ?? "Unknown";
+
+      runtime.log?.(
+        warn(
+          `[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`,
+        ),
+      );
+
+      // Check if old chat ID has config and migrate it
+      const currentConfig = await loadConfig();
+      const telegramGroups = currentConfig.channels?.telegram?.groups;
+
+      if (telegramGroups && telegramGroups[oldChatId]) {
+        const groupConfig = telegramGroups[oldChatId];
+        runtime.log?.(
+          warn(
+            `[telegram] Migrating group config from ${oldChatId} to ${newChatId}`,
+          ),
+        );
+
+        // Copy config to new ID
+        telegramGroups[newChatId] = groupConfig;
+        // Remove old ID
+        delete telegramGroups[oldChatId];
+
+        // Save updated config
+        await writeConfigFile(currentConfig);
+        runtime.log?.(
+          warn(`[telegram] Group config migrated and saved successfully`),
+        );
+      } else {
+        runtime.log?.(
+          warn(
+            `[telegram] No config found for old group ID ${oldChatId}, migration logged only`,
+          ),
+        );
+      }
+    } catch (err) {
+      runtime.error?.(
+        danger(`[telegram] Group migration handler failed: ${String(err)}`),
+      );
     }
   });
 
