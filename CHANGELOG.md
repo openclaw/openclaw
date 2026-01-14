@@ -7,6 +7,7 @@
 
 ### Fixes
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
+- macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
 
 ## 2026.1.13
