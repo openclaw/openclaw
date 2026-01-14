@@ -103,6 +103,7 @@ group messages, so use admin if you need full visibility.
 ## Limits
 - Outbound text is chunked to `channels.telegram.textChunkLimit` (default 4000).
 - Media downloads/uploads are capped by `channels.telegram.mediaMaxMb` (default 5).
+- Telegram Bot API requests time out after `channels.telegram.timeoutSeconds` (default 500 via grammY). Set lower to avoid long hangs.
 - Group history context uses `channels.telegram.historyLimit` (or `channels.telegram.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Group activation modes

@@ -148,9 +148,20 @@ export async function sendMessageTelegram(
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
   const fetchImpl = resolveTelegramFetch();
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const timeoutSeconds =
+    typeof account.config.timeoutSeconds === "number" &&
+    Number.isFinite(account.config.timeoutSeconds)
+      ? Math.max(1, Math.floor(account.config.timeoutSeconds))
+      : undefined;
+  const client: ApiClientOptions | undefined =
+    fetchImpl || timeoutSeconds
+      ? {
+          ...(fetchImpl
+            ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+            : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        }
+      : undefined;
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
