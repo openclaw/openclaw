@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -16,7 +16,6 @@ import {
   canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveMainSessionKey,
-  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   type SessionScope,
@@ -26,144 +25,26 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
-export type GatewaySessionsDefaults = {
-  model: string | null;
-  contextTokens: number | null;
-};
-
-export type GatewaySessionRow = {
-  key: string;
-  kind: "direct" | "group" | "global" | "unknown";
-  label?: string;
-  displayName?: string;
-  channel?: string;
-  subject?: string;
-  room?: string;
-  space?: string;
-  chatType?: "direct" | "group" | "room";
-  updatedAt: number | null;
-  sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  sendPolicy?: "allow" | "deny";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  responseUsage?: "on" | "off";
-  modelProvider?: string;
-  model?: string;
-  contextTokens?: number;
-  lastChannel?: SessionEntry["lastChannel"];
-  lastTo?: string;
-  lastAccountId?: string;
-};
-
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-};
-
-export type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
-
-export type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: SessionEntry;
-};
-
-export function readSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(
-    sessionId,
-    storePath,
-    sessionFile,
-  );
-
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) return [];
-
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const messages: unknown[] = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messages.push(parsed.message);
-      }
-    } catch {
-      // ignore bad lines
-    }
-  }
-  return messages;
-}
-
-export function resolveSessionTranscriptCandidates(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string[] {
-  const candidates: string[] = [];
-  if (sessionFile) candidates.push(sessionFile);
-  if (storePath) {
-    const dir = path.dirname(storePath);
-    candidates.push(path.join(dir, `${sessionId}.jsonl`));
-  }
-  if (agentId) {
-    candidates.push(resolveSessionTranscriptPath(sessionId, agentId));
-  }
-  candidates.push(
-    path.join(os.homedir(), ".clawdbot", "sessions", `${sessionId}.jsonl`),
-  );
-  return candidates;
-}
-
-export function archiveFileOnDisk(filePath: string, reason: string): string {
-  const ts = new Date().toISOString().replaceAll(":", "-");
-  const archived = `${filePath}.${reason}.${ts}`;
-  fs.renameSync(filePath, archived);
-  return archived;
-}
-
-function jsonUtf8Bytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Buffer.byteLength(String(value), "utf8");
-  }
-}
-
-export function capArrayByJsonBytes<T>(
-  items: T[],
-  maxBytes: number,
-): { items: T[]; bytes: number } {
-  if (items.length === 0) return { items, bytes: 2 };
-  const parts = items.map((item) => jsonUtf8Bytes(item));
-  let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
-  let start = 0;
-  while (bytes > maxBytes && start < items.length - 1) {
-    bytes -= parts[start] + 1;
-    start += 1;
-  }
-  const next = start > 0 ? items.slice(start) : items;
-  return { items: next, bytes };
-}
+export {
+  archiveFileOnDisk,
+  capArrayByJsonBytes,
+  readSessionMessages,
+  resolveSessionTranscriptCandidates,
+} from "./session-utils.fs.js";
+export type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "./session-utils.types.js";
 
 export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();

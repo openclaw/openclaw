@@ -33,6 +33,15 @@ export async function maybeRepairUiProtocolFreshness(
         "UI",
       );
 
+      // In slim/docker environments we may not have the UI source tree. Trying
+      // to build would fail (and spam logs), so skip the interactive repair.
+      const uiSourcesPath = path.join(root, "ui/package.json");
+      const uiSourcesExist = await fs.stat(uiSourcesPath).catch(() => null);
+      if (!uiSourcesExist) {
+        note("Skipping UI build: ui/ sources not present.", "UI");
+        return;
+      }
+
       const shouldRepair = await prompter.confirmRepair({
         message: "Build Control UI assets now?",
         initialValue: true,
@@ -99,6 +108,13 @@ export async function maybeRepairUiProtocolFreshness(
         });
 
         if (shouldRepair) {
+          const uiSourcesPath = path.join(root, "ui/package.json");
+          const uiSourcesExist = await fs.stat(uiSourcesPath).catch(() => null);
+          if (!uiSourcesExist) {
+            note("Skipping UI rebuild: ui/ sources not present.", "UI");
+            return;
+          }
+
           note("Rebuilding stale UI assets... (this may take a moment)", "UI");
           // Use scripts/ui.js to build, assuming node is available as we are running in it.
           // We use the same node executable to run the script.

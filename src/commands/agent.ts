@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import {
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
@@ -7,13 +6,8 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { runCliAgent } from "../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
-import { lookupContextTokens } from "../agents/context.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../agents/defaults.js";
+import { getCliSessionId } from "../agents/cli-session.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
@@ -26,9 +20,7 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
-import { hasNonzeroUsage } from "../agents/usage.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import {
   formatThinkingLevels,
   formatXHighModelHint,
@@ -38,25 +30,11 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
+import { loadConfig } from "../config/config.js";
 import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../channels/plugins/index.js";
-import type { ChannelOutboundTargetMode } from "../channels/plugins/types.js";
-import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
-import {
-  type CliDeps,
-  createDefaultDeps,
-  createOutboundSendDeps,
-} from "../cli/deps.js";
-import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import {
-  DEFAULT_IDLE_MINUTES,
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
-  resolveSessionKey,
-  resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -64,139 +42,14 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
-import {
-  formatOutboundPayloadLog,
-  type NormalizedOutboundPayload,
-  normalizeOutboundPayloads,
-  normalizeOutboundPayloadsForJson,
-} from "../infra/outbound/payloads.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
-import {
-  isInternalMessageChannel,
-  resolveGatewayMessageChannel,
-  resolveMessageChannel,
-} from "../utils/message-channel.js";
-
-/** Image content block for Claude API multimodal messages. */
-type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
-
-type AgentCommandOpts = {
-  message: string;
-  /** Optional image attachments for multimodal messages. */
-  images?: ImageContent[];
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  thinking?: string;
-  thinkingOnce?: string;
-  verbose?: string;
-  json?: boolean;
-  timeout?: string;
-  deliver?: boolean;
-  /** Message channel context (webchat|voicewake|whatsapp|...). */
-  messageChannel?: string;
-  channel?: string; // delivery channel (whatsapp|telegram|...)
-  deliveryTargetMode?: ChannelOutboundTargetMode;
-  bestEffortDeliver?: boolean;
-  abortSignal?: AbortSignal;
-  lane?: string;
-  runId?: string;
-  extraSystemPrompt?: string;
-};
-
-type SessionResolution = {
-  sessionId: string;
-  sessionKey?: string;
-  sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath: string;
-  isNewSession: boolean;
-  persistedThinking?: ThinkLevel;
-  persistedVerbose?: VerboseLevel;
-};
-
-function resolveSession(opts: {
-  cfg: ClawdbotConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): SessionResolution {
-  const sessionCfg = opts.cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const idleMinutes = Math.max(
-    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
-    1,
-  );
-  const idleMs = idleMinutes * 60_000;
-  const explicitSessionKey = opts.sessionKey?.trim();
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
-  const storePath = resolveStorePath(sessionCfg?.store, {
-    agentId: storeAgentId,
-  });
-  const sessionStore = loadSessionStore(storePath);
-  const now = Date.now();
-
-  const ctx: MsgContext | undefined = opts.to?.trim()
-    ? { From: opts.to }
-    : undefined;
-  let sessionKey: string | undefined =
-    explicitSessionKey ??
-    (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
-  let sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
-
-  // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
-  if (
-    !explicitSessionKey &&
-    opts.sessionId &&
-    (!sessionEntry || sessionEntry.sessionId !== opts.sessionId)
-  ) {
-    const foundKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === opts.sessionId,
-    );
-    if (foundKey) {
-      sessionKey = sessionKey ?? foundKey;
-      sessionEntry = sessionStore[foundKey];
-    }
-  }
-
-  const fresh = sessionEntry && sessionEntry.updatedAt >= now - idleMs;
-  const sessionId =
-    opts.sessionId?.trim() ||
-    (fresh ? sessionEntry?.sessionId : undefined) ||
-    crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
-
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
-
-  return {
-    sessionId,
-    sessionKey,
-    sessionEntry,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-  };
-}
+import { resolveMessageChannel } from "../utils/message-channel.js";
+import { deliverAgentCommandResult } from "./agent/delivery.js";
+import { resolveSession } from "./agent/session.js";
+import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
+import type { AgentCommandOpts } from "./agent/types.js";
 
 export async function agentCommand(
   opts: AgentCommandOpts,
@@ -593,142 +446,29 @@ export async function agentCommand(
 
   // Update token+model fields in the session store.
   if (sessionStore && sessionKey) {
-    const usage = result.meta.agentMeta?.usage;
-    const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed =
-      result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
-    const contextTokens =
-      agentCfg?.contextTokens ??
-      lookupContextTokens(modelUsed) ??
-      DEFAULT_CONTEXT_TOKENS;
-
-    const entry = sessionStore[sessionKey] ?? {
+    await updateSessionStoreAfterAgentRun({
+      cfg,
+      contextTokensOverride: agentCfg?.contextTokens,
       sessionId,
-      updatedAt: Date.now(),
-    };
-    const next: SessionEntry = {
-      ...entry,
-      sessionId,
-      updatedAt: Date.now(),
-      modelProvider: providerUsed,
-      model: modelUsed,
-      contextTokens,
-    };
-    if (isCliProvider(providerUsed, cfg)) {
-      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-      if (cliSessionId) setCliSessionId(next, providerUsed, cliSessionId);
-    }
-    next.abortedLastRun = result.meta.aborted ?? false;
-    if (hasNonzeroUsage(usage)) {
-      const input = usage.input ?? 0;
-      const output = usage.output ?? 0;
-      const promptTokens =
-        input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-      next.inputTokens = input;
-      next.outputTokens = output;
-      next.totalTokens =
-        promptTokens > 0 ? promptTokens : (usage.total ?? input);
-    }
-    sessionStore[sessionKey] = next;
-    await saveSessionStore(storePath, sessionStore);
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: provider,
+      defaultModel: model,
+      fallbackProvider,
+      fallbackModel,
+      result,
+    });
   }
 
   const payloads = result.payloads ?? [];
-  const deliver = opts.deliver === true;
-  const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryChannel =
-    resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
-  // Channel docking: delivery channels are resolved via plugin registry.
-  const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
-    ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
-    : undefined;
-
-  const logDeliveryError = (err: unknown) => {
-    const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
-    runtime.error?.(message);
-    if (!runtime.error) runtime.log(message);
-  };
-
-  const isDeliveryChannelKnown =
-    isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
-
-  const targetMode: ChannelOutboundTargetMode =
-    opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedTarget =
-    deliver && isDeliveryChannelKnown && deliveryChannel
-      ? resolveOutboundTarget({
-          channel: deliveryChannel,
-          to: opts.to,
-          cfg,
-          accountId:
-            targetMode === "implicit" ? sessionEntry?.lastAccountId : undefined,
-          mode: targetMode,
-        })
-      : null;
-  const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
-
-  if (deliver) {
-    if (!isDeliveryChannelKnown) {
-      const err = new Error(`Unknown channel: ${deliveryChannel}`);
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) throw resolvedTarget.error;
-      logDeliveryError(resolvedTarget.error);
-    }
-  }
-
-  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads);
-  if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        buildOutboundResultEnvelope({
-          payloads: normalizedPayloads,
-          meta: result.meta,
-        }),
-        null,
-        2,
-      ),
-    );
-    if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
-    }
-  }
-
-  if (payloads.length === 0) {
-    runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
-  }
-
-  const deliveryPayloads = normalizeOutboundPayloads(payloads);
-  const logPayload = (payload: NormalizedOutboundPayload) => {
-    if (opts.json) return;
-    const output = formatOutboundPayloadLog(payload);
-    if (output) runtime.log(output);
-  };
-  if (!deliver) {
-    for (const payload of deliveryPayloads) {
-      logPayload(payload);
-    }
-  }
-  if (
-    deliver &&
-    deliveryChannel &&
-    !isInternalMessageChannel(deliveryChannel)
-  ) {
-    if (deliveryTarget) {
-      await deliverOutboundPayloads({
-        cfg,
-        channel: deliveryChannel,
-        to: deliveryTarget,
-        payloads: deliveryPayloads,
-        bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
-        onPayload: logPayload,
-        deps: createOutboundSendDeps(deps, cfg),
-      });
-    }
-  }
-
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return await deliverAgentCommandResult({
+    cfg,
+    deps,
+    runtime,
+    opts,
+    sessionEntry,
+    result,
+    payloads,
+  });
 }

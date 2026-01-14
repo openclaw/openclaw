@@ -20,7 +20,6 @@ const GOOGLE_PREFIXES = ["gemini-3"];
 const ZAI_PREFIXES = ["glm-4.7"];
 const MINIMAX_PREFIXES = ["minimax-m2.1"];
 const XAI_PREFIXES = ["grok-4"];
-const SYNTHETIC_PREFIXES = ["hf:minimaxai/minimax-m2.1"];
 
 function matchesPrefix(id: string, prefixes: string[]): boolean {
   return prefixes.some((prefix) => id.startsWith(prefix));
@@ -72,10 +71,6 @@ export function isModernModelRef(ref: ModelRef): boolean {
 
   if (provider === "xai") {
     return matchesPrefix(id, XAI_PREFIXES);
-  }
-
-  if (provider === "synthetic") {
-    return matchesPrefix(id, SYNTHETIC_PREFIXES);
   }
 
   if (provider === "openrouter" || provider === "opencode") {
