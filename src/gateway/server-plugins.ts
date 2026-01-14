@@ -1,0 +1,42 @@
+import type { loadConfig } from "../config/config.js";
+import { loadClawdbotPlugins } from "../plugins/loader.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
+
+export function loadGatewayPlugins(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  workspaceDir: string;
+  log: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+    debug: (msg: string) => void;
+  };
+  coreGatewayHandlers: Record<string, GatewayRequestHandler>;
+  baseMethods: string[];
+}) {
+  const pluginRegistry = loadClawdbotPlugins({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    logger: {
+      info: (msg) => params.log.info(msg),
+      warn: (msg) => params.log.warn(msg),
+      error: (msg) => params.log.error(msg),
+      debug: (msg) => params.log.debug(msg),
+    },
+    coreGatewayHandlers: params.coreGatewayHandlers,
+  });
+  const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
+  const gatewayMethods = Array.from(
+    new Set([...params.baseMethods, ...pluginMethods]),
+  );
+  if (pluginRegistry.diagnostics.length > 0) {
+    for (const diag of pluginRegistry.diagnostics) {
+      if (diag.level === "error") {
+        params.log.warn(`[plugins] ${diag.message}`);
+      } else {
+        params.log.info(`[plugins] ${diag.message}`);
+      }
+    }
+  }
+  return { pluginRegistry, gatewayMethods };
+}
