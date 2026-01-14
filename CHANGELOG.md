@@ -2,6 +2,9 @@
 
 ## 2026.1.14
 
+### Changes
+- Usage: add MiniMax coding plan usage tracking.
+
 ### Fixes
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
