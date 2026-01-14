@@ -141,11 +141,7 @@ export async function monitorWebInbox(options: {
       });
       if (!access.allowed) continue;
 
-      if (
-        id &&
-        !access.isSelfChat &&
-        options.sendReadReceipts !== false
-      ) {
+      if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
         const participant = msg.key?.participant;
         try {
           await sock.readMessages([{ remoteJid, id, participant, fromMe: false }]);
