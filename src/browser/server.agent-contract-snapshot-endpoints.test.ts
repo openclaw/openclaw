@@ -129,6 +129,7 @@ vi.mock("./cdp.js", () => ({
   createTargetViaCdp: cdpMocks.createTargetViaCdp,
   normalizeCdpWsUrl: vi.fn((wsUrl: string) => wsUrl),
   snapshotAria: cdpMocks.snapshotAria,
+  getHeadersWithAuth: vi.fn(() => ({})),
 }));
 
 vi.mock("./pw-ai.js", () => pwMocks);
