@@ -80,7 +80,9 @@ vi.mock("grammy", () => ({
     command = commandSpy;
     constructor(
       public token: string,
-      public options?: { client?: { fetch?: typeof fetch } },
+      public options?: {
+        client?: { fetch?: typeof fetch; timeoutSeconds?: number };
+      },
     ) {
       botCtorSpy(token, options);
     }
@@ -194,6 +196,20 @@ describe("createTelegramBot", () => {
         (globalThis as { Bun?: unknown }).Bun = originalBun;
       }
     }
+  });
+  it("passes timeoutSeconds even without a custom fetch", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
   });
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });

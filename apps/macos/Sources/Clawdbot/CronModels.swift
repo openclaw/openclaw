@@ -67,20 +67,20 @@ enum CronSchedule: Codable, Equatable {
     }
 }
 
-	enum CronPayload: Codable, Equatable {
-	    case systemEvent(text: String)
-	    case agentTurn(
-	        message: String,
-	        thinking: String?,
-	        timeoutSeconds: Int?,
-	        deliver: Bool?,
-	        channel: String?,
-	        to: String?,
-	        bestEffortDeliver: Bool?)
+enum CronPayload: Codable, Equatable {
+    case systemEvent(text: String)
+    case agentTurn(
+        message: String,
+        thinking: String?,
+        timeoutSeconds: Int?,
+        deliver: Bool?,
+        channel: String?,
+        to: String?,
+        bestEffortDeliver: Bool?)
 
-	    enum CodingKeys: String, CodingKey {
-	        case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver
-	    }
+    enum CodingKeys: String, CodingKey {
+        case kind, text, message, thinking, timeoutSeconds, deliver, channel, provider, to, bestEffortDeliver
+    }
 
     var kind: String {
         switch self {
@@ -95,16 +95,16 @@ enum CronSchedule: Codable, Equatable {
         switch kind {
         case "systemEvent":
             self = try .systemEvent(text: container.decode(String.self, forKey: .text))
-	        case "agentTurn":
-	            self = try .agentTurn(
-	                message: container.decode(String.self, forKey: .message),
-	                thinking: container.decodeIfPresent(String.self, forKey: .thinking),
-	                timeoutSeconds: container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
-	                deliver: container.decodeIfPresent(Bool.self, forKey: .deliver),
-	                channel: container.decodeIfPresent(String.self, forKey: .channel)
-	                    ?? container.decodeIfPresent(String.self, forKey: .provider),
-	                to: container.decodeIfPresent(String.self, forKey: .to),
-	                bestEffortDeliver: container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
+        case "agentTurn":
+            self = try .agentTurn(
+                message: container.decode(String.self, forKey: .message),
+                thinking: container.decodeIfPresent(String.self, forKey: .thinking),
+                timeoutSeconds: container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
+                deliver: container.decodeIfPresent(Bool.self, forKey: .deliver),
+                channel: container.decodeIfPresent(String.self, forKey: .channel)
+                    ?? container.decodeIfPresent(String.self, forKey: .provider),
+                to: container.decodeIfPresent(String.self, forKey: .to),
+                bestEffortDeliver: container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -119,17 +119,17 @@ enum CronSchedule: Codable, Equatable {
         switch self {
         case let .systemEvent(text):
             try container.encode(text, forKey: .text)
-	        case let .agentTurn(message, thinking, timeoutSeconds, deliver, channel, to, bestEffortDeliver):
-	            try container.encode(message, forKey: .message)
-	            try container.encodeIfPresent(thinking, forKey: .thinking)
-	            try container.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
-	            try container.encodeIfPresent(deliver, forKey: .deliver)
-	            try container.encodeIfPresent(channel, forKey: .channel)
-	            try container.encodeIfPresent(to, forKey: .to)
-	            try container.encodeIfPresent(bestEffortDeliver, forKey: .bestEffortDeliver)
-	        }
-	    }
-	}
+        case let .agentTurn(message, thinking, timeoutSeconds, deliver, channel, to, bestEffortDeliver):
+            try container.encode(message, forKey: .message)
+            try container.encodeIfPresent(thinking, forKey: .thinking)
+            try container.encodeIfPresent(timeoutSeconds, forKey: .timeoutSeconds)
+            try container.encodeIfPresent(deliver, forKey: .deliver)
+            try container.encodeIfPresent(channel, forKey: .channel)
+            try container.encodeIfPresent(to, forKey: .to)
+            try container.encodeIfPresent(bestEffortDeliver, forKey: .bestEffortDeliver)
+        }
+    }
+}
 
 struct CronIsolation: Codable, Equatable {
     var postToMainPrefix: String?

@@ -63,6 +63,8 @@ export type TelegramAccountConfig = {
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
+  timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
   proxy?: string;

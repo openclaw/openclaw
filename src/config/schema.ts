@@ -175,6 +175,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
   "channels.telegram.retry.jitter": "Telegram Retry Jitter",
+  "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
   "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
   "channels.whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
   "channels.signal.dmPolicy": "Signal DM Policy",
@@ -330,6 +331,8 @@ const FIELD_HELP: Record<string, string> = {
     "Maximum retry delay cap in ms for Telegram outbound calls.",
   "channels.telegram.retry.jitter":
     "Jitter factor (0-1) applied to Telegram retry delays.",
+  "channels.telegram.timeoutSeconds":
+    "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
   "channels.whatsapp.selfChatMode":

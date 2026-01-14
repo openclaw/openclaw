@@ -93,14 +93,30 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       throw new Error(`exit ${code}`);
     },
   };
+  const cfg = opts.config ?? loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const telegramCfg = account.config;
+
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
   const isBun = "Bun" in globalThis || Boolean(process?.versions?.bun);
   const shouldProvideFetch = Boolean(opts.proxyFetch) || isBun;
-  const client: ApiClientOptions | undefined = fetchImpl
-    ? shouldProvideFetch
-      ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-      : undefined
-    : undefined;
+  const timeoutSeconds =
+    typeof telegramCfg?.timeoutSeconds === "number" &&
+    Number.isFinite(telegramCfg.timeoutSeconds)
+      ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
+      : undefined;
+  const client: ApiClientOptions | undefined =
+    shouldProvideFetch || timeoutSeconds
+      ? {
+          ...(shouldProvideFetch && fetchImpl
+            ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+            : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        }
+      : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
@@ -138,12 +154,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     recordUpdateId(ctx);
   });
 
-  const cfg = opts.config ?? loadConfig();
-  const account = resolveTelegramAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const telegramCfg = account.config;
   const historyLimit = Math.max(
     0,
     telegramCfg.historyLimit ??
