@@ -23,7 +23,7 @@ read_when:
 - **Gemini CLI**: OAuth tokens in auth profiles.
 - **Antigravity**: OAuth tokens in auth profiles.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
-- **MiniMax**: API key (coding plan key); uses the 5‑hour coding plan window.
+- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY` or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window.
 - **z.ai**: API key via env/config/auth store.
 
 Usage is hidden if no matching OAuth/API credentials exist.
