@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
+import {
+  isWhatsAppGroupJid,
+  isWhatsAppUserJid,
+  normalizeWhatsAppTarget,
+} from "./normalize.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
@@ -24,6 +28,25 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("1555123@s.whatsapp.net")).toBe("+1555123");
   });
 
+  it("normalizes user JIDs with device suffix to E.164", () => {
+    // This is the bug fix: JIDs like "41796666864:0@s.whatsapp.net" should
+    // normalize to "+41796666864", not "+417966668640" (extra digit from ":0")
+    expect(normalizeWhatsAppTarget("41796666864:0@s.whatsapp.net")).toBe(
+      "+41796666864",
+    );
+    expect(normalizeWhatsAppTarget("1234567890:123@s.whatsapp.net")).toBe(
+      "+1234567890",
+    );
+    // Without device suffix still works
+    expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe(
+      "+41796666864",
+    );
+  });
+
+  it("normalizes LID JIDs to E.164", () => {
+    expect(normalizeWhatsAppTarget("123456789@lid")).toBe("+123456789");
+  });
+
   it("rejects invalid targets", () => {
     expect(normalizeWhatsAppTarget("wat")).toBeNull();
     expect(normalizeWhatsAppTarget("whatsapp:")).toBeNull();
@@ -34,6 +57,16 @@ describe("normalizeWhatsAppTarget", () => {
   it("handles repeated prefixes", () => {
     expect(normalizeWhatsAppTarget("whatsapp:whatsapp:+1555")).toBe("+1555");
     expect(normalizeWhatsAppTarget("group:group:120@g.us")).toBe("120@g.us");
+  });
+});
+
+describe("isWhatsAppUserJid", () => {
+  it("detects user JIDs with various formats", () => {
+    expect(isWhatsAppUserJid("41796666864:0@s.whatsapp.net")).toBe(true);
+    expect(isWhatsAppUserJid("1234567890@s.whatsapp.net")).toBe(true);
+    expect(isWhatsAppUserJid("123456789@lid")).toBe(true);
+    expect(isWhatsAppUserJid("123456789-987654321@g.us")).toBe(false);
+    expect(isWhatsAppUserJid("+1555123")).toBe(false);
   });
 });
 

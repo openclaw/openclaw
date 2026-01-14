@@ -15,6 +15,7 @@
 - Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
 - Discord: isolate autoThread thread context. (#856) — thanks @davidguttman.
 - WhatsApp: fix context isolation using wrong ID (was bot's number, now conversation ID). (#911) — thanks @tristanmanchester.
+- WhatsApp: normalize user JIDs with device suffix for allowlist checks in groups. (#838) — thanks @peschee.
 
 ## 2026.1.13
 
