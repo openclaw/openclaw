@@ -1,0 +1,20 @@
+import type { ClawdbotConfig } from "../config/config.js";
+import { MemoryIndexManager } from "./manager.js";
+
+export type MemorySearchManagerResult = {
+  manager: MemoryIndexManager | null;
+  error?: string;
+};
+
+export async function getMemorySearchManager(params: {
+  cfg: ClawdbotConfig;
+  agentId: string;
+}): Promise<MemorySearchManagerResult> {
+  try {
+    const manager = await MemoryIndexManager.get(params);
+    return { manager };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { manager: null, error: message };
+  }
+}
