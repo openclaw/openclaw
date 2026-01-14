@@ -328,7 +328,11 @@ struct MenuContent: View {
                 components.scheme = "http"
             }
             components.path = "/"
-            components.query = nil
+            if let token = config.token, !token.isEmpty {
+                components.queryItems = [URLQueryItem(name: "token", value: token)]
+            } else if let password = config.password, !password.isEmpty {
+                components.queryItems = [URLQueryItem(name: "password", value: password)]
+            }
             guard let url = components.url else {
                 throw NSError(domain: "Dashboard", code: 2, userInfo: [
                     NSLocalizedDescriptionKey: "Failed to build dashboard URL",
