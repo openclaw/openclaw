@@ -147,7 +147,10 @@ export async function occupyPort(): Promise<{
 export function onceMessage<T = unknown>(
   ws: WebSocket,
   filter: (obj: unknown) => boolean,
-  timeoutMs = 3000,
+  // Full-suite runs can saturate the event loop (581+ files). Keep this high
+  // enough to avoid flaky RPC timeouts, but still fail fast when a response
+  // never arrives.
+  timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
