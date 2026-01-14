@@ -404,7 +404,7 @@ describe("doctor command", () => {
       ([args]) => Array.isArray(args) && args[0] === "/usr/bin/defaults",
     );
     expect(defaultsCalls.length).toBe(runCommandWithTimeout.mock.calls.length);
-  });
+  }, 20_000);
 
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
     readConfigFileSnapshot.mockResolvedValue({

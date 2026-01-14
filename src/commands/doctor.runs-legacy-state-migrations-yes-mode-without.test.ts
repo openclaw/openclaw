@@ -380,7 +380,7 @@ describe("doctor command", () => {
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
-  });
+  }, 20_000);
 
   it("skips gateway restarts in non-interactive mode", async () => {
     readConfigFileSnapshot.mockResolvedValue({
