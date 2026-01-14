@@ -8,6 +8,7 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isLoopbackHost } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 
 export type BrowserConsoleMessage = {
@@ -261,6 +262,13 @@ export async function getConnectedBrowser(cdpUrl: string): Promise<Browser> {
   return browser;
 }
 
+function getWsEndpoint(cdpUrl: string): string {
+  const u = new URL(cdpUrl);
+  // Ensure we use wss/ws matching the protocol
+  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+  return u.toString();
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) return cached;
@@ -271,7 +279,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(
+          () => null,
+        );
         const endpoint = wsUrl ?? normalized;
         const browser = await chromium.connectOverCDP(endpoint, { timeout });
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized };
