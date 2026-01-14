@@ -133,8 +133,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   let shouldClearHistory = false;
   const shouldIncludeChannelHistory =
-    !isDirectMessage &&
-    !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
+    !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
   if (shouldIncludeChannelHistory) {
     combinedBody = buildHistoryContextFromMap({
       historyMap: guildHistories,
