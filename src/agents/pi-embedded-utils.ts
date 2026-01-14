@@ -21,6 +21,32 @@ function stripMinimaxToolCallXml(text: string): string {
   return cleaned;
 }
 
+/**
+ * Strip downgraded tool call text representations that leak into text content.
+ * When replaying history to Gemini, tool calls without `thought_signature` are
+ * downgraded to text blocks like `[Tool Call: name (ID: ...)]`. These should
+ * not be shown to users.
+ */
+function stripDowngradedToolCallText(text: string): string {
+  if (!text) return text;
+  if (!/\[Tool (?:Call|Result)/i.test(text)) return text;
+
+  // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
+  // Match until the next [Tool marker or end of string.
+  let cleaned = text.replace(
+    /\[Tool Call:[^\]]*\]\n?(?:Arguments:[\s\S]*?)?(?=\n*\[Tool |\n*$)/gi,
+    "",
+  );
+
+  // Remove [Tool Result for ID ...] blocks and their content.
+  cleaned = cleaned.replace(
+    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
+    "",
+  );
+
+  return cleaned.trim();
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
     if (!block || typeof block !== "object") return false;
@@ -31,7 +57,9 @@ export function extractAssistantText(msg: AssistantMessage): string {
   const blocks = Array.isArray(msg.content)
     ? msg.content
         .filter(isTextBlock)
-        .map((c) => stripMinimaxToolCallXml(c.text).trim())
+        .map((c) =>
+          stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)).trim(),
+        )
         .filter(Boolean)
     : [];
   return blocks.join("\n").trim();
