@@ -220,7 +220,11 @@ export async function fetchMinimaxUsage(
   const baseResp = isRecord(data.base_resp)
     ? (data.base_resp as MinimaxBaseResp)
     : undefined;
-  if (baseResp?.status_code && baseResp.status_code !== 0) {
+  if (
+    baseResp &&
+    typeof baseResp.status_code === "number" &&
+    baseResp.status_code !== 0
+  ) {
     return {
       provider: "minimax",
       displayName: PROVIDER_LABELS.minimax,
