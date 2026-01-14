@@ -1,18 +1,15 @@
 // @ts-nocheck
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions, Message } from "grammy";
-import { Bot, InputFile, webhookCallback } from "grammy";
+import type { ApiClientOptions } from "grammy";
+import { Bot, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   resolveAckReaction,
   resolveEffectiveMessagesConfig,
 } from "../agents/identity.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
-import {
-  chunkMarkdownText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
+import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
@@ -31,12 +28,7 @@ import {
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import {
-  formatLocationText,
-  type NormalizedLocation,
-  toLocationContext,
-} from "../channels/location.js";
+import { formatLocationText, toLocationContext } from "../channels/location.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -55,40 +47,39 @@ import {
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
-import { mediaKindFromMime } from "../media/constants.js";
-import { fetchRemoteMedia } from "../media/fetch.js";
-import { isGifMedia } from "../media/mime.js";
-import { saveMediaBuffer } from "../media/store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { deliverReplies, resolveMedia } from "./bot/delivery.js";
+import {
+  buildGroupFromLabel,
+  buildGroupLabel,
+  buildSenderLabel,
+  buildSenderName,
+  buildTelegramGroupFrom,
+  buildTelegramGroupPeerId,
+  buildTelegramThreadParams,
+  describeReplyTarget,
+  extractTelegramLocation,
+  hasBotMention,
+  resolveTelegramForumThreadId,
+  resolveTelegramStreamMode,
+} from "./bot/helpers.js";
+import type { TelegramContext, TelegramMessage } from "./bot/types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { markdownToTelegramHtml } from "./format.js";
 import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
 } from "./pairing-store.js";
-import { resolveTelegramVoiceSend } from "./voice.js";
-
-const TELEGRAM_GENERAL_TOPIC_ID = 1;
-
-const PARSE_ERR_RE =
-  /can't parse entities|parse entities|find end of the entity/i;
 
 // Media group aggregation - Telegram sends multi-image messages as separate updates
 // with a shared media_group_id. We buffer them and process as a single message after a short delay.
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
 const RECENT_TELEGRAM_UPDATE_MAX = 2000;
-
-type TelegramMessage = Message.CommonMessage;
-
-type TelegramStreamMode = "off" | "partial" | "block";
 
 type MediaGroupEntry = {
   messages: Array<{
@@ -136,34 +127,6 @@ const createTelegramUpdateDedupe = () =>
     maxSize: RECENT_TELEGRAM_UPDATE_MAX,
   });
 
-/** Telegram Location object */
-interface TelegramLocation {
-  latitude: number;
-  longitude: number;
-  horizontal_accuracy?: number;
-  live_period?: number;
-  heading?: number;
-}
-
-/** Telegram Venue object */
-interface TelegramVenue {
-  location: TelegramLocation;
-  title: string;
-  address: string;
-  foursquare_id?: string;
-  foursquare_type?: string;
-  google_place_id?: string;
-  google_place_type?: string;
-}
-
-type TelegramContext = {
-  message: TelegramMessage;
-  me?: { username?: string };
-  getFile: () => Promise<{
-    file_path?: string;
-  }>;
-};
-
 export type TelegramBotOptions = {
   token: string;
   accountId?: string;
@@ -207,16 +170,6 @@ export function getTelegramSequentialKey(ctx: {
       : `telegram:${chatId}`;
   }
   return "telegram:unknown";
-}
-
-function resolveTelegramForumThreadId(params: {
-  isForum?: boolean;
-  messageThreadId?: number | null;
-}) {
-  if (params.isForum && params.messageThreadId == null) {
-    return TELEGRAM_GENERAL_TOPIC_ID;
-  }
-  return params.messageThreadId ?? undefined;
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
@@ -1474,366 +1427,4 @@ export function createTelegramWebhookCallback(
   path = "/telegram-webhook",
 ) {
   return { path, handler: webhookCallback(bot, "http") };
-}
-
-async function deliverReplies(params: {
-  replies: ReplyPayload[];
-  chatId: string;
-  token: string;
-  runtime: RuntimeEnv;
-  bot: Bot;
-  replyToMode: ReplyToMode;
-  textLimit: number;
-  messageThreadId?: number;
-}) {
-  const {
-    replies,
-    chatId,
-    runtime,
-    bot,
-    replyToMode,
-    textLimit,
-    messageThreadId,
-  } = params;
-  const threadParams = buildTelegramThreadParams(messageThreadId);
-  let hasReplied = false;
-  for (const reply of replies) {
-    if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
-      runtime.error?.(danger("reply missing text/media"));
-      continue;
-    }
-    const replyToId =
-      replyToMode === "off"
-        ? undefined
-        : resolveTelegramReplyId(reply.replyToId);
-    const mediaList = reply.mediaUrls?.length
-      ? reply.mediaUrls
-      : reply.mediaUrl
-        ? [reply.mediaUrl]
-        : [];
-    if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(reply.text || "", textLimit)) {
-        await sendTelegramText(bot, chatId, chunk, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied)
-              ? replyToId
-              : undefined,
-          messageThreadId,
-        });
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
-        }
-      }
-      continue;
-    }
-    // media with optional caption on first item
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const media = await loadWebMedia(mediaUrl);
-      const kind = mediaKindFromMime(media.contentType ?? undefined);
-      const isGif = isGifMedia({
-        contentType: media.contentType,
-        fileName: media.fileName,
-      });
-      const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
-      const file = new InputFile(media.buffer, fileName);
-      const caption = first ? (reply.text ?? undefined) : undefined;
-      first = false;
-      const replyToMessageId =
-        replyToId && (replyToMode === "all" || !hasReplied)
-          ? replyToId
-          : undefined;
-      const mediaParams: Record<string, unknown> = {
-        caption,
-        reply_to_message_id: replyToMessageId,
-      };
-      if (threadParams) {
-        mediaParams.message_thread_id = threadParams.message_thread_id;
-      }
-      if (isGif) {
-        await bot.api.sendAnimation(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, {
-          ...mediaParams,
-        });
-      } else if (kind === "audio") {
-        const { useVoice } = resolveTelegramVoiceSend({
-          wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
-          contentType: media.contentType,
-          fileName,
-          logFallback: logVerbose,
-        });
-        if (useVoice) {
-          // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
-          await bot.api.sendVoice(chatId, file, {
-            ...mediaParams,
-          });
-        } else {
-          // Audio file - displays with metadata (title, duration) - DEFAULT
-          await bot.api.sendAudio(chatId, file, {
-            ...mediaParams,
-          });
-        }
-      } else {
-        await bot.api.sendDocument(chatId, file, {
-          ...mediaParams,
-        });
-      }
-      if (replyToId && !hasReplied) {
-        hasReplied = true;
-      }
-    }
-  }
-}
-
-function buildTelegramThreadParams(messageThreadId?: number) {
-  return messageThreadId != null
-    ? { message_thread_id: messageThreadId }
-    : undefined;
-}
-
-function resolveTelegramStreamMode(
-  telegramCfg: ClawdbotConfig["telegram"],
-): TelegramStreamMode {
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off" || raw === "partial" || raw === "block") return raw;
-  return "partial";
-}
-
-function buildTelegramGroupPeerId(
-  chatId: number | string,
-  messageThreadId?: number,
-) {
-  return messageThreadId != null
-    ? `${chatId}:topic:${messageThreadId}`
-    : String(chatId);
-}
-
-function buildTelegramGroupFrom(
-  chatId: number | string,
-  messageThreadId?: number,
-) {
-  return messageThreadId != null
-    ? `group:${chatId}:topic:${messageThreadId}`
-    : `group:${chatId}`;
-}
-
-function buildSenderName(msg: TelegramMessage) {
-  const name =
-    [msg.from?.first_name, msg.from?.last_name]
-      .filter(Boolean)
-      .join(" ")
-      .trim() || msg.from?.username;
-  return name || undefined;
-}
-
-function buildSenderLabel(msg: TelegramMessage, senderId?: number | string) {
-  const name = buildSenderName(msg);
-  const username = msg.from?.username ? `@${msg.from.username}` : undefined;
-  let label = name;
-  if (name && username) {
-    label = `${name} (${username})`;
-  } else if (!name && username) {
-    label = username;
-  }
-  const normalizedSenderId =
-    senderId != null && `${senderId}`.trim() ? `${senderId}`.trim() : undefined;
-  const fallbackId =
-    normalizedSenderId ??
-    (msg.from?.id != null ? String(msg.from.id) : undefined);
-  const idPart = fallbackId ? `id:${fallbackId}` : undefined;
-  if (label && idPart) return `${label} ${idPart}`;
-  if (label) return label;
-  return idPart ?? "id:unknown";
-}
-
-function buildGroupLabel(
-  msg: TelegramMessage,
-  chatId: number | string,
-  messageThreadId?: number,
-) {
-  const title = msg.chat?.title;
-  const topicSuffix =
-    messageThreadId != null ? ` topic:${messageThreadId}` : "";
-  if (title) return `${title} id:${chatId}${topicSuffix}`;
-  return `group:${chatId}${topicSuffix}`;
-}
-
-function buildGroupFromLabel(
-  msg: TelegramMessage,
-  chatId: number | string,
-  senderId?: number | string,
-  messageThreadId?: number,
-) {
-  const groupLabel = buildGroupLabel(msg, chatId, messageThreadId);
-  const senderLabel = buildSenderLabel(msg, senderId);
-  return `${groupLabel} from ${senderLabel}`;
-}
-
-function hasBotMention(msg: TelegramMessage, botUsername: string) {
-  const text = (msg.text ?? msg.caption ?? "").toLowerCase();
-  if (text.includes(`@${botUsername}`)) return true;
-  const entities = msg.entities ?? msg.caption_entities ?? [];
-  for (const ent of entities) {
-    if (ent.type !== "mention") continue;
-    const slice = (msg.text ?? msg.caption ?? "").slice(
-      ent.offset,
-      ent.offset + ent.length,
-    );
-    if (slice.toLowerCase() === `@${botUsername}`) return true;
-  }
-  return false;
-}
-
-function resolveTelegramReplyId(raw?: string): number | undefined {
-  if (!raw) return undefined;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) return undefined;
-  return parsed;
-}
-
-async function resolveMedia(
-  ctx: TelegramContext,
-  maxBytes: number,
-  token: string,
-  proxyFetch?: typeof fetch,
-): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
-  const msg = ctx.message;
-  const m =
-    msg.photo?.[msg.photo.length - 1] ??
-    msg.video ??
-    msg.document ??
-    msg.audio ??
-    msg.voice;
-  if (!m?.file_id) return null;
-  const file = await ctx.getFile();
-  if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path");
-  }
-  const fetchImpl = proxyFetch ?? globalThis.fetch;
-  if (!fetchImpl) {
-    throw new Error(
-      "fetch is not available; set channels.telegram.proxy in config",
-    );
-  }
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl,
-    filePathHint: file.file_path,
-  });
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-  );
-  let placeholder = "<media:document>";
-  if (msg.photo) placeholder = "<media:image>";
-  else if (msg.video) placeholder = "<media:video>";
-  else if (msg.audio || msg.voice) placeholder = "<media:audio>";
-  return { path: saved.path, contentType: saved.contentType, placeholder };
-}
-
-async function sendTelegramText(
-  bot: Bot,
-  chatId: string,
-  text: string,
-  runtime: RuntimeEnv,
-  opts?: { replyToMessageId?: number; messageThreadId?: number },
-): Promise<number | undefined> {
-  const threadParams = buildTelegramThreadParams(opts?.messageThreadId);
-  const baseParams: Record<string, unknown> = {
-    reply_to_message_id: opts?.replyToMessageId,
-  };
-  if (threadParams) {
-    baseParams.message_thread_id = threadParams.message_thread_id;
-  }
-  const htmlText = markdownToTelegramHtml(text);
-  try {
-    const res = await bot.api.sendMessage(chatId, htmlText, {
-      parse_mode: "HTML",
-      ...baseParams,
-    });
-    return res.message_id;
-  } catch (err) {
-    const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText)) {
-      runtime.log?.(
-        `telegram HTML parse failed; retrying without formatting: ${errText}`,
-      );
-      const res = await bot.api.sendMessage(chatId, text, {
-        ...baseParams,
-      });
-      return res.message_id;
-    }
-    throw err;
-  }
-}
-
-function describeReplyTarget(msg: TelegramMessage) {
-  const reply = msg.reply_to_message;
-  if (!reply) return null;
-  const replyBody = (reply.text ?? reply.caption ?? "").trim();
-  let body = replyBody;
-  if (!body) {
-    if (reply.photo) body = "<media:image>";
-    else if (reply.video) body = "<media:video>";
-    else if (reply.audio || reply.voice) body = "<media:audio>";
-    else if (reply.document) body = "<media:document>";
-    else {
-      const locationData = extractTelegramLocation(reply);
-      if (locationData) body = formatLocationText(locationData);
-    }
-  }
-  if (!body) return null;
-  const sender = buildSenderName(reply);
-  const senderLabel = sender ? `${sender}` : "unknown sender";
-  return {
-    id: reply.message_id ? String(reply.message_id) : undefined,
-    sender: senderLabel,
-    body,
-  };
-}
-
-function extractTelegramLocation(
-  msg: TelegramMessage,
-): NormalizedLocation | null {
-  const msgWithLocation = msg as {
-    location?: TelegramLocation;
-    venue?: TelegramVenue;
-  };
-  const { venue, location } = msgWithLocation;
-
-  if (venue) {
-    return {
-      latitude: venue.location.latitude,
-      longitude: venue.location.longitude,
-      accuracy: venue.location.horizontal_accuracy,
-      name: venue.title,
-      address: venue.address,
-      source: "place",
-      isLive: false,
-    };
-  }
-
-  if (location) {
-    const isLive =
-      typeof location.live_period === "number" && location.live_period > 0;
-    return {
-      latitude: location.latitude,
-      longitude: location.longitude,
-      accuracy: location.horizontal_accuracy,
-      source: isLive ? "live" : "pin",
-      isLive,
-    };
-  }
-
-  return null;
 }
