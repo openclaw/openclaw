@@ -85,12 +85,7 @@ import {
 } from "./controllers/skills";
 import { loadDebug } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
-
-type EventLogEntry = {
-  ts: number;
-  event: string;
-  payload?: unknown;
-};
+import type { EventLogEntry } from "./app-events";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;

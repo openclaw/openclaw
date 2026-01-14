@@ -1,12 +1,7 @@
 import { html, nothing } from "lit";
 
 import { formatEventPayload } from "../presenter";
-
-type EventLogEntry = {
-  ts: number;
-  event: string;
-  payload?: unknown;
-};
+import type { EventLogEntry } from "../app-events";
 
 export type DebugProps = {
   loading: boolean;
@@ -126,4 +121,3 @@ export function renderDebug(props: DebugProps) {
     </section>
   `;
 }
-
