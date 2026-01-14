@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isWhatsAppGroupJid,
-  isWhatsAppUserJid,
+  isWhatsAppUserTarget,
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 
@@ -45,6 +45,7 @@ describe("normalizeWhatsAppTarget", () => {
 
   it("normalizes LID JIDs to E.164", () => {
     expect(normalizeWhatsAppTarget("123456789@lid")).toBe("+123456789");
+    expect(normalizeWhatsAppTarget("123456789@LID")).toBe("+123456789");
   });
 
   it("rejects invalid targets", () => {
@@ -52,6 +53,7 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("whatsapp:")).toBeNull();
     expect(normalizeWhatsAppTarget("@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget("whatsapp:group:@g.us")).toBeNull();
+    expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
   });
 
   it("handles repeated prefixes", () => {
@@ -60,13 +62,16 @@ describe("normalizeWhatsAppTarget", () => {
   });
 });
 
-describe("isWhatsAppUserJid", () => {
+describe("isWhatsAppUserTarget", () => {
   it("detects user JIDs with various formats", () => {
-    expect(isWhatsAppUserJid("41796666864:0@s.whatsapp.net")).toBe(true);
-    expect(isWhatsAppUserJid("1234567890@s.whatsapp.net")).toBe(true);
-    expect(isWhatsAppUserJid("123456789@lid")).toBe(true);
-    expect(isWhatsAppUserJid("123456789-987654321@g.us")).toBe(false);
-    expect(isWhatsAppUserJid("+1555123")).toBe(false);
+    expect(isWhatsAppUserTarget("41796666864:0@s.whatsapp.net")).toBe(true);
+    expect(isWhatsAppUserTarget("1234567890@s.whatsapp.net")).toBe(true);
+    expect(isWhatsAppUserTarget("123456789@lid")).toBe(true);
+    expect(isWhatsAppUserTarget("123456789@LID")).toBe(true);
+    expect(isWhatsAppUserTarget("123@lid:0")).toBe(false);
+    expect(isWhatsAppUserTarget("abc@s.whatsapp.net")).toBe(false);
+    expect(isWhatsAppUserTarget("123456789-987654321@g.us")).toBe(false);
+    expect(isWhatsAppUserTarget("+1555123")).toBe(false);
   });
 });
 

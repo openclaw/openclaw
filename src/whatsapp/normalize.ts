@@ -25,9 +25,9 @@ export function isWhatsAppGroupJid(value: string): boolean {
 }
 
 /**
- * Check if value looks like a WhatsApp user JID (e.g. "41796666864:0@s.whatsapp.net" or "123@lid").
+ * Check if value looks like a WhatsApp user target (e.g. "41796666864:0@s.whatsapp.net" or "123@lid").
  */
-export function isWhatsAppUserJid(value: string): boolean {
+export function isWhatsAppUserTarget(value: string): boolean {
   const candidate = stripWhatsAppTargetPrefixes(value);
   return WHATSAPP_USER_JID_RE.test(candidate) || WHATSAPP_LID_RE.test(candidate);
 }
@@ -53,7 +53,7 @@ export function normalizeWhatsAppTarget(value: string): string | null {
     return `${localPart}@g.us`;
   }
   // Handle user JIDs (e.g. "41796666864:0@s.whatsapp.net")
-  if (isWhatsAppUserJid(candidate)) {
+  if (isWhatsAppUserTarget(candidate)) {
     const phone = extractUserJidPhone(candidate);
     if (!phone) return null;
     const normalized = normalizeE164(phone);
