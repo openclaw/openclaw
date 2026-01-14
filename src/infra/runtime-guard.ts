@@ -70,9 +70,7 @@ export function assertSupportedRuntime(
 
   const versionLabel = details.version ?? "unknown";
   const runtimeLabel =
-    details.kind === "unknown"
-      ? "unknown runtime"
-      : `${details.kind} ${versionLabel}`;
+    details.kind === "unknown" ? "unknown runtime" : `${details.kind} ${versionLabel}`;
   const execLabel = details.execPath ?? "unknown";
 
   runtime.error(

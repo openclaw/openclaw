@@ -16,10 +16,7 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
-export function formatHealthCheckFailure(
-  err: unknown,
-  opts: { rich?: boolean } = {},
-): string {
+export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
   const message = err instanceof Error ? err.message : raw;

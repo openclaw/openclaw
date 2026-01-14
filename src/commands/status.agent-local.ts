@@ -47,10 +47,8 @@ export async function getAgentLocalStatuses(): Promise<{
       }
     })();
 
-    const bootstrapPath =
-      workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
-    const bootstrapPending =
-      bootstrapPath != null ? await fileExists(bootstrapPath) : null;
+    const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
+    const bootstrapPending = bootstrapPath != null ? await fileExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
     const store = (() => {
@@ -64,14 +62,9 @@ export async function getAgentLocalStatuses(): Promise<{
       .filter(([key]) => key !== "global" && key !== "unknown")
       .map(([, entry]) => entry);
     const sessionsCount = sessions.length;
-    const lastUpdatedAt = sessions.reduce(
-      (max, e) => Math.max(max, e?.updatedAt ?? 0),
-      0,
-    );
+    const lastUpdatedAt = sessions.reduce((max, e) => Math.max(max, e?.updatedAt ?? 0), 0);
     const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;
-    const lastActiveAgeMs = resolvedLastUpdatedAt
-      ? now - resolvedLastUpdatedAt
-      : null;
+    const lastActiveAgeMs = resolvedLastUpdatedAt ? now - resolvedLastUpdatedAt : null;
 
     statuses.push({
       id: agentId,
@@ -86,10 +79,7 @@ export async function getAgentLocalStatuses(): Promise<{
   }
 
   const totalSessions = statuses.reduce((sum, s) => sum + s.sessionsCount, 0);
-  const bootstrapPendingCount = statuses.reduce(
-    (sum, s) => sum + (s.bootstrapPending ? 1 : 0),
-    0,
-  );
+  const bootstrapPendingCount = statuses.reduce((sum, s) => sum + (s.bootstrapPending ? 1 : 0), 0);
   return {
     defaultId: agentList.defaultId,
     agents: statuses,

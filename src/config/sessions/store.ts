@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import JSON5 from "json5";
-import {
-  getFileMtimeMs,
-  isCacheEnabled,
-  resolveCacheTtlMs,
-} from "../cache-utils.js";
+import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -49,9 +45,7 @@ export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
 }
 
-export function loadSessionStore(
-  storePath: string,
-): Record<string, SessionEntry> {
+export function loadSessionStore(storePath: string): Record<string, SessionEntry> {
   // Check cache first if enabled
   if (isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
@@ -87,10 +81,7 @@ export function loadSessionStore(
       rec.channel = rec.provider;
       delete rec.provider;
     }
-    if (
-      typeof rec.lastChannel !== "string" &&
-      typeof rec.lastProvider === "string"
-    ) {
+    if (typeof rec.lastChannel !== "string" && typeof rec.lastProvider === "string") {
       rec.lastChannel = rec.lastProvider;
       delete rec.lastProvider;
     }
@@ -288,9 +279,7 @@ export async function updateLastRoute(params: {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       lastChannel: channel,
       lastTo: to?.trim() ? to.trim() : undefined,
-      lastAccountId: accountId?.trim()
-        ? accountId.trim()
-        : existing?.lastAccountId,
+      lastAccountId: accountId?.trim() ? accountId.trim() : existing?.lastAccountId,
     });
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);

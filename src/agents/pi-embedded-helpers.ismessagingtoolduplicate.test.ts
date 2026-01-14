@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isMessagingToolDuplicate } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -41,10 +39,9 @@ describe("isMessagingToolDuplicate", () => {
   });
   it("detects substring duplicates (LLM elaboration)", () => {
     expect(
-      isMessagingToolDuplicate(
-        'I sent the message: "Hello, this is a test message!"',
-        ["Hello, this is a test message!"],
-      ),
+      isMessagingToolDuplicate('I sent the message: "Hello, this is a test message!"', [
+        "Hello, this is a test message!",
+      ]),
     ).toBe(true);
   });
   it("detects when sent text contains block reply (reverse substring)", () => {

@@ -4,11 +4,7 @@ import path from "node:path";
 
 import type { Page } from "playwright-core";
 
-import {
-  ensurePageState,
-  getPageForTargetId,
-  refLocator,
-} from "./pw-session.js";
+import { ensurePageState, getPageForTargetId, refLocator } from "./pw-session.js";
 import {
   bumpDialogArmId,
   bumpDownloadArmId,

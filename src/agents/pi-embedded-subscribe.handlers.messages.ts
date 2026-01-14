@@ -47,21 +47,14 @@ export function handleMessageUpdate(
     assistantEvent && typeof assistantEvent === "object"
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
-  const evtType =
-    typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
 
-  if (
-    evtType !== "text_delta" &&
-    evtType !== "text_start" &&
-    evtType !== "text_end"
-  ) {
+  if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
     return;
   }
 
-  const delta =
-    typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
-  const content =
-    typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+  const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
+  const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
   appendRawStream({
     ts: Date.now(),
@@ -103,9 +96,7 @@ export function handleMessageUpdate(
 
   if (ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
-    ctx.emitReasoningStream(
-      extractThinkingFromTaggedStream(ctx.state.deltaBuffer),
-    );
+    ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
 
   const next = ctx
@@ -140,11 +131,7 @@ export function handleMessageUpdate(
     }
   }
 
-  if (
-    ctx.params.onBlockReply &&
-    ctx.blockChunking &&
-    ctx.state.blockReplyBreak === "text_end"
-  ) {
+  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
@@ -182,29 +169,23 @@ export function handleMessageEnd(
   const text = ctx.stripBlockTags(rawText, { thinking: false, final: false });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) ||
-        extractThinkingFromTaggedText(rawText)
+      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking
-    ? formatReasoningMessage(rawThinking)
-    : "";
+  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
 
-  const addedDuringMessage =
-    ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
+  const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
 
   const onBlockReply = ctx.params.onBlockReply;
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
-      formattedReasoning &&
-      onBlockReply &&
-      formattedReasoning !== ctx.state.lastReasoningSent,
+    formattedReasoning &&
+    onBlockReply &&
+    formattedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
-    shouldEmitReasoning &&
-    ctx.state.blockReplyBreak === "message_end" &&
-    !addedDuringMessage;
+    shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
     if (!shouldEmitReasoning || !formattedReasoning) return;
     ctx.state.lastReasoningSent = formattedReasoning;
@@ -215,9 +196,7 @@ export function handleMessageEnd(
 
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
-      (ctx.blockChunker
-        ? ctx.blockChunker.hasBuffered()
-        : ctx.state.blockBuffer.length > 0)) &&
+      (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
     onBlockReply
   ) {
@@ -238,17 +217,9 @@ export function handleMessageEnd(
         );
       } else {
         ctx.state.lastBlockReplyText = text;
-        const {
-          text: cleanedText,
-          mediaUrls,
-          audioAsVoice,
-        } = parseReplyDirectives(text);
+        const { text: cleanedText, mediaUrls, audioAsVoice } = parseReplyDirectives(text);
         // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-        if (
-          cleanedText ||
-          (mediaUrls && mediaUrls.length > 0) ||
-          audioAsVoice
-        ) {
+        if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
           void onBlockReply({
             text: cleanedText,
             mediaUrls: mediaUrls?.length ? mediaUrls : undefined,

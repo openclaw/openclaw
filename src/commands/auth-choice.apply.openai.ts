@@ -1,8 +1,5 @@
 import { loginOpenAICodex } from "@mariozechner/pi-ai";
-import {
-  CODEX_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-} from "../agents/auth-profiles.js";
+import { CODEX_CLI_PROFILE_ID, ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
 import { isRemoteEnvironment } from "./antigravity-oauth.js";
@@ -11,15 +8,9 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import {
-  applyAuthProfileConfig,
-  writeOAuthCredentials,
-} from "./onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import {
   applyOpenAICodexModelDefault,

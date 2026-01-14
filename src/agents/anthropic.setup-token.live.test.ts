@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import {
-  discoverAuthStorage,
-  discoverModels,
-} from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
@@ -26,15 +23,11 @@ import { ensureClawdbotModelsJson } from "./models-config.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const SETUP_TOKEN_RAW = process.env.CLAWDBOT_LIVE_SETUP_TOKEN?.trim() ?? "";
-const SETUP_TOKEN_VALUE =
-  process.env.CLAWDBOT_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
-const SETUP_TOKEN_PROFILE =
-  process.env.CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
-const SETUP_TOKEN_MODEL =
-  process.env.CLAWDBOT_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
+const SETUP_TOKEN_VALUE = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
+const SETUP_TOKEN_PROFILE = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
+const SETUP_TOKEN_MODEL = process.env.CLAWDBOT_LIVE_SETUP_TOKEN_MODEL?.trim() ?? "";
 
-const ENABLED =
-  LIVE && Boolean(SETUP_TOKEN_RAW || SETUP_TOKEN_VALUE || SETUP_TOKEN_PROFILE);
+const ENABLED = LIVE && Boolean(SETUP_TOKEN_RAW || SETUP_TOKEN_VALUE || SETUP_TOKEN_PROFILE);
 const describeLive = ENABLED ? describe : describe.skip;
 
 type TokenSource = {
@@ -60,11 +53,7 @@ function listSetupTokenProfiles(store: {
 }
 
 function pickSetupTokenProfile(candidates: string[]): string {
-  const preferred = [
-    "anthropic:setup-token-test",
-    "anthropic:setup-token",
-    "anthropic:default",
-  ];
+  const preferred = ["anthropic:setup-token-test", "anthropic:setup-token", "anthropic:default"];
   for (const id of preferred) {
     if (candidates.includes(id)) return id;
   }
@@ -73,17 +62,14 @@ function pickSetupTokenProfile(candidates: string[]): string {
 
 async function resolveTokenSource(): Promise<TokenSource> {
   const explicitToken =
-    (SETUP_TOKEN_RAW && isSetupToken(SETUP_TOKEN_RAW) ? SETUP_TOKEN_RAW : "") ||
-    SETUP_TOKEN_VALUE;
+    (SETUP_TOKEN_RAW && isSetupToken(SETUP_TOKEN_RAW) ? SETUP_TOKEN_RAW : "") || SETUP_TOKEN_VALUE;
 
   if (explicitToken) {
     const error = validateAnthropicSetupToken(explicitToken);
     if (error) {
       throw new Error(`Invalid setup-token: ${error}`);
     }
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-setup-token-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-setup-token-"));
     const profileId = `anthropic:setup-token-live-${randomUUID()}`;
     const store = ensureAuthProfileStore(tempDir, {
       allowKeychainPrompt: false,
@@ -111,8 +97,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
   const candidates = listSetupTokenProfiles(store);
   if (SETUP_TOKEN_PROFILE) {
     if (!candidates.includes(SETUP_TOKEN_PROFILE)) {
-      const available =
-        candidates.length > 0 ? candidates.join(", ") : "(none)";
+      const available = candidates.length > 0 ? candidates.join(", ") : "(none)";
       throw new Error(
         `Setup-token profile "${SETUP_TOKEN_PROFILE}" not found. Available: ${available}.`,
       );
@@ -120,11 +105,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
     return { agentDir, profileId: SETUP_TOKEN_PROFILE };
   }
 
-  if (
-    SETUP_TOKEN_RAW &&
-    SETUP_TOKEN_RAW !== "1" &&
-    SETUP_TOKEN_RAW !== "auto"
-  ) {
+  if (SETUP_TOKEN_RAW && SETUP_TOKEN_RAW !== "1" && SETUP_TOKEN_RAW !== "auto") {
     throw new Error(
       "CLAWDBOT_LIVE_SETUP_TOKEN did not look like a setup-token. Use CLAWDBOT_LIVE_SETUP_TOKEN_VALUE for raw tokens.",
     );
@@ -146,8 +127,7 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
     return (
       models.find(
         (model) =>
-          normalizeProviderId(model.provider) === parsed.provider &&
-          model.id === parsed.model,
+          normalizeProviderId(model.provider) === parsed.provider && model.id === parsed.model,
       ) ?? null
     );
   }
@@ -176,9 +156,7 @@ describeLive("live anthropic setup-token", () => {
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);
-        const all = Array.isArray(modelRegistry)
-          ? modelRegistry
-          : modelRegistry.getAll();
+        const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
           (model) => normalizeProviderId(model.provider) === "anthropic",
         ) as Array<Model<Api>>;
@@ -201,9 +179,7 @@ describeLive("live anthropic setup-token", () => {
         });
         const tokenError = validateAnthropicSetupToken(apiKeyInfo.apiKey);
         if (tokenError) {
-          throw new Error(
-            `Resolved profile is not a setup-token: ${tokenError}`,
-          );
+          throw new Error(`Resolved profile is not a setup-token: ${tokenError}`);
         }
 
         const res = await completeSimple(

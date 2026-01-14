@@ -1,9 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import type {
-  GatewayAuthConfig,
-  GatewayTailscaleMode,
-} from "../config/config.js";
+import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 export type ResolvedGatewayAuthMode = "none" | "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -52,14 +49,10 @@ function isLocalDirectRequest(req?: IncomingMessage): boolean {
 
   const host = (req.headers.host ?? "").toLowerCase();
   const hostIsLocal =
-    host.startsWith("localhost") ||
-    host.startsWith("127.0.0.1") ||
-    host.startsWith("[::1]");
+    host.startsWith("localhost") || host.startsWith("127.0.0.1") || host.startsWith("[::1]");
 
   const hasForwarded = Boolean(
-    req.headers["x-forwarded-for"] ||
-      req.headers["x-real-ip"] ||
-      req.headers["x-forwarded-host"],
+    req.headers["x-forwarded-for"] || req.headers["x-real-ip"] || req.headers["x-forwarded-host"],
   );
 
   return hostIsLocal && !hasForwarded;
@@ -71,17 +64,11 @@ function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
   if (typeof login !== "string" || !login.trim()) return null;
   const nameRaw = req.headers["tailscale-user-name"];
   const profilePic = req.headers["tailscale-user-profile-pic"];
-  const name =
-    typeof nameRaw === "string" && nameRaw.trim()
-      ? nameRaw.trim()
-      : login.trim();
+  const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : login.trim();
   return {
     login: login.trim(),
     name,
-    profilePic:
-      typeof profilePic === "string" && profilePic.trim()
-        ? profilePic.trim()
-        : undefined,
+    profilePic: typeof profilePic === "string" && profilePic.trim() ? profilePic.trim() : undefined,
   };
 }
 
@@ -89,17 +76,14 @@ function hasTailscaleProxyHeaders(req?: IncomingMessage): boolean {
   if (!req) return false;
   return Boolean(
     req.headers["x-forwarded-for"] &&
-      req.headers["x-forwarded-proto"] &&
-      req.headers["x-forwarded-host"],
+    req.headers["x-forwarded-proto"] &&
+    req.headers["x-forwarded-host"],
   );
 }
 
 function isTailscaleProxyRequest(req?: IncomingMessage): boolean {
   if (!req) return false;
-  return (
-    isLoopbackAddress(req.socket?.remoteAddress) &&
-    hasTailscaleProxyHeaders(req)
-  );
+  return isLoopbackAddress(req.socket?.remoteAddress) && hasTailscaleProxyHeaders(req);
 }
 
 export function resolveGatewayAuth(params: {
@@ -110,13 +94,11 @@ export function resolveGatewayAuth(params: {
   const authConfig = params.authConfig ?? {};
   const env = params.env ?? process.env;
   const token = authConfig.token ?? env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
-  const password =
-    authConfig.password ?? env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
+  const password = authConfig.password ?? env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
   const mode: ResolvedGatewayAuth["mode"] =
     authConfig.mode ?? (password ? "password" : token ? "token" : "none");
   const allowTailscale =
-    authConfig.allowTailscale ??
-    (params.tailscaleMode === "serve" && mode !== "password");
+    authConfig.allowTailscale ?? (params.tailscaleMode === "serve" && mode !== "password");
   return {
     mode,
     token,
@@ -132,9 +114,7 @@ export function assertGatewayAuthConfigured(auth: ResolvedGatewayAuth): void {
     );
   }
   if (auth.mode === "password" && !auth.password) {
-    throw new Error(
-      "gateway auth mode is password, but no password was configured",
-    );
+    throw new Error("gateway auth mode is password, but no password was configured");
   }
 }
 

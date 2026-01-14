@@ -1,12 +1,6 @@
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
-import {
-  pickPrimaryTailnetIPv4,
-  pickPrimaryTailnetIPv6,
-} from "../infra/tailnet.js";
-import {
-  WIDE_AREA_DISCOVERY_DOMAIN,
-  writeWideAreaBridgeZone,
-} from "../infra/widearea-dns.js";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { WIDE_AREA_DISCOVERY_DOMAIN, writeWideAreaBridgeZone } from "../infra/widearea-dns.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -25,10 +19,7 @@ export async function startGatewayDiscovery(params: {
   const tailnetDns = await resolveTailnetDnsHint();
   const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
   const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
-  const sshPort =
-    Number.isFinite(sshPortParsed) && sshPortParsed > 0
-      ? sshPortParsed
-      : undefined;
+  const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
 
   try {
     const bonjour = await startGatewayBonjourAdvertiser({
@@ -68,9 +59,7 @@ export async function startGatewayDiscovery(params: {
           `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${WIDE_AREA_DISCOVERY_DOMAIN} → ${result.zonePath})`,
         );
       } catch (err) {
-        params.logDiscovery.warn(
-          `wide-area discovery update failed: ${String(err)}`,
-        );
+        params.logDiscovery.warn(`wide-area discovery update failed: ${String(err)}`);
       }
     }
   }

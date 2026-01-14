@@ -2,10 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  ensureAuthProfileStore,
-  markAuthProfileFailure,
-} from "./auth-profiles.js";
+import { ensureAuthProfileStore, markAuthProfileFailure } from "./auth-profiles.js";
 
 describe("markAuthProfileFailure", () => {
   it("disables billing failures for ~5 hours by default", async () => {
@@ -35,8 +32,7 @@ describe("markAuthProfileFailure", () => {
         agentDir,
       });
 
-      const disabledUntil =
-        store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
       expect(remainingMs).toBeGreaterThan(4.5 * 60 * 60 * 1000);
@@ -80,8 +76,7 @@ describe("markAuthProfileFailure", () => {
         } as never,
       });
 
-      const disabledUntil =
-        store.usageStats?.["anthropic:default"]?.disabledUntil;
+      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
       expect(typeof disabledUntil).toBe("number");
       const remainingMs = (disabledUntil as number) - startedAt;
       expect(remainingMs).toBeGreaterThan(0.8 * 60 * 60 * 1000);
@@ -128,9 +123,7 @@ describe("markAuthProfileFailure", () => {
       });
 
       expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
-      expect(
-        store.usageStats?.["anthropic:default"]?.failureCounts?.billing,
-      ).toBe(1);
+      expect(store.usageStats?.["anthropic:default"]?.failureCounts?.billing).toBe(1);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }

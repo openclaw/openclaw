@@ -7,8 +7,6 @@ export function ignoreCiaoCancellationRejection(reason: unknown): boolean {
   if (!message.includes("CIAO ANNOUNCEMENT CANCELLED")) {
     return false;
   }
-  logDebug(
-    `bonjour: ignoring unhandled ciao rejection: ${formatBonjourError(reason)}`,
-  );
+  logDebug(`bonjour: ignoring unhandled ciao rejection: ${formatBonjourError(reason)}`);
   return true;
 }

@@ -13,11 +13,9 @@ export async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId } =
-    params;
+  const { replies, target, client, runtime, maxBytes, textLimit, accountId } = params;
   for (const payload of replies) {
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {

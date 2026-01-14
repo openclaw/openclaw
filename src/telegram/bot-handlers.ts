@@ -3,11 +3,7 @@ import { danger, logVerbose } from "../globals.js";
 import { resolveMedia } from "./bot/delivery.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
-import {
-  firstDefined,
-  isSenderAllowed,
-  normalizeAllowFrom,
-} from "./bot-access.js";
+import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 
@@ -31,19 +27,12 @@ export const registerTelegramHandlers = ({
     try {
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
-      const captionMsg = entry.messages.find(
-        (m) => m.msg.caption || m.msg.text,
-      );
+      const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
 
       const allMedia: Array<{ path: string; contentType?: string }> = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(
-          ctx,
-          mediaMaxBytes,
-          opts.token,
-          opts.proxyFetch,
-        );
+        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
         if (media) {
           allMedia.push({ path: media.path, contentType: media.contentType });
         }
@@ -74,16 +63,11 @@ export const registerTelegramHandlers = ({
         entities: undefined,
       };
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
-      const getFile =
-        typeof ctx.getFile === "function"
-          ? ctx.getFile.bind(ctx)
-          : async () => ({});
-      await processMessage(
-        { message: syntheticMessage, me: ctx.me, getFile },
-        [],
-        storeAllowFrom,
-        { forceWasMentioned: true, messageIdOverride: callback.id },
-      );
+      const getFile = typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx) : async () => ({});
+      await processMessage({ message: syntheticMessage, me: ctx.me, getFile }, [], storeAllowFrom, {
+        forceWasMentioned: true,
+        messageIdOverride: callback.id,
+      });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));
     } finally {
@@ -98,24 +82,16 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) return;
 
       const chatId = msg.chat.id;
-      const isGroup =
-        msg.chat.type === "group" || msg.chat.type === "supergroup";
-      const messageThreadId = (msg as { message_thread_id?: number })
-        .message_thread_id;
+      const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
       const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
       const resolvedThreadId = resolveTelegramForumThreadId({
         isForum,
         messageThreadId,
       });
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
-      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
-        chatId,
-        resolvedThreadId,
-      );
-      const groupAllowOverride = firstDefined(
-        topicConfig?.allowFrom,
-        groupConfig?.allowFrom,
-      );
+      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
+      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
       const effectiveGroupAllow = normalizeAllowFrom([
         ...(groupAllowOverride ?? groupAllowFrom ?? []),
         ...storeAllowFrom,
@@ -163,9 +139,7 @@ export const registerTelegramHandlers = ({
           // For allowlist mode, the sender (msg.from.id) must be in allowFrom
           const senderId = msg.from?.id;
           if (senderId == null) {
-            logVerbose(
-              `Blocked telegram group message (no sender ID, groupPolicy: allowlist)`,
-            );
+            logVerbose(`Blocked telegram group message (no sender ID, groupPolicy: allowlist)`);
             return;
           }
           if (!effectiveGroupAllow.hasEntries) {
@@ -182,9 +156,7 @@ export const registerTelegramHandlers = ({
               senderUsername,
             })
           ) {
-            logVerbose(
-              `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
-            );
+            logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
             return;
           }
         }
@@ -236,31 +208,22 @@ export const registerTelegramHandlers = ({
 
       let media: Awaited<ReturnType<typeof resolveMedia>> = null;
       try {
-        media = await resolveMedia(
-          ctx,
-          mediaMaxBytes,
-          opts.token,
-          opts.proxyFetch,
-        );
+        media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
       } catch (mediaErr) {
         const errMsg = String(mediaErr);
         if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await bot.api
-            .sendMessage(
-              chatId,
-              `⚠️ File too large. Maximum size is ${limitMb}MB.`,
-              { reply_to_message_id: msg.message_id },
-            )
+            .sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
+              reply_to_message_id: msg.message_id,
+            })
             .catch(() => {});
           logger.warn({ chatId, error: errMsg }, "media exceeds size limit");
           return;
         }
         throw mediaErr;
       }
-      const allMedia = media
-        ? [{ path: media.path, contentType: media.contentType }]
-        : [];
+      const allMedia = media ? [{ path: media.path, contentType: media.contentType }] : [];
       await processMessage(ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));

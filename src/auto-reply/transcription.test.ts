@@ -54,22 +54,14 @@ describe("transcribeInboundAudio", () => {
       stderr: "",
     });
     const { transcribeInboundAudio } = await import("./transcription.js");
-    const result = await transcribeInboundAudio(
-      cfg as never,
-      ctx as never,
-      runtime as never,
-    );
+    const result = await transcribeInboundAudio(cfg as never, ctx as never, runtime as never);
     expect(result?.text).toBe("transcribed text");
     expect(fetchMock).toHaveBeenCalled();
   });
 
   it("returns undefined when no transcription command", async () => {
     const { transcribeInboundAudio } = await import("./transcription.js");
-    const res = await transcribeInboundAudio(
-      { audio: {} } as never,
-      {} as never,
-      runtime as never,
-    );
+    const res = await transcribeInboundAudio({ audio: {} } as never, {} as never, runtime as never);
     expect(res).toBeUndefined();
   });
 });

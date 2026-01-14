@@ -1,20 +1,11 @@
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type {
-  CanvasHostHandler,
-  CanvasHostServer,
-} from "../canvas-host/server.js";
+import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { startCanvasHost } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
-import {
-  deriveDefaultBridgePort,
-  deriveDefaultCanvasHostPort,
-} from "../config/port-defaults.js";
+import { deriveDefaultBridgePort, deriveDefaultCanvasHostPort } from "../config/port-defaults.js";
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
-import {
-  pickPrimaryTailnetIPv4,
-  pickPrimaryTailnetIPv6,
-} from "../infra/tailnet.js";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createBridgeHandlers } from "./server-bridge.js";
@@ -36,11 +27,7 @@ export type GatewayBridgeRuntime = {
   canvasHostServer: CanvasHostServer | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   bonjourStop: (() => Promise<void>) | null;
-  bridgeSendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-  ) => void;
+  bridgeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   bridgeSendToAllSubscribed: (event: string, payload: unknown) => void;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
 };
@@ -83,35 +70,26 @@ export async function startGatewayBridgeRuntime(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   getHealthCache: () => HealthSummary | null;
-  refreshGatewayHealthSnapshot: (opts?: {
-    probe?: boolean;
-  }) => Promise<HealthSummary>;
+  refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   logBridge: { info: (msg: string) => void; warn: (msg: string) => void };
   logCanvas: { warn: (msg: string) => void };
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<GatewayBridgeRuntime> {
-  const wideAreaDiscoveryEnabled =
-    params.cfg.discovery?.wideArea?.enabled === true;
+  const wideAreaDiscoveryEnabled = params.cfg.discovery?.wideArea?.enabled === true;
 
   const bridgeEnabled = (() => {
-    if (params.cfg.bridge?.enabled !== undefined)
-      return params.cfg.bridge.enabled === true;
+    if (params.cfg.bridge?.enabled !== undefined) return params.cfg.bridge.enabled === true;
     return process.env.CLAWDBOT_BRIDGE_ENABLED !== "0";
   })();
 
   const bridgePort = (() => {
-    if (
-      typeof params.cfg.bridge?.port === "number" &&
-      params.cfg.bridge.port > 0
-    ) {
+    if (typeof params.cfg.bridge?.port === "number" && params.cfg.bridge.port > 0) {
       return params.cfg.bridge.port;
     }
     if (process.env.CLAWDBOT_BRIDGE_PORT !== undefined) {
       const parsed = Number.parseInt(process.env.CLAWDBOT_BRIDGE_PORT, 10);
-      return Number.isFinite(parsed) && parsed > 0
-        ? parsed
-        : deriveDefaultBridgePort(params.port);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : deriveDefaultBridgePort(params.port);
     }
     return deriveDefaultBridgePort(params.port);
   })();
@@ -123,8 +101,7 @@ export async function startGatewayBridgeRuntime(params: {
       if (env) return env;
     }
 
-    const bind =
-      params.cfg.bridge?.bind ?? (wideAreaDiscoveryEnabled ? "auto" : "lan");
+    const bind = params.cfg.bridge?.bind ?? (wideAreaDiscoveryEnabled ? "auto" : "lan");
     if (bind === "loopback") return "127.0.0.1";
     if (bind === "lan") return "0.0.0.0";
 
@@ -169,9 +146,7 @@ export async function startGatewayBridgeRuntime(params: {
         canvasHostServer = started;
       }
     } catch (err) {
-      params.logCanvas.warn(
-        `failed to start on ${bridgeHost}:${canvasHostPort}: ${String(err)}`,
-      );
+      params.logCanvas.warn(`failed to start on ${bridgeHost}:${canvasHostPort}: ${String(err)}`);
     }
   }
 
@@ -183,28 +158,13 @@ export async function startGatewayBridgeRuntime(params: {
   const bridgeSendEvent: BridgeSendEventFn = (opts) => {
     bridge?.sendEvent(opts);
   };
-  const bridgeListConnected: BridgeListConnectedFn = () =>
-    bridge?.listConnected() ?? [];
-  const bridgeSendToSession = (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-  ) =>
-    bridgeSubscriptions.sendToSession(
-      sessionKey,
-      event,
-      payload,
-      bridgeSendEvent,
-    );
+  const bridgeListConnected: BridgeListConnectedFn = () => bridge?.listConnected() ?? [];
+  const bridgeSendToSession = (sessionKey: string, event: string, payload: unknown) =>
+    bridgeSubscriptions.sendToSession(sessionKey, event, payload, bridgeSendEvent);
   const bridgeSendToAllSubscribed = (event: string, payload: unknown) =>
     bridgeSubscriptions.sendToAllSubscribed(event, payload, bridgeSendEvent);
   const bridgeSendToAllConnected = (event: string, payload: unknown) =>
-    bridgeSubscriptions.sendToAllConnected(
-      event,
-      payload,
-      bridgeListConnected,
-      bridgeSendEvent,
-    );
+    bridgeSubscriptions.sendToAllConnected(event, payload, bridgeListConnected, bridgeSendEvent);
 
   const broadcastVoiceWakeChanged = (triggers: string[]) => {
     const payload = { triggers };
@@ -229,17 +189,13 @@ export async function startGatewayBridgeRuntime(params: {
     agentRunSeq: params.agentRunSeq,
     getHealthCache: params.getHealthCache,
     refreshHealthSnapshot: params.refreshGatewayHealthSnapshot,
-    loadGatewayModelCatalog:
-      params.loadGatewayModelCatalog ?? loadGatewayModelCatalog,
+    loadGatewayModelCatalog: params.loadGatewayModelCatalog ?? loadGatewayModelCatalog,
     logBridge: params.logBridge,
   });
 
   const canvasHostPortForBridge = canvasHostServer?.port;
   const canvasHostHostForBridge =
-    canvasHostServer &&
-    bridgeHost &&
-    bridgeHost !== "0.0.0.0" &&
-    bridgeHost !== "::"
+    canvasHostServer && bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::"
       ? bridgeHost
       : undefined;
 

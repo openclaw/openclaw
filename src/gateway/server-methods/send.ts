@@ -1,7 +1,4 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
@@ -52,19 +49,13 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const message = request.message.trim();
-    const channelInput =
-      typeof request.channel === "string" ? request.channel : undefined;
-    const normalizedChannel = channelInput
-      ? normalizeChannelId(channelInput)
-      : null;
+    const channelInput = typeof request.channel === "string" ? request.channel : undefined;
+    const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unsupported channel: ${channelInput}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channelInput}`),
       );
       return;
     }
@@ -80,10 +71,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `unsupported channel: ${channel}`,
-          ),
+          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
         );
         return;
       }
@@ -96,11 +84,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         mode: "explicit",
       });
       if (!resolved.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)));
         return;
       }
       const results = await deliverOutboundPayloads({
@@ -174,19 +158,13 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const channelInput =
-      typeof request.channel === "string" ? request.channel : undefined;
-    const normalizedChannel = channelInput
-      ? normalizeChannelId(channelInput)
-      : null;
+    const channelInput = typeof request.channel === "string" ? request.channel : undefined;
+    const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unsupported poll channel: ${channelInput}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channelInput}`),
       );
       return;
     }
@@ -208,10 +186,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `unsupported poll channel: ${channel}`,
-          ),
+          errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
         );
         return;
       }
@@ -224,11 +199,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         mode: "explicit",
       });
       if (!resolved.ok) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)));
         return;
       }
       const normalized = outbound.pollMaxOptions

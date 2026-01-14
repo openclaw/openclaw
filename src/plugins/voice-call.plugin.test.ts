@@ -65,9 +65,7 @@ describe("voice-call plugin", () => {
         })),
         speak: vi.fn(async () => ({ success: true })),
         endCall: vi.fn(async () => ({ success: true })),
-        getCall: vi.fn((id: string) =>
-          id === "call-1" ? { callId: "call-1" } : undefined,
-        ),
+        getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
         getCallByProviderCallId: vi.fn(() => undefined),
       },
       stop: vi.fn(async () => {}),
@@ -165,10 +163,9 @@ describe("voice-call plugin", () => {
       resolvePath: (p: string) => p,
     });
 
-    await program.parseAsync(
-      ["voicecall", "start", "--to", "+1", "--message", "Hello"],
-      { from: "user" },
-    );
+    await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
+      from: "user",
+    });
     expect(logSpy).toHaveBeenCalled();
     logSpy.mockRestore();
   });

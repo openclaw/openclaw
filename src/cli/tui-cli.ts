@@ -9,31 +9,18 @@ export function registerTuiCli(program: Command) {
   program
     .command("tui")
     .description("Open a terminal UI connected to the Gateway")
-    .option(
-      "--url <url>",
-      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
-    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
-    .option(
-      "--session <key>",
-      'Session key (default: "main", or "global" when scope is global)',
-    )
+    .option("--session <key>", 'Session key (default: "main", or "global" when scope is global)')
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")
     .option("--message <text>", "Send an initial message after connecting")
-    .option(
-      "--timeout-ms <ms>",
-      "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)",
-    )
+    .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/tui",
-          "docs.clawd.bot/tui",
-        )}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/tui", "docs.clawd.bot/tui")}\n`,
     )
     .action(async (opts) => {
       try {
@@ -43,10 +30,7 @@ export function registerTuiCli(program: Command) {
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
           );
         }
-        const historyLimit = Number.parseInt(
-          String(opts.historyLimit ?? "200"),
-          10,
-        );
+        const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
         await runTui({
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,

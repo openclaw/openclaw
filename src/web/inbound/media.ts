@@ -1,17 +1,10 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
-import {
-  downloadMediaMessage,
-  normalizeMessageContent,
-} from "@whiskeysockets/baileys";
+import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
 import { logVerbose } from "../../globals.js";
 import type { createWaSocket } from "../session.js";
 
-function unwrapMessage(
-  message: proto.IMessage | undefined,
-): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(
-    message as proto.IMessage | undefined,
-  );
+function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  const normalized = normalizeMessageContent(message as proto.IMessage | undefined);
   return normalized as proto.IMessage | undefined;
 }
 

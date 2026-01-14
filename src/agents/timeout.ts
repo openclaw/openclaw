@@ -3,9 +3,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
 
 const normalizeNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value)
-    ? Math.floor(value)
-    : undefined;
+  typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 
 export function resolveAgentTimeoutSeconds(cfg?: ClawdbotConfig): number {
   const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);

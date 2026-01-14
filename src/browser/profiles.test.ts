@@ -66,13 +66,9 @@ describe("port allocation", () => {
 
   it("allocates within an explicit range", () => {
     const usedPorts = new Set<number>();
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
-      20000,
-    );
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20000);
     usedPorts.add(20000);
-    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
-      20001,
-    );
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20001);
   });
 
   it("skips used ports and returns next available", () => {

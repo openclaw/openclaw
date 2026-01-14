@@ -73,10 +73,8 @@ export function registerBrowserActionObserveCommands(
       "How long to wait for the response (default: 20000)",
       (v: string) => Number(v),
     )
-    .option(
-      "--max-chars <n>",
-      "Max body chars to return (default: 200000)",
-      (v: string) => Number(v),
+    .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
+      Number(v),
     )
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -86,9 +84,7 @@ export function registerBrowserActionObserveCommands(
         const result = await browserResponseBody(baseUrl, {
           url,
           targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs)
-            ? opts.timeoutMs
-            : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           maxChars: Number.isFinite(opts.maxChars) ? opts.maxChars : undefined,
           profile,
         });

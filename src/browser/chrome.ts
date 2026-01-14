@@ -12,18 +12,9 @@ import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
-import {
-  decorateClawdProfile,
-  isProfileDecorated,
-} from "./chrome.profile-decoration.js";
-import type {
-  ResolvedBrowserConfig,
-  ResolvedBrowserProfile,
-} from "./config.js";
-import {
-  DEFAULT_CLAWD_BROWSER_COLOR,
-  DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
-} from "./constants.js";
+import { decorateClawdProfile, isProfileDecorated } from "./chrome.profile-decoration.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import { DEFAULT_CLAWD_BROWSER_COLOR, DEFAULT_CLAWD_BROWSER_PROFILE_NAME } from "./constants.js";
 
 const log = createSubsystemLogger("browser").child("chrome");
 
@@ -34,10 +25,7 @@ export {
   findChromeExecutableWindows,
   resolveBrowserExecutableForPlatform,
 } from "./chrome.executables.js";
-export {
-  decorateClawdProfile,
-  isProfileDecorated,
-} from "./chrome.profile-decoration.js";
+export { decorateClawdProfile, isProfileDecorated } from "./chrome.profile-decoration.js";
 
 function exists(filePath: string) {
   try {
@@ -56,15 +44,11 @@ export type RunningChrome = {
   proc: ChildProcessWithoutNullStreams;
 };
 
-function resolveBrowserExecutable(
-  resolved: ResolvedBrowserConfig,
-): BrowserExecutable | null {
+function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
-export function resolveClawdUserDataDir(
-  profileName = DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
-) {
+export function resolveClawdUserDataDir(profileName = DEFAULT_CLAWD_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
@@ -72,10 +56,7 @@ function cdpUrlForPort(cdpPort: number) {
   return `http://127.0.0.1:${cdpPort}`;
 }
 
-export async function isChromeReachable(
-  cdpUrl: string,
-  timeoutMs = 500,
-): Promise<boolean> {
+export async function isChromeReachable(cdpUrl: string, timeoutMs = 500): Promise<boolean> {
   const version = await fetchChromeVersion(cdpUrl, timeoutMs);
   return Boolean(version);
 }
@@ -86,10 +67,7 @@ type ChromeVersion = {
   "User-Agent"?: string;
 };
 
-async function fetchChromeVersion(
-  cdpUrl: string,
-  timeoutMs = 500,
-): Promise<ChromeVersion | null> {
+async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -118,10 +96,7 @@ export async function getChromeWebSocketUrl(
   return normalizeCdpWsUrl(wsUrl, cdpUrl);
 }
 
-async function canOpenWebSocket(
-  wsUrl: string,
-  timeoutMs = 800,
-): Promise<boolean> {
+async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const ws = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
     const timer = setTimeout(
@@ -166,17 +141,13 @@ export async function launchClawdChrome(
   profile: ResolvedBrowserProfile,
 ): Promise<RunningChrome> {
   if (!profile.cdpIsLoopback) {
-    throw new Error(
-      `Profile "${profile.name}" is remote; cannot launch local Chrome.`,
-    );
+    throw new Error(`Profile "${profile.name}" is remote; cannot launch local Chrome.`);
   }
   await ensurePortAvailable(profile.cdpPort);
 
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
-    throw new Error(
-      "No supported browser found (Chrome/Chromium on macOS, Linux, or Windows).",
-    );
+    throw new Error("No supported browser found (Chrome/Chromium on macOS, Linux, or Windows).");
   }
 
   const userDataDir = resolveClawdUserDataDir(profile.name);
@@ -301,10 +272,7 @@ export async function launchClawdChrome(
   };
 }
 
-export async function stopClawdChrome(
-  running: RunningChrome,
-  timeoutMs = 2500,
-) {
+export async function stopClawdChrome(running: RunningChrome, timeoutMs = 2500) {
   const proc = running.proc;
   if (proc.killed) return;
   try {

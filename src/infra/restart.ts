@@ -20,8 +20,7 @@ function formatSpawnDetail(result: {
   stderr?: string | Buffer | null;
 }): string {
   const clean = (value: string | Buffer | null | undefined) => {
-    const text =
-      typeof value === "string" ? value : value ? value.toString() : "";
+    const text = typeof value === "string" ? value : value ? value.toString() : "";
     return text.replace(/\s+/g, " ").trim();
   };
   if (result.error) {
@@ -94,8 +93,7 @@ export function triggerClawdbotRestart(): RestartAttempt {
   const label =
     process.env.CLAWDBOT_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
-  const uid =
-    typeof process.getuid === "function" ? process.getuid() : undefined;
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);

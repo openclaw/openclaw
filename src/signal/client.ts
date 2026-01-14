@@ -35,11 +35,7 @@ function normalizeBaseUrl(url: string): string {
   return `http://${trimmed}`.replace(/\/+$/, "");
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -93,11 +89,7 @@ export async function signalCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
   try {
-    const res = await fetchWithTimeout(
-      `${normalized}/api/v1/check`,
-      { method: "GET" },
-      timeoutMs,
-    );
+    const res = await fetchWithTimeout(`${normalized}/api/v1/check`, { method: "GET" }, timeoutMs);
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -127,9 +119,7 @@ export async function streamSignalEvents(params: {
     signal: params.abortSignal,
   });
   if (!res.ok || !res.body) {
-    throw new Error(
-      `Signal SSE failed (${res.status} ${res.statusText || "error"})`,
-    );
+    throw new Error(`Signal SSE failed (${res.status} ${res.statusText || "error"})`);
   }
 
   const reader = res.body.getReader();
@@ -173,9 +163,7 @@ export async function streamSignalEvents(params: {
       if (field === "event") {
         currentEvent.event = value;
       } else if (field === "data") {
-        currentEvent.data = currentEvent.data
-          ? `${currentEvent.data}\n${value}`
-          : value;
+        currentEvent.data = currentEvent.data ? `${currentEvent.data}\n${value}` : value;
       } else if (field === "id") {
         currentEvent.id = value;
       }

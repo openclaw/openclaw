@@ -29,9 +29,7 @@ export type ShellEnvFallbackOptions = {
   exec?: typeof execFileSync;
 };
 
-export function loadShellEnvFallback(
-  opts: ShellEnvFallbackOptions,
-): ShellEnvFallbackResult {
+export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
   const exec = opts.exec ?? execFileSync;
 
@@ -40,9 +38,7 @@ export function loadShellEnvFallback(
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const hasAnyKey = opts.expectedKeys.some((key) =>
-    Boolean(opts.env[key]?.trim()),
-  );
+  const hasAnyKey = opts.expectedKeys.some((key) => Boolean(opts.env[key]?.trim()));
   if (hasAnyKey) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -100,9 +96,7 @@ export function shouldEnableShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
   return isTruthy(env.CLAWDBOT_LOAD_SHELL_ENV);
 }
 
-export function resolveShellEnvFallbackTimeoutMs(
-  env: NodeJS.ProcessEnv,
-): number {
+export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number {
   const raw = env.CLAWDBOT_SHELL_ENV_TIMEOUT_MS?.trim();
   if (!raw) return DEFAULT_TIMEOUT_MS;
   const parsed = Number.parseInt(raw, 10);

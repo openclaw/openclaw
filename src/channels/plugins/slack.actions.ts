@@ -1,12 +1,5 @@
-import {
-  createActionGate,
-  readNumberParam,
-  readStringParam,
-} from "../../agents/tools/common.js";
-import {
-  handleSlackAction,
-  type SlackActionContext,
-} from "../../agents/tools/slack-actions.js";
+import { createActionGate, readNumberParam, readStringParam } from "../../agents/tools/common.js";
+import { handleSlackAction, type SlackActionContext } from "../../agents/tools/slack-actions.js";
 import { listEnabledSlackAccounts } from "../../slack/accounts.js";
 import type {
   ChannelMessageActionAdapter,
@@ -15,9 +8,7 @@ import type {
   ChannelToolSend,
 } from "./types.js";
 
-export function createSlackActions(
-  providerId: string,
-): ChannelMessageActionAdapter {
+export function createSlackActions(providerId: string): ChannelMessageActionAdapter {
   return {
     listActions: ({ cfg }) => {
       const accounts = listEnabledSlackAccounts(cfg).filter(
@@ -61,8 +52,7 @@ export function createSlackActions(
       if (action !== "sendMessage") return null;
       const to = typeof args.to === "string" ? args.to : undefined;
       if (!to) return null;
-      const accountId =
-        typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+      const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
       return { to, accountId };
     },
     handleAction: async (ctx: ChannelMessageActionContext) => {
@@ -70,8 +60,7 @@ export function createSlackActions(
       const accountId = ctx.accountId ?? undefined;
       const toolContext = ctx.toolContext as SlackActionContext | undefined;
       const resolveChannelId = () =>
-        readStringParam(params, "channelId") ??
-        readStringParam(params, "to", { required: true });
+        readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
 
       if (action === "send") {
         const to = readStringParam(params, "to", { required: true });
@@ -101,8 +90,7 @@ export function createSlackActions(
           required: true,
         });
         const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-        const remove =
-          typeof params.remove === "boolean" ? params.remove : undefined;
+        const remove = typeof params.remove === "boolean" ? params.remove : undefined;
         return await handleSlackAction(
           {
             action: "react",
@@ -188,11 +176,7 @@ export function createSlackActions(
         return await handleSlackAction(
           {
             action:
-              action === "pin"
-                ? "pinMessage"
-                : action === "unpin"
-                  ? "unpinMessage"
-                  : "listPins",
+              action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
             channelId: resolveChannelId(),
             messageId,
             accountId: accountId ?? undefined,
@@ -216,9 +200,7 @@ export function createSlackActions(
         );
       }
 
-      throw new Error(
-        `Action ${action} is not supported for provider ${providerId}.`,
-      );
+      throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
     },
   };
 }

@@ -6,9 +6,7 @@ import { ensureClawdbotModelsJson } from "./models-config.js";
 import { limitHistoryTurns } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -126,40 +124,20 @@ describe("limitHistoryTurns", () => {
     expect(limitHistoryTurns(messages, 10)).toBe(messages);
   });
   it("limits to last N user turns", () => {
-    const messages = makeMessages([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
+    const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 2);
     expect(limited.length).toBe(4);
     expect(limited[0].content).toEqual([{ type: "text", text: "message 2" }]);
   });
   it("handles single user turn limit", () => {
-    const messages = makeMessages([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
+    const messages = makeMessages(["user", "assistant", "user", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
     expect(limited[0].content).toEqual([{ type: "text", text: "message 4" }]);
     expect(limited[1].content).toEqual([{ type: "text", text: "message 5" }]);
   });
   it("handles messages with multiple assistant responses per user turn", () => {
-    const messages = makeMessages([
-      "user",
-      "assistant",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
+    const messages = makeMessages(["user", "assistant", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
     expect(limited[0].role).toBe("user");

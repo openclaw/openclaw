@@ -9,10 +9,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -37,16 +34,14 @@ function parseGoogleToken(apiKey: string): { token: string } | null {
 }
 
 function resolveZaiApiKey(): string | undefined {
-  const envDirect =
-    process.env.ZAI_API_KEY?.trim() || process.env.Z_AI_API_KEY?.trim();
+  const envDirect = process.env.ZAI_API_KEY?.trim() || process.env.Z_AI_API_KEY?.trim();
   if (envDirect) return envDirect;
 
   const envResolved = resolveEnvApiKey("zai");
   if (envResolved?.apiKey) return envResolved.apiKey;
 
   const cfg = loadConfig();
-  const key =
-    getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
+  const key = getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
   if (key) return key;
 
   const store = ensureAuthProfileStore();
@@ -76,8 +71,7 @@ function resolveZaiApiKey(): string | undefined {
 
 function resolveMinimaxApiKey(): string | undefined {
   const envDirect =
-    process.env.MINIMAX_CODE_PLAN_KEY?.trim() ||
-    process.env.MINIMAX_API_KEY?.trim();
+    process.env.MINIMAX_CODE_PLAN_KEY?.trim() || process.env.MINIMAX_API_KEY?.trim();
   if (envDirect) return envDirect;
 
   const envResolved = resolveEnvApiKey("minimax");
@@ -119,8 +113,7 @@ async function resolveOAuthToken(params: {
 
   // Claude CLI creds are the only Anthropic tokens that reliably include the
   // `user:profile` scope required for the OAuth usage endpoint.
-  const candidates =
-    params.provider === "anthropic" ? [CLAUDE_CLI_PROFILE_ID, ...order] : order;
+  const candidates = params.provider === "anthropic" ? [CLAUDE_CLI_PROFILE_ID, ...order] : order;
   const deduped: string[] = [];
   for (const entry of candidates) {
     if (!deduped.includes(entry)) deduped.push(entry);
@@ -140,10 +133,7 @@ async function resolveOAuthToken(params: {
       });
       if (!resolved?.apiKey) continue;
       let token = resolved.apiKey;
-      if (
-        params.provider === "google-gemini-cli" ||
-        params.provider === "google-antigravity"
-      ) {
+      if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
         const parsed = parseGoogleToken(resolved.apiKey);
         token = parsed?.token ?? resolved.apiKey;
       }
@@ -180,15 +170,11 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
     return cred?.type === "oauth" || cred?.type === "token";
   };
   return providers.filter((provider) => {
-    const profiles = listProfilesForProvider(store, provider).filter(
-      isOAuthLikeCredential,
-    );
+    const profiles = listProfilesForProvider(store, provider).filter(isOAuthLikeCredential);
     if (profiles.length > 0) return true;
     const normalized = normalizeProviderId(provider);
     const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
-      .filter(
-        ([, profile]) => normalizeProviderId(profile.provider) === normalized,
-      )
+      .filter(([, profile]) => normalizeProviderId(profile.provider) === normalized)
       .map(([id]) => id)
       .filter(isOAuthLikeCredential);
     return configuredProfiles.length > 0;

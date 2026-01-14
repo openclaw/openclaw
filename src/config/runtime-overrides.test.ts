@@ -41,11 +41,7 @@ describe("runtime overrides", () => {
   });
 
   it("rejects prototype pollution paths", () => {
-    const attempts = [
-      "__proto__.polluted",
-      "constructor.polluted",
-      "prototype.polluted",
-    ];
+    const attempts = ["__proto__.polluted", "constructor.polluted", "prototype.polluted"];
     for (const path of attempts) {
       const result = setConfigOverride(path, true);
       expect(result.ok).toBe(false);

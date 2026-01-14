@@ -54,9 +54,7 @@ beforeEach(() => {
     signal: null,
     killed: false,
   });
-  ensureAuthProfileStore
-    .mockReset()
-    .mockReturnValue({ version: 1, profiles: {} });
+  ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,
     changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -80,9 +78,7 @@ beforeEach(() => {
   originalStateDir = process.env.CLAWDBOT_STATE_DIR;
   originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
   process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "clawdbot-doctor-state-"),
-  );
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-doctor-state-"));
   process.env.CLAWDBOT_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -134,9 +130,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
   killed: false,
 });
 
-const ensureAuthProfileStore = vi
-  .fn()
-  .mockReturnValue({ version: 1, profiles: {} });
+const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
   path: "/tmp/clawdis.json",
@@ -437,10 +431,7 @@ describe("doctor command", () => {
 
     await doctorCommand(runtime);
 
-    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<
-      string,
-      unknown
-    >;
+    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     const agents = written.agents as Record<string, unknown>;
     const defaults = agents.defaults as Record<string, unknown>;
     const sandbox = defaults.sandbox as Record<string, unknown>;

@@ -20,15 +20,7 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
 }) {
-  const {
-    replyResult,
-    msg,
-    maxMediaBytes,
-    textLimit,
-    replyLogger,
-    connectionId,
-    skipLog,
-  } = params;
+  const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
   const textChunks = chunkMarkdownText(replyResult.text || "", textLimit);
   const mediaList = replyResult.mediaUrls?.length
@@ -37,14 +29,9 @@ export async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sleep = (ms: number) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const sendWithRetry = async (
-    fn: () => Promise<unknown>,
-    label: string,
-    maxAttempts = 3,
-  ) => {
+  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -53,9 +40,7 @@ export async function deliverWebReply(params: {
         lastErr = err;
         const errText = formatError(err);
         const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\\s*out|disconnect/i.test(
-          errText,
-        );
+        const shouldRetry = /closed|reset|timed\\s*out|disconnect/i.test(errText);
         if (!shouldRetry || isLast) {
           throw err;
         }
@@ -103,17 +88,14 @@ export async function deliverWebReply(params: {
 
   // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
-    const caption =
-      index === 0 ? remainingText.shift() || undefined : undefined;
+    const caption = index === 0 ? remainingText.shift() || undefined : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
       if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
         );
-        logVerbose(
-          `Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`,
-        );
+        logVerbose(`Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`);
       }
       if (media.kind === "image") {
         await sendWithRetry(
@@ -178,24 +160,15 @@ export async function deliverWebReply(params: {
         "auto-reply sent (media)",
       );
     } catch (err) {
-      whatsappOutboundLog.error(
-        `Failed sending web media to ${msg.from}: ${formatError(err)}`,
-      );
+      whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(err)}`);
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
       if (index === 0) {
         const warning =
-          err instanceof Error
-            ? `⚠️ Media failed: ${err.message}`
-            : "⚠️ Media failed.";
-        const fallbackTextParts = [
-          remainingText.shift() ?? caption ?? "",
-          warning,
-        ].filter(Boolean);
+          err instanceof Error ? `⚠️ Media failed: ${err.message}` : "⚠️ Media failed.";
+        const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
         const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
-          whatsappOutboundLog.warn(
-            `Media skipped; sent text-only to ${msg.from}`,
-          );
+          whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
           await msg.reply(fallbackText);
         }
       }

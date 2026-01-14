@@ -1,12 +1,6 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { truncateUtf16Safe } from "../utils.js";
-import {
-  type MessagingToolSend,
-  normalizeTargetForProvider,
-} from "./pi-embedded-messaging.js";
+import { type MessagingToolSend, normalizeTargetForProvider } from "./pi-embedded-messaging.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 
@@ -56,18 +50,15 @@ export function extractMessagingToolSend(
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
-  const accountIdRaw =
-    typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   const accountId = accountIdRaw ? accountIdRaw : undefined;
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") return undefined;
     const toRaw = typeof args.to === "string" ? args.to : undefined;
     if (!toRaw) return undefined;
-    const providerRaw =
-      typeof args.provider === "string" ? args.provider.trim() : "";
+    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
     const providerId = providerRaw ? normalizeChannelId(providerRaw) : null;
-    const provider =
-      providerId ?? (providerRaw ? providerRaw.toLowerCase() : "message");
+    const provider = providerId ?? (providerRaw ? providerRaw.toLowerCase() : "message");
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }

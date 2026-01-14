@@ -66,9 +66,7 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 15_000 },
     async () => {
-      const homeDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), "clawdbot-home-"),
-      );
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
       const restoreHome = setTempHome(homeDir);
 
       const { server, ws } = await startServerWithClient();
@@ -76,11 +74,7 @@ describe("gateway server models + voicewake", () => {
 
       const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
       expect(initial.ok).toBe(true);
-      expect(initial.payload?.triggers).toEqual([
-        "clawd",
-        "claude",
-        "computer",
-      ]);
+      expect(initial.payload?.triggers).toEqual(["clawd", "claude", "computer"]);
 
       const changedP = onceMessage<{
         type: "event";
@@ -96,19 +90,17 @@ describe("gateway server models + voicewake", () => {
 
       const changed = await changedP;
       expect(changed.event).toBe("voicewake.changed");
-      expect(
-        (changed.payload as { triggers?: unknown } | undefined)?.triggers,
-      ).toEqual(["hi", "there"]);
+      expect((changed.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+        "hi",
+        "there",
+      ]);
 
       const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
       expect(after.ok).toBe(true);
       expect(after.payload?.triggers).toEqual(["hi", "there"]);
 
       const onDisk = JSON.parse(
-        await fs.readFile(
-          path.join(homeDir, ".clawdbot", "settings", "voicewake.json"),
-          "utf8",
-        ),
+        await fs.readFile(path.join(homeDir, ".clawdbot", "settings", "voicewake.json"), "utf8"),
       ) as { triggers?: unknown; updatedAtMs?: unknown };
       expect(onDisk.triggers).toEqual(["hi", "there"]);
       expect(typeof onDisk.updatedAtMs).toBe("number");
@@ -289,9 +281,7 @@ describe("gateway server models + voicewake", () => {
       paramsJSON: JSON.stringify({ extra: true }),
     });
     expect(badRes?.ok).toBe(false);
-    expect(badRes && "error" in badRes ? badRes.error.code : "").toBe(
-      "INVALID_REQUEST",
-    );
+    expect(badRes && "error" in badRes ? badRes.error.code : "").toBe("INVALID_REQUEST");
 
     ws.close();
     await server.close();

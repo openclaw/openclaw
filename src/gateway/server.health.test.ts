@@ -3,10 +3,7 @@ import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
   getFreePort,
@@ -19,51 +16,35 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server health/presence", () => {
-  test(
-    "connect + health + presence + status succeed",
-    { timeout: 8000 },
-    async () => {
-      const { server, ws } = await startServerWithClient();
-      await connectOk(ws);
+  test("connect + health + presence + status succeed", { timeout: 8000 }, async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
 
-      const healthP = onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === "health1",
-      );
-      const statusP = onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === "status1",
-      );
-      const presenceP = onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === "presence1",
-      );
-      const channelsP = onceMessage(
-        ws,
-        (o) => o.type === "res" && o.id === "channels1",
-      );
+    const healthP = onceMessage(ws, (o) => o.type === "res" && o.id === "health1");
+    const statusP = onceMessage(ws, (o) => o.type === "res" && o.id === "status1");
+    const presenceP = onceMessage(ws, (o) => o.type === "res" && o.id === "presence1");
+    const channelsP = onceMessage(ws, (o) => o.type === "res" && o.id === "channels1");
 
-      const sendReq = (id: string, method: string) =>
-        ws.send(JSON.stringify({ type: "req", id, method }));
-      sendReq("health1", "health");
-      sendReq("status1", "status");
-      sendReq("presence1", "system-presence");
-      sendReq("channels1", "channels.status");
+    const sendReq = (id: string, method: string) =>
+      ws.send(JSON.stringify({ type: "req", id, method }));
+    sendReq("health1", "health");
+    sendReq("status1", "status");
+    sendReq("presence1", "system-presence");
+    sendReq("channels1", "channels.status");
 
-      const health = await healthP;
-      const status = await statusP;
-      const presence = await presenceP;
-      const channels = await channelsP;
-      expect(health.ok).toBe(true);
-      expect(status.ok).toBe(true);
-      expect(presence.ok).toBe(true);
-      expect(channels.ok).toBe(true);
-      expect(Array.isArray(presence.payload)).toBe(true);
+    const health = await healthP;
+    const status = await statusP;
+    const presence = await presenceP;
+    const channels = await channelsP;
+    expect(health.ok).toBe(true);
+    expect(status.ok).toBe(true);
+    expect(presence.ok).toBe(true);
+    expect(channels.ok).toBe(true);
+    expect(Array.isArray(presence.payload)).toBe(true);
 
-      ws.close();
-      await server.close();
-    },
-  );
+    ws.close();
+    await server.close();
+  });
 
   test("broadcasts heartbeat events and serves last-heartbeat", async () => {
     type HeartbeatPayload = {
@@ -106,10 +87,7 @@ describe("gateway server health/presence", () => {
         method: "last-heartbeat",
       }),
     );
-    const last = await onceMessage<ResFrame>(
-      ws,
-      (o) => o.type === "res" && o.id === "hb-last",
-    );
+    const last = await onceMessage<ResFrame>(ws, (o) => o.type === "res" && o.id === "hb-last");
     expect(last.ok).toBe(true);
     const lastPayload = last.payload as HeartbeatPayload | null | undefined;
     expect(lastPayload?.status).toBe("sent");
@@ -128,43 +106,34 @@ describe("gateway server health/presence", () => {
       (o) => o.type === "res" && o.id === "hb-toggle-off",
     );
     expect(toggle.ok).toBe(true);
-    expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(
-      false,
-    );
+    expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
 
     ws.close();
     await server.close();
   });
 
-  test(
-    "presence events carry seq + stateVersion",
-    { timeout: 8000 },
-    async () => {
-      const { server, ws } = await startServerWithClient();
-      await connectOk(ws);
+  test("presence events carry seq + stateVersion", { timeout: 8000 }, async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
 
-      const presenceEventP = onceMessage(
-        ws,
-        (o) => o.type === "event" && o.event === "presence",
-      );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "evt-1",
-          method: "system-event",
-          params: { text: "note from test" },
-        }),
-      );
+    const presenceEventP = onceMessage(ws, (o) => o.type === "event" && o.event === "presence");
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "evt-1",
+        method: "system-event",
+        params: { text: "note from test" },
+      }),
+    );
 
-      const evt = await presenceEventP;
-      expect(typeof evt.seq).toBe("number");
-      expect(evt.stateVersion?.presence).toBeGreaterThan(0);
-      expect(Array.isArray(evt.payload?.presence)).toBe(true);
+    const evt = await presenceEventP;
+    expect(typeof evt.seq).toBe("number");
+    expect(evt.stateVersion?.presence).toBeGreaterThan(0);
+    expect(Array.isArray(evt.payload?.presence)).toBe(true);
 
-      ws.close();
-      await server.close();
-    },
-  );
+    ws.close();
+    await server.close();
+  });
 
   test("agent events stream with seq", { timeout: 8000 }, async () => {
     const { server, ws } = await startServerWithClient();
@@ -193,50 +162,42 @@ describe("gateway server health/presence", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const shutdownP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "shutdown",
-      5000,
-    );
+    const shutdownP = onceMessage(ws, (o) => o.type === "event" && o.event === "shutdown", 5000);
     await server.close();
     const evt = await shutdownP;
     expect(evt.payload?.reason).toBeDefined();
   });
 
-  test(
-    "presence broadcast reaches multiple clients",
-    { timeout: 8000 },
-    async () => {
-      const port = await getFreePort();
-      const server = await startGatewayServer(port);
-      const mkClient = async () => {
-        const c = new WebSocket(`ws://127.0.0.1:${port}`);
-        await new Promise<void>((resolve) => c.once("open", resolve));
-        await connectOk(c);
-        return c;
-      };
+  test("presence broadcast reaches multiple clients", { timeout: 8000 }, async () => {
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const mkClient = async () => {
+      const c = new WebSocket(`ws://127.0.0.1:${port}`);
+      await new Promise<void>((resolve) => c.once("open", resolve));
+      await connectOk(c);
+      return c;
+    };
 
-      const clients = await Promise.all([mkClient(), mkClient(), mkClient()]);
-      const waits = clients.map((c) =>
-        onceMessage(c, (o) => o.type === "event" && o.event === "presence"),
-      );
-      clients[0].send(
-        JSON.stringify({
-          type: "req",
-          id: "broadcast",
-          method: "system-event",
-          params: { text: "fanout" },
-        }),
-      );
-      const events = await Promise.all(waits);
-      for (const evt of events) {
-        expect(evt.payload?.presence?.length).toBeGreaterThan(0);
-        expect(typeof evt.seq).toBe("number");
-      }
-      for (const c of clients) c.close();
-      await server.close();
-    },
-  );
+    const clients = await Promise.all([mkClient(), mkClient(), mkClient()]);
+    const waits = clients.map((c) =>
+      onceMessage(c, (o) => o.type === "event" && o.event === "presence"),
+    );
+    clients[0].send(
+      JSON.stringify({
+        type: "req",
+        id: "broadcast",
+        method: "system-event",
+        params: { text: "fanout" },
+      }),
+    );
+    const events = await Promise.all(waits);
+    for (const evt of events) {
+      expect(evt.payload?.presence?.length).toBeGreaterThan(0);
+      expect(typeof evt.seq).toBe("number");
+    }
+    for (const c of clients) c.close();
+    await server.close();
+  });
 
   test("presence includes client fingerprint", async () => {
     const { server, ws } = await startServerWithClient();
@@ -252,11 +213,7 @@ describe("gateway server health/presence", () => {
       },
     });
 
-    const presenceP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "fingerprint",
-      4000,
-    );
+    const presenceP = onceMessage(ws, (o) => o.type === "res" && o.id === "fingerprint", 4000);
     ws.send(
       JSON.stringify({
         type: "req",
@@ -291,11 +248,7 @@ describe("gateway server health/presence", () => {
       },
     });
 
-    const presenceP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "cli-presence",
-      4000,
-    );
+    const presenceP = onceMessage(ws, (o) => o.type === "res" && o.id === "cli-presence", 4000);
     ws.send(
       JSON.stringify({
         type: "req",

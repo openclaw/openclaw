@@ -38,16 +38,10 @@ describe("inbound dedupe", () => {
       MessageSid: "msg-1",
     };
     expect(
-      shouldSkipDuplicateInbound(
-        { ...base, OriginatingTo: "whatsapp:+1000" },
-        { now: 100 },
-      ),
+      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+1000" }, { now: 100 }),
     ).toBe(false);
     expect(
-      shouldSkipDuplicateInbound(
-        { ...base, OriginatingTo: "whatsapp:+2000" },
-        { now: 200 },
-      ),
+      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+2000" }, { now: 200 }),
     ).toBe(false);
   });
 
@@ -60,22 +54,13 @@ describe("inbound dedupe", () => {
       MessageSid: "msg-1",
     };
     expect(
-      shouldSkipDuplicateInbound(
-        { ...base, SessionKey: "agent:alpha:main" },
-        { now: 100 },
-      ),
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
     ).toBe(false);
     expect(
-      shouldSkipDuplicateInbound(
-        { ...base, SessionKey: "agent:bravo:main" },
-        { now: 200 },
-      ),
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:bravo:main" }, { now: 200 }),
     ).toBe(false);
     expect(
-      shouldSkipDuplicateInbound(
-        { ...base, SessionKey: "agent:alpha:main" },
-        { now: 300 },
-      ),
+      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
     ).toBe(true);
   });
 });

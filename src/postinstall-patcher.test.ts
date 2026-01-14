@@ -148,15 +148,7 @@ index 0000000..1111111 100644
     applyPatchSet({ patchText, targetDir: dir });
 
     const updated = fs.readFileSync(filePath, "utf-8").trim().split("\n");
-    expect(updated).toEqual([
-      "alpha",
-      "beta",
-      "beta2",
-      "gamma",
-      "DELTA",
-      "epsilon",
-      "zeta",
-    ]);
+    expect(updated).toEqual(["alpha", "beta", "beta2", "gamma", "DELTA", "epsilon", "zeta"]);
 
     fs.rmSync(dir, { recursive: true, force: true });
   });

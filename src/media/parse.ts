@@ -18,18 +18,11 @@ function isValidMedia(candidate: string) {
   if (!candidate) return false;
   if (candidate.length > 1024) return false;
   if (/\s/.test(candidate)) return false;
-  return (
-    /^https?:\/\//i.test(candidate) ||
-    candidate.startsWith("/") ||
-    candidate.startsWith("./")
-  );
+  return /^https?:\/\//i.test(candidate) || candidate.startsWith("/") || candidate.startsWith("./");
 }
 
 // Check if a character offset is inside any fenced code block
-function isInsideFence(
-  fenceSpans: Array<{ start: number; end: number }>,
-  offset: number,
-): boolean {
+function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset: number): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
 

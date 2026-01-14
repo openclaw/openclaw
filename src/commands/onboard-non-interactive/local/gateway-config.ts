@@ -20,18 +20,13 @@ export function applyNonInteractiveGatewayConfig(params: {
   const { opts, runtime } = params;
 
   const hasGatewayPort = opts.gatewayPort !== undefined;
-  if (
-    hasGatewayPort &&
-    (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)
-  ) {
+  if (hasGatewayPort && (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)) {
     runtime.error("Invalid --gateway-port");
     runtime.exit(1);
     return null;
   }
 
-  const port = hasGatewayPort
-    ? (opts.gatewayPort as number)
-    : params.defaultPort;
+  const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   let authMode = opts.gatewayAuth ?? "token";
   const tailscaleMode = opts.tailscale ?? "off";
@@ -43,8 +38,7 @@ export function applyNonInteractiveGatewayConfig(params: {
   // - If using Tailscale Funnel, require password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") bind = "loopback";
   if (authMode === "off" && bind !== "loopback") authMode = "token";
-  if (tailscaleMode === "funnel" && authMode !== "password")
-    authMode = "password";
+  if (tailscaleMode === "funnel" && authMode !== "password") authMode = "password";
 
   let nextConfig = params.nextConfig;
   let gatewayToken = opts.gatewayToken?.trim() || undefined;

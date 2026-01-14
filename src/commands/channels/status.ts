@@ -2,21 +2,14 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { withProgress } from "../../cli/progress.js";
-import {
-  type ClawdbotConfig,
-  readConfigFileSnapshot,
-} from "../../config/config.js";
+import { type ClawdbotConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatAge } from "../../infra/channel-summary.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import {
-  type ChatChannel,
-  formatChannelAccountLabel,
-  requireValidConfig,
-} from "./shared.js";
+import { type ChatChannel, formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ChannelsStatusOptions = {
   json?: boolean;
@@ -24,15 +17,10 @@ export type ChannelsStatusOptions = {
   timeout?: string;
 };
 
-export function formatGatewayChannelsStatusLines(
-  payload: Record<string, unknown>,
-): string[] {
+export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
-  const accountLines = (
-    provider: ChatChannel,
-    accounts: Array<Record<string, unknown>>,
-  ) =>
+  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
       const bits: string[] = [];
       if (typeof account.enabled === "boolean") {
@@ -51,13 +39,11 @@ export function formatGatewayChannelsStatusLines(
         bits.push(account.connected ? "connected" : "disconnected");
       }
       const inboundAt =
-        typeof account.lastInboundAt === "number" &&
-        Number.isFinite(account.lastInboundAt)
+        typeof account.lastInboundAt === "number" && Number.isFinite(account.lastInboundAt)
           ? account.lastInboundAt
           : null;
       const outboundAt =
-        typeof account.lastOutboundAt === "number" &&
-        Number.isFinite(account.lastOutboundAt)
+        typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
       if (inboundAt) bits.push(`in:${formatAge(Date.now() - inboundAt)}`);
@@ -74,16 +60,10 @@ export function formatGatewayChannelsStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
-      if (
-        typeof account.botTokenSource === "string" &&
-        account.botTokenSource
-      ) {
+      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
         bits.push(`bot:${account.botTokenSource}`);
       }
-      if (
-        typeof account.appTokenSource === "string" &&
-        account.appTokenSource
-      ) {
+      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
         bits.push(`app:${account.appTokenSource}`);
       }
       const application = account.application as
@@ -114,8 +94,7 @@ export function formatGatewayChannelsStatusLines(
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
       }
-      const accountId =
-        typeof account.accountId === "string" ? account.accountId : "default";
+      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
       const name = typeof account.name === "string" ? account.name.trim() : "";
       const labelText = formatChannelAccountLabel({
         channel: provider,
@@ -126,12 +105,8 @@ export function formatGatewayChannelsStatusLines(
     });
 
   const plugins = listChannelPlugins();
-  const accountsByChannel = payload.channelAccounts as
-    | Record<string, unknown>
-    | undefined;
-  const accountPayloads: Partial<
-    Record<string, Array<Record<string, unknown>>>
-  > = {};
+  const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
+  const accountPayloads: Partial<Record<string, Array<Record<string, unknown>>>> = {};
   for (const plugin of plugins) {
     const raw = accountsByChannel?.[plugin.id];
     if (Array.isArray(raw)) {
@@ -178,10 +153,7 @@ async function formatConfigChannelsStatusLines(
   }
   if (meta.path || meta.mode) lines.push("");
 
-  const accountLines = (
-    provider: ChatChannel,
-    accounts: Array<Record<string, unknown>>,
-  ) =>
+  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
       const bits: string[] = [];
       if (typeof account.enabled === "boolean") {
@@ -199,23 +171,16 @@ async function formatConfigChannelsStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
-      if (
-        typeof account.botTokenSource === "string" &&
-        account.botTokenSource
-      ) {
+      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
         bits.push(`bot:${account.botTokenSource}`);
       }
-      if (
-        typeof account.appTokenSource === "string" &&
-        account.appTokenSource
-      ) {
+      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
         bits.push(`app:${account.appTokenSource}`);
       }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
         bits.push(`url:${account.baseUrl}`);
       }
-      const accountId =
-        typeof account.accountId === "string" ? account.accountId : "default";
+      const accountId = typeof account.accountId === "string" ? account.accountId : "default";
       const name = typeof account.name === "string" ? account.name.trim() : "";
       const labelText = formatChannelAccountLabel({
         channel: provider,
@@ -255,9 +220,7 @@ export async function channelsStatusCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const timeoutMs = Number(opts.timeout ?? 10_000);
-  const statusLabel = opts.probe
-    ? "Checking channel status (probe)…"
-    : "Checking channel status…";
+  const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) runtime.log(statusLabel);
   try {
@@ -278,11 +241,7 @@ export async function channelsStatusCommand(
       runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
-    runtime.log(
-      formatGatewayChannelsStatusLines(payload as Record<string, unknown>).join(
-        "\n",
-      ),
-    );
+    runtime.log(formatGatewayChannelsStatusLines(payload as Record<string, unknown>).join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfig(runtime);

@@ -67,9 +67,7 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   if (runtime.status === "stopped") {
-    hints.push(
-      "Service is loaded but not running (likely exited immediately).",
-    );
+    hints.push("Service is loaded but not running (likely exited immediately).");
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     if (platform === "darwin") {
       const logs = resolveGatewayLogPaths(env);
@@ -77,9 +75,7 @@ export function buildGatewayRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
-      hints.push(
-        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
-      );
+      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);

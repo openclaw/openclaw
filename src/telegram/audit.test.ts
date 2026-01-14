@@ -24,13 +24,10 @@ describe("telegram audit", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ ok: true, result: { status: "member" } }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        ),
+        new Response(JSON.stringify({ ok: true, result: { status: "member" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
       ),
     );
     const res = await auditTelegramGroupMembership({

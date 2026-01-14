@@ -7,10 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 
 export type LingerPrompter = {
-  confirm?: (params: {
-    message: string;
-    initialValue?: boolean;
-  }) => Promise<boolean>;
+  confirm?: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
   note: (message: string, title?: string) => Promise<void> | void;
 };
 
@@ -29,10 +26,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const prompter = params.prompter ?? { note };
   const title = params.title ?? "Systemd";
   if (!(await isSystemdUserServiceAvailable())) {
-    await prompter.note(
-      "Systemd user services are unavailable. Skipping lingering checks.",
-      title,
-    );
+    await prompter.note("Systemd user services are unavailable. Skipping lingering checks.", title);
     return;
   }
   const status = await readSystemdUserLingerStatus(env);
@@ -59,10 +53,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
       initialValue: true,
     });
     if (!ok) {
-      await prompter.note(
-        "Without lingering, the Gateway will stop when you log out.",
-        title,
-      );
+      await prompter.note("Without lingering, the Gateway will stop when you log out.", title);
       return;
     }
   }
@@ -89,10 +80,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   params.runtime.error(
     `Failed to enable lingering: ${result.stderr || result.stdout || "unknown error"}`,
   );
-  await prompter.note(
-    `Run manually: sudo loginctl enable-linger ${status.user}`,
-    title,
-  );
+  await prompter.note(`Run manually: sudo loginctl enable-linger ${status.user}`, title);
 }
 
 export async function ensureSystemdUserLingerNonInteractive(params: {

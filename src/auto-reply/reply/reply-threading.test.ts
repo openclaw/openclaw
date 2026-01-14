@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  createReplyToModeFilter,
-  resolveReplyToMode,
-} from "./reply-threading.js";
+import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
 
 const emptyCfg = {} as ClawdbotConfig;
 
@@ -44,9 +41,7 @@ describe("createReplyToModeFilter", () => {
 
   it("keeps replyToId when mode is off and reply tags are allowed", () => {
     const filter = createReplyToModeFilter("off", { allowTagsWhenOff: true });
-    expect(
-      filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId,
-    ).toBe("1");
+    expect(filter({ text: "hi", replyToId: "1", replyToTag: true }).replyToId).toBe("1");
   });
 
   it("keeps replyToId when mode is all", () => {

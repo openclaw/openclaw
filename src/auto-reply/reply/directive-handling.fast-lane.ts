@@ -6,12 +6,7 @@ import type { ReplyPayload } from "../types.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "./directives.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 export async function applyInlineDirectivesFastLane(params: {
   directives: InlineDirectives;
@@ -45,9 +40,7 @@ export async function applyInlineDirectivesFastLane(params: {
     resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
     allowedModelKeys: Set<string>;
     allowedModelCatalog: Awaited<
-      ReturnType<
-        typeof import("../../agents/model-catalog.js").loadModelCatalog
-      >
+      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
     >;
     resetModelOverride: boolean;
   };

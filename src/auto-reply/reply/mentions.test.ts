@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  normalizeMentionText,
-} from "./mentions.js";
+import { buildMentionRegexes, matchesMentionPatterns, normalizeMentionText } from "./mentions.js";
 
 describe("mention helpers", () => {
   it("builds regexes and skips invalid patterns", () => {

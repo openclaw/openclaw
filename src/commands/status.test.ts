@@ -75,16 +75,10 @@ vi.mock("../channels/plugins/index.js", () => ({
         status: {
           collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
             accounts
-              .filter(
-                (account) =>
-                  typeof account.lastError === "string" && account.lastError,
-              )
+              .filter((account) => typeof account.lastError === "string" && account.lastError)
               .map((account) => ({
                 channel: "signal",
-                accountId:
-                  typeof account.accountId === "string"
-                    ? account.accountId
-                    : "default",
+                accountId: typeof account.accountId === "string" ? account.accountId : "default",
                 message: `Channel error: ${String(account.lastError)}`,
               })),
         },
@@ -105,16 +99,10 @@ vi.mock("../channels/plugins/index.js", () => ({
         status: {
           collectStatusIssues: (accounts: Array<Record<string, unknown>>) =>
             accounts
-              .filter(
-                (account) =>
-                  typeof account.lastError === "string" && account.lastError,
-              )
+              .filter((account) => typeof account.lastError === "string" && account.lastError)
               .map((account) => ({
                 channel: "imessage",
-                accountId:
-                  typeof account.accountId === "string"
-                    ? account.accountId
-                    : "default",
+                accountId: typeof account.accountId === "string" ? account.accountId : "default",
                 message: `Channel error: ${String(account.lastError)}`,
               })),
         },

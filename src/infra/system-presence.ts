@@ -56,10 +56,7 @@ function resolvePrimaryIPv4(): string | undefined {
 function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
-  const version =
-    process.env.CLAWDBOT_VERSION ??
-    process.env.npm_package_version ??
-    "unknown";
+  const version = process.env.CLAWDBOT_VERSION ?? process.env.npm_package_version ?? "unknown";
   const modelIdentifier = (() => {
     const p = os.platform();
     if (p === "darwin") {
@@ -146,9 +143,7 @@ function parsePresence(text: string): SystemPresence {
     host: host.trim(),
     ip: ip.trim(),
     version: version.trim(),
-    lastInputSeconds: Number.isFinite(lastInputSeconds)
-      ? lastInputSeconds
-      : undefined,
+    lastInputSeconds: Number.isFinite(lastInputSeconds) ? lastInputSeconds : undefined,
     mode: mode.trim(),
     reason,
     text: trimmed,
@@ -171,9 +166,7 @@ type SystemPresencePayload = {
   tags?: string[];
 };
 
-export function updateSystemPresence(
-  payload: SystemPresencePayload,
-): SystemPresenceUpdate {
+export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
   ensureSelfPresence();
   const parsed = parsePresence(payload.text);
   const key =
@@ -196,9 +189,7 @@ export function updateSystemPresence(
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ??
-      parsed.lastInputSeconds ??
-      existing.lastInputSeconds,
+      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     instanceId: payload.instanceId ?? parsed.instanceId ?? existing.instanceId,
     text: payload.text || parsed.text || existing.text,
@@ -228,8 +219,7 @@ export function updateSystemPresence(
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
-  const normalizedKey =
-    normalizePresenceKey(key) ?? os.hostname().toLowerCase();
+  const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const merged: SystemPresence = {
     ...existing,

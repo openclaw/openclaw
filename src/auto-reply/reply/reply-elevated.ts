@@ -1,13 +1,7 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
-import {
-  CHAT_CHANNEL_ORDER,
-  normalizeChannelId,
-} from "../../channels/registry.js";
-import type {
-  AgentElevatedAllowFromConfig,
-  ClawdbotConfig,
-} from "../../config/config.js";
+import { CHAT_CHANNEL_ORDER, normalizeChannelId } from "../../channels/registry.js";
+import type { AgentElevatedAllowFromConfig, ClawdbotConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 
@@ -64,9 +58,7 @@ function isApprovedElevatedSender(params: {
   );
   if (!rawAllow || rawAllow.length === 0) return false;
 
-  const allowTokens = rawAllow
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  const allowTokens = rawAllow.map((entry) => String(entry).trim()).filter(Boolean);
   if (allowTokens.length === 0) return false;
   if (allowTokens.some((entry) => entry === "*")) return true;
 
@@ -116,14 +108,12 @@ export function resolveElevatedPermissions(params: {
   failures: Array<{ gate: string; key: string }>;
 } {
   const globalConfig = params.cfg.tools?.elevated;
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId)?.tools
-    ?.elevated;
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId)?.tools?.elevated;
   const globalEnabled = globalConfig?.enabled !== false;
   const agentEnabled = agentConfig?.enabled !== false;
   const enabled = globalEnabled && agentEnabled;
   const failures: Array<{ gate: string; key: string }> = [];
-  if (!globalEnabled)
-    failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
+  if (!globalEnabled) failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
   if (!agentEnabled)
     failures.push({
       gate: "enabled",
@@ -184,11 +174,7 @@ export function formatElevatedUnavailableMessage(params: {
     `elevated is not available right now (runtime=${params.runtimeSandboxed ? "sandboxed" : "direct"}).`,
   );
   if (params.failures.length > 0) {
-    lines.push(
-      `Failing gates: ${params.failures
-        .map((f) => `${f.gate} (${f.key})`)
-        .join(", ")}`,
-    );
+    lines.push(`Failing gates: ${params.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
   } else {
     lines.push(
       "Failing gates: enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",

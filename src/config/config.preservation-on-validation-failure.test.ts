@@ -12,9 +12,7 @@ describe("config preservation on validation failure", () => {
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(true);
-    expect(
-      (res as { config: Record<string, unknown> }).config.customUnknownField,
-    ).toEqual({
+    expect((res as { config: Record<string, unknown> }).config.customUnknownField).toEqual({
       nested: "value",
     });
   });
@@ -42,9 +40,7 @@ describe("config preservation on validation failure", () => {
       expect((snap.config as Record<string, unknown>).customData).toEqual({
         preserved: true,
       });
-      expect(snap.config.channels?.whatsapp?.allowFrom).toEqual([
-        "+15555550123",
-      ]);
+      expect(snap.config.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     });
   });
 });

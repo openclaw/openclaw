@@ -10,15 +10,11 @@ export type MSTeamsStorePathOptions = {
   filename: string;
 };
 
-export function resolveMSTeamsStorePath(
-  params: MSTeamsStorePathOptions,
-): string {
+export function resolveMSTeamsStorePath(params: MSTeamsStorePathOptions): string {
   if (params.storePath) return params.storePath;
   if (params.stateDir) return path.join(params.stateDir, params.filename);
 
   const env = params.env ?? process.env;
-  const stateDir = params.homedir
-    ? resolveStateDir(env, params.homedir)
-    : resolveStateDir(env);
+  const stateDir = params.homedir ? resolveStateDir(env, params.homedir) : resolveStateDir(env);
   return path.join(stateDir, params.filename);
 }

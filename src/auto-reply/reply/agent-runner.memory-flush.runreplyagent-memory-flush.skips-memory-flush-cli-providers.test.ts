@@ -12,10 +12,7 @@ const runCliAgentMock = vi.fn();
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
-  onAgentEvent?: (evt: {
-    stream?: string;
-    data?: { phase?: string; willRetry?: boolean };
-  }) => void;
+  onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
 };
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -44,8 +41,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -141,15 +137,13 @@ describe("runReplyAgent memory flush", () => {
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
     const calls: Array<{ prompt?: string }> = [];
-    runEmbeddedPiAgentMock.mockImplementation(
-      async (params: EmbeddedRunParams) => {
-        calls.push({ prompt: params.prompt });
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      calls.push({ prompt: params.prompt });
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
     runCliAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -187,9 +181,7 @@ describe("runReplyAgent memory flush", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    const call = runCliAgentMock.mock.calls[0]?.[0] as
-      | { prompt?: string }
-      | undefined;
+    const call = runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
     expect(call?.prompt).toBe("hello");
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });

@@ -54,9 +54,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
-    expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe(
-      "number",
-    );
+    expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "timeoutSeconds").type).toBe("number");
   });
 
@@ -108,9 +106,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createClawdbotTools().find(
-      (candidate) => candidate.name === "sessions_list",
-    );
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_list");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_list tool");
 
@@ -147,9 +143,7 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createClawdbotTools().find(
-      (candidate) => candidate.name === "sessions_history",
-    );
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "sessions_history");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_history tool");
 
@@ -181,9 +175,7 @@ describe("sessions tools", () => {
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as
-          | { message?: string; sessionKey?: string }
-          | undefined;
+        const params = request.params as { message?: string; sessionKey?: string } | undefined;
         const message = params?.message ?? "";
         let reply = "REPLY_SKIP";
         if (message === "ping" || message === "wait") {
@@ -207,8 +199,7 @@ describe("sessions tools", () => {
       }
       if (request.method === "chat.history") {
         _historyCallCount += 1;
-        const text =
-          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -268,9 +259,7 @@ describe("sessions tools", () => {
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
-    const historyOnlyCalls = calls.filter(
-      (call) => call.method === "chat.history",
-    );
+    const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
@@ -281,31 +270,28 @@ describe("sessions tools", () => {
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt === "string" &&
-          (
-            call.params as { extraSystemPrompt?: string }
-          )?.extraSystemPrompt?.includes("Agent-to-agent message context"),
+          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+            "Agent-to-agent message context",
+          ),
       ),
     ).toBe(true);
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt === "string" &&
-          (
-            call.params as { extraSystemPrompt?: string }
-          )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
+          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+            "Agent-to-agent reply step",
+          ),
       ),
     ).toBe(true);
     expect(
       agentCalls.some(
         (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt === "string" &&
-          (
-            call.params as { extraSystemPrompt?: string }
-          )?.extraSystemPrompt?.includes("Agent-to-agent announce step"),
+          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+            "Agent-to-agent announce step",
+          ),
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
@@ -339,9 +325,7 @@ describe("sessions tools", () => {
         if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
           reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
         }
-        if (
-          params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
-        ) {
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
           reply = "announce now";
         }
         replyByRunId.set(runId, reply);
@@ -357,8 +341,7 @@ describe("sessions tools", () => {
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        const text =
-          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -414,11 +397,10 @@ describe("sessions tools", () => {
     const replySteps = calls.filter(
       (call) =>
         call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })
-          ?.extraSystemPrompt === "string" &&
-        (
-          call.params as { extraSystemPrompt?: string }
-        )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({

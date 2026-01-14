@@ -11,8 +11,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
@@ -120,9 +119,7 @@ describe("web auto-reply", () => {
       | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
       | undefined;
     const listenerFactory = async (opts: {
-      onMessage: (
-        msg: import("./inbound.js").WebInboundMessage,
-      ) => Promise<void>;
+      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
     }) => {
       capturedOnMessage = opts.onMessage;
       return { close: vi.fn() };
@@ -142,10 +139,7 @@ describe("web auto-reply", () => {
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        smallPng.buffer.slice(
-          smallPng.byteOffset,
-          smallPng.byteOffset + smallPng.byteLength,
-        ),
+        smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
     } as Response);
@@ -182,9 +176,7 @@ describe("web auto-reply", () => {
       | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
       | undefined;
     const listenerFactory = async (opts: {
-      onMessage: (
-        msg: import("./inbound.js").WebInboundMessage,
-      ) => Promise<void>;
+      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
     }) => {
       capturedOnMessage = opts.onMessage;
       return { close: vi.fn() };
@@ -232,9 +224,7 @@ describe("web auto-reply", () => {
       | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
       | undefined;
     const listenerFactory = async (opts: {
-      onMessage: (
-        msg: import("./inbound.js").WebInboundMessage,
-      ) => Promise<void>;
+      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
     }) => {
       capturedOnMessage = opts.onMessage;
       return { close: vi.fn() };
@@ -256,10 +246,7 @@ describe("web auto-reply", () => {
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        bigPng.buffer.slice(
-          bigPng.byteOffset,
-          bigPng.byteOffset + bigPng.byteLength,
-        ),
+        bigPng.buffer.slice(bigPng.byteOffset, bigPng.byteOffset + bigPng.byteLength),
       headers: { get: () => "image/png" },
       status: 200,
     } as Response);

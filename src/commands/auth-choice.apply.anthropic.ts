@@ -8,14 +8,8 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
-import {
-  buildTokenProfileId,
-  validateAnthropicSetupToken,
-} from "./auth-token.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
 
 export async function applyAuthChoiceAnthropic(
@@ -164,10 +158,9 @@ export async function applyAuthChoiceAnthropic(
       options: [{ value: "anthropic", label: "Anthropic (only supported)" }],
     })) as "anthropic";
     await params.prompter.note(
-      [
-        "Run `claude setup-token` in your terminal.",
-        "Then paste the generated token below.",
-      ].join("\n"),
+      ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
+        "\n",
+      ),
       "Anthropic token",
     );
 
@@ -223,10 +216,7 @@ export async function applyAuthChoiceAnthropic(
         message: "Enter Anthropic API key",
         validate: validateApiKeyInput,
       });
-      await setAnthropicApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
+      await setAnthropicApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",

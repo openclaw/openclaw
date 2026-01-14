@@ -25,9 +25,7 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
 
 function pickPrimaryWindow(windows: UsageWindow[]): UsageWindow | undefined {
   if (windows.length === 0) return undefined;
-  return windows.reduce((best, next) =>
-    next.usedPercent > best.usedPercent ? next : best,
-  );
+  return windows.reduce((best, next) => (next.usedPercent > best.usedPercent ? next : best));
 }
 
 function formatWindowShort(window: UsageWindow, now?: number): string {
@@ -58,10 +56,7 @@ export function formatUsageSummaryLine(
   return `📊 Usage: ${parts.join(" · ")}`;
 }
 
-export function formatUsageReportLines(
-  summary: UsageSummary,
-  opts?: { now?: number },
-): string[] {
+export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {
   if (summary.providers.length === 0) {
     return ["Usage: no provider usage available."];
   }
@@ -82,9 +77,7 @@ export function formatUsageReportLines(
       const remaining = clampPercent(100 - window.usedPercent);
       const reset = formatResetRemaining(window.resetAt, opts?.now);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
-      lines.push(
-        `    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`,
-      );
+      lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
     }
   }
   return lines;

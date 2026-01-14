@@ -66,8 +66,7 @@ export function createBlockReplyCoalescer(params: {
 
   const enqueue = (payload: ReplyPayload) => {
     if (shouldAbort()) return;
-    const hasMedia =
-      Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const text = payload.text ?? "";
     const hasText = text.trim().length > 0;
     if (hasMedia) {
@@ -79,8 +78,7 @@ export function createBlockReplyCoalescer(params: {
 
     if (
       bufferText &&
-      (bufferReplyToId !== payload.replyToId ||
-        bufferAudioAsVoice !== payload.audioAsVoice)
+      (bufferReplyToId !== payload.replyToId || bufferAudioAsVoice !== payload.audioAsVoice)
     ) {
       void flush({ force: true });
     }

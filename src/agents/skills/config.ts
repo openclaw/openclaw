@@ -16,10 +16,7 @@ function isTruthy(value: unknown): boolean {
   return true;
 }
 
-export function resolveConfigPath(
-  config: ClawdbotConfig | undefined,
-  pathStr: string,
-) {
+export function resolveConfigPath(config: ClawdbotConfig | undefined, pathStr: string) {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -29,10 +26,7 @@ export function resolveConfigPath(
   return current;
 }
 
-export function isConfigPathTruthy(
-  config: ClawdbotConfig | undefined,
-  pathStr: string,
-): boolean {
+export function isConfigPathTruthy(config: ClawdbotConfig | undefined, pathStr: string): boolean {
   const value = resolveConfigPath(config, pathStr);
   if (value === undefined && pathStr in DEFAULT_CONFIG_VALUES) {
     return DEFAULT_CONFIG_VALUES[pathStr] === true;
@@ -66,16 +60,11 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return entry.skill.source === "clawdbot-bundled";
 }
 
-export function resolveBundledAllowlist(
-  config?: ClawdbotConfig,
-): string[] | undefined {
+export function resolveBundledAllowlist(config?: ClawdbotConfig): string[] | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
-export function isBundledSkillAllowed(
-  entry: SkillEntry,
-  allowlist?: string[],
-): boolean {
+export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
   if (!allowlist || allowlist.length === 0) return true;
   if (!isBundledSkill(entry)) return true;
   const key = resolveSkillKey(entry.skill, entry);

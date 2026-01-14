@@ -4,10 +4,7 @@ import chalk from "chalk";
 import type { Command } from "commander";
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
-import {
-  installPluginFromArchive,
-  installPluginFromNpmSpec,
-} from "../plugins/install.js";
+import { installPluginFromArchive, installPluginFromNpmSpec } from "../plugins/install.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
@@ -33,8 +30,7 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
         ? chalk.yellow("disabled")
         : chalk.red("error");
   const name = plugin.name ? chalk.white(plugin.name) : chalk.white(plugin.id);
-  const idSuffix =
-    plugin.name !== plugin.id ? chalk.gray(` (${plugin.id})`) : "";
+  const idSuffix = plugin.name !== plugin.id ? chalk.gray(` (${plugin.id})`) : "";
   const desc = plugin.description
     ? chalk.gray(
         plugin.description.length > 60
@@ -58,9 +54,7 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
 }
 
 export function registerPluginsCli(program: Command) {
-  const plugins = program
-    .command("plugins")
-    .description("Manage Clawdbot plugins/extensions");
+  const plugins = program.command("plugins").description("Manage Clawdbot plugins/extensions");
 
   plugins
     .command("list")
@@ -160,20 +154,14 @@ export function registerPluginsCli(program: Command) {
           entries: {
             ...cfg.plugins?.entries,
             [id]: {
-              ...(
-                cfg.plugins?.entries as
-                  | Record<string, { enabled?: boolean }>
-                  | undefined
-              )?.[id],
+              ...(cfg.plugins?.entries as Record<string, { enabled?: boolean }> | undefined)?.[id],
               enabled: true,
             },
           },
         },
       };
       await writeConfigFile(next);
-      defaultRuntime.log(
-        `Enabled plugin "${id}". Restart the gateway to apply.`,
-      );
+      defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
     });
 
   plugins
@@ -189,20 +177,14 @@ export function registerPluginsCli(program: Command) {
           entries: {
             ...cfg.plugins?.entries,
             [id]: {
-              ...(
-                cfg.plugins?.entries as
-                  | Record<string, { enabled?: boolean }>
-                  | undefined
-              )?.[id],
+              ...(cfg.plugins?.entries as Record<string, { enabled?: boolean }> | undefined)?.[id],
               enabled: false,
             },
           },
         },
       };
       await writeConfigFile(next);
-      defaultRuntime.log(
-        `Disabled plugin "${id}". Restart the gateway to apply.`,
-      );
+      defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
     });
 
   plugins
@@ -235,9 +217,7 @@ export function registerPluginsCli(program: Command) {
               entries: {
                 ...cfg.plugins?.entries,
                 [result.pluginId]: {
-                  ...(cfg.plugins?.entries?.[result.pluginId] as
-                    | object
-                    | undefined),
+                  ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
                   enabled: true,
                 },
               },
@@ -301,9 +281,7 @@ export function registerPluginsCli(program: Command) {
           entries: {
             ...cfg.plugins?.entries,
             [result.pluginId]: {
-              ...(cfg.plugins?.entries?.[result.pluginId] as
-                | object
-                | undefined),
+              ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
               enabled: true,
             },
           },
@@ -331,9 +309,7 @@ export function registerPluginsCli(program: Command) {
       if (errors.length > 0) {
         lines.push(chalk.bold.red("Plugin errors:"));
         for (const entry of errors) {
-          lines.push(
-            `- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`,
-          );
+          lines.push(`- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`);
         }
       }
       if (diags.length > 0) {

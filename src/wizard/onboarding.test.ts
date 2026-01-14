@@ -16,13 +16,9 @@ const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({ exists: false, valid: true, config: {} })),
 );
-const ensureSystemdUserLingerInteractive = vi.hoisted(() =>
-  vi.fn(async () => {}),
-);
+const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
-const ensureControlUiAssetsBuilt = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true })),
-);
+const ensureControlUiAssetsBuilt = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const runTui = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../commands/onboard-channels.js", () => ({
@@ -47,8 +43,7 @@ vi.mock("../config/config.js", async (importActual) => {
 });
 
 vi.mock("../commands/onboard-helpers.js", async (importActual) => {
-  const actual =
-    await importActual<typeof import("../commands/onboard-helpers.js")>();
+  const actual = await importActual<typeof import("../commands/onboard-helpers.js")>();
   return {
     ...actual,
     ensureWorkspaceAndSessions,
@@ -177,13 +172,8 @@ describe("runOnboardingWizard", () => {
   it("launches TUI without auto-delivery when hatching", async () => {
     runTui.mockClear();
 
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-onboard-"),
-    );
-    await fs.writeFile(
-      path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME),
-      "{}",
-    );
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-"));
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME), "{}");
 
     const confirm: WizardPrompter["confirm"] = vi.fn(async (opts) => {
       if (opts.message === "Do you want to hatch your bot now?") return true;

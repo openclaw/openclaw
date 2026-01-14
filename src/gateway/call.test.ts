@@ -59,9 +59,7 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { buildGatewayConnectionDetails, callGateway } = await import(
-  "./call.js"
-);
+const { buildGatewayConnectionDetails, callGateway } = await import("./call.js");
 
 describe("callGateway url resolution", () => {
   beforeEach(() => {
@@ -131,9 +129,7 @@ describe("buildGatewayConnectionDetails", () => {
     const details = buildGatewayConnectionDetails();
 
     expect(details.url).toBe("ws://127.0.0.1:18789");
-    expect(details.urlSource).toBe(
-      "missing gateway.remote.url (fallback local)",
-    );
+    expect(details.urlSource).toBe("missing gateway.remote.url (fallback local)");
     expect(details.bindDetail).toBe("Bind: loopback");
     expect(details.remoteFallbackNote).toContain(
       "gateway.mode=remote but gateway.remote.url is missing",
@@ -209,11 +205,9 @@ describe("callGateway error details", () => {
 
     vi.useFakeTimers();
     let err: Error | null = null;
-    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch(
-      (caught) => {
-        err = caught as Error;
-      },
-    );
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught as Error;
+    });
 
     await vi.advanceTimersByTimeAsync(5);
     await promise;

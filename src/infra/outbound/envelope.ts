@@ -1,9 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OutboundDeliveryJson } from "./format.js";
-import {
-  normalizeOutboundPayloadsForJson,
-  type OutboundPayloadJson,
-} from "./payloads.js";
+import { normalizeOutboundPayloadsForJson, type OutboundPayloadJson } from "./payloads.js";
 
 export type OutboundResultEnvelope = {
   payloads?: OutboundPayloadJson[];
@@ -35,12 +32,7 @@ export function buildOutboundResultEnvelope(
           ? (params.payloads as OutboundPayloadJson[])
           : normalizeOutboundPayloadsForJson(params.payloads as ReplyPayload[]);
 
-  if (
-    params.flattenDelivery !== false &&
-    params.delivery &&
-    !params.meta &&
-    !hasPayloads
-  ) {
+  if (params.flattenDelivery !== false && params.delivery && !params.meta && !hasPayloads) {
     return params.delivery;
   }
 

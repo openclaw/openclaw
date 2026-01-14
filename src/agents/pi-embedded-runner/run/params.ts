@@ -1,9 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
-import type {
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../../../auto-reply/thinking.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.js";
@@ -42,10 +38,7 @@ export type RunEmbeddedPiAgentParams = {
   runId: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
-  onPartialReply?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: {
     text?: string;
@@ -55,18 +48,9 @@ export type RunEmbeddedPiAgentParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
-  onToolResult?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-  }) => void | Promise<void>;
-  onAgentEvent?: (evt: {
-    stream: string;
-    data: Record<string, unknown>;
-  }) => void;
+  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;

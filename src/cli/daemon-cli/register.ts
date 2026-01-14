@@ -17,20 +17,13 @@ export function registerDaemonCli(program: Command) {
     .description("Manage the Gateway daemon service (launchd/systemd/schtasks)")
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/gateway",
-          "docs.clawd.bot/gateway",
-        )}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway", "docs.clawd.bot/gateway")}\n`,
     );
 
   daemon
     .command("status")
     .description("Show daemon install status + probe the Gateway")
-    .option(
-      "--url <url>",
-      "Gateway WebSocket URL (defaults to config/remote/local)",
-    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to config/remote/local)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")

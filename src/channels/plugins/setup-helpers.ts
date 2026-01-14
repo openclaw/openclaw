@@ -1,8 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
 type ChannelSectionBase = {
   name?: string;
@@ -39,9 +36,7 @@ export function applyAccountNameToChannelSection(params: {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
   const base =
-    typeof baseConfig === "object" && baseConfig
-      ? (baseConfig as ChannelSectionBase)
-      : undefined;
+    typeof baseConfig === "object" && baseConfig ? (baseConfig as ChannelSectionBase) : undefined;
   const useAccounts = shouldStoreNameInAccounts({
     cfg: params.cfg,
     channelKey: params.channelKey,
@@ -61,10 +56,7 @@ export function applyAccountNameToChannelSection(params: {
       },
     } as ClawdbotConfig;
   }
-  const baseAccounts: Record<
-    string,
-    Record<string, unknown>
-  > = base?.accounts ?? {};
+  const baseAccounts: Record<string, Record<string, unknown>> = base?.accounts ?? {};
   const existingAccount = baseAccounts[accountId] ?? {};
   const baseWithoutName =
     accountId === DEFAULT_ACCOUNT_ID

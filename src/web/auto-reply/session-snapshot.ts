@@ -27,8 +27,6 @@ export function getSessionSnapshot(
       : sessionCfg?.idleMinutes) ?? DEFAULT_IDLE_MINUTES,
     1,
   );
-  const fresh = !!(
-    entry && Date.now() - entry.updatedAt <= idleMinutes * 60_000
-  );
+  const fresh = !!(entry && Date.now() - entry.updatedAt <= idleMinutes * 60_000);
   return { key, entry, fresh, idleMinutes };
 }

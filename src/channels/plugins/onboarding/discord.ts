@@ -5,25 +5,17 @@ import {
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
 } from "../../../discord/accounts.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "discord" as const;
 
 function setDiscordDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.discord?.dm?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.discord?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -77,12 +69,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 2 : 1,
     };
   },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }) => {
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
     const discordOverride = accountOverrides.discord?.trim();
     const defaultDiscordAccountId = resolveDefaultDiscordAccountId(cfg);
     let discordAccountId = discordOverride
@@ -106,8 +93,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = discordAccountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv && Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
+    const canUseEnv = allowEnv && Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
     const hasConfigToken = Boolean(resolvedAccount.config.token);
 
     let token: string | null = null;
@@ -178,9 +164,7 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.discord?.accounts,
                 [discordAccountId]: {
                   ...next.channels?.discord?.accounts?.[discordAccountId],
-                  enabled:
-                    next.channels?.discord?.accounts?.[discordAccountId]
-                      ?.enabled ?? true,
+                  enabled: next.channels?.discord?.accounts?.[discordAccountId]?.enabled ?? true,
                   token,
                 },
               },

@@ -76,8 +76,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }
       return next;
     },
-    isConfigured: (_account, cfg) =>
-      Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
+    isConfigured: (_account, cfg) => Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams)),
     describeAccount: (account) => ({
       accountId: account.accountId,
       enabled: account.enabled,
@@ -139,17 +138,14 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       return { ok: true, to: trimmed };
     },
     sendText: async ({ cfg, to, text, deps }) => {
-      const send =
-        deps?.sendMSTeams ??
-        ((to, text) => sendMessageMSTeams({ cfg, to, text }));
+      const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
       const result = await send(to, text);
       return { channel: "msteams", ...result };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, deps }) => {
       const send =
         deps?.sendMSTeams ??
-        ((to, text, opts) =>
-          sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
+        ((to, text, opts) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
       const result = await send(to, text, { mediaUrl });
       return { channel: "msteams", ...result };
     },

@@ -1,9 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  createEditTool,
-  createReadTool,
-  createWriteTool,
-} from "@mariozechner/pi-coding-agent";
+import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 
 import { detectMime } from "../media/mime.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -16,9 +12,7 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
-async function sniffMimeFromBase64(
-  base64: string,
-): Promise<string | undefined> {
+async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();
   if (!trimmed) return undefined;
 
@@ -74,11 +68,7 @@ async function normalizeReadImageResult(
   if (sniffed === image.mimeType) return result;
 
   const nextContent = content.map((block) => {
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "image"
-    ) {
+    if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
       const b = block as ImageContentBlock & { mimeType: string };
       return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
     }
@@ -125,9 +115,7 @@ export const CLAUDE_PARAM_GROUPS = {
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
-export function normalizeToolParams(
-  params: unknown,
-): Record<string, unknown> | undefined {
+export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") return undefined;
   const record = params as Record<string, unknown>;
   const normalized = { ...record };
@@ -149,9 +137,7 @@ export function normalizeToolParams(
   return normalized;
 }
 
-export function patchToolSchemaForClaudeCompatibility(
-  tool: AnyAgentTool,
-): AnyAgentTool {
+export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
@@ -235,9 +221,7 @@ export function wrapToolParamNormalization(
       const normalized = normalizeToolParams(params);
       const record =
         normalized ??
-        (params && typeof params === "object"
-          ? (params as Record<string, unknown>)
-          : undefined);
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
@@ -253,9 +237,7 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
       const normalized = normalizeToolParams(args);
       const record =
         normalized ??
-        (args && typeof args === "object"
-          ? (args as Record<string, unknown>)
-          : undefined);
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         await assertSandboxPath({ filePath, cwd: root, root });
@@ -272,18 +254,12 @@ export function createSandboxedReadTool(root: string) {
 
 export function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(
-    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
-    root,
-  );
+  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
 }
 
 export function createSandboxedEditTool(root: string) {
   const base = createEditTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(
-    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
-    root,
-  );
+  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit), root);
 }
 
 export function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
@@ -294,17 +270,14 @@ export function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
       const normalized = normalizeToolParams(params);
       const record =
         normalized ??
-        (params && typeof params === "object"
-          ? (params as Record<string, unknown>)
-          : undefined);
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
       const result = (await base.execute(
         toolCallId,
         normalized ?? params,
         signal,
       )) as AgentToolResult<unknown>;
-      const filePath =
-        typeof record?.path === "string" ? String(record.path) : "<unknown>";
+      const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
       return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
     },

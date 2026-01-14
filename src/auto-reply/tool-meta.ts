@@ -1,7 +1,4 @@
-import {
-  formatToolSummary,
-  resolveToolDisplay,
-} from "../agents/tool-display.js";
+import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 export function shortenPath(p: string): string {
@@ -17,10 +14,7 @@ export function shortenMeta(meta: string): string {
   return `${shortenHomeInString(base)}${rest}`;
 }
 
-export function formatToolAggregate(
-  toolName?: string,
-  metas?: string[],
-): string {
+export function formatToolAggregate(toolName?: string, metas?: string[]): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
   const prefix = `${display.emoji} ${display.label}`;

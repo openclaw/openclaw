@@ -69,14 +69,10 @@ async function sendMSTeamsActivity(params: {
     activityId: undefined,
   };
   let messageId = "unknown";
-  await params.adapter.continueConversation(
-    params.appId,
-    proactiveRef,
-    async (ctx) => {
-      const response = await ctx.sendActivity(params.activity);
-      messageId = extractMessageId(response) ?? "unknown";
-    },
-  );
+  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
+    const response = await ctx.sendActivity(params.activity);
+    messageId = extractMessageId(response) ?? "unknown";
+  });
   return messageId;
 }
 
@@ -91,11 +87,10 @@ export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
   const { cfg, to, text, mediaUrl } = params;
-  const { adapter, appId, conversationId, ref, log } =
-    await resolveMSTeamsSendContext({
-      cfg,
-      to,
-    });
+  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+  });
 
   log.debug("sending proactive message", {
     conversationId,
@@ -103,11 +98,7 @@ export async function sendMessageMSTeams(
     hasMedia: Boolean(mediaUrl),
   });
 
-  const message = mediaUrl
-    ? text
-      ? `${text}\n\n${mediaUrl}`
-      : mediaUrl
-    : text;
+  const message = mediaUrl ? (text ? `${text}\n\n${mediaUrl}` : mediaUrl) : text;
   let messageIds: string[];
   try {
     messageIds = await sendMSTeamsMessages({
@@ -125,9 +116,7 @@ export async function sendMessageMSTeams(
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode
-      ? ` (HTTP ${classification.statusCode})`
-      : "";
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
     );
@@ -149,11 +138,10 @@ export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
   const { cfg, to, question, options, maxSelections } = params;
-  const { adapter, appId, conversationId, ref, log } =
-    await resolveMSTeamsSendContext({
-      cfg,
-      to,
-    });
+  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+    cfg,
+    to,
+  });
 
   const pollCard = buildMSTeamsPollCard({
     question,
@@ -189,9 +177,7 @@ export async function sendPollMSTeams(
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
-    const status = classification.statusCode
-      ? ` (HTTP ${classification.statusCode})`
-      : "";
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
     throw new Error(
       `msteams poll send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
     );

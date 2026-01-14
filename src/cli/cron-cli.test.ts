@@ -1,26 +1,17 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 
-const callGatewayFromCli = vi.fn(
-  async (method: string, _opts: unknown, params?: unknown) => {
-    if (method === "cron.status") return { enabled: true };
-    return { ok: true, params };
-  },
-);
+const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
+  if (method === "cron.status") return { enabled: true };
+  return { ok: true, params };
+});
 
 vi.mock("./gateway-rpc.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./gateway-rpc.js")>(
-      "./gateway-rpc.js",
-    );
+  const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
     ...actual,
-    callGatewayFromCli: (
-      method: string,
-      opts: unknown,
-      params?: unknown,
-      extra?: unknown,
-    ) => callGatewayFromCli(method, opts, params, extra),
+    callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
+      callGatewayFromCli(method, opts, params, extra),
   };
 });
 
@@ -63,9 +54,7 @@ describe("cron cli", () => {
       { from: "user" },
     );
 
-    const addCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.add",
-    );
+    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as {
       payload?: { model?: string; thinking?: string };
     };
@@ -100,9 +89,7 @@ describe("cron cli", () => {
       { from: "user" },
     );
 
-    const addCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.add",
-    );
+    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
   });
@@ -116,23 +103,11 @@ describe("cron cli", () => {
     registerCronCli(program);
 
     await program.parseAsync(
-      [
-        "cron",
-        "edit",
-        "job-1",
-        "--message",
-        "hello",
-        "--model",
-        "   ",
-        "--thinking",
-        "  ",
-      ],
+      ["cron", "edit", "job-1", "--message", "hello", "--model", "   ", "--thinking", "  "],
       { from: "user" },
     );
 
-    const updateCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.update",
-    );
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: { payload?: { model?: string; thinking?: string } };
     };
@@ -164,9 +139,7 @@ describe("cron cli", () => {
       { from: "user" },
     );
 
-    const updateCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.update",
-    );
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: { payload?: { model?: string; thinking?: string } };
     };
@@ -183,14 +156,11 @@ describe("cron cli", () => {
     program.exitOverride();
     registerCronCli(program);
 
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--agent", " Ops ", "--message", "hello"],
-      { from: "user" },
-    );
+    await program.parseAsync(["cron", "edit", "job-1", "--agent", " Ops ", "--message", "hello"], {
+      from: "user",
+    });
 
-    const updateCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.update",
-    );
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { agentId?: unknown } };
     expect(patch?.patch?.agentId).toBe("Ops");
 
@@ -198,9 +168,7 @@ describe("cron cli", () => {
     await program.parseAsync(["cron", "edit", "job-2", "--clear-agent"], {
       from: "user",
     });
-    const clearCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.update",
-    );
+    const clearCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const clearPatch = clearCall?.[2] as { patch?: { agentId?: unknown } };
     expect(clearPatch?.patch?.agentId).toBeNull();
   });
@@ -213,14 +181,11 @@ describe("cron cli", () => {
     program.exitOverride();
     registerCronCli(program);
 
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--model", "opus", "--thinking", "low"],
-      { from: "user" },
-    );
+    await program.parseAsync(["cron", "edit", "job-1", "--model", "opus", "--thinking", "low"], {
+      from: "user",
+    });
 
-    const updateCall = callGatewayFromCli.mock.calls.find(
-      (call) => call[0] === "cron.update",
-    );
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as { patch?: { payload?: unknown } };
 
     expect(patch?.patch?.payload).toBeUndefined();

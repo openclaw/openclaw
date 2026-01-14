@@ -34,8 +34,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -124,13 +123,9 @@ function createMinimalRun(params?: {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("still replies even if session reset fails to persist", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(
-      path.join(tmpdir(), "clawdbot-session-reset-fail-"),
-    );
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-reset-fail-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
-    const saveSpy = vi
-      .spyOn(sessions, "saveSessionStore")
-      .mockRejectedValueOnce(new Error("boom"));
+    const saveSpy = vi.spyOn(sessions, "saveSessionStore").mockRejectedValueOnce(new Error("boom"));
     try {
       const sessionId = "session-corrupt";
       const storePath = path.join(stateDir, "sessions", "sessions.json");
@@ -185,9 +180,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBe(1);
     expect(payloads[0]?.text).toContain("LLM connection failed");
-    expect(payloads[0]?.text).toContain(
-      "socket connection was closed unexpectedly",
-    );
+    expect(payloads[0]?.text).toContain("socket connection was closed unexpectedly");
     expect(payloads[0]?.text).toContain("```");
   });
 });

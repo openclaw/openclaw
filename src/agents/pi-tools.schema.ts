@@ -28,9 +28,7 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   const existingEnum = extractEnumValues(existing);
   const incomingEnum = extractEnumValues(incoming);
   if (existingEnum || incomingEnum) {
-    const values = Array.from(
-      new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]),
-    );
+    const values = Array.from(new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]));
     const merged: Record<string, unknown> = {};
     for (const source of [existing, incoming]) {
       if (!source || typeof source !== "object") continue;
@@ -64,11 +62,7 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
 
   // If schema already has type + properties (no top-level anyOf to merge),
   // still clean it for Gemini compatibility
-  if (
-    "type" in schema &&
-    "properties" in schema &&
-    !Array.isArray(schema.anyOf)
-  ) {
+  if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
     return {
       ...tool,
       parameters: cleanSchemaForGemini(schema),
@@ -105,17 +99,12 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     const props = (entry as { properties?: unknown }).properties;
     if (!props || typeof props !== "object") continue;
     objectVariants += 1;
-    for (const [key, value] of Object.entries(
-      props as Record<string, unknown>,
-    )) {
+    for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
       if (!(key in mergedProperties)) {
         mergedProperties[key] = value;
         continue;
       }
-      mergedProperties[key] = mergePropertySchemas(
-        mergedProperties[key],
-        value,
-      );
+      mergedProperties[key] = mergePropertySchemas(mergedProperties[key], value);
     }
     const required = Array.isArray((entry as { required?: unknown }).required)
       ? (entry as { required: unknown[] }).required
@@ -147,27 +136,18 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
     parameters: cleanSchemaForGemini({
       type: "object",
-      ...(typeof nextSchema.title === "string"
-        ? { title: nextSchema.title }
-        : {}),
+      ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
       ...(typeof nextSchema.description === "string"
         ? { description: nextSchema.description }
         : {}),
       properties:
-        Object.keys(mergedProperties).length > 0
-          ? mergedProperties
-          : (schema.properties ?? {}),
-      ...(mergedRequired && mergedRequired.length > 0
-        ? { required: mergedRequired }
-        : {}),
-      additionalProperties:
-        "additionalProperties" in schema ? schema.additionalProperties : true,
+        Object.keys(mergedProperties).length > 0 ? mergedProperties : (schema.properties ?? {}),
+      ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
+      additionalProperties: "additionalProperties" in schema ? schema.additionalProperties : true,
     }),
   };
 }
 
-export function cleanToolSchemaForGemini(
-  schema: Record<string, unknown>,
-): unknown {
+export function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
   return cleanSchemaForGemini(schema);
 }

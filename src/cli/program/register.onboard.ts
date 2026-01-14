@@ -16,9 +16,7 @@ function resolveInstallDaemonFlag(
 ): boolean | undefined {
   if (!command || typeof command !== "object") return undefined;
   const getOptionValueSource =
-    "getOptionValueSource" in command
-      ? command.getOptionValueSource
-      : undefined;
+    "getOptionValueSource" in command ? command.getOptionValueSource : undefined;
   if (typeof getOptionValueSource !== "function") return undefined;
 
   // Commander doesn't support option conflicts natively; keep original behavior.
@@ -33,14 +31,9 @@ function resolveInstallDaemonFlag(
 export function registerOnboardCommand(program: Command) {
   program
     .command("onboard")
-    .description(
-      "Interactive wizard to set up the gateway, workspace, and skills",
-    )
+    .description("Interactive wizard to set up the gateway, workspace, and skills")
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
-    .option(
-      "--reset",
-      "Reset config + credentials + sessions + workspace before running wizard",
-    )
+    .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
     .option("--non-interactive", "Run without prompts", false)
     .option("--flow <flow>", "Wizard flow: quickstart|advanced")
     .option("--mode <mode>", "Wizard mode: local|remote")
@@ -52,18 +45,12 @@ export function registerOnboardCommand(program: Command) {
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
     )
-    .option(
-      "--token <token>",
-      "Token value (non-interactive; used with --auth-choice token)",
-    )
+    .option("--token <token>", "Token value (non-interactive; used with --auth-choice token)")
     .option(
       "--token-profile-id <id>",
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
-    .option(
-      "--token-expires-in <duration>",
-      "Optional token expiry duration (e.g. 365d, 12h)",
-    )
+    .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--openai-api-key <key>", "OpenAI API key")
     .option("--openrouter-api-key <key>", "OpenRouter API key")
@@ -98,9 +85,7 @@ export function registerOnboardCommand(program: Command) {
           installDaemon: Boolean(opts.installDaemon),
         });
         const gatewayPort =
-          typeof opts.gatewayPort === "string"
-            ? Number.parseInt(opts.gatewayPort, 10)
-            : undefined;
+          typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
         await onboardCommand(
           {
             workspace: opts.workspace as string | undefined,
@@ -135,9 +120,7 @@ export function registerOnboardCommand(program: Command) {
             tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
             reset: Boolean(opts.reset),
             installDaemon,
-            daemonRuntime: opts.daemonRuntime as
-              | GatewayDaemonRuntime
-              | undefined,
+            daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
             skipChannels: Boolean(opts.skipChannels),
             skipSkills: Boolean(opts.skipSkills),
             skipHealth: Boolean(opts.skipHealth),

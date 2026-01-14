@@ -115,11 +115,10 @@ export async function sendMessageSignal(
     params.username = [target.username];
   }
 
-  const result = await signalRpcRequest<{ timestamp?: number }>(
-    "send",
-    params,
-    { baseUrl, timeoutMs: opts.timeoutMs },
-  );
+  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
+    baseUrl,
+    timeoutMs: opts.timeoutMs,
+  });
   const timestamp = result?.timestamp;
   return {
     messageId: timestamp ? String(timestamp) : "unknown",

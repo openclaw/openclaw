@@ -35,8 +35,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
-  resolveGatewayProgramArguments: (opts: unknown) =>
-    resolveGatewayProgramArguments(opts),
+  resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -59,8 +58,7 @@ vi.mock("../daemon/legacy.js", () => ({
 }));
 
 vi.mock("../daemon/inspect.js", () => ({
-  findExtraGatewayServices: (env: unknown, opts?: unknown) =>
-    findExtraGatewayServices(env, opts),
+  findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
   renderGatewayServiceCleanupHints: () => [],
 }));
 
@@ -78,8 +76,7 @@ vi.mock("./deps.js", () => ({
 }));
 
 vi.mock("./progress.js", () => ({
-  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) =>
-    await fn(),
+  withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
 describe("daemon-cli coverage", () => {
@@ -129,9 +126,7 @@ describe("daemon-cli coverage", () => {
     await program.parseAsync(["daemon", "status"], { from: "user" });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "status" }),
-    );
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   }, 20_000);

@@ -24,9 +24,7 @@ describe("subscribeEmbeddedPiSession", () => {
     };
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       reasoningMode: "on",
     });
@@ -80,9 +78,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onPartialReply = vi.fn();
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       reasoningMode: "on",
       onPartialReply,

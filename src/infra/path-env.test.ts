@@ -31,8 +31,7 @@ describe("ensureClawdbotCliOnPath", () => {
         expect(updated.split(path.delimiter)[0]).toBe(relayDir);
       } finally {
         process.env.PATH = originalPath;
-        if (originalFlag === undefined)
-          delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+        if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
         else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
       }
     } finally {
@@ -55,8 +54,7 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(process.env.PATH).toBe("/bin");
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined)
-        delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
       else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
     }
   });
@@ -103,8 +101,7 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(shimsIndex).toBeGreaterThan(localIndex);
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined)
-        delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
       else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
       if (originalMiseDataDir === undefined) delete process.env.MISE_DATA_DIR;
       else process.env.MISE_DATA_DIR = originalMiseDataDir;
@@ -147,14 +144,11 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(parts[1]).toBe(linuxbrewSbin);
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined)
-        delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
       else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
-      if (originalHomebrewPrefix === undefined)
-        delete process.env.HOMEBREW_PREFIX;
+      if (originalHomebrewPrefix === undefined) delete process.env.HOMEBREW_PREFIX;
       else process.env.HOMEBREW_PREFIX = originalHomebrewPrefix;
-      if (originalHomebrewBrewFile === undefined)
-        delete process.env.HOMEBREW_BREW_FILE;
+      if (originalHomebrewBrewFile === undefined) delete process.env.HOMEBREW_BREW_FILE;
       else process.env.HOMEBREW_BREW_FILE = originalHomebrewBrewFile;
       if (originalXdgBinHome === undefined) delete process.env.XDG_BIN_HOME;
       else process.env.XDG_BIN_HOME = originalXdgBinHome;

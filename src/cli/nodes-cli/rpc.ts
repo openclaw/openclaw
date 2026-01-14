@@ -1,35 +1,18 @@
 import type { Command } from "commander";
 import { callGateway } from "../../gateway/call.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
-export const nodesCallOpts = (
-  cmd: Command,
-  defaults?: { timeoutMs?: number },
-) =>
+export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
-    .option(
-      "--url <url>",
-      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
-    )
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
-    .option(
-      "--timeout <ms>",
-      "Timeout in ms",
-      String(defaults?.timeoutMs ?? 10_000),
-    )
+    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
-export const callGatewayCli = async (
-  method: string,
-  opts: NodesRpcOpts,
-  params?: unknown,
-) =>
+export const callGatewayCli = async (method: string, opts: NodesRpcOpts, params?: unknown) =>
   withProgress(
     {
       label: `Nodes ${method}`,

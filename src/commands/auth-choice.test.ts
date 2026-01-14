@@ -6,10 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  applyAuthChoice,
-  resolvePreferredProviderForAuthChoice,
-} from "./auth-choice.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
@@ -18,8 +15,7 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
 
 const noopAsync = async () => {};
 const noop = () => {};
-const authProfilePathFor = (agentDir: string) =>
-  path.join(agentDir, "auth-profiles.json");
+const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 const requireAgentDir = () => {
   const agentDir = process.env.CLAWDBOT_AGENT_DIR;
   if (!agentDir) throw new Error("CLAWDBOT_AGENT_DIR not set");
@@ -176,9 +172,7 @@ describe("applyAuthChoice", () => {
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
     };
-    expect(parsed.profiles?.["synthetic:default"]?.key).toBe(
-      "sk-synthetic-test",
-    );
+    expect(parsed.profiles?.["synthetic:default"]?.key).toBe("sk-synthetic-test");
   });
 
   it("sets default model when selecting github-copilot", async () => {
@@ -218,9 +212,7 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      expect(result.config.agents?.defaults?.model?.primary).toBe(
-        "github-copilot/gpt-4o",
-      );
+      expect(result.config.agents?.defaults?.model?.primary).toBe("github-copilot/gpt-4o");
     } finally {
       stdin.isTTY = previousTty;
     }
@@ -272,9 +264,7 @@ describe("applyAuthChoice", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Enter OpenCode Zen API key" }),
     );
-    expect(result.config.agents?.defaults?.model?.primary).toBe(
-      "anthropic/claude-opus-4-5",
-    );
+    expect(result.config.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
     expect(result.config.models?.providers?.["opencode-zen"]).toBeUndefined();
     expect(result.agentModelOverride).toBe("opencode/claude-opus-4-5");
   });
@@ -328,18 +318,14 @@ describe("applyAuthChoice", () => {
       provider: "openrouter",
       mode: "api_key",
     });
-    expect(result.config.agents?.defaults?.model?.primary).toBe(
-      "openrouter/auto",
-    );
+    expect(result.config.agents?.defaults?.model?.primary).toBe("openrouter/auto");
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, { key?: string }>;
     };
-    expect(parsed.profiles?.["openrouter:default"]?.key).toBe(
-      "sk-openrouter-test",
-    );
+    expect(parsed.profiles?.["openrouter:default"]?.key).toBe("sk-openrouter-test");
 
     delete process.env.OPENROUTER_API_KEY;
   });
@@ -434,14 +420,10 @@ describe("applyAuthChoice", () => {
 
 describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps github-copilot to the provider", () => {
-    expect(resolvePreferredProviderForAuthChoice("github-copilot")).toBe(
-      "github-copilot",
-    );
+    expect(resolvePreferredProviderForAuthChoice("github-copilot")).toBe("github-copilot");
   });
 
   it("returns undefined for unknown choices", () => {
-    expect(
-      resolvePreferredProviderForAuthChoice("unknown" as AuthChoice),
-    ).toBeUndefined();
+    expect(resolvePreferredProviderForAuthChoice("unknown" as AuthChoice)).toBeUndefined();
   });
 });

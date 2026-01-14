@@ -39,16 +39,10 @@ function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
   return null;
 }
 
-async function runSandboxScript(
-  scriptRel: string,
-  runtime: RuntimeEnv,
-): Promise<boolean> {
+async function runSandboxScript(scriptRel: string, runtime: RuntimeEnv): Promise<boolean> {
   const script = resolveSandboxScript(scriptRel);
   if (!script) {
-    note(
-      `Unable to locate ${scriptRel}. Run it from the repo root.`,
-      "Sandbox",
-    );
+    note(`Unable to locate ${scriptRel}. Run it from the repo root.`, "Sandbox");
     return false;
   }
 
@@ -100,10 +94,7 @@ function resolveSandboxBrowserImage(cfg: ClawdbotConfig): string {
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
-function updateSandboxDockerImage(
-  cfg: ClawdbotConfig,
-  image: string,
-): ClawdbotConfig {
+function updateSandboxDockerImage(cfg: ClawdbotConfig, image: string): ClawdbotConfig {
   return {
     ...cfg,
     agents: {
@@ -122,10 +113,7 @@ function updateSandboxDockerImage(
   };
 }
 
-function updateSandboxBrowserImage(
-  cfg: ClawdbotConfig,
-  image: string,
-): ClawdbotConfig {
+function updateSandboxBrowserImage(cfg: ClawdbotConfig, image: string): ClawdbotConfig {
   return {
     ...cfg,
     agents: {
@@ -162,10 +150,7 @@ async function handleMissingSandboxImage(
   const buildHint = params.buildScript
     ? `Build it with ${params.buildScript}.`
     : "Build or pull it first.";
-  note(
-    `Sandbox ${params.label} image missing: ${params.image}. ${buildHint}`,
-    "Sandbox",
-  );
+  note(`Sandbox ${params.label} image missing: ${params.image}. ${buildHint}`, "Sandbox");
 
   let built = false;
   if (params.buildScript) {
@@ -240,9 +225,7 @@ export async function maybeRepairSandboxImages(
         buildScript: "scripts/sandbox-browser-setup.sh",
         updateConfig: (image) => {
           next = updateSandboxBrowserImage(next, image);
-          changes.push(
-            `Updated agents.defaults.sandbox.browser.image → ${image}`,
-          );
+          changes.push(`Updated agents.defaults.sandbox.browser.image → ${image}`);
         },
       },
       runtime,
@@ -289,9 +272,7 @@ export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
 
     warnings.push(
       [
-        `- agents.list (id "${agentId}") sandbox ${overrides.join(
-          "/",
-        )} overrides ignored.`,
+        `- agents.list (id "${agentId}") sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

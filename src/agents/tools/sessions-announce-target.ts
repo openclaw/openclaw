@@ -1,7 +1,4 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -35,13 +32,9 @@ export async function resolveAnnounceTarget(params: {
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
-    const channel =
-      typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
+    const channel = typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
     const to = typeof match?.lastTo === "string" ? match.lastTo : undefined;
-    const accountId =
-      typeof match?.lastAccountId === "string"
-        ? match.lastAccountId
-        : undefined;
+    const accountId = typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined;
     if (channel && to) return { channel, to, accountId };
   } catch {
     // ignore

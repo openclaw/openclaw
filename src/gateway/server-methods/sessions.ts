@@ -99,11 +99,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params as import("../protocol/index.js").SessionsPatchParams;
     const key = String(p.key ?? "").trim();
     if (!key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 
@@ -153,11 +149,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params as import("../protocol/index.js").SessionsResetParams;
     const key = String(p.key ?? "").trim();
     if (!key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 
@@ -192,11 +184,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     };
     store[primaryKey] = next;
     await saveSessionStore(storePath, store);
-    respond(
-      true,
-      { ok: true, key: target.canonicalKey, entry: next },
-      undefined,
-    );
+    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond }) => {
     if (!validateSessionsDeleteParams(params)) {
@@ -213,11 +201,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params as import("../protocol/index.js").SessionsDeleteParams;
     const key = String(p.key ?? "").trim();
     if (!key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 
@@ -228,16 +212,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Cannot delete the main session (${mainKey}).`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `Cannot delete the main session (${mainKey}).`),
       );
       return;
     }
 
-    const deleteTranscript =
-      typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+    const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
     const storePath = target.storePath;
     const store = loadSessionStore(storePath);
@@ -286,11 +266,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    respond(
-      true,
-      { ok: true, key: target.canonicalKey, deleted: existed, archived },
-      undefined,
-    );
+    respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!validateSessionsCompactParams(params)) {
@@ -307,11 +283,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params as import("../protocol/index.js").SessionsCompactParams;
     const key = String(p.key ?? "").trim();
     if (!key) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
     }
 

@@ -104,9 +104,7 @@ export async function resolveTelegramEffectiveAllowFrom(params: {
     .filter(Boolean)
     .map((v) => v.replace(/^(telegram|tg):/i, ""))
     .filter((v) => v !== "*");
-  const cfgGroupAllowFrom = (
-    params.cfg.channels?.telegram?.groupAllowFrom ?? []
-  )
+  const cfgGroupAllowFrom = (params.cfg.channels?.telegram?.groupAllowFrom ?? [])
     .map((v) => String(v).trim())
     .filter(Boolean)
     .map((v) => v.replace(/^(telegram|tg):/i, ""))

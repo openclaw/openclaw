@@ -11,9 +11,7 @@ export async function traceStartViaPlaywright(opts: {
   const context = page.context();
   const ctxState = ensureContextState(context);
   if (ctxState.traceActive) {
-    throw new Error(
-      "Trace already running. Stop the current trace before starting a new one.",
-    );
+    throw new Error("Trace already running. Stop the current trace before starting a new one.");
   }
   await context.tracing.start({
     screenshots: opts.screenshots ?? true,

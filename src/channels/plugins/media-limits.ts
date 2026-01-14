@@ -7,10 +7,7 @@ export function resolveChannelMediaMaxBytes(params: {
   cfg: ClawdbotConfig;
   // Channel-specific config lives under different keys; keep this helper generic
   // so shared plugin helpers don't need channel-id branching.
-  resolveChannelLimitMb: (params: {
-    cfg: ClawdbotConfig;
-    accountId: string;
-  }) => number | undefined;
+  resolveChannelLimitMb: (params: { cfg: ClawdbotConfig; accountId: string }) => number | undefined;
   accountId?: string | null;
 }): number | undefined {
   const accountId = normalizeAccountId(params.accountId);

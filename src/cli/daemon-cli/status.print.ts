@@ -8,21 +8,14 @@ import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
-import {
-  formatRuntimeStatus,
-  renderRuntimeHints,
-  safeDaemonEnv,
-} from "./shared.js";
+import { formatRuntimeStatus, renderRuntimeHints, safeDaemonEnv } from "./shared.js";
 import {
   type DaemonStatus,
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
 
-export function printDaemonStatus(
-  status: DaemonStatus,
-  opts: { json: boolean },
-) {
+export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(status, null, 2));
     return;
@@ -41,9 +34,7 @@ export function printDaemonStatus(
   const serviceStatus = service.loaded
     ? okText(service.loadedText)
     : warnText(service.notLoadedText);
-  defaultRuntime.log(
-    `${label("Service:")} ${accent(service.label)} (${serviceStatus})`,
-  );
+  defaultRuntime.log(`${label("Service:")} ${accent(service.label)} (${serviceStatus})`);
   try {
     const logFile = getResolvedLoggerSettings().file;
     defaultRuntime.log(`${label("File logs:")} ${infoText(logFile)}`);
@@ -56,14 +47,10 @@ export function printDaemonStatus(
     );
   }
   if (service.command?.sourcePath) {
-    defaultRuntime.log(
-      `${label("Service file:")} ${infoText(service.command.sourcePath)}`,
-    );
+    defaultRuntime.log(`${label("Service file:")} ${infoText(service.command.sourcePath)}`);
   }
   if (service.command?.workingDirectory) {
-    defaultRuntime.log(
-      `${label("Working dir:")} ${infoText(service.command.workingDirectory)}`,
-    );
+    defaultRuntime.log(`${label("Working dir:")} ${infoText(service.command.workingDirectory)}`);
   }
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
@@ -72,19 +59,13 @@ export function printDaemonStatus(
   spacer();
 
   if (service.configAudit?.issues.length) {
-    defaultRuntime.error(
-      warnText("Service config looks out of date or non-standard."),
-    );
+    defaultRuntime.error(warnText("Service config looks out of date or non-standard."));
     for (const issue of service.configAudit.issues) {
       const detail = issue.detail ? ` (${issue.detail})` : "";
-      defaultRuntime.error(
-        `${warnText("Service config issue:")} ${issue.message}${detail}`,
-      );
+      defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
     defaultRuntime.error(
-      warnText(
-        'Recommendation: run "clawdbot doctor" (or "clawdbot doctor --repair").',
-      ),
+      warnText('Recommendation: run "clawdbot doctor" (or "clawdbot doctor --repair").'),
     );
   }
 
@@ -129,9 +110,7 @@ export function printDaemonStatus(
     defaultRuntime.log(
       `${label("Gateway:")} bind=${infoText(status.gateway.bindMode)} (${infoText(bindHost)}), port=${infoText(String(status.gateway.port))} (${infoText(status.gateway.portSource)})`,
     );
-    defaultRuntime.log(
-      `${label("Probe target:")} ${infoText(status.gateway.probeUrl)}`,
-    );
+    defaultRuntime.log(`${label("Probe target:")} ${infoText(status.gateway.probeUrl)}`);
     const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
@@ -145,9 +124,7 @@ export function printDaemonStatus(
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
     if (status.gateway.probeNote) {
-      defaultRuntime.log(
-        `${label("Probe note:")} ${infoText(status.gateway.probeNote)}`,
-      );
+      defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);
     }
     spacer();
   }
@@ -163,21 +140,12 @@ export function printDaemonStatus(
           : runtimeStatus === "unknown"
             ? theme.muted
             : theme.warn;
-    defaultRuntime.log(
-      `${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`,
-    );
+    defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
   }
 
-  if (
-    rpc &&
-    !rpc.ok &&
-    service.loaded &&
-    service.runtime?.status === "running"
-  ) {
+  if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
     defaultRuntime.log(
-      warnText(
-        "Warm-up: launch agents can take a few seconds. Try again shortly.",
-      ),
+      warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
     );
   }
   if (rpc) {
@@ -203,9 +171,7 @@ export function printDaemonStatus(
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
     defaultRuntime.error(
-      errorText(
-        "Service is loaded but not running (likely exited immediately).",
-      ),
+      errorText("Service is loaded but not running (likely exited immediately)."),
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
@@ -217,8 +183,7 @@ export function printDaemonStatus(
   }
 
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ??
-      process.env) as NodeJS.ProcessEnv;
+    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
     const labelValue = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
     defaultRuntime.error(
       errorText(
@@ -236,9 +201,7 @@ export function printDaemonStatus(
   if (status.port) {
     const addrs = resolvePortListeningAddresses(status);
     if (addrs.length > 0) {
-      defaultRuntime.log(
-        `${label("Listening:")} ${infoText(addrs.join(", "))}`,
-      );
+      defaultRuntime.log(`${label("Listening:")} ${infoText(addrs.join(", "))}`);
     }
   }
 
@@ -255,23 +218,16 @@ export function printDaemonStatus(
     status.port.status !== "busy"
   ) {
     defaultRuntime.error(
-      errorText(
-        `Gateway port ${status.port.port} is not listening (service appears running).`,
-      ),
+      errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
     );
     if (status.lastError) {
-      defaultRuntime.error(
-        `${errorText("Last gateway error:")} ${status.lastError}`,
-      );
+      defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ??
-        process.env) as NodeJS.ProcessEnv;
+      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
       const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
       defaultRuntime.error(
-        errorText(
-          `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
-        ),
+        errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewayLogPaths(
@@ -293,13 +249,9 @@ export function printDaemonStatus(
   }
 
   if (extraServices.length > 0) {
-    defaultRuntime.error(
-      errorText("Other gateway-like services detected (best effort):"),
-    );
+    defaultRuntime.error(errorText("Other gateway-like services detected (best effort):"));
     for (const svc of extraServices) {
-      defaultRuntime.error(
-        `- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`,
-      );
+      defaultRuntime.error(`- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
     for (const hint of renderGatewayServiceCleanupHints()) {
       defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
@@ -322,7 +274,5 @@ export function printDaemonStatus(
   }
 
   defaultRuntime.log(`${label("Troubles:")} run clawdbot status`);
-  defaultRuntime.log(
-    `${label("Troubleshooting:")} https://docs.clawd.bot/troubleshooting`,
-  );
+  defaultRuntime.log(`${label("Troubleshooting:")} https://docs.clawd.bot/troubleshooting`);
 }

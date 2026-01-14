@@ -1,23 +1,11 @@
 import { RequestClient } from "@buape/carbon";
-import type {
-  APIChannel,
-  APIGuild,
-  APIGuildMember,
-  APIRole,
-} from "discord-api-types/v10";
-import {
-  ChannelType,
-  PermissionFlagsBits,
-  Routes,
-} from "discord-api-types/v10";
+import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
+import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 
 import { loadConfig } from "../config/config.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { resolveDiscordAccount } from "./accounts.js";
-import type {
-  DiscordPermissionsSummary,
-  DiscordReactOpts,
-} from "./send.types.js";
+import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
@@ -32,11 +20,7 @@ type DiscordClientOpts = {
   verbose?: boolean;
 };
 
-function resolveToken(params: {
-  explicit?: string;
-  accountId: string;
-  fallbackToken?: string;
-}) {
+function resolveToken(params: { explicit?: string; accountId: string; fallbackToken?: string }) {
   const explicit = normalizeDiscordToken(params.explicit);
   if (explicit) return explicit;
   const fallback = normalizeDiscordToken(params.fallbackToken);
@@ -119,9 +103,7 @@ export async function fetchChannelPermissionsDiscord(
     rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
   ]);
 
-  const rolesById = new Map<string, APIRole>(
-    (guild.roles ?? []).map((role) => [role.id, role]),
-  );
+  const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
   const everyoneRole = rolesById.get(guildId);
   let base = 0n;
   if (everyoneRole?.permissions) {
@@ -136,9 +118,7 @@ export async function fetchChannelPermissionsDiscord(
 
   let permissions = base;
   const overwrites =
-    "permission_overwrites" in channel
-      ? (channel.permission_overwrites ?? [])
-      : [];
+    "permission_overwrites" in channel ? (channel.permission_overwrites ?? []) : [];
   for (const overwrite of overwrites) {
     if (overwrite.id === guildId) {
       permissions = removePermissionBits(permissions, overwrite.deny ?? "0");

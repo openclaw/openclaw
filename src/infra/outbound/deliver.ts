@@ -49,10 +49,7 @@ type ChannelHandler = {
   chunker: Chunker | null;
   textChunkLimit?: number;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (
-    caption: string,
-    mediaUrl: string,
-  ) => Promise<OutboundDeliveryResult>;
+  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
 
 function throwIfAborted(abortSignal?: AbortSignal): void {

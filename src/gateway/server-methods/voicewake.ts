@@ -1,7 +1,4 @@
-import {
-  loadVoiceWakeConfig,
-  setVoiceWakeTriggers,
-} from "../../infra/voicewake.js";
+import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../../infra/voicewake.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { normalizeVoiceWakeTriggers } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -13,11 +10,7 @@ export const voicewakeHandlers: GatewayRequestHandlers = {
       const cfg = await loadVoiceWakeConfig();
       respond(true, { triggers: cfg.triggers });
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
   "voicewake.set": async ({ params, respond, context }) => {
@@ -25,10 +18,7 @@ export const voicewakeHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "voicewake.set requires triggers: string[]",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "voicewake.set requires triggers: string[]"),
       );
       return;
     }
@@ -38,11 +28,7 @@ export const voicewakeHandlers: GatewayRequestHandlers = {
       context.broadcastVoiceWakeChanged(cfg.triggers);
       respond(true, { triggers: cfg.triggers });
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
 };

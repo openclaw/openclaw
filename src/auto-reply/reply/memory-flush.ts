@@ -33,22 +33,17 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-export function resolveMemoryFlushSettings(
-  cfg?: ClawdbotConfig,
-): MemoryFlushSettings | null {
+export function resolveMemoryFlushSettings(cfg?: ClawdbotConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
   if (!enabled) return null;
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ??
-    DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const prompt = defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT;
-  const systemPrompt =
-    defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
+  const systemPrompt = defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT;
   const reserveTokensFloor =
-    normalizeNonNegativeInt(
-      cfg?.agents?.defaults?.compaction?.reserveTokensFloor,
-    ) ?? DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+    DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   return {
     enabled,
@@ -69,17 +64,12 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   agentCfgContextTokens?: number;
 }): number {
   return (
-    lookupContextTokens(params.modelId) ??
-    params.agentCfgContextTokens ??
-    DEFAULT_CONTEXT_TOKENS
+    lookupContextTokens(params.modelId) ?? params.agentCfgContextTokens ?? DEFAULT_CONTEXT_TOKENS
   );
 }
 
 export function shouldRunMemoryFlush(params: {
-  entry?: Pick<
-    SessionEntry,
-    "totalTokens" | "compactionCount" | "memoryFlushCompactionCount"
-  >;
+  entry?: Pick<SessionEntry, "totalTokens" | "compactionCount" | "memoryFlushCompactionCount">;
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;

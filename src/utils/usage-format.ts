@@ -20,8 +20,7 @@ export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) return "0";
   const safe = Math.max(0, value);
   if (safe >= 1_000_000) return `${(safe / 1_000_000).toFixed(1)}m`;
-  if (safe >= 1_000)
-    return `${(safe / 1_000).toFixed(safe >= 10_000 ? 0 : 1)}k`;
+  if (safe >= 1_000) return `${(safe / 1_000).toFixed(safe >= 10_000 ? 0 : 1)}k`;
   return String(Math.round(safe));
 }
 

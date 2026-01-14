@@ -5,10 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
-import type {
-  BrowserRouteContext,
-  BrowserServerState,
-} from "./server-context.js";
+import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();

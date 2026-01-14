@@ -77,9 +77,7 @@ describe("gateway SIGTERM", () => {
 
   it("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
     const port = await getFreePort();
-    const stateDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-gateway-test-"),
-    );
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-gateway-test-"));
     const configPath = path.join(stateDir, "clawdbot.json");
     fs.writeFileSync(
       configPath,
@@ -134,14 +132,9 @@ describe("gateway SIGTERM", () => {
     const result = await new Promise<{
       code: number | null;
       signal: NodeJS.Signals | null;
-    }>((resolve) =>
-      proc.once("exit", (code, signal) => resolve({ code, signal })),
-    );
+    }>((resolve) => proc.once("exit", (code, signal) => resolve({ code, signal })));
 
-    if (
-      result.code !== 0 &&
-      !(result.code === null && result.signal === "SIGTERM")
-    ) {
+    if (result.code !== 0 && !(result.code === null && result.signal === "SIGTERM")) {
       const stdout = out.join("");
       const stderr = err.join("");
       throw new Error(

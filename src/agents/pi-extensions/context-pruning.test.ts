@@ -1,8 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
 import { setContextPruningRuntime } from "./context-pruning/runtime.js";
@@ -21,13 +18,8 @@ function toolText(msg: AgentMessage): string {
   return first.text;
 }
 
-function findToolResult(
-  messages: AgentMessage[],
-  toolCallId: string,
-): AgentMessage {
-  const msg = messages.find(
-    (m) => m.role === "toolResult" && m.toolCallId === toolCallId,
-  );
+function findToolResult(messages: AgentMessage[], toolCallId: string): AgentMessage {
+  const msg = messages.find((m) => m.role === "toolResult" && m.toolCallId === toolCallId);
   if (!msg) throw new Error(`missing toolResult: ${toolCallId}`);
   return msg;
 }

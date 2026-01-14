@@ -11,32 +11,24 @@ export type OutboundPayloadJson = {
   mediaUrls?: string[];
 };
 
-export function normalizeOutboundPayloads(
-  payloads: ReplyPayload[],
-): NormalizedOutboundPayload[] {
+export function normalizeOutboundPayloads(payloads: ReplyPayload[]): NormalizedOutboundPayload[] {
   return payloads
     .map((payload) => ({
       text: payload.text ?? "",
-      mediaUrls:
-        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
     }))
     .filter((payload) => payload.text || payload.mediaUrls.length > 0);
 }
 
-export function normalizeOutboundPayloadsForJson(
-  payloads: ReplyPayload[],
-): OutboundPayloadJson[] {
+export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): OutboundPayloadJson[] {
   return payloads.map((payload) => ({
     text: payload.text ?? "",
     mediaUrl: payload.mediaUrl ?? null,
-    mediaUrls:
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
   }));
 }
 
-export function formatOutboundPayloadLog(
-  payload: NormalizedOutboundPayload,
-): string {
+export function formatOutboundPayloadLog(payload: NormalizedOutboundPayload): string {
   const lines: string[] = [];
   if (payload.text) lines.push(payload.text.trimEnd());
   for (const url of payload.mediaUrls) lines.push(`MEDIA:${url}`);

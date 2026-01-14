@@ -9,10 +9,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { loadClawdbotPlugins } from "../plugins/loader.js";
-import {
-  type PluginServicesHandle,
-  startPluginServices,
-} from "../plugins/services.js";
+import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import {
   scheduleRestartSentinelWake,
@@ -35,9 +32,7 @@ export async function startGatewaySidecars(params: {
   logBrowser: { error: (msg: string) => void };
 }) {
   // Start clawd browser control server (unless disabled via config).
-  let browserControl: Awaited<
-    ReturnType<typeof startBrowserControlServerIfEnabled>
-  > = null;
+  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   try {
     browserControl = await startBrowserControlServerIfEnabled();
   } catch (err) {
@@ -55,9 +50,7 @@ export async function startGatewaySidecars(params: {
         gmailResult.reason !== "hooks not enabled" &&
         gmailResult.reason !== "no gmail account configured"
       ) {
-        params.logHooks.warn(
-          `gmail watcher not started: ${gmailResult.reason}`,
-        );
+        params.logHooks.warn(`gmail watcher not started: ${gmailResult.reason}`);
       }
     } catch (err) {
       params.logHooks.error(`gmail watcher failed to start: ${String(err)}`);
@@ -71,12 +64,11 @@ export async function startGatewaySidecars(params: {
       defaultProvider: DEFAULT_PROVIDER,
     });
     if (hooksModelRef) {
-      const { provider: defaultProvider, model: defaultModel } =
-        resolveConfiguredModelRef({
-          cfg: params.cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-        });
+      const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
       const catalog = await loadModelCatalog({ config: params.cfg });
       const status = getModelRefStatus({
         cfg: params.cfg,
@@ -101,8 +93,7 @@ export async function startGatewaySidecars(params: {
   // Launch configured channels so gateway replies via the surface the message came from.
   // Tests can opt out via CLAWDBOT_SKIP_CHANNELS (or legacy CLAWDBOT_SKIP_PROVIDERS).
   const skipChannels =
-    process.env.CLAWDBOT_SKIP_CHANNELS === "1" ||
-    process.env.CLAWDBOT_SKIP_PROVIDERS === "1";
+    process.env.CLAWDBOT_SKIP_CHANNELS === "1" || process.env.CLAWDBOT_SKIP_PROVIDERS === "1";
   if (!skipChannels) {
     try {
       await params.startChannels();

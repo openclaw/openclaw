@@ -61,9 +61,7 @@ export function validateA2UIJsonl(jsonl: string) {
     const actionKeys = A2UI_ACTION_KEYS.filter((key) => key in record);
     if (actionKeys.length !== 1) {
       errors.push(
-        `line ${idx + 1}: expected exactly one action key (${A2UI_ACTION_KEYS.join(
-          ", ",
-        )})`,
+        `line ${idx + 1}: expected exactly one action key (${A2UI_ACTION_KEYS.join(", ")})`,
       );
       return;
     }

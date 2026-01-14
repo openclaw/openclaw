@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { detectMime, imageMimeFromFormat } from "./mime.js";
 
-async function makeOoxmlZip(opts: {
-  mainMime: string;
-  partPath: string;
-}): Promise<Buffer> {
+async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
   const zip = new JSZip();
   zip.file(
     "[Content_Types].xml",
@@ -28,26 +25,20 @@ describe("mime detection", () => {
 
   it("detects docx from buffer", async () => {
     const buf = await makeOoxmlZip({
-      mainMime:
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      mainMime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       partPath: "/word/document.xml",
     });
     const mime = await detectMime({ buffer: buf, filePath: "/tmp/file.bin" });
-    expect(mime).toBe(
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    );
+    expect(mime).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
   });
 
   it("detects pptx from buffer", async () => {
     const buf = await makeOoxmlZip({
-      mainMime:
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      mainMime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       partPath: "/ppt/presentation.xml",
     });
     const mime = await detectMime({ buffer: buf, filePath: "/tmp/file.bin" });
-    expect(mime).toBe(
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    );
+    expect(mime).toBe("application/vnd.openxmlformats-officedocument.presentationml.presentation");
   });
 
   it("prefers extension mapping over generic zip", async () => {
@@ -59,8 +50,6 @@ describe("mime detection", () => {
       buffer: buf,
       filePath: "/tmp/file.xlsx",
     });
-    expect(mime).toBe(
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    );
+    expect(mime).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   });
 });

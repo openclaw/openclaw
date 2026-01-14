@@ -7,11 +7,7 @@ import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
-  const hash = crypto
-    .createHash("sha1")
-    .update(trimmed)
-    .digest("hex")
-    .slice(0, 8);
+  const hash = crypto.createHash("sha1").update(trimmed).digest("hex").slice(0, 8);
   const safe = trimmed
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
@@ -26,10 +22,7 @@ export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   return path.join(resolvedRoot, slug);
 }
 
-export function resolveSandboxScopeKey(
-  scope: "session" | "agent" | "shared",
-  sessionKey: string,
-) {
+export function resolveSandboxScopeKey(scope: "session" | "agent" | "shared", sessionKey: string) {
   const trimmed = sessionKey.trim() || "main";
   if (scope === "shared") return "shared";
   if (scope === "session") return trimmed;

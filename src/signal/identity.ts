@@ -9,8 +9,7 @@ type SignalAllowEntry =
   | { kind: "phone"; e164: string }
   | { kind: "uuid"; raw: string };
 
-const UUID_HYPHENATED_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_HYPHENATED_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
 
 function looksLikeUuid(value: string): boolean {
@@ -88,10 +87,7 @@ function parseSignalAllowEntry(entry: string): SignalAllowEntry | null {
   return { kind: "phone", e164: normalizeE164(stripped) };
 }
 
-export function isSignalSenderAllowed(
-  sender: SignalSender,
-  allowFrom: string[],
-): boolean {
+export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[]): boolean {
   if (allowFrom.length === 0) return false;
   const parsed = allowFrom
     .map(parseSignalAllowEntry)

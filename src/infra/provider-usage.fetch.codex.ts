@@ -1,9 +1,6 @@
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageWindow,
-} from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type CodexUsageResponse = {
   rate_limit?: {

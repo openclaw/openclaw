@@ -39,18 +39,10 @@ describe("config compaction settings", () => {
 
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
       expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(
-        false,
-      );
-      expect(
-        cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens,
-      ).toBe(1234);
-      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe(
-        "Write notes.",
-      );
-      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe(
-        "Flush memory now.",
-      );
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(false);
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens).toBe(1234);
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe("Write notes.");
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
     });
   });
 });

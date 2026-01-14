@@ -33,9 +33,7 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     const typed = entry as PersistedSubagentRunRecord;
     if (!typed.runId || typeof typed.runId !== "string") continue;
     const announceCompletedAt =
-      typeof typed.announceCompletedAt === "number"
-        ? typed.announceCompletedAt
-        : undefined;
+      typeof typed.announceCompletedAt === "number" ? typed.announceCompletedAt : undefined;
     out.set(runId, {
       ...typed,
       announceCompletedAt,
@@ -45,9 +43,7 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   return out;
 }
 
-export function saveSubagentRegistryToDisk(
-  runs: Map<string, SubagentRunRecord>,
-) {
+export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
   for (const [runId, entry] of runs.entries()) {

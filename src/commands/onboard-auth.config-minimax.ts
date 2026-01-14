@@ -12,9 +12,7 @@ import {
   MINIMAX_LM_STUDIO_COST,
 } from "./onboard-auth.models.js";
 
-export function applyMinimaxProviderConfig(
-  cfg: ClawdbotConfig,
-): ClawdbotConfig {
+export function applyMinimaxProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models["anthropic/claude-opus-4-5"] = {
     ...models["anthropic/claude-opus-4-5"],
@@ -78,15 +76,9 @@ export function applyMinimaxHostedProviderConfig(
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
   const existingProvider = providers.minimax;
-  const existingModels = Array.isArray(existingProvider?.models)
-    ? existingProvider.models
-    : [];
-  const hasHostedModel = existingModels.some(
-    (model) => model.id === MINIMAX_HOSTED_MODEL_ID,
-  );
-  const mergedModels = hasHostedModel
-    ? existingModels
-    : [...existingModels, hostedModel];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const hasHostedModel = existingModels.some((model) => model.id === MINIMAX_HOSTED_MODEL_ID);
+  const mergedModels = hasHostedModel ? existingModels : [...existingModels, hostedModel];
   providers.minimax = {
     ...existingProvider,
     baseUrl: params?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
@@ -123,9 +115,7 @@ export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
           ...(next.agents?.defaults?.model &&
           "fallbacks" in (next.agents.defaults.model as Record<string, unknown>)
             ? {
-                fallbacks: (
-                  next.agents.defaults.model as { fallbacks?: string[] }
-                ).fallbacks,
+                fallbacks: (next.agents.defaults.model as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
           primary: "lmstudio/minimax-m2.1-gs32",
@@ -162,20 +152,16 @@ export function applyMinimaxApiProviderConfig(
 ): ClawdbotConfig {
   const providers = { ...cfg.models?.providers };
   const existingProvider = providers.minimax;
-  const existingModels = Array.isArray(existingProvider?.models)
-    ? existingProvider.models
-    : [];
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const apiModel = buildMinimaxApiModelDefinition(modelId);
   const hasApiModel = existingModels.some((model) => model.id === modelId);
-  const mergedModels = hasApiModel
-    ? existingModels
-    : [...existingModels, apiModel];
-  const { apiKey: existingApiKey, ...existingProviderRest } =
-    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
-  const resolvedApiKey =
-    typeof existingApiKey === "string" ? existingApiKey : undefined;
-  const normalizedApiKey =
-    resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
+  const mergedModels = hasApiModel ? existingModels : [...existingModels, apiModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
   providers.minimax = {
     ...existingProviderRest,
     baseUrl: MINIMAX_API_BASE_URL,
@@ -218,9 +204,7 @@ export function applyMinimaxApiConfig(
           ...(next.agents?.defaults?.model &&
           "fallbacks" in (next.agents.defaults.model as Record<string, unknown>)
             ? {
-                fallbacks: (
-                  next.agents.defaults.model as { fallbacks?: string[] }
-                ).fallbacks,
+                fallbacks: (next.agents.defaults.model as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
           primary: `minimax/${modelId}`,

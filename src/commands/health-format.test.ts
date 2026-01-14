@@ -8,9 +8,7 @@ const stripAnsi = (input: string) => input.replace(ansiRegex, "");
 
 describe("formatHealthCheckFailure", () => {
   it("keeps non-rich output stable", () => {
-    const err = new Error(
-      "gateway closed (1006 abnormal closure): no close reason",
-    );
+    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
     expect(formatHealthCheckFailure(err, { rich: false })).toBe(
       `Health check failed: ${String(err)}`,
     );

@@ -21,13 +21,7 @@ import type {
   ConfigureWizardParams,
   WizardSection,
 } from "./configure.shared.js";
-import {
-  CONFIGURE_SECTION_OPTIONS,
-  intro,
-  outro,
-  select,
-  text,
-} from "./configure.shared.js";
+import { CONFIGURE_SECTION_OPTIONS, intro, outro, select, text } from "./configure.shared.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -67,9 +61,7 @@ async function promptConfigureSection(
   );
 }
 
-async function promptChannelMode(
-  runtime: RuntimeEnv,
-): Promise<ChannelsWizardMode> {
+async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMode> {
   return guardCancel(
     await select({
       message: "Channels",
@@ -97,20 +89,14 @@ export async function runConfigureWizard(
 ) {
   try {
     printWizardHeader(runtime);
-    intro(
-      opts.command === "update"
-        ? "Clawdbot update wizard"
-        : "Clawdbot configure",
-    );
+    intro(opts.command === "update" ? "Clawdbot update wizard" : "Clawdbot configure");
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
     const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
 
     if (snapshot.exists) {
-      const title = snapshot.valid
-        ? "Existing config detected"
-        : "Invalid config";
+      const title = snapshot.valid ? "Existing config detected" : "Invalid config";
       note(summarizeExistingConfig(baseConfig), title);
       if (!snapshot.valid && snapshot.issues.length > 0) {
         note(
@@ -123,9 +109,7 @@ export async function runConfigureWizard(
         );
       }
       if (!snapshot.valid) {
-        outro(
-          "Config invalid. Run `clawdbot doctor` to repair it, then re-run configure.",
-        );
+        outro("Config invalid. Run `clawdbot doctor` to repair it, then re-run configure.");
         runtime.exit(1);
         return;
       }
@@ -134,11 +118,8 @@ export async function runConfigureWizard(
     const localUrl = "ws://127.0.0.1:18789";
     const localProbe = await probeGatewayReachable({
       url: localUrl,
-      token:
-        baseConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-      password:
-        baseConfig.gateway?.auth?.password ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD,
+      token: baseConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+      password: baseConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD,
     });
     const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
     const remoteProbe = remoteUrl
@@ -220,9 +201,7 @@ export async function runConfigureWizard(
           }),
           runtime,
         );
-        workspaceDir = resolveUserPath(
-          String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE,
-        );
+        workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
         nextConfig = {
           ...nextConfig,
           agents: {
@@ -272,8 +251,7 @@ export async function runConfigureWizard(
             await text({
               message: "Gateway port for daemon install",
               initialValue: String(gatewayPort),
-              validate: (value) =>
-                Number.isFinite(Number(value)) ? undefined : "Invalid port",
+              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
             }),
             runtime,
           );
@@ -316,9 +294,7 @@ export async function runConfigureWizard(
             }),
             runtime,
           );
-          workspaceDir = resolveUserPath(
-            String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE,
-          );
+          workspaceDir = resolveUserPath(String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE);
           nextConfig = {
             ...nextConfig,
             agents: {
@@ -372,8 +348,7 @@ export async function runConfigureWizard(
               await text({
                 message: "Gateway port for daemon install",
                 initialValue: String(gatewayPort),
-                validate: (value) =>
-                  Number.isFinite(Number(value)) ? undefined : "Invalid port",
+                validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
               }),
               runtime,
             );
@@ -423,14 +398,9 @@ export async function runConfigureWizard(
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
     // Try both new and old passwords since gateway may still have old config.
-    const newPassword =
-      nextConfig.gateway?.auth?.password ??
-      process.env.CLAWDBOT_GATEWAY_PASSWORD;
-    const oldPassword =
-      baseConfig.gateway?.auth?.password ??
-      process.env.CLAWDBOT_GATEWAY_PASSWORD;
-    const token =
-      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const newPassword = nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const oldPassword = baseConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
 
     let gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,

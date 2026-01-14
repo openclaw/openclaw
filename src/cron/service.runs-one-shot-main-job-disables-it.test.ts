@@ -362,10 +362,9 @@ describe("CronService", () => {
     await vi.runOnlyPendingTimersAsync();
     await cron.list({ includeDisabled: true });
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Cron (error): last output",
-      { agentId: undefined },
-    );
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron (error): last output", {
+      agentId: undefined,
+    });
     expect(requestHeartbeatNow).toHaveBeenCalled();
     cron.stop();
     await store.cleanup();

@@ -6,10 +6,7 @@ import type { ActiveWebSendOptions } from "../active-listener.js";
 export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
-    sendPresenceUpdate: (
-      presence: WAPresence,
-      jid?: string,
-    ) => Promise<unknown>;
+    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
 }) {

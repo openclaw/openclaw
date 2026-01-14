@@ -35,10 +35,9 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
     return null;
   }
 
-  const oauthProfiles = listProfilesForProvider(
-    params.store,
-    providerKey,
-  ).filter((id) => params.store.profiles[id]?.type === "oauth");
+  const oauthProfiles = listProfilesForProvider(params.store, providerKey).filter(
+    (id) => params.store.profiles[id]?.type === "oauth",
+  );
   if (oauthProfiles.length === 0) return null;
 
   const configuredEmail = legacyCfg?.email?.trim();
@@ -47,16 +46,12 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
       const cred = params.store.profiles[id];
       if (!cred || cred.type !== "oauth") return false;
       const email = (cred.email as string | undefined)?.trim();
-      return (
-        email === configuredEmail || id === `${providerKey}:${configuredEmail}`
-      );
+      return email === configuredEmail || id === `${providerKey}:${configuredEmail}`;
     });
     if (byEmail) return byEmail;
   }
 
-  const lastGood =
-    params.store.lastGood?.[providerKey] ??
-    params.store.lastGood?.[params.provider];
+  const lastGood = params.store.lastGood?.[providerKey] ?? params.store.lastGood?.[params.provider];
   if (lastGood && oauthProfiles.includes(lastGood)) return lastGood;
 
   const nonLegacy = oauthProfiles.filter((id) => id !== params.legacyProfileId);
@@ -83,10 +78,7 @@ export function repairOAuthProfileIdMismatch(params: {
   if (legacyCfg.mode !== "oauth") {
     return { config: params.cfg, changes: [], migrated: false };
   }
-  if (
-    normalizeProviderId(legacyCfg.provider) !==
-    normalizeProviderId(params.provider)
-  ) {
+  if (normalizeProviderId(legacyCfg.provider) !== normalizeProviderId(params.provider)) {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
@@ -102,14 +94,10 @@ export function repairOAuthProfileIdMismatch(params: {
 
   const toCred = params.store.profiles[toProfileId];
   const toEmail =
-    toCred?.type === "oauth"
-      ? (toCred.email as string | undefined)?.trim()
-      : undefined;
+    toCred?.type === "oauth" ? (toCred.email as string | undefined)?.trim() : undefined;
 
   const nextProfiles = {
-    ...(params.cfg.auth?.profiles as
-      | Record<string, AuthProfileConfig>
-      | undefined),
+    ...(params.cfg.auth?.profiles as Record<string, AuthProfileConfig> | undefined),
   } as Record<string, AuthProfileConfig>;
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
@@ -121,17 +109,13 @@ export function repairOAuthProfileIdMismatch(params: {
   const nextOrder = (() => {
     const order = params.cfg.auth?.order;
     if (!order) return undefined;
-    const resolvedKey = Object.keys(order).find(
-      (key) => normalizeProviderId(key) === providerKey,
-    );
+    const resolvedKey = Object.keys(order).find((key) => normalizeProviderId(key) === providerKey);
     if (!resolvedKey) return order;
     const existing = order[resolvedKey];
     if (!Array.isArray(existing)) return order;
     const replaced = existing
       .map((id) => (id === legacyProfileId ? toProfileId : id))
-      .filter(
-        (id): id is string => typeof id === "string" && id.trim().length > 0,
-      );
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
     const deduped: string[] = [];
     for (const entry of replaced) {
       if (!deduped.includes(entry)) deduped.push(entry);
@@ -148,9 +132,7 @@ export function repairOAuthProfileIdMismatch(params: {
     },
   };
 
-  const changes = [
-    `Auth: migrate ${legacyProfileId} → ${toProfileId} (OAuth profile id)`,
-  ];
+  const changes = [`Auth: migrate ${legacyProfileId} → ${toProfileId} (OAuth profile id)`];
 
   return {
     config: nextCfg,

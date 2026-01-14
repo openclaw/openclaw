@@ -79,10 +79,7 @@ async function canConnectLocal(port: number): Promise<boolean> {
   });
 }
 
-async function waitForLocalListener(
-  port: number,
-  timeoutMs: number,
-): Promise<void> {
+async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (await canConnectLocal(port)) return;
@@ -175,20 +172,14 @@ export async function startSshPortForward(opts: {
       waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
       new Promise<void>((_, reject) => {
         child.once("exit", (code, signal) => {
-          reject(
-            new Error(
-              `ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`,
-            ),
-          );
+          reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
         });
       }),
     ]);
   } catch (err) {
     await stop();
     const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
-    throw new Error(
-      `${err instanceof Error ? err.message : String(err)}${suffix}`,
-    );
+    throw new Error(`${err instanceof Error ? err.message : String(err)}${suffix}`);
   }
 
   return {

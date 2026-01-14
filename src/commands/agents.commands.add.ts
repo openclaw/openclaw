@@ -1,7 +1,4 @@
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-} from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -16,15 +13,8 @@ import {
   describeBinding,
   parseBindingSpecs,
 } from "./agents.bindings.js";
-import {
-  createQuietRuntime,
-  requireValidConfig,
-} from "./agents.command-shared.js";
-import {
-  applyAgentConfig,
-  findAgentEntryIndex,
-  listAgentEntries,
-} from "./agents.config.js";
+import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
+import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -122,9 +112,7 @@ export async function agentsAddCommand(
     if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(
-        bindingResult.config.agents?.defaults?.skipBootstrap,
-      ),
+      skipBootstrap: Boolean(bindingResult.config.agents?.defaults?.skipBootstrap),
       agentId,
     });
 
@@ -138,8 +126,7 @@ export async function agentsAddCommand(
         added: bindingResult.added.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
         conflicts: bindingResult.conflicts.map(
-          (conflict) =>
-            `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+          (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
         ),
       },
     };
@@ -208,9 +195,7 @@ export async function agentsAddCommand(
       initialValue: workspaceDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const workspaceDir = resolveUserPath(
-      String(workspaceInput).trim() || workspaceDefault,
-    );
+    const workspaceDir = resolveUserPath(String(workspaceInput).trim() || workspaceDefault);
     const agentDir = resolveAgentDir(cfg, agentId);
 
     let nextConfig = applyAgentConfig(cfg, {

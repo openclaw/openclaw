@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveBrowserConfig,
-  resolveProfile,
-  shouldStartLocalBrowserServer,
-} from "./config.js";
+import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback control url and lobster-orange color", () => {
@@ -108,8 +104,8 @@ describe("browser config", () => {
   });
 
   it("rejects unsupported protocols", () => {
-    expect(() =>
-      resolveBrowserConfig({ controlUrl: "ws://127.0.0.1:18791" }),
-    ).toThrow(/must be http/i);
+    expect(() => resolveBrowserConfig({ controlUrl: "ws://127.0.0.1:18791" })).toThrow(
+      /must be http/i,
+    );
   });
 });

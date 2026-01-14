@@ -6,9 +6,7 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("ensureAuthProfileStore", () => {
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-auth-profiles-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-profiles-"));
     try {
       const legacyPath = path.join(agentDir, "auth.json");
       fs.writeFileSync(

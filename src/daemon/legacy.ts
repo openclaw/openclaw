@@ -1,15 +1,6 @@
-import {
-  findLegacyLaunchAgents,
-  uninstallLegacyLaunchAgents,
-} from "./launchd.js";
-import {
-  findLegacyScheduledTasks,
-  uninstallLegacyScheduledTasks,
-} from "./schtasks.js";
-import {
-  findLegacySystemdUnits,
-  uninstallLegacySystemdUnits,
-} from "./systemd.js";
+import { findLegacyLaunchAgents, uninstallLegacyLaunchAgents } from "./launchd.js";
+import { findLegacyScheduledTasks, uninstallLegacyScheduledTasks } from "./schtasks.js";
+import { findLegacySystemdUnits, uninstallLegacySystemdUnits } from "./systemd.js";
 
 export type LegacyGatewayService = {
   platform: "darwin" | "linux" | "win32";

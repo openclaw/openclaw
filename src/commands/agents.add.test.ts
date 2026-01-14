@@ -49,9 +49,7 @@ describe("agents add command", () => {
 
     await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--workspace"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
@@ -63,9 +61,7 @@ describe("agents add command", () => {
       hasFlags: false,
     });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--workspace"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });

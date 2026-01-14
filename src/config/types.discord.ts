@@ -33,11 +33,7 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
 };
 
-export type DiscordReactionNotificationMode =
-  | "off"
-  | "own"
-  | "all"
-  | "allowlist";
+export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type DiscordGuildEntry = {
   slug?: string;

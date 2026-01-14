@@ -33,8 +33,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -123,12 +122,10 @@ function createMinimalRun(params?: {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("signals typing on block replies", async () => {
     const onBlockReply = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: EmbeddedPiAgentParams) => {
-        await params.onBlockReply?.({ text: "chunk", mediaUrls: [] });
-        return { payloads: [{ text: "final" }], meta: {} };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
+      await params.onBlockReply?.({ text: "chunk", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
     const { run, typing } = createMinimalRun({
       typingMode: "message",
@@ -148,12 +145,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
   it("signals typing on tool results", async () => {
     const onToolResult = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: EmbeddedPiAgentParams) => {
-        await params.onToolResult?.({ text: "tooling", mediaUrls: [] });
-        return { payloads: [{ text: "final" }], meta: {} };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
+      await params.onToolResult?.({ text: "tooling", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
     const { run, typing } = createMinimalRun({
       typingMode: "message",
@@ -169,12 +164,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
   it("skips typing for silent tool results", async () => {
     const onToolResult = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: EmbeddedPiAgentParams) => {
-        await params.onToolResult?.({ text: "NO_REPLY", mediaUrls: [] });
-        return { payloads: [{ text: "final" }], meta: {} };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
+      await params.onToolResult?.({ text: "NO_REPLY", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
 
     const { run, typing } = createMinimalRun({
       typingMode: "message",
@@ -195,10 +188,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     runEmbeddedPiAgentMock.mockImplementationOnce(
       async (params: {
-        onAgentEvent?: (evt: {
-          stream: string;
-          data: Record<string, unknown>;
-        }) => void;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
       }) => {
         params.onAgentEvent?.({
           stream: "compaction",

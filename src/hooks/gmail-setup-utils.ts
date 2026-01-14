@@ -40,16 +40,9 @@ function formatCommandResult(command: string, result: SpawnResult): string {
   return lines.join("\n");
 }
 
-function formatJsonParseFailure(
-  command: string,
-  result: SpawnResult,
-  err: unknown,
-): string {
+function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
   const reason = err instanceof Error ? err.message : String(err);
-  return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(
-    command,
-    result,
-  )}`;
+  return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(command, result)}`;
 }
 
 function formatCommand(command: string, args: string[]): string {
@@ -81,8 +74,7 @@ function ensurePathIncludes(dirPath: string, position: "append" | "prepend") {
   const pathEnv = process.env.PATH ?? "";
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
   if (parts.includes(dirPath)) return;
-  const next =
-    position === "prepend" ? [dirPath, ...parts] : [...parts, dirPath];
+  const next = position === "prepend" ? [dirPath, ...parts] : [...parts, dirPath];
   process.env.PATH = next.join(path.delimiter);
 }
 
@@ -106,20 +98,14 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<
-  string | undefined
-> {
+export async function resolvePythonExecutablePath(): Promise<string | undefined> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }
   const candidates = findExecutablesOnPath(["python3", "python"]);
   for (const candidate of candidates) {
     const res = await runCommandWithTimeout(
-      [
-        candidate,
-        "-c",
-        "import os, sys; print(os.path.realpath(sys.executable))",
-      ],
+      [candidate, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
       { timeoutMs: 2_000 },
     );
     if (res.code !== 0) continue;
@@ -169,9 +155,7 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
     env: brewEnv,
   });
   if (result.code !== 0) {
-    throw new Error(
-      `brew install failed for ${bin}: ${result.stderr || result.stdout}`,
-    );
+    throw new Error(`brew install failed for ${bin}: ${result.stderr || result.stdout}`);
   }
   if (!hasBinary(bin)) {
     throw new Error(`${bin} still not available after brew install`);
@@ -204,14 +188,7 @@ export async function ensureTopic(projectId: string, topicName: string) {
     30_000,
   );
   if (describe.code === 0) return;
-  await runGcloud([
-    "pubsub",
-    "topics",
-    "create",
-    topicName,
-    "--project",
-    projectId,
-  ]);
+  await runGcloud(["pubsub", "topics", "create", topicName, "--project", projectId]);
 }
 
 export async function ensureSubscription(
@@ -221,14 +198,7 @@ export async function ensureSubscription(
   pushEndpoint: string,
 ) {
   const describe = await runGcloudCommand(
-    [
-      "pubsub",
-      "subscriptions",
-      "describe",
-      subscription,
-      "--project",
-      projectId,
-    ],
+    ["pubsub", "subscriptions", "describe", subscription, "--project", projectId],
     30_000,
   );
   if (describe.code === 0) {
@@ -296,21 +266,11 @@ export async function ensureTailscaleEndpoint(params: {
     throw new Error("tailscale target missing; set a port or target URL");
   }
   const pathArg = normalizeServePath(params.path);
-  const funnelArgs = [
-    params.mode,
-    "--bg",
-    "--set-path",
-    pathArg,
-    "--yes",
-    target,
-  ];
+  const funnelArgs = [params.mode, "--bg", "--set-path", pathArg, "--yes", target];
   const funnelCommand = formatCommand("tailscale", funnelArgs);
-  const funnelResult = await runCommandWithTimeout(
-    ["tailscale", ...funnelArgs],
-    {
-      timeoutMs: 30_000,
-    },
-  );
+  const funnelResult = await runCommandWithTimeout(["tailscale", ...funnelArgs], {
+    timeoutMs: 30_000,
+  });
   if (funnelResult.code !== 0) {
     throw new Error(formatCommandFailure(funnelCommand, funnelResult));
   }
@@ -320,9 +280,7 @@ export async function ensureTailscaleEndpoint(params: {
   return params.token ? `${baseUrl}?token=${params.token}` : baseUrl;
 }
 
-export async function resolveProjectIdFromGogCredentials(): Promise<
-  string | null
-> {
+export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
   const candidates = gogCredentialsPaths();
   for (const candidate of candidates) {
     if (!fs.existsSync(candidate)) continue;
@@ -361,9 +319,7 @@ function gogCredentialsPaths(): string[] {
   }
   paths.push(resolveUserPath("~/.config/gogcli/credentials.json"));
   if (process.platform === "darwin") {
-    paths.push(
-      resolveUserPath("~/Library/Application Support/gogcli/credentials.json"),
-    );
+    paths.push(resolveUserPath("~/Library/Application Support/gogcli/credentials.json"));
   }
   return paths;
 }
@@ -371,8 +327,7 @@ function gogCredentialsPaths(): string[] {
 function extractGogClientId(parsed: Record<string, unknown>): string | null {
   const installed = parsed.installed as Record<string, unknown> | undefined;
   const web = parsed.web as Record<string, unknown> | undefined;
-  const candidate =
-    installed?.client_id || web?.client_id || parsed.client_id || "";
+  const candidate = installed?.client_id || web?.client_id || parsed.client_id || "";
   return typeof candidate === "string" ? candidate : null;
 }
 

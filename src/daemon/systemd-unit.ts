@@ -3,17 +3,14 @@ function systemdEscapeArg(value: string): string {
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
-function renderEnvLines(
-  env: Record<string, string | undefined> | undefined,
-): string[] {
+function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
   if (!env) return [];
   const entries = Object.entries(env).filter(
     ([, value]) => typeof value === "string" && value.trim(),
   );
   if (entries.length === 0) return [];
   return entries.map(
-    ([key, value]) =>
-      `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
+    ([key, value]) => `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
   );
 }
 
@@ -92,9 +89,7 @@ export function parseSystemdExecStart(value: string): string[] {
   return args;
 }
 
-export function parseSystemdEnvAssignment(
-  raw: string,
-): { key: string; value: string } | null {
+export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 

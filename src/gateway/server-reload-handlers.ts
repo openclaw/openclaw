@@ -6,27 +6,18 @@ import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
-import {
-  buildGatewayCronService,
-  type GatewayCronState,
-} from "./server-cron.js";
+import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: { stop: () => void };
   cronState: GatewayCronState;
-  browserControl: Awaited<
-    ReturnType<typeof startBrowserControlServerIfEnabled>
-  > | null;
+  browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
 
 export function createGatewayReloadHandlers(params: {
   deps: CliDeps;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
@@ -70,9 +61,7 @@ export function createGatewayReloadHandlers(params: {
       });
       void nextState.cronState.cron
         .start()
-        .catch((err) =>
-          params.logCron.error(`failed to start: ${String(err)}`),
-        );
+        .catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
     }
 
     if (plan.restartBrowserControl) {
@@ -98,19 +87,13 @@ export function createGatewayReloadHandlers(params: {
             gmailResult.reason !== "hooks not enabled" &&
             gmailResult.reason !== "no gmail account configured"
           ) {
-            params.logHooks.warn(
-              `gmail watcher not started: ${gmailResult.reason}`,
-            );
+            params.logHooks.warn(`gmail watcher not started: ${gmailResult.reason}`);
           }
         } catch (err) {
-          params.logHooks.error(
-            `gmail watcher failed to start: ${String(err)}`,
-          );
+          params.logHooks.error(`gmail watcher failed to start: ${String(err)}`);
         }
       } else {
-        params.logHooks.info(
-          "skipping gmail watcher restart (CLAWDBOT_SKIP_GMAIL_WATCHER=1)",
-        );
+        params.logHooks.info("skipping gmail watcher restart (CLAWDBOT_SKIP_GMAIL_WATCHER=1)");
       }
     }
 
@@ -135,23 +118,16 @@ export function createGatewayReloadHandlers(params: {
     }
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
-    setCommandLaneConcurrency(
-      "main",
-      nextConfig.agents?.defaults?.maxConcurrent ?? 1,
-    );
+    setCommandLaneConcurrency("main", nextConfig.agents?.defaults?.maxConcurrent ?? 1);
     setCommandLaneConcurrency(
       "subagent",
       nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 1,
     );
 
     if (plan.hotReasons.length > 0) {
-      params.logReload.info(
-        `config hot reload applied (${plan.hotReasons.join(", ")})`,
-      );
+      params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);
     } else if (plan.noopPaths.length > 0) {
-      params.logReload.info(
-        `config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`,
-      );
+      params.logReload.info(`config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`);
     }
 
     params.setState(nextState);
@@ -164,9 +140,7 @@ export function createGatewayReloadHandlers(params: {
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
       : plan.changedPaths.join(", ");
-    params.logReload.warn(
-      `config change requires gateway restart (${reasons})`,
-    );
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
       return;

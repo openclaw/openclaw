@@ -2,29 +2,21 @@ import { detectBinary } from "../../../commands/onboard-helpers.js";
 import { installSignalCli } from "../../../commands/signal-install.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "signal" as const;
 
 function setSignalDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.signal?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.signal?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -62,9 +54,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
         `Signal: ${configured ? "configured" : "needs setup"}`,
         `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
       ],
-      selectionHint: signalCliDetected
-        ? "signal-cli found"
-        : "signal-cli missing",
+      selectionHint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
       quickstartScore: signalCliDetected ? 1 : 0,
     };
   },
@@ -113,21 +103,12 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
           if (result.ok && result.cliPath) {
             cliDetected = true;
             resolvedCliPath = result.cliPath;
-            await prompter.note(
-              `Installed signal-cli at ${result.cliPath}`,
-              "Signal",
-            );
+            await prompter.note(`Installed signal-cli at ${result.cliPath}`, "Signal");
           } else if (!result.ok) {
-            await prompter.note(
-              result.error ?? "signal-cli install failed.",
-              "Signal",
-            );
+            await prompter.note(result.error ?? "signal-cli install failed.", "Signal");
           }
         } catch (err) {
-          await prompter.note(
-            `signal-cli install failed: ${String(err)}`,
-            "Signal",
-          );
+          await prompter.note(`signal-cli install failed: ${String(err)}`, "Signal");
         }
       }
     }
@@ -183,9 +164,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.signal?.accounts,
                 [signalAccountId]: {
                   ...next.channels?.signal?.accounts?.[signalAccountId],
-                  enabled:
-                    next.channels?.signal?.accounts?.[signalAccountId]
-                      ?.enabled ?? true,
+                  enabled: next.channels?.signal?.accounts?.[signalAccountId]?.enabled ?? true,
                   account,
                   cliPath: resolvedCliPath ?? "signal-cli",
                 },

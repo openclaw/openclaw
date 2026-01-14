@@ -4,9 +4,7 @@ type UnhandledRejectionHandler = (reason: unknown) => boolean;
 
 const handlers = new Set<UnhandledRejectionHandler>();
 
-export function registerUnhandledRejectionHandler(
-  handler: UnhandledRejectionHandler,
-): () => void {
+export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
     handlers.delete(handler);

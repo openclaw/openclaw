@@ -1,19 +1,13 @@
-import {
-  colorize,
-  isRich as isRichTerminal,
-  theme,
-} from "../../terminal/theme.js";
+import { colorize, isRich as isRichTerminal, theme } from "../../terminal/theme.js";
 
 export const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   Boolean(isRichTerminal() && !opts?.json && !opts?.plain);
 
 export const pad = (value: string, size: number) => value.padEnd(size);
 
-export const formatKey = (key: string, rich: boolean) =>
-  colorize(rich, theme.warn, key);
+export const formatKey = (key: string, rich: boolean) => colorize(rich, theme.warn, key);
 
-export const formatValue = (value: string, rich: boolean) =>
-  colorize(rich, theme.info, value);
+export const formatValue = (value: string, rich: boolean) => colorize(rich, theme.info, value);
 
 export const formatKeyValue = (
   key: string,
@@ -22,8 +16,7 @@ export const formatKeyValue = (
   valueColor: (value: string) => string = theme.info,
 ) => `${formatKey(key, rich)}=${colorize(rich, valueColor, value)}`;
 
-export const formatSeparator = (rich: boolean) =>
-  colorize(rich, theme.muted, " | ");
+export const formatSeparator = (rich: boolean) => colorize(rich, theme.muted, " | ");
 
 export const formatTag = (tag: string, rich: boolean) => {
   if (!rich) return tag;

@@ -20,13 +20,9 @@ import {
 import { defaultRuntime } from "../runtime.js";
 
 export function registerHooksCli(program: Command) {
-  const hooks = program
-    .command("hooks")
-    .description("Webhook helpers and hook-based integrations");
+  const hooks = program.command("hooks").description("Webhook helpers and hook-based integrations");
 
-  const gmail = hooks
-    .command("gmail")
-    .description("Gmail Pub/Sub hooks (via gogcli)");
+  const gmail = hooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
 
   gmail
     .command("setup")
@@ -34,42 +30,22 @@ export function registerHooksCli(program: Command) {
     .requiredOption("--account <email>", "Gmail account to watch")
     .option("--project <id>", "GCP project id (OAuth client owner)")
     .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
-    .option(
-      "--subscription <name>",
-      "Pub/Sub subscription name",
-      DEFAULT_GMAIL_SUBSCRIPTION,
-    )
+    .option("--subscription <name>", "Pub/Sub subscription name", DEFAULT_GMAIL_SUBSCRIPTION)
     .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
     .option("--hook-url <url>", "Clawdbot hook URL")
     .option("--hook-token <token>", "Clawdbot hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
-    .option(
-      "--bind <host>",
-      "gog watch serve bind host",
-      DEFAULT_GMAIL_SERVE_BIND,
-    )
-    .option(
-      "--port <port>",
-      "gog watch serve port",
-      String(DEFAULT_GMAIL_SERVE_PORT),
-    )
+    .option("--bind <host>", "gog watch serve bind host", DEFAULT_GMAIL_SERVE_BIND)
+    .option("--port <port>", "gog watch serve port", String(DEFAULT_GMAIL_SERVE_PORT))
     .option("--path <path>", "gog watch serve path", DEFAULT_GMAIL_SERVE_PATH)
     .option("--include-body", "Include email body snippets", true)
-    .option(
-      "--max-bytes <n>",
-      "Max bytes for body snippets",
-      String(DEFAULT_GMAIL_MAX_BYTES),
-    )
+    .option("--max-bytes <n>", "Max bytes for body snippets", String(DEFAULT_GMAIL_MAX_BYTES))
     .option(
       "--renew-minutes <n>",
       "Renew watch every N minutes",
       String(DEFAULT_GMAIL_RENEW_MINUTES),
     )
-    .option(
-      "--tailscale <mode>",
-      "Expose push endpoint via tailscale (funnel|serve|off)",
-      "funnel",
-    )
+    .option("--tailscale <mode>", "Expose push endpoint via tailscale (funnel|serve|off)", "funnel")
     .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
     .option(
       "--tailscale-target <target>",
@@ -103,10 +79,7 @@ export function registerHooksCli(program: Command) {
     .option("--include-body", "Include email body snippets")
     .option("--max-bytes <n>", "Max bytes for body snippets")
     .option("--renew-minutes <n>", "Renew watch every N minutes")
-    .option(
-      "--tailscale <mode>",
-      "Expose push endpoint via tailscale (funnel|serve|off)",
-    )
+    .option("--tailscale <mode>", "Expose push endpoint via tailscale (funnel|serve|off)")
     .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
     .option(
       "--tailscale-target <target>",
@@ -123,9 +96,7 @@ export function registerHooksCli(program: Command) {
     });
 }
 
-function parseGmailSetupOptions(
-  raw: Record<string, unknown>,
-): GmailSetupOptions {
+function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
   if (!account) throw new Error("--account is required");

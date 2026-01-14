@@ -14,10 +14,7 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import {
-  type ChatImageContent,
-  parseMessageWithAttachments,
-} from "../chat-attachments.js";
+import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
 import {
   ErrorCodes,
   errorShape,
@@ -56,19 +53,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
-      sessionId && storePath
-        ? readSessionMessages(sessionId, storePath, entry?.sessionFile)
-        : [];
+      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced =
-      rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const capped = capArrayByJsonBytes(
-      sliced,
-      MAX_CHAT_HISTORY_MESSAGES_BYTES,
-    ).items;
+    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const capped = capArrayByJsonBytes(sliced, MAX_CHAT_HISTORY_MESSAGES_BYTES).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -138,10 +129,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "runId does not match sessionKey",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
       );
       return;
     }
@@ -206,25 +194,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
-        const parsed = await parseMessageWithAttachments(
-          p.message,
-          normalizedAttachments,
-          { maxBytes: 5_000_000, log: context.logGateway },
-        );
+        const parsed = await parseMessageWithAttachments(p.message, normalizedAttachments, {
+          maxBytes: 5_000_000,
+          log: context.logGateway,
+        });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
       }
     }
-    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
-      p.sessionKey,
-    );
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -249,10 +230,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "send blocked by session policy",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
       );
       return;
     }
@@ -285,12 +263,10 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const activeExisting = context.chatAbortControllers.get(clientRunId);
     if (activeExisting) {
-      respond(
-        true,
-        { runId: clientRunId, status: "in_flight" as const },
-        undefined,
-        { cached: true, runId: clientRunId },
-      );
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
       return;
     }
 

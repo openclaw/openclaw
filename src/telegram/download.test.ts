@@ -1,16 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  downloadTelegramFile,
-  getTelegramFile,
-  type TelegramFileInfo,
-} from "./download.js";
+import { downloadTelegramFile, getTelegramFile, type TelegramFileInfo } from "./download.js";
 
 describe("telegram download", () => {
   it("fetches file info", async () => {
-    const json = vi
-      .fn()
-      .mockResolvedValue({ ok: true, result: { file_path: "photos/1.jpg" } });
+    const json = vi.fn().mockResolvedValue({ ok: true, result: { file_path: "photos/1.jpg" } });
     vi.spyOn(global, "fetch" as never).mockResolvedValueOnce({
       ok: true,
       status: 200,

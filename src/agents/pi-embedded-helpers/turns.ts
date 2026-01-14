@@ -30,10 +30,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
       const currentMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
 
       if (lastMsg && typeof lastMsg === "object") {
-        const lastAsst = lastMsg as Extract<
-          AgentMessage,
-          { role: "assistant" }
-        >;
+        const lastAsst = lastMsg as Extract<AgentMessage, { role: "assistant" }>;
         const mergedContent = [
           ...(Array.isArray(lastAsst.content) ? lastAsst.content : []),
           ...(Array.isArray(currentMsg.content) ? currentMsg.content : []),
@@ -82,9 +79,7 @@ export function mergeConsecutiveUserTurns(
  * Anthropic requires strict alternating user→assistant pattern.
  * Merges consecutive user messages together.
  */
-export function validateAnthropicTurns(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function validateAnthropicTurns(messages: AgentMessage[]): AgentMessage[] {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
   }

@@ -1,23 +1,15 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessagePinCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessagePinCommands(message: Command, helpers: MessageCliHelpers) {
   const withPinsTarget = (command: Command) =>
-    command.option(
-      "--channel-id <id>",
-      "Channel id (defaults to --to; required for WhatsApp)",
-    );
+    command.option("--channel-id <id>", "Channel id (defaults to --to; required for WhatsApp)");
 
   const pins = [
     helpers
       .withMessageBase(
         withPinsTarget(
-          helpers.withMessageTarget(
-            message.command("pin").description("Pin a message"),
-          ),
+          helpers.withMessageTarget(message.command("pin").description("Pin a message")),
         ),
       )
       .requiredOption("--message-id <id>", "Message id")
@@ -27,9 +19,7 @@ export function registerMessagePinCommands(
     helpers
       .withMessageBase(
         withPinsTarget(
-          helpers.withMessageTarget(
-            message.command("unpin").description("Unpin a message"),
-          ),
+          helpers.withMessageTarget(message.command("unpin").description("Unpin a message")),
         ),
       )
       .requiredOption("--message-id <id>", "Message id")
@@ -38,9 +28,7 @@ export function registerMessagePinCommands(
       }),
     helpers
       .withMessageBase(
-        helpers.withMessageTarget(
-          message.command("pins").description("List pinned messages"),
-        ),
+        helpers.withMessageTarget(message.command("pins").description("List pinned messages")),
       )
       .option("--channel-id <id>", "Channel id (defaults to --to)")
       .option("--limit <n>", "Result limit")

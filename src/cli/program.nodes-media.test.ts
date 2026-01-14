@@ -82,10 +82,7 @@ describe("cli program (nodes media)", () => {
 
     const program = buildProgram();
     runtime.log.mockClear();
-    await program.parseAsync(
-      ["nodes", "camera", "snap", "--node", "ios-node"],
-      { from: "user" },
-    );
+    await program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node"], { from: "user" });
 
     expect(callGateway).toHaveBeenNthCalledWith(
       2,
@@ -436,14 +433,11 @@ describe("cli program (nodes media)", () => {
     runtime.error.mockClear();
 
     await expect(
-      program.parseAsync(
-        ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"],
-        { from: "user" },
-      ),
+      program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"], {
+        from: "user",
+      }),
     ).rejects.toThrow(/exit/i);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/invalid facing/i),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringMatching(/invalid facing/i));
   });
 });

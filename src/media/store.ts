@@ -82,14 +82,9 @@ async function downloadToFile(
       });
       pipeline(res, out)
         .then(() => {
-          const sniffBuffer = Buffer.concat(
-            sniffChunks,
-            Math.min(sniffLen, 16384),
-          );
+          const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
           const rawHeader = res.headers["content-type"];
-          const headerMime = Array.isArray(rawHeader)
-            ? rawHeader[0]
-            : rawHeader;
+          const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
           resolve({
             headerMime,
             sniffBuffer,
@@ -121,18 +116,13 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(
-      source,
-      tempDest,
-      headers,
-    );
+    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
     const mime = await detectMime({
       buffer: sniffBuffer,
       headerMime,
       filePath: source,
     });
-    const ext =
-      extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+    const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
     const id = ext ? `${baseId}${ext}` : baseId;
     const finalDest = path.join(dir, id);
     await fs.rename(tempDest, finalDest);
@@ -162,16 +152,12 @@ export async function saveMediaBuffer(
   maxBytes = MAX_BYTES,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(
-      `Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`,
-    );
+    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
   }
   const dir = path.join(MEDIA_DIR, subdir);
   await fs.mkdir(dir, { recursive: true });
   const baseId = crypto.randomUUID();
-  const headerExt = extensionForMime(
-    contentType?.split(";")[0]?.trim() ?? undefined,
-  );
+  const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime);
   const id = ext ? `${baseId}${ext}` : baseId;

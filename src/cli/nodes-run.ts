@@ -1,8 +1,6 @@
 import { parseTimeoutMs } from "./parse-timeout.js";
 
-export function parseEnvPairs(
-  pairs: unknown,
-): Record<string, string> | undefined {
+export function parseEnvPairs(pairs: unknown): Record<string, string> | undefined {
   if (!Array.isArray(pairs) || pairs.length === 0) return undefined;
   const env: Record<string, string> = {};
   for (const pair of pairs) {

@@ -51,14 +51,11 @@ export function resolveChannelGroupPolicy(params: {
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId && groups ? groups[normalizedId] : undefined;
   const defaultConfig = groups?.["*"];
-  const allowAll =
-    allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
+  const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
   const allowed =
     !allowlistEnabled ||
     allowAll ||
-    (normalizedId
-      ? Boolean(groups && Object.hasOwn(groups, normalizedId))
-      : false);
+    (normalizedId ? Boolean(groups && Object.hasOwn(groups, normalizedId)) : false);
   return {
     allowlistEnabled,
     allowed,
@@ -84,17 +81,11 @@ export function resolveChannelGroupRequireMention(params: {
         ? defaultConfig.requireMention
         : undefined;
 
-  if (
-    overrideOrder === "before-config" &&
-    typeof requireMentionOverride === "boolean"
-  ) {
+  if (overrideOrder === "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
   if (typeof configMention === "boolean") return configMention;
-  if (
-    overrideOrder !== "before-config" &&
-    typeof requireMentionOverride === "boolean"
-  ) {
+  if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
   return true;

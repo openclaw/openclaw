@@ -5,11 +5,7 @@ import type { CronService } from "../../cron/service.js";
 import type { startNodeBridgeServer } from "../../infra/bridge/server.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import type {
-  ConnectParams,
-  ErrorShape,
-  RequestFrame,
-} from "../protocol/index.js";
+import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -44,21 +40,14 @@ export type GatewayRequestContext = {
     },
   ) => void;
   bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null;
-  bridgeSendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-  ) => void;
+  bridgeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   hasConnectedMobileNode: () => boolean;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
-  addChatRun: (
-    sessionId: string,
-    entry: { sessionKey: string; clientRunId: string },
-  ) => void;
+  addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -107,8 +96,6 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
 };
 
-export type GatewayRequestHandler = (
-  opts: GatewayRequestHandlerOptions,
-) => Promise<void> | void;
+export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
 
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

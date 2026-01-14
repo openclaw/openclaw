@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -24,12 +22,8 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
   it("returns a friendly message for Anthropic role ordering", () => {
-    const msg = makeAssistantError(
-      'messages: roles must alternate between "user" and "assistant"',
-    );
-    expect(formatAssistantErrorText(msg)).toContain(
-      "Message ordering conflict",
-    );
+    const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
+    expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");
   });
   it("returns a friendly message for Anthropic overload errors", () => {
     const msg = makeAssistantError(

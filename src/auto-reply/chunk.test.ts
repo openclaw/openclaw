@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  chunkMarkdownText,
-  chunkText,
-  resolveTextChunkLimit,
-} from "./chunk.js";
+import { chunkMarkdownText, chunkText, resolveTextChunkLimit } from "./chunk.js";
 
 function expectFencesBalanced(chunks: string[]) {
   for (const chunk of chunks) {
@@ -32,10 +28,7 @@ type ChunkCase = {
   expected: string[];
 };
 
-function runChunkCases(
-  chunker: (text: string, limit: number) => string[],
-  cases: ChunkCase[],
-) {
+function runChunkCases(chunker: (text: string, limit: number) => string[], cases: ChunkCase[]) {
   for (const { name, text, limit, expected } of cases) {
     it(name, () => {
       expect(chunker(text, limit)).toEqual(expected);
@@ -84,21 +77,15 @@ describe("chunkText", () => {
   it("prefers breaking at a newline before the limit", () => {
     const text = `paragraph one line\n\nparagraph two starts here and continues`;
     const chunks = chunkText(text, 40);
-    expect(chunks).toEqual([
-      "paragraph one line",
-      "paragraph two starts here and continues",
-    ]);
+    expect(chunks).toEqual(["paragraph one line", "paragraph two starts here and continues"]);
   });
 
   it("otherwise breaks at the last whitespace under the limit", () => {
-    const text =
-      "This is a message that should break nicely near a word boundary.";
+    const text = "This is a message that should break nicely near a word boundary.";
     const chunks = chunkText(text, 30);
     expect(chunks[0].length).toBeLessThanOrEqual(30);
     expect(chunks[1].length).toBeLessThanOrEqual(30);
-    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(
-      text.replace(/\s+/g, " ").trim(),
-    );
+    expect(chunks.join(" ").replace(/\s+/g, " ").trim()).toBe(text.replace(/\s+/g, " ").trim());
   });
 
   it("falls back to a hard break when no whitespace is present", () => {

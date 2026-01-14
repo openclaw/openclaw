@@ -63,11 +63,7 @@ describe("sendMessageDiscord", () => {
   it("creates a thread", async () => {
     const { rest, postMock } = makeRest();
     postMock.mockResolvedValue({ id: "t1" });
-    await createThreadDiscord(
-      "chan1",
-      { name: "thread", messageId: "m1" },
-      { rest, token: "t" },
-    );
+    await createThreadDiscord("chan1", { name: "thread", messageId: "m1" }, { rest, token: "t" });
     expect(postMock).toHaveBeenCalledWith(
       Routes.threads("chan1", "m1"),
       expect.objectContaining({ body: { name: "thread" } }),
@@ -102,20 +98,10 @@ describe("sendMessageDiscord", () => {
     const { rest, putMock, deleteMock } = makeRest();
     putMock.mockResolvedValue({});
     deleteMock.mockResolvedValue({});
-    await addRoleDiscord(
-      { guildId: "g1", userId: "u1", roleId: "r1" },
-      { rest, token: "t" },
-    );
-    await removeRoleDiscord(
-      { guildId: "g1", userId: "u1", roleId: "r1" },
-      { rest, token: "t" },
-    );
-    expect(putMock).toHaveBeenCalledWith(
-      Routes.guildMemberRole("g1", "u1", "r1"),
-    );
-    expect(deleteMock).toHaveBeenCalledWith(
-      Routes.guildMemberRole("g1", "u1", "r1"),
-    );
+    await addRoleDiscord({ guildId: "g1", userId: "u1", roleId: "r1" }, { rest, token: "t" });
+    await removeRoleDiscord({ guildId: "g1", userId: "u1", roleId: "r1" }, { rest, token: "t" });
+    expect(putMock).toHaveBeenCalledWith(Routes.guildMemberRole("g1", "u1", "r1"));
+    expect(deleteMock).toHaveBeenCalledWith(Routes.guildMemberRole("g1", "u1", "r1"));
   });
 
   it("bans a member", async () => {
@@ -264,10 +250,7 @@ describe("sendPollDiscord", () => {
         body: expect.objectContaining({
           poll: {
             question: { text: "Lunch?" },
-            answers: [
-              { poll_media: { text: "Pizza" } },
-              { poll_media: { text: "Sushi" } },
-            ],
+            answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
             duration: 24,
             allow_multiselect: false,
             layout_type: 1,
@@ -362,9 +345,9 @@ describe("retry rate limits", () => {
     const { rest, postMock } = makeRest();
     postMock.mockRejectedValueOnce(new Error("network error"));
 
-    await expect(
-      sendMessageDiscord("channel:789", "hello", { rest, token: "t" }),
-    ).rejects.toThrow("network error");
+    await expect(sendMessageDiscord("channel:789", "hello", { rest, token: "t" })).rejects.toThrow(
+      "network error",
+    );
     expect(postMock).toHaveBeenCalledTimes(1);
   });
 
@@ -372,9 +355,7 @@ describe("retry rate limits", () => {
     const { rest, putMock } = makeRest();
     const rateLimitError = createMockRateLimitError(0);
 
-    putMock
-      .mockRejectedValueOnce(rateLimitError)
-      .mockResolvedValueOnce(undefined);
+    putMock.mockRejectedValueOnce(rateLimitError).mockResolvedValueOnce(undefined);
 
     const res = await reactMessageDiscord("chan1", "msg1", "ok", {
       rest,

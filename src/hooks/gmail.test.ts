@@ -41,9 +41,7 @@ describe("gmail hook config", () => {
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
-      expect(result.value.hookUrl).toBe(
-        `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
-      );
+      expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
     }
   });
 
@@ -154,9 +152,7 @@ describe("gmail hook config", () => {
     if (result.ok) {
       expect(result.value.serve.path).toBe("/custom");
       expect(result.value.tailscale.path).toBe("/custom");
-      expect(result.value.tailscale.target).toBe(
-        "http://127.0.0.1:8788/custom",
-      );
+      expect(result.value.tailscale.target).toBe("http://127.0.0.1:8788/custom");
     }
   });
 });

@@ -16,11 +16,7 @@ export function getCliSessionId(
   return undefined;
 }
 
-export function setCliSessionId(
-  entry: SessionEntry,
-  provider: string,
-  sessionId: string,
-): void {
+export function setCliSessionId(entry: SessionEntry, provider: string, sessionId: string): void {
   const normalized = normalizeProviderId(provider);
   const trimmed = sessionId.trim();
   if (!trimmed) return;

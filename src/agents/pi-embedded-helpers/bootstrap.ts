@@ -124,11 +124,7 @@ export function buildBootstrapContextFiles(
       });
       continue;
     }
-    const trimmed = trimBootstrapContent(
-      file.content ?? "",
-      file.name,
-      maxChars,
-    );
+    const trimmed = trimBootstrapContent(file.content ?? "", file.name, maxChars);
     if (!trimmed.content) continue;
     if (trimmed.truncated) {
       opts?.warn?.(
@@ -143,13 +139,9 @@ export function buildBootstrapContextFiles(
   return result;
 }
 
-export function sanitizeGoogleTurnOrdering(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
   const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-  const first = messages[0] as
-    | { role?: unknown; content?: unknown }
-    | undefined;
+  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
   const role = first?.role;
   const content = first?.content;
   if (

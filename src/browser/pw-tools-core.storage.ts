@@ -66,8 +66,7 @@ export async function storageGetViaPlaywright(opts: {
   const key = typeof opts.key === "string" ? opts.key : undefined;
   const values = await page.evaluate(
     ({ kind: kind2, key: key2 }) => {
-      const store =
-        kind2 === "session" ? window.sessionStorage : window.localStorage;
+      const store = kind2 === "session" ? window.sessionStorage : window.localStorage;
       if (key2) {
         const value = store.getItem(key2);
         return value === null ? {} : { [key2]: value };
@@ -99,8 +98,7 @@ export async function storageSetViaPlaywright(opts: {
   if (!key) throw new Error("key is required");
   await page.evaluate(
     ({ kind, key: k, value }) => {
-      const store =
-        kind === "session" ? window.sessionStorage : window.localStorage;
+      const store = kind === "session" ? window.sessionStorage : window.localStorage;
       store.setItem(k, value);
     },
     { kind: opts.kind, key, value: String(opts.value ?? "") },
@@ -116,8 +114,7 @@ export async function storageClearViaPlaywright(opts: {
   ensurePageState(page);
   await page.evaluate(
     ({ kind }) => {
-      const store =
-        kind === "session" ? window.sessionStorage : window.localStorage;
+      const store = kind === "session" ? window.sessionStorage : window.localStorage;
       store.clear();
     },
     { kind: opts.kind },

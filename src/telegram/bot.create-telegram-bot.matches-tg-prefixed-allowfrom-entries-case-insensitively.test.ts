@@ -21,15 +21,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(
-  () => ({
-    readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-    upsertTelegramPairingRequest: vi.fn(async () => ({
-      code: "PAIRCODE",
-      created: true,
-    })),
-  }),
-);
+const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
+  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertTelegramPairingRequest: vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })),
+}));
 
 vi.mock("./pairing-store.js", () => ({
   readTelegramAllowFromStore,
@@ -144,9 +142,7 @@ describe("createTelegramBot", () => {
 
   it("matches tg:-prefixed allowFrom entries case-insensitively in group allowlist", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
@@ -159,9 +155,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -179,9 +173,7 @@ describe("createTelegramBot", () => {
   });
   it("blocks group messages when groupPolicy allowlist has no groupAllowFrom", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
@@ -193,9 +185,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -212,9 +202,7 @@ describe("createTelegramBot", () => {
   });
   it("allows control commands with TG-prefixed groupAllowFrom entries", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
@@ -227,9 +215,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -247,9 +233,7 @@ describe("createTelegramBot", () => {
   it("isolates forum topic sessions and carries thread metadata", async () => {
     onSpy.mockReset();
     sendChatActionSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
@@ -262,9 +246,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -286,9 +268,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.SessionKey).toContain(
-      "telegram:group:-1001234567890:topic:99",
-    );
+    expect(payload.SessionKey).toContain("telegram:group:-1001234567890:topic:99");
     expect(payload.From).toBe("group:-1001234567890:topic:99");
     expect(payload.MessageThreadId).toBe(99);
     expect(payload.IsForum).toBe(true);
@@ -299,9 +279,7 @@ describe("createTelegramBot", () => {
   it("falls back to General topic thread id for typing in forums", async () => {
     onSpy.mockReset();
     sendChatActionSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
@@ -314,9 +292,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -343,9 +319,7 @@ describe("createTelegramBot", () => {
   it("routes General topic replies using thread id 1", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     replySpy.mockResolvedValue({ text: "response" });
 
@@ -359,9 +333,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {

@@ -30,9 +30,7 @@ export async function applySessionHints(params: {
     }
   }
 
-  const messageIdHint = params.messageId?.trim()
-    ? `[message_id: ${params.messageId.trim()}]`
-    : "";
+  const messageIdHint = params.messageId?.trim() ? `[message_id: ${params.messageId.trim()}]` : "";
   if (messageIdHint) {
     prefixedBodyBase = `${prefixedBodyBase}\n${messageIdHint}`;
   }

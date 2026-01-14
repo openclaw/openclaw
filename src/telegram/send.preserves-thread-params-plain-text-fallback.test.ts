@@ -56,16 +56,11 @@ describe("buildInlineKeyboard", () => {
     });
 
     // First call: with HTML + thread params
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      chatId,
-      "<i>bad markdown</i>",
-      {
-        parse_mode: "HTML",
-        message_thread_id: 271,
-        reply_to_message_id: 100,
-      },
-    );
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>bad markdown</i>", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+      reply_to_message_id: 100,
+    });
     // Second call: plain text BUT still with thread params (critical!)
     expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_bad markdown_", {
       message_thread_id: 271,
@@ -116,9 +111,7 @@ describe("reactMessageTelegram", () => {
       api,
     });
 
-    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [
-      { type: "emoji", emoji: "✅" },
-    ]);
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "✅" }]);
   });
 
   it("removes reactions when emoji is empty", async () => {

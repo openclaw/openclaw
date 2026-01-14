@@ -21,15 +21,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(
-  () => ({
-    readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-    upsertTelegramPairingRequest: vi.fn(async () => ({
-      code: "PAIRCODE",
-      created: true,
-    })),
-  }),
-);
+const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
+  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertTelegramPairingRequest: vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })),
+}));
 
 vi.mock("./pairing-store.js", () => ({
   readTelegramAllowFromStore,
@@ -144,9 +142,7 @@ describe("createTelegramBot", () => {
 
   it("dedupes duplicate callback_query updates by update_id", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
@@ -183,9 +179,7 @@ describe("createTelegramBot", () => {
   });
   it("allows distinct callback_query ids without update_id", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({

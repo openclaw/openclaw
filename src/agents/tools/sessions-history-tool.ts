@@ -22,9 +22,7 @@ const SessionsHistoryToolSchema = Type.Object({
   includeTools: Type.Optional(Type.Boolean()),
 });
 
-function resolveSandboxSessionToolsVisibility(
-  cfg: ReturnType<typeof loadConfig>,
-) {
+function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
@@ -99,9 +97,7 @@ export function createSessionsHistoryTool(opts?: {
 
       const routingA2A = cfg.tools?.agentToAgent;
       const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow)
-        ? routingA2A.allow
-        : [];
+      const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
       const matchesAllow = (agentId: string) => {
         if (allowPatterns.length === 0) return true;
         return allowPatterns.some((pattern) => {
@@ -117,9 +113,7 @@ export function createSessionsHistoryTool(opts?: {
       const requesterAgentId = normalizeAgentId(
         parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
-      const targetAgentId = normalizeAgentId(
-        parseAgentSessionKey(resolvedKey)?.agentId,
-      );
+      const targetAgentId = normalizeAgentId(parseAgentSessionKey(resolvedKey)?.agentId);
       const isCrossAgent = requesterAgentId !== targetAgentId;
       if (isCrossAgent) {
         if (!a2aEnabled) {
@@ -146,12 +140,8 @@ export function createSessionsHistoryTool(opts?: {
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       })) as { messages?: unknown[] };
-      const rawMessages = Array.isArray(result?.messages)
-        ? result.messages
-        : [];
-      const messages = includeTools
-        ? rawMessages
-        : stripToolMessages(rawMessages);
+      const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
+      const messages = includeTools ? rawMessages : stripToolMessages(rawMessages);
       return jsonResult({
         sessionKey: resolveDisplaySessionKey({
           key: sessionKey,

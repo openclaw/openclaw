@@ -1,13 +1,6 @@
 import chokidar from "chokidar";
-import {
-  type ChannelId,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
-import type {
-  ClawdbotConfig,
-  ConfigFileSnapshot,
-  GatewayReloadMode,
-} from "../config/config.js";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import type { ClawdbotConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 
 export type GatewayReloadSettings = {
   mode: GatewayReloadMode;
@@ -96,28 +89,22 @@ let cachedReloadRules: ReloadRule[] | null = null;
 function listReloadRules(): ReloadRule[] {
   if (cachedReloadRules) return cachedReloadRules;
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
-  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap(
-    (plugin) => [
-      ...(plugin.reload?.configPrefixes ?? []).map(
-        (prefix): ReloadRule => ({
-          prefix,
-          kind: "hot",
-          actions: [`restart-channel:${plugin.id}` as ReloadAction],
-        }),
-      ),
-      ...(plugin.reload?.noopPrefixes ?? []).map(
-        (prefix): ReloadRule => ({
-          prefix,
-          kind: "none",
-        }),
-      ),
-    ],
-  );
-  const rules = [
-    ...BASE_RELOAD_RULES,
-    ...channelReloadRules,
-    ...BASE_RELOAD_RULES_TAIL,
-  ];
+  const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [
+    ...(plugin.reload?.configPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "hot",
+        actions: [`restart-channel:${plugin.id}` as ReloadAction],
+      }),
+    ),
+    ...(plugin.reload?.noopPrefixes ?? []).map(
+      (prefix): ReloadRule => ({
+        prefix,
+        kind: "none",
+      }),
+    ),
+  ]);
+  const rules = [...BASE_RELOAD_RULES, ...channelReloadRules, ...BASE_RELOAD_RULES_TAIL];
   cachedReloadRules = rules;
   return rules;
 }
@@ -132,17 +119,13 @@ function matchRule(path: string): ReloadRule | null {
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      Object.prototype.toString.call(value) === "[object Object]",
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]",
   );
 }
 
-export function diffConfigPaths(
-  prev: unknown,
-  next: unknown,
-  prefix = "",
-): string[] {
+export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) return [];
   if (isPlainObject(prev) && isPlainObject(next)) {
     const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
@@ -160,25 +143,17 @@ export function diffConfigPaths(
     return paths;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
-    if (
-      prev.length === next.length &&
-      prev.every((val, idx) => val === next[idx])
-    ) {
+    if (prev.length === next.length && prev.every((val, idx) => val === next[idx])) {
       return [];
     }
   }
   return [prefix || "<root>"];
 }
 
-export function resolveGatewayReloadSettings(
-  cfg: ClawdbotConfig,
-): GatewayReloadSettings {
+export function resolveGatewayReloadSettings(cfg: ClawdbotConfig): GatewayReloadSettings {
   const rawMode = cfg.gateway?.reload?.mode;
   const mode =
-    rawMode === "off" ||
-    rawMode === "restart" ||
-    rawMode === "hot" ||
-    rawMode === "hybrid"
+    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
       ? rawMode
       : DEFAULT_RELOAD_SETTINGS.mode;
   const debounceRaw = cfg.gateway?.reload?.debounceMs;
@@ -189,9 +164,7 @@ export function resolveGatewayReloadSettings(
   return { mode, debounceMs };
 }
 
-export function buildGatewayReloadPlan(
-  changedPaths: string[],
-): GatewayReloadPlan {
+export function buildGatewayReloadPlan(changedPaths: string[]): GatewayReloadPlan {
   const plan: GatewayReloadPlan = {
     changedPaths,
     restartGateway: false,
@@ -269,10 +242,7 @@ export type GatewayConfigReloader = {
 export function startGatewayConfigReloader(opts: {
   initialConfig: ClawdbotConfig;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
-  onHotReload: (
-    plan: GatewayReloadPlan,
-    nextConfig: ClawdbotConfig,
-  ) => Promise<void>;
+  onHotReload: (plan: GatewayReloadPlan, nextConfig: ClawdbotConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: ClawdbotConfig) => void;
   log: {
     info: (msg: string) => void;
@@ -312,9 +282,7 @@ export function startGatewayConfigReloader(opts: {
     try {
       const snapshot = await opts.readSnapshot();
       if (!snapshot.valid) {
-        const issues = snapshot.issues
-          .map((issue) => `${issue.path}: ${issue.message}`)
-          .join(", ");
+        const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
         opts.log.warn(`config reload skipped (invalid config): ${issues}`);
         return;
       }
@@ -324,9 +292,7 @@ export function startGatewayConfigReloader(opts: {
       settings = resolveGatewayReloadSettings(nextConfig);
       if (changedPaths.length === 0) return;
 
-      opts.log.info(
-        `config change detected; evaluating reload (${changedPaths.join(", ")})`,
-      );
+      opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
       const plan = buildGatewayReloadPlan(changedPaths);
       if (settings.mode === "off") {
         opts.log.info("config reload disabled (gateway.reload.mode=off)");

@@ -26,9 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -77,9 +75,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",

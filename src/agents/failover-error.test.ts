@@ -8,9 +8,7 @@ import {
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
-    expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe(
-      "rate_limit",
-    );
+    expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
   });
@@ -24,12 +22,8 @@ describe("failover-error", () => {
   });
 
   it("infers timeout from common node error codes", () => {
-    expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe(
-      "timeout",
-    );
-    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe(
-      "timeout",
-    );
+    expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
   });
 
   it("coerces failover-worthy errors into FailoverError with metadata", () => {

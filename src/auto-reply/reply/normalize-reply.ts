@@ -1,9 +1,5 @@
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  HEARTBEAT_TOKEN,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 
 export type NormalizeReplyOptions = {
@@ -17,9 +13,7 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
-  const hasMedia = Boolean(
-    payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0,
-  );
+  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
   const trimmed = payload.text?.trim() ?? "";
   if (!trimmed && !hasMedia) return null;
 

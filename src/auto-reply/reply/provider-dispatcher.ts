@@ -17,8 +17,9 @@ export async function dispatchReplyWithBufferedBlockDispatcher(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("../reply.js").getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
-  const { dispatcher, replyOptions, markDispatchIdle } =
-    createReplyDispatcherWithTyping(params.dispatcherOptions);
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping(
+    params.dispatcherOptions,
+  );
 
   const result = await dispatchReplyFromConfig({
     ctx: params.ctx,

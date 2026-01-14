@@ -9,10 +9,7 @@ import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
 import { getFreePort as getFreeTestPort } from "../gateway/test-helpers.js";
 import { rawDataToString } from "../infra/ws.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 async function isPortFree(port: number): Promise<boolean> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
@@ -31,9 +28,9 @@ async function getFreeGatewayPort(): Promise<number> {
   for (let attempt = 0; attempt < 25; attempt += 1) {
     const port = await getFreeTestPort();
     const candidates = [port, port + 1, port + 2, port + 4];
-    const ok = (
-      await Promise.all(candidates.map((candidate) => isPortFree(candidate)))
-    ).every(Boolean);
+    const ok = (await Promise.all(candidates.map((candidate) => isPortFree(candidate)))).every(
+      Boolean,
+    );
     if (ok) return port;
   }
   throw new Error("failed to acquire a free gateway port block");
@@ -123,9 +120,7 @@ describe("onboard (non-interactive): lan bind auto-token", () => {
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
 
-    const tempHome = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-onboard-lan-"),
-    );
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-lan-"));
     process.env.HOME = tempHome;
     const stateDir = path.join(tempHome, ".clawdbot");
     process.env.CLAWDBOT_STATE_DIR = stateDir;
@@ -149,14 +144,10 @@ describe("onboard (non-interactive): lan bind auto-token", () => {
     // otherwise sees a mocked writeConfigFile and the config never lands on disk).
     vi.resetModules();
     vi.doMock("../config/config.js", async () => {
-      return (await vi.importActual(
-        "../config/config.js",
-      )) as typeof import("../config/config.js");
+      return (await vi.importActual("../config/config.js")) as typeof import("../config/config.js");
     });
 
-    const { runNonInteractiveOnboarding } = await import(
-      "./onboard-non-interactive.js"
-    );
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
     await runNonInteractiveOnboarding(
       {
         nonInteractive: true,

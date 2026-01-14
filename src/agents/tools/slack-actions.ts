@@ -17,19 +17,9 @@ import {
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
-import {
-  createActionGate,
-  jsonResult,
-  readReactionParams,
-  readStringParam,
-} from "./common.js";
+import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
-const messagingActions = new Set([
-  "sendMessage",
-  "editMessage",
-  "deleteMessage",
-  "readMessages",
-]);
+const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
@@ -73,11 +63,7 @@ function resolveThreadTsFromContext(
   if (context.replyToMode === "all") {
     return context.currentThreadTs;
   }
-  if (
-    context.replyToMode === "first" &&
-    context.hasRepliedRef &&
-    !context.hasRepliedRef.value
-  ) {
+  if (context.replyToMode === "first" && context.hasRepliedRef && !context.hasRepliedRef.value) {
     context.hasRepliedRef.value = true;
     return context.currentThreadTs;
   }
@@ -157,9 +143,7 @@ export async function handleSlackAction(
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const normalizedTarget = to.startsWith("channel:")
-            ? to.slice("channel:".length)
-            : to;
+          const normalizedTarget = to.startsWith("channel:") ? to.slice("channel:".length) : to;
           if (normalizedTarget === context.currentChannelId) {
             context.hasRepliedRef.value = true;
           }
@@ -204,9 +188,7 @@ export async function handleSlackAction(
         });
         const limitRaw = params.limit;
         const limit =
-          typeof limitRaw === "number" && Number.isFinite(limitRaw)
-            ? limitRaw
-            : undefined;
+          typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const result = await readSlackMessages(channelId, {
@@ -270,9 +252,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const emojis = accountOpts
-      ? await listSlackEmojis(accountOpts)
-      : await listSlackEmojis();
+    const emojis = accountOpts ? await listSlackEmojis(accountOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
   }
 

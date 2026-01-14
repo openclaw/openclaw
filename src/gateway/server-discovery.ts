@@ -18,9 +18,7 @@ export function formatBonjourInstanceName(displayName: string) {
   return `${trimmed} (Clawdbot)`;
 }
 
-export function resolveBonjourCliPath(
-  opts: ResolveBonjourCliPathOptions = {},
-): string | undefined {
+export function resolveBonjourCliPath(opts: ResolveBonjourCliPathOptions = {}): string | undefined {
   const env = opts.env ?? process.env;
   const envPath = env.CLAWDBOT_CLI_PATH?.trim();
   if (envPath) return envPath;
@@ -65,8 +63,7 @@ export async function resolveTailnetDnsHint(opts?: {
 
   const exec =
     opts?.exec ??
-    ((command, args) =>
-      runExec(command, args, { timeoutMs: 1500, maxBuffer: 200_000 }));
+    ((command, args) => runExec(command, args, { timeoutMs: 1500, maxBuffer: 200_000 }));
   try {
     return await getTailnetHostname(exec);
   } catch {

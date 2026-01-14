@@ -62,8 +62,7 @@ describe("node bridge server", () => {
     const ifaces = os.networkInterfaces();
     for (const entries of Object.values(ifaces)) {
       for (const info of entries ?? []) {
-        if (info.family === "IPv4" && info.internal === false)
-          return info.address;
+        if (info.family === "IPv4" && info.internal === false) return info.address;
       }
     }
     return null;
@@ -206,21 +205,13 @@ describe("node bridge server", () => {
     expect(node?.deviceFamily).toBe("iPad");
     expect(node?.modelIdentifier).toBe("iPad14,5");
     expect(node?.caps).toEqual(["canvas", "camera"]);
-    expect(node?.commands).toEqual([
-      "canvas.eval",
-      "canvas.snapshot",
-      "camera.snap",
-    ]);
+    expect(node?.commands).toEqual(["canvas.eval", "canvas.snapshot", "camera.snap"]);
     expect(node?.permissions).toEqual({ accessibility: true });
 
     const after = await listNodePairing(baseDir);
     const paired = after.paired.find((p) => p.nodeId === "n-caps");
     expect(paired?.caps).toEqual(["canvas", "camera"]);
-    expect(paired?.commands).toEqual([
-      "canvas.eval",
-      "canvas.snapshot",
-      "camera.snap",
-    ]);
+    expect(paired?.commands).toEqual(["canvas.eval", "canvas.snapshot", "camera.snap"]);
     expect(paired?.permissions).toEqual({ accessibility: true });
 
     socket.destroy();

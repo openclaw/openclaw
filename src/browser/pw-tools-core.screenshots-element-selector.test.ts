@@ -59,9 +59,7 @@ describe("pw-tools-core", () => {
 
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
-    expect(
-      currentPage.locator as ReturnType<typeof vi.fn>,
-    ).toHaveBeenCalledWith("#main");
+    expect(currentPage.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
     expect(elementScreenshot).toHaveBeenCalledWith({ type: "png" });
   });
   it("screenshots a ref locator", async () => {
@@ -115,9 +113,7 @@ describe("pw-tools-core", () => {
   });
   it("arms the next file chooser and sets files (default timeout)", async () => {
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(
-      async (_event: string, _opts: unknown) => fileChooser,
-    );
+    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
     currentPage = {
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },

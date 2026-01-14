@@ -1,16 +1,11 @@
 import fs from "node:fs/promises";
 
-export async function readFileTailLines(
-  filePath: string,
-  maxLines: number,
-): Promise<string[]> {
+export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
   const raw = await fs.readFile(filePath, "utf8").catch(() => "");
   if (!raw.trim()) return [];
   const lines = raw.replace(/\r/g, "").split("\n");
   const out = lines.slice(Math.max(0, lines.length - maxLines));
-  return out
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim().length > 0);
+  return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
 }
 
 function countMatches(haystack: string, needle: string): number {
@@ -42,8 +37,7 @@ function consumeJsonBlock(
   if (braceAt < 0) return null;
 
   const parts: string[] = [startLine.slice(braceAt)];
-  let depth =
-    countMatches(parts[0] ?? "", "{") - countMatches(parts[0] ?? "", "}");
+  let depth = countMatches(parts[0] ?? "", "{") - countMatches(parts[0] ?? "", "}");
   let i = startIndex;
   while (depth > 0 && i + 1 < lines.length) {
     i += 1;
@@ -54,17 +48,11 @@ function consumeJsonBlock(
   return { json: parts.join("\n"), endIndex: i };
 }
 
-export function summarizeLogTail(
-  rawLines: string[],
-  opts?: { maxLines?: number },
-): string[] {
+export function summarizeLogTail(rawLines: string[], opts?: { maxLines?: number }): string[] {
   const maxLines = Math.max(6, opts?.maxLines ?? 26);
 
   const out: string[] = [];
-  const groups = new Map<
-    string,
-    { count: number; index: number; base: string }
-  >();
+  const groups = new Map<string, { count: number; index: number; base: string }>();
 
   const addGroup = (key: string, base: string) => {
     const existing = groups.get(key);
@@ -100,9 +88,7 @@ export function summarizeLogTail(
     }
 
     // "[openai-codex] Token refresh failed: 401 { ...json... }"
-    const tokenRefresh = line.match(
-      /^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/,
-    );
+    const tokenRefresh = line.match(/^\[([^\]]+)\]\s+Token refresh failed:\s*(\d+)\s*(\{)?\s*$/);
     if (tokenRefresh) {
       const tag = tokenRefresh[1] ?? "unknown";
       const status = tokenRefresh[2] ?? "unknown";
@@ -126,10 +112,7 @@ export function summarizeLogTail(
             : shorten(msg, 52)
           : null;
         const base = `[${tag}] token refresh ${status}${code ? ` ${code}` : ""}${msgShort ? ` · ${msgShort}` : ""}`;
-        addGroup(
-          `token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`,
-          base,
-        );
+        addGroup(`token:${tag}:${status}:${code ?? ""}:${msgShort ?? ""}`, base);
         continue;
       }
     }
@@ -140,10 +123,7 @@ export function summarizeLogTail(
     );
     if (embedded) {
       const provider = embedded[1]?.trim() || "unknown";
-      addGroup(
-        `embedded:${provider}`,
-        `Embedded agent: OAuth token refresh failed (${provider})`,
-      );
+      addGroup(`embedded:${provider}`, `Embedded agent: OAuth token refresh failed (${provider})`);
       continue;
     }
 
@@ -192,8 +172,7 @@ export function pickGatewaySelfPresence(presence: unknown): {
 } | null {
   if (!Array.isArray(presence)) return null;
   const entries = presence as Array<Record<string, unknown>>;
-  const self =
-    entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
+  const self = entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
   if (!self) return null;
   return {
     host: typeof self.host === "string" ? self.host : undefined,

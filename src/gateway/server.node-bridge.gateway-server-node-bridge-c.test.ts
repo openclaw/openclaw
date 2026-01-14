@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   agentCommand,
   bridgeStartCalls,
@@ -25,9 +22,7 @@ const decodeWsData = (data: unknown): string => {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
   if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
-      "utf-8",
-    );
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf-8");
   }
   return "";
 };
@@ -84,9 +79,10 @@ describe("gateway server node/bridge", () => {
     expect(call.deliver).toBe(false);
     expect(call.messageChannel).toBe("node");
 
-    const stored = JSON.parse(
-      await fs.readFile(testState.sessionStorePath, "utf-8"),
-    ) as Record<string, { sessionId?: string } | undefined>;
+    const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+      string,
+      { sessionId?: string } | undefined
+    >;
     expect(stored.main?.sessionId).toBe("sess-main");
     expect(stored["node-ios-node"]).toBeUndefined();
 

@@ -39,16 +39,10 @@ export async function readJsonFile<T>(
   }
 }
 
-export async function writeJsonFile(
-  filePath: string,
-  value: unknown,
-): Promise<void> {
+export async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: "utf-8",
   });

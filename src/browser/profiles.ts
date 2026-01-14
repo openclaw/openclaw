@@ -28,12 +28,7 @@ export function allocateCdpPort(
 ): number | null {
   const start = range?.start ?? CDP_PORT_RANGE_START;
   const end = range?.end ?? CDP_PORT_RANGE_END;
-  if (
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
-    start <= 0 ||
-    end <= 0
-  ) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) {
     return null;
   }
   if (start > end) return null;

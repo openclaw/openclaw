@@ -3,14 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  emitAgentEvent,
-  registerAgentRunContext,
-} from "../infra/agent-events.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   agentCommand,
   connectOk,
@@ -121,10 +115,7 @@ describe("gateway server agent", () => {
     expect(resTeams.ok).toBe(true);
 
     const spy = vi.mocked(agentCommand);
-    const lastIMessageCall = spy.mock.calls.at(-2)?.[0] as Record<
-      string,
-      unknown
-    >;
+    const lastIMessageCall = spy.mock.calls.at(-2)?.[0] as Record<string, unknown>;
     expectChannels(lastIMessageCall, "imessage");
     expect(lastIMessageCall.to).toBe("chat_id:123");
 
@@ -242,46 +233,36 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-  test(
-    "agent ack response then final response",
-    { timeout: 8000 },
-    async () => {
-      const { server, ws } = await startServerWithClient();
-      await connectOk(ws);
+  test("agent ack response then final response", { timeout: 8000 }, async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
 
-      const ackP = onceMessage(
-        ws,
-        (o) =>
-          o.type === "res" &&
-          o.id === "ag1" &&
-          o.payload?.status === "accepted",
-      );
-      const finalP = onceMessage(
-        ws,
-        (o) =>
-          o.type === "res" &&
-          o.id === "ag1" &&
-          o.payload?.status !== "accepted",
-      );
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "ag1",
-          method: "agent",
-          params: { message: "hi", idempotencyKey: "idem-ag" },
-        }),
-      );
+    const ackP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status === "accepted",
+    );
+    const finalP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
+    );
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "ag1",
+        method: "agent",
+        params: { message: "hi", idempotencyKey: "idem-ag" },
+      }),
+    );
 
-      const ack = await ackP;
-      const final = await finalP;
-      expect(ack.payload.runId).toBeDefined();
-      expect(final.payload.runId).toBe(ack.payload.runId);
-      expect(final.payload.status).toBe("ok");
+    const ack = await ackP;
+    const final = await finalP;
+    expect(ack.payload.runId).toBeDefined();
+    expect(final.payload.runId).toBe(ack.payload.runId);
+    expect(final.payload.status).toBe("ok");
 
-      ws.close();
-      await server.close();
-    },
-  );
+    ws.close();
+    await server.close();
+  });
 
   test("agent dedupes by idempotencyKey after completion", async () => {
     const { server, ws } = await startServerWithClient();
@@ -289,8 +270,7 @@ describe("gateway server agent", () => {
 
     const firstFinalP = onceMessage(
       ws,
-      (o) =>
-        o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
+      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
     );
     ws.send(
       JSON.stringify({
@@ -333,8 +313,7 @@ describe("gateway server agent", () => {
     const ws1 = await dial();
     const final1P = onceMessage(
       ws1,
-      (o) =>
-        o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
+      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
       6000,
     );
     ws1.send(
@@ -351,8 +330,7 @@ describe("gateway server agent", () => {
     const ws2 = await dial();
     const final2P = onceMessage(
       ws2,
-      (o) =>
-        o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
+      (o) => o.type === "res" && o.id === "ag2" && o.payload?.status !== "accepted",
       6000,
     );
     ws2.send(
@@ -403,9 +381,7 @@ describe("gateway server agent", () => {
       ws,
       (o) => {
         if (o.type !== "event" || o.event !== "chat") return false;
-        const payload = o.payload as
-          | { state?: unknown; runId?: unknown }
-          | undefined;
+        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
         return payload?.state === "final" && payload.runId === "run-auto-1";
       },
       8000,

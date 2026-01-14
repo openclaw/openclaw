@@ -14,11 +14,8 @@ export async function stageSandboxMedia(params: {
   workspaceDir: string;
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const hasPathsArray =
-    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
-  const pathsFromArray = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths
-    : undefined;
+  const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const rawPaths =
     pathsFromArray && pathsFromArray.length > 0
       ? pathsFromArray
@@ -86,9 +83,7 @@ export async function stageSandboxMedia(params: {
       return mapped ?? value;
     };
 
-    const nextMediaPaths = hasPathsArray
-      ? rawPaths.map((p) => rewriteIfStaged(p) ?? p)
-      : undefined;
+    const nextMediaPaths = hasPathsArray ? rawPaths.map((p) => rewriteIfStaged(p) ?? p) : undefined;
     if (nextMediaPaths) {
       ctx.MediaPaths = nextMediaPaths;
       sessionCtx.MediaPaths = nextMediaPaths;

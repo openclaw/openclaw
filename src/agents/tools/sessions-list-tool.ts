@@ -51,9 +51,7 @@ const SessionsListToolSchema = Type.Object({
   messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
-function resolveSandboxSessionToolsVisibility(
-  cfg: ReturnType<typeof loadConfig>,
-) {
+function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
@@ -91,22 +89,18 @@ export function createSessionsListTool(opts?: {
       const allowedKindsList = (kindsRaw ?? []).filter((value) =>
         ["main", "group", "cron", "hook", "node", "other"].includes(value),
       );
-      const allowedKinds = allowedKindsList.length
-        ? new Set(allowedKindsList)
-        : undefined;
+      const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
 
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))
           : undefined;
       const activeMinutes =
-        typeof params.activeMinutes === "number" &&
-        Number.isFinite(params.activeMinutes)
+        typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
           ? Math.max(1, Math.floor(params.activeMinutes))
           : undefined;
       const messageLimitRaw =
-        typeof params.messageLimit === "number" &&
-        Number.isFinite(params.messageLimit)
+        typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
           ? Math.max(0, Math.floor(params.messageLimit))
           : 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
@@ -129,9 +123,7 @@ export function createSessionsListTool(opts?: {
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const routingA2A = cfg.tools?.agentToAgent;
       const a2aEnabled = routingA2A?.enabled === true;
-      const allowPatterns = Array.isArray(routingA2A?.allow)
-        ? routingA2A.allow
-        : [];
+      const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
       const matchesAllow = (agentId: string) => {
         if (allowPatterns.length === 0) return true;
         return allowPatterns.some((pattern) => {
@@ -154,21 +146,17 @@ export function createSessionsListTool(opts?: {
         const key = typeof entry.key === "string" ? entry.key : "";
         if (!key) continue;
 
-        const entryAgentId = normalizeAgentId(
-          parseAgentSessionKey(key)?.agentId,
-        );
+        const entryAgentId = normalizeAgentId(parseAgentSessionKey(key)?.agentId);
         const crossAgent = entryAgentId !== requesterAgentId;
         if (crossAgent) {
           if (!a2aEnabled) continue;
-          if (!matchesAllow(requesterAgentId) || !matchesAllow(entryAgentId))
-            continue;
+          if (!matchesAllow(requesterAgentId) || !matchesAllow(entryAgentId)) continue;
         }
 
         if (key === "unknown") continue;
         if (key === "global" && alias !== "global") continue;
 
-        const gatewayKind =
-          typeof entry.kind === "string" ? entry.kind : undefined;
+        const gatewayKind = typeof entry.kind === "string" ? entry.kind : undefined;
         const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
         if (allowedKinds && !allowedKinds.has(kind)) continue;
 
@@ -178,14 +166,10 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryChannel =
-          typeof entry.channel === "string" ? entry.channel : undefined;
-        const lastChannel =
-          typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
+        const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
+        const lastChannel = typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
         const lastAccountId =
-          typeof entry.lastAccountId === "string"
-            ? entry.lastAccountId
-            : undefined;
+          typeof entry.lastAccountId === "string" ? entry.lastAccountId : undefined;
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -193,8 +177,7 @@ export function createSessionsListTool(opts?: {
           lastChannel,
         });
 
-        const sessionId =
-          typeof entry.sessionId === "string" ? entry.sessionId : undefined;
+        const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : undefined;
         const transcriptPath =
           sessionId && storePath
             ? path.join(path.dirname(storePath), `${sessionId}.jsonl`)
@@ -205,40 +188,18 @@ export function createSessionsListTool(opts?: {
           kind,
           channel: derivedChannel,
           label: typeof entry.label === "string" ? entry.label : undefined,
-          displayName:
-            typeof entry.displayName === "string"
-              ? entry.displayName
-              : undefined,
-          updatedAt:
-            typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
           sessionId,
           model: typeof entry.model === "string" ? entry.model : undefined,
-          contextTokens:
-            typeof entry.contextTokens === "number"
-              ? entry.contextTokens
-              : undefined,
-          totalTokens:
-            typeof entry.totalTokens === "number"
-              ? entry.totalTokens
-              : undefined,
-          thinkingLevel:
-            typeof entry.thinkingLevel === "string"
-              ? entry.thinkingLevel
-              : undefined,
-          verboseLevel:
-            typeof entry.verboseLevel === "string"
-              ? entry.verboseLevel
-              : undefined,
-          systemSent:
-            typeof entry.systemSent === "boolean"
-              ? entry.systemSent
-              : undefined,
+          contextTokens: typeof entry.contextTokens === "number" ? entry.contextTokens : undefined,
+          totalTokens: typeof entry.totalTokens === "number" ? entry.totalTokens : undefined,
+          thinkingLevel: typeof entry.thinkingLevel === "string" ? entry.thinkingLevel : undefined,
+          verboseLevel: typeof entry.verboseLevel === "string" ? entry.verboseLevel : undefined,
+          systemSent: typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
           abortedLastRun:
-            typeof entry.abortedLastRun === "boolean"
-              ? entry.abortedLastRun
-              : undefined,
-          sendPolicy:
-            typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
+            typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
+          sendPolicy: typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
           lastChannel,
           lastTo: typeof entry.lastTo === "string" ? entry.lastTo : undefined,
           lastAccountId,
@@ -255,14 +216,9 @@ export function createSessionsListTool(opts?: {
             method: "chat.history",
             params: { sessionKey: resolvedKey, limit: messageLimit },
           })) as { messages?: unknown[] };
-          const rawMessages = Array.isArray(history?.messages)
-            ? history.messages
-            : [];
+          const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
           const filtered = stripToolMessages(rawMessages);
-          row.messages =
-            filtered.length > messageLimit
-              ? filtered.slice(-messageLimit)
-              : filtered;
+          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
         }
 
         rows.push(row);

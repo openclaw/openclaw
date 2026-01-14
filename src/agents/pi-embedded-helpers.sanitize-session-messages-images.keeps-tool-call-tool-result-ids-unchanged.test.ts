@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeSessionMessagesImages } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -40,9 +38,9 @@ describe("sanitizeSessionMessagesImages", () => {
     const assistant = out[0] as unknown as { role?: string; content?: unknown };
     expect(assistant.role).toBe("assistant");
     expect(Array.isArray(assistant.content)).toBe(true);
-    const toolCall = (
-      assistant.content as Array<{ type?: string; id?: string }>
-    ).find((b) => b.type === "toolCall");
+    const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
+      (b) => b.type === "toolCall",
+    );
     expect(toolCall?.id).toBe("call_123|fc_456");
 
     const toolResult = out[1] as unknown as {
@@ -81,9 +79,9 @@ describe("sanitizeSessionMessagesImages", () => {
     const assistant = out[0] as unknown as { role?: string; content?: unknown };
     expect(assistant.role).toBe("assistant");
     expect(Array.isArray(assistant.content)).toBe(true);
-    const toolCall = (
-      assistant.content as Array<{ type?: string; id?: string }>
-    ).find((b) => b.type === "toolCall");
+    const toolCall = (assistant.content as Array<{ type?: string; id?: string }>).find(
+      (b) => b.type === "toolCall",
+    );
     expect(toolCall?.id).toBe("call_123_fc_456");
 
     const toolResult = out[1] as unknown as {
@@ -127,11 +125,6 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<{ type?: string }> };
-    expect(assistant.content?.map((b) => b.type)).toEqual([
-      "text",
-      "toolCall",
-      "thinking",
-      "text",
-    ]);
+    expect(assistant.content?.map((b) => b.type)).toEqual(["text", "toolCall", "thinking", "text"]);
   });
 });

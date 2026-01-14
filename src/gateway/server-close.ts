@@ -1,13 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
-import type {
-  CanvasHostHandler,
-  CanvasHostServer,
-} from "../canvas-host/server.js";
-import {
-  type ChannelId,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -23,11 +17,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: { stop: () => void };
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
@@ -40,16 +30,11 @@ export function createGatewayCloseHandler(params: {
   wss: WebSocketServer;
   httpServer: HttpServer;
 }) {
-  return async (opts?: {
-    reason?: string;
-    restartExpectedMs?: number | null;
-  }) => {
-    const reasonRaw =
-      typeof opts?.reason === "string" ? opts.reason.trim() : "";
+  return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+    const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
     const reason = reasonRaw || "gateway stopping";
     const restartExpectedMs =
-      typeof opts?.restartExpectedMs === "number" &&
-      Number.isFinite(opts.restartExpectedMs)
+      typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
     if (params.bonjourStop) {

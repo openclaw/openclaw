@@ -24,9 +24,7 @@ describe("ensureAgentWorkspace", () => {
       ensureBootstrapFiles: true,
     });
     expect(result.dir).toBe(path.resolve(nested));
-    expect(result.agentsPath).toBe(
-      path.join(path.resolve(nested), "AGENTS.md"),
-    );
+    expect(result.agentsPath).toBe(path.join(path.resolve(nested), "AGENTS.md"));
     expect(result.agentsPath).toBeDefined();
     if (!result.agentsPath) throw new Error("agentsPath missing");
     const content = await fs.readFile(result.agentsPath, "utf-8");
@@ -111,20 +109,12 @@ describe("filterBootstrapFilesForSession", () => {
   ];
 
   it("keeps full bootstrap set for non-subagent sessions", () => {
-    const result = filterBootstrapFilesForSession(
-      files,
-      "agent:main:session:abc",
-    );
-    expect(result.map((file) => file.name)).toEqual(
-      files.map((file) => file.name),
-    );
+    const result = filterBootstrapFilesForSession(files, "agent:main:session:abc");
+    expect(result.map((file) => file.name)).toEqual(files.map((file) => file.name));
   });
 
   it("limits bootstrap files for subagent sessions", () => {
-    const result = filterBootstrapFilesForSession(
-      files,
-      "agent:main:subagent:abc",
-    );
+    const result = filterBootstrapFilesForSession(files, "agent:main:subagent:abc");
     expect(result.map((file) => file.name)).toEqual([
       DEFAULT_AGENTS_FILENAME,
       DEFAULT_TOOLS_FILENAME,

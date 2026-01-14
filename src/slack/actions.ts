@@ -41,9 +41,7 @@ function resolveToken(explicit?: string, accountId?: string) {
         explicit,
       )} source=${account.botTokenSource ?? "unknown"}`,
     );
-    throw new Error(
-      "SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions",
-    );
+    throw new Error("SLACK_BOT_TOKEN or channels.slack.botToken is required for Slack actions");
   }
   return token;
 }
@@ -203,10 +201,7 @@ export async function readSlackMessages(
   };
 }
 
-export async function getSlackMemberInfo(
-  userId: string,
-  opts: SlackActionClientOpts = {},
-) {
+export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {
   const client = await getClient(opts);
   return await client.users.info({ user: userId });
 }

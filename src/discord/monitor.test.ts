@@ -342,10 +342,7 @@ describe("discord reply target selection", () => {
 
 describe("discord autoThread name sanitization", () => {
   it("strips mentions and collapses whitespace", () => {
-    const name = sanitizeDiscordThreadName(
-      "  <@123>  <@&456> <#789>  Help   here  ",
-      "msg-1",
-    );
+    const name = sanitizeDiscordThreadName("  <@123>  <@&456> <#789>  Help   here  ", "msg-1");
     expect(name).toBe("Help here");
   });
 
@@ -449,15 +446,7 @@ describe("discord media payload", () => {
     expect(payload.MediaPath).toBe("/tmp/a.png");
     expect(payload.MediaUrl).toBe("/tmp/a.png");
     expect(payload.MediaType).toBe("image/png");
-    expect(payload.MediaPaths).toEqual([
-      "/tmp/a.png",
-      "/tmp/b.png",
-      "/tmp/c.png",
-    ]);
-    expect(payload.MediaUrls).toEqual([
-      "/tmp/a.png",
-      "/tmp/b.png",
-      "/tmp/c.png",
-    ]);
+    expect(payload.MediaPaths).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
+    expect(payload.MediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]);
   });
 });

@@ -34,9 +34,7 @@ function mergePath(params: { existing: string; prepend: string[] }): string {
     .split(path.delimiter)
     .map((part) => part.trim())
     .filter(Boolean);
-  const partsPrepend = params.prepend
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const partsPrepend = params.prepend.map((part) => part.trim()).filter(Boolean);
 
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -69,11 +67,9 @@ function candidateBinDirs(opts: EnsureClawdbotPathOpts): string[] {
   // Project-local installs (best effort): if a `node_modules/.bin/clawdbot` exists near cwd,
   // include it. This helps when running under launchd or other minimal PATH environments.
   const localBinDir = path.join(cwd, "node_modules", ".bin");
-  if (isExecutable(path.join(localBinDir, "clawdbot")))
-    candidates.push(localBinDir);
+  if (isExecutable(path.join(localBinDir, "clawdbot"))) candidates.push(localBinDir);
 
-  const miseDataDir =
-    process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
+  const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isDirectory(miseShims)) candidates.push(miseShims);
 

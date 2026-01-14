@@ -12,10 +12,7 @@ import { resolveGatewayService } from "../../../daemon/service.js";
 import { buildServiceEnvironment } from "../../../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  isGatewayDaemonRuntime,
-} from "../../daemon-runtime.js";
+import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "../../systemd-linger.js";
 
@@ -33,9 +30,7 @@ export async function installGatewayDaemonNonInteractive(params: {
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
-    runtime.log(
-      "Systemd user services are unavailable; skipping daemon install.",
-    );
+    runtime.log("Systemd user services are unavailable; skipping daemon install.");
     return;
   }
 
@@ -47,19 +42,17 @@ export async function installGatewayDaemonNonInteractive(params: {
 
   const service = resolveGatewayService();
   const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-    process.argv[1]?.endsWith(".ts");
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const nodePath = await resolvePreferredNodePath({
     env: process.env,
     runtime: daemonRuntimeRaw,
   });
-  const { programArguments, workingDirectory } =
-    await resolveGatewayProgramArguments({
-      port,
-      dev: devMode,
-      runtime: daemonRuntimeRaw,
-      nodePath,
-    });
+  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    port,
+    dev: devMode,
+    runtime: daemonRuntimeRaw,
+    nodePath,
+  });
 
   if (daemonRuntimeRaw === "node") {
     const systemNode = await resolveSystemNodeInfo({ env: process.env });

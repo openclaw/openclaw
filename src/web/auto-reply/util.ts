@@ -22,14 +22,11 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
     if (typeof value === "boolean") return String(value);
     if (typeof value === "bigint") return String(value);
     if (typeof value === "symbol") return value.description ?? value.toString();
-    if (typeof value === "function")
-      return value.name ? `[function ${value.name}]` : "[function]";
+    if (typeof value === "function") return value.name ? `[function ${value.name}]` : "[function]";
     return Object.prototype.toString.call(value);
   };
   const raw =
-    reason instanceof Error
-      ? `${reason.message}\n${reason.stack ?? ""}`
-      : formatReason(reason);
+    reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : formatReason(reason);
   const haystack = raw.toLowerCase();
   const hasAuthError =
     haystack.includes("unsupported state or unable to authenticate data") ||

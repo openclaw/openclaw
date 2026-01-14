@@ -1,11 +1,5 @@
-import {
-  normalizeCronJobCreate,
-  normalizeCronJobPatch,
-} from "../../cron/normalize.js";
-import {
-  readCronRunLogEntries,
-  resolveCronRunLogPath,
-} from "../../cron/run-log.js";
+import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import { readCronRunLogEntries, resolveCronRunLogPath } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   ErrorCodes,
@@ -92,9 +86,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    const normalizedPatch = normalizeCronJobPatch(
-      (params as { patch?: unknown } | null)?.patch,
-    );
+    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
     const candidate =
       normalizedPatch && typeof params === "object" && params !== null
         ? { ...(params as Record<string, unknown>), patch: normalizedPatch }
@@ -120,17 +112,11 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid cron.update params: missing id",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.update params: missing id"),
       );
       return;
     }
-    const job = await context.cron.update(
-      jobId,
-      p.patch as unknown as CronJobPatch,
-    );
+    const job = await context.cron.update(jobId, p.patch as unknown as CronJobPatch);
     respond(true, job, undefined);
   },
   "cron.remove": async ({ params, respond, context }) => {
@@ -151,10 +137,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid cron.remove params: missing id",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: missing id"),
       );
       return;
     }
@@ -179,10 +162,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid cron.run params: missing id",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.run params: missing id"),
       );
       return;
     }
@@ -207,10 +187,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid cron.runs params: missing id",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: missing id"),
       );
       return;
     }

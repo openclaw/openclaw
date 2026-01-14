@@ -1,9 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  FileOperations,
-} from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
 
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -25,27 +21,19 @@ function computeFileLists(fileOps: FileOperations): {
   return { readFiles, modifiedFiles };
 }
 
-function formatFileOperations(
-  readFiles: string[],
-  modifiedFiles: string[],
-): string {
+function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
   const sections: string[] = [];
   if (readFiles.length > 0) {
     sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
   }
   if (modifiedFiles.length > 0) {
-    sections.push(
-      `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`,
-    );
+    sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
   }
   if (sections.length === 0) return "";
   return `\n\n${sections.join("\n\n")}`;
 }
 
-function chunkMessages(
-  messages: AgentMessage[],
-  maxTokens: number,
-): AgentMessage[][] {
+function chunkMessages(messages: AgentMessage[], maxTokens: number): AgentMessage[][] {
   if (messages.length === 0) return [];
 
   const chunks: AgentMessage[][] = [];
@@ -146,14 +134,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         1,
         Math.floor(model.contextWindow ?? DEFAULT_CONTEXT_TOKENS),
       );
-      const maxChunkTokens = Math.max(
-        1,
-        Math.floor(contextWindowTokens * MAX_CHUNK_RATIO),
-      );
-      const reserveTokens = Math.max(
-        1,
-        Math.floor(preparation.settings.reserveTokens),
-      );
+      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * MAX_CHUNK_RATIO));
+      const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
       const historySummary = await summarizeChunks({
         messages: preparation.messagesToSummarize,
@@ -167,10 +149,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
 
       let summary = historySummary;
-      if (
-        preparation.isSplitTurn &&
-        preparation.turnPrefixMessages.length > 0
-      ) {
+      if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
         const prefixSummary = await summarizeChunks({
           messages: preparation.turnPrefixMessages,
           model,

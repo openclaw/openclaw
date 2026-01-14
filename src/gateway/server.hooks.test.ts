@@ -105,14 +105,11 @@ describe("gateway server hooks", () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     const port = await getFreePort();
     const server = await startGatewayServer(port);
-    const res = await fetch(
-      `http://127.0.0.1:${port}/hooks/wake?token=hook-secret`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "Query auth" }),
-      },
-    );
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake?token=hook-secret`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Query auth" }),
+    });
     expect(res.status).toBe(200);
     const events = await waitForSystemEvent();
     expect(events.some((e) => e.includes("Query auth"))).toBe(true);

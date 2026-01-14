@@ -82,9 +82,7 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      this.flushPendingErrors(
-        new Error(`gateway closed (${code}): ${reasonText}`),
-      );
+      this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       this.scheduleReconnect();
       this.opts.onClose?.(code, reasonText);
     });
@@ -139,9 +137,7 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
-        this.opts.onConnectError?.(
-          err instanceof Error ? err : new Error(String(err)),
-        );
+        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE) logDebug(msg);
         else logError(msg);
@@ -178,8 +174,7 @@ export class GatewayClient {
         }
         this.pending.delete(parsed.id);
         if (parsed.ok) pending.resolve(parsed.payload);
-        else
-          pending.reject(new Error(parsed.error?.message ?? "unknown error"));
+        else pending.reject(new Error(parsed.error?.message ?? "unknown error"));
       }
     } catch (err) {
       logDebug(`gateway client parse error: ${String(err)}`);
@@ -229,11 +224,7 @@ export class GatewayClient {
     const frame: RequestFrame = { type: "req", id, method, params };
     if (!validateRequestFrame(frame)) {
       throw new Error(
-        `invalid request frame: ${JSON.stringify(
-          validateRequestFrame.errors,
-          null,
-          2,
-        )}`,
+        `invalid request frame: ${JSON.stringify(validateRequestFrame.errors, null, 2)}`,
       );
     }
     const expectFinal = opts?.expectFinal === true;

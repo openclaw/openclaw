@@ -63,8 +63,7 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
 
-const escapeRegExp = (value: string) =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
@@ -87,8 +86,8 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     outbound: { textChunkLimit: 4000 },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []).map(
-          (entry) => String(entry),
+        (resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
         ),
       formatAllowFrom: ({ allowFrom }) =>
         allowFrom
@@ -101,8 +100,7 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
       resolveRequireMention: resolveTelegramGroupRequireMention,
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) =>
-        cfg.channels?.telegram?.replyToMode ?? "first",
+      resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "first",
       buildToolContext: ({ context, hasRepliedRef }) => ({
         currentChannelId: context.To?.trim() || undefined,
         currentThreadTs: context.ReplyToId,
@@ -130,9 +128,7 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
         allowFrom
           .map((entry) => String(entry).trim())
           .filter((entry): entry is string => Boolean(entry))
-          .map((entry) =>
-            entry === "*" ? entry : normalizeWhatsAppTarget(entry),
-          )
+          .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
           .filter((entry): entry is string => Boolean(entry)),
     },
     groups: {
@@ -175,9 +171,9 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (
-          resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []
-        ).map((entry) => String(entry)),
+        (resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
     },
     groups: {
@@ -187,8 +183,7 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
       stripPatterns: () => ["<@!?\\d+>"],
     },
     threading: {
-      resolveReplyToMode: ({ cfg }) =>
-        cfg.channels?.discord?.replyToMode ?? "off",
+      resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
       buildToolContext: ({ context, hasRepliedRef }) => ({
         currentChannelId: context.To?.trim() || undefined,
         currentThreadTs: context.ReplyToId,
@@ -211,9 +206,7 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map(
-          (entry) => String(entry),
-        ),
+        (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map((entry) => String(entry)),
       formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
     },
     groups: {
@@ -224,11 +217,8 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
         resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
       allowTagsWhenOff: true,
       buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
-        const configuredReplyToMode =
-          resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
-        const effectiveReplyToMode = context.ThreadLabel
-          ? "all"
-          : configuredReplyToMode;
+        const configuredReplyToMode = resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
+        const effectiveReplyToMode = context.ThreadLabel ? "all" : configuredReplyToMode;
         return {
           currentChannelId: context.To?.startsWith("channel:")
             ? context.To.slice("channel:".length)
@@ -253,16 +243,14 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map(
-          (entry) => String(entry),
+        (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
         ),
       formatAllowFrom: ({ allowFrom }) =>
         allowFrom
           .map((entry) => String(entry).trim())
           .filter(Boolean)
-          .map((entry) =>
-            entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, "")),
-          )
+          .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
           .filter(Boolean),
     },
     threading: {
@@ -283,8 +271,8 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
     outbound: { textChunkLimit: 4000 },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map(
-          (entry) => String(entry),
+        (resolveIMessageAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
         ),
       formatAllowFrom: ({ allowFrom }) =>
         allowFrom.map((entry) => String(entry).trim()).filter(Boolean),

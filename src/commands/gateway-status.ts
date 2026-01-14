@@ -46,12 +46,9 @@ export async function gatewayStatusCommand(
     timeoutMs: discoveryTimeoutMs,
   });
 
-  let sshTarget =
-    sanitizeSshTarget(opts.ssh) ??
-    sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
+  let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
   const sshIdentity =
-    sanitizeSshTarget(opts.sshIdentity) ??
-    sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
+    sanitizeSshTarget(opts.sshIdentity) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
   const remotePort = resolveGatewayPort(cfg);
 
   let sshTunnelError: string | null = null;
@@ -85,10 +82,7 @@ export async function gatewayStatusCommand(
       const discoveryTask = discoveryPromise.catch(() => []);
       const tunnelTask = sshTarget ? tryStartTunnel() : Promise.resolve(null);
 
-      const [discovery, tunnelFirst] = await Promise.all([
-        discoveryTask,
-        tunnelTask,
-      ]);
+      const [discovery, tunnelFirst] = await Promise.all([discoveryTask, tunnelTask]);
 
       if (!sshTarget && opts.sshAuto) {
         const user = process.env.USER?.trim() || "";
@@ -96,8 +90,7 @@ export async function gatewayStatusCommand(
           .map((b) => {
             const host = b.tailnetDns || b.lanHost || b.host;
             if (!host?.trim()) return null;
-            const sshPort =
-              typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
+            const sshPort = typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
             const base = user ? `${user}@${host.trim()}` : host.trim();
             return sshPort !== 22 ? `${base}:${sshPort}` : base;
           })
@@ -107,9 +100,7 @@ export async function gatewayStatusCommand(
 
       const tunnel =
         tunnelFirst ||
-        (sshTarget && !sshTunnelStarted && !sshTunnelError
-          ? await tryStartTunnel()
-          : null);
+        (sshTarget && !sshTunnelStarted && !sshTunnelError ? await tryStartTunnel() : null);
 
       const tunnelTarget: GatewayStatusTarget | null = tunnel
         ? {
@@ -128,10 +119,7 @@ export async function gatewayStatusCommand(
         : null;
 
       const targets: GatewayStatusTarget[] = tunnelTarget
-        ? [
-            tunnelTarget,
-            ...baseTargets.filter((t) => t.url !== tunnelTarget.url),
-          ]
+        ? [tunnelTarget, ...baseTargets.filter((t) => t.url !== tunnelTarget.url)]
         : baseTargets;
 
       try {
@@ -139,13 +127,9 @@ export async function gatewayStatusCommand(
           targets.map(async (target) => {
             const auth = resolveAuthForTarget(cfg, target, {
               token: typeof opts.token === "string" ? opts.token : undefined,
-              password:
-                typeof opts.password === "string" ? opts.password : undefined,
+              password: typeof opts.password === "string" ? opts.password : undefined,
             });
-            const timeoutMs = resolveProbeBudgetMs(
-              overallTimeoutMs,
-              target.kind,
-            );
+            const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
             const probe = await probeGateway({
               url: target.url,
               auth,
@@ -268,9 +252,7 @@ export async function gatewayStatusCommand(
       ? `${colorize(rich, theme.success, "Reachable")}: yes`
       : `${colorize(rich, theme.error, "Reachable")}: no`,
   );
-  runtime.log(
-    colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`),
-  );
+  runtime.log(colorize(rich, theme.muted, `Probe budget: ${overallTimeoutMs}ms`));
 
   if (warnings.length > 0) {
     runtime.log("");
@@ -310,18 +292,12 @@ export async function gatewayStatusCommand(
       const ip = p.self.ip ? ` (${p.self.ip})` : "";
       const platform = p.self.platform ? ` · ${p.self.platform}` : "";
       const version = p.self.version ? ` · app ${p.self.version}` : "";
-      runtime.log(
-        `  ${colorize(rich, theme.info, "Gateway")}: ${host}${ip}${platform}${version}`,
-      );
+      runtime.log(`  ${colorize(rich, theme.info, "Gateway")}: ${host}${ip}${platform}${version}`);
     }
     if (p.configSummary) {
       const c = p.configSummary;
       const bridge =
-        c.bridge.enabled === false
-          ? "disabled"
-          : c.bridge.enabled === true
-            ? "enabled"
-            : "unknown";
+        c.bridge.enabled === false ? "disabled" : c.bridge.enabled === true ? "enabled" : "unknown";
       const wideArea =
         c.discovery.wideAreaEnabled === true
           ? "enabled"
@@ -331,9 +307,7 @@ export async function gatewayStatusCommand(
       runtime.log(
         `  ${colorize(rich, theme.info, "Bridge")}: ${bridge}${c.bridge.bind ? ` · bind ${c.bridge.bind}` : ""}${c.bridge.port ? ` · port ${c.bridge.port}` : ""}`,
       );
-      runtime.log(
-        `  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`,
-      );
+      runtime.log(`  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`);
     }
     runtime.log("");
   }

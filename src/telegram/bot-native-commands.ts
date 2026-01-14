@@ -15,11 +15,7 @@ import {
   buildTelegramGroupPeerId,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
-import {
-  firstDefined,
-  isSenderAllowed,
-  normalizeAllowFrom,
-} from "./bot-access.js";
+import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 
 export const registerTelegramNativeCommands = ({
@@ -40,9 +36,7 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   opts,
 }) => {
-  const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg)
-    : [];
+  const nativeCommands = nativeEnabled ? listNativeCommandSpecsForConfig(cfg) : [];
   if (nativeCommands.length > 0) {
     const api = bot.api as unknown as {
       setMyCommands?: (
@@ -58,17 +52,13 @@ export const registerTelegramNativeCommands = ({
           })),
         )
         .catch((err) => {
-          runtime.error?.(
-            danger(`telegram setMyCommands failed: ${String(err)}`),
-          );
+          runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
         });
     } else {
       logVerbose("telegram: setMyCommands unavailable; skipping registration");
     }
 
-    if (
-      typeof (bot as unknown as { command?: unknown }).command !== "function"
-    ) {
+    if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
@@ -77,33 +67,21 @@ export const registerTelegramNativeCommands = ({
           if (!msg) return;
           if (shouldSkipUpdate(ctx)) return;
           const chatId = msg.chat.id;
-          const isGroup =
-            msg.chat.type === "group" || msg.chat.type === "supergroup";
-          const messageThreadId = (msg as { message_thread_id?: number })
-            .message_thread_id;
-          const isForum =
-            (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+          const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+          const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
           const resolvedThreadId = resolveTelegramForumThreadId({
             isForum,
             messageThreadId,
           });
-          const storeAllowFrom = await readTelegramAllowFromStore().catch(
-            () => [],
-          );
-          const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
-            chatId,
-            resolvedThreadId,
-          );
-          const groupAllowOverride = firstDefined(
-            topicConfig?.allowFrom,
-            groupConfig?.allowFrom,
-          );
+          const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+          const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
+          const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
           const effectiveGroupAllow = normalizeAllowFrom([
             ...(groupAllowOverride ?? groupAllowFrom ?? []),
             ...storeAllowFrom,
           ]);
-          const hasGroupAllowOverride =
-            typeof groupAllowOverride !== "undefined";
+          const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
           if (isGroup && groupConfig?.enabled === false) {
             await bot.api.sendMessage(chatId, "This group is disabled.");
@@ -124,10 +102,7 @@ export const registerTelegramNativeCommands = ({
                 senderUsername,
               })
             ) {
-              await bot.api.sendMessage(
-                chatId,
-                "You are not authorized to use this command.",
-              );
+              await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
               return;
             }
           }
@@ -135,19 +110,13 @@ export const registerTelegramNativeCommands = ({
           if (isGroup && useAccessGroups) {
             const groupPolicy = telegramCfg.groupPolicy ?? "open";
             if (groupPolicy === "disabled") {
-              await bot.api.sendMessage(
-                chatId,
-                "Telegram group commands are disabled.",
-              );
+              await bot.api.sendMessage(chatId, "Telegram group commands are disabled.");
               return;
             }
             if (groupPolicy === "allowlist") {
               const senderId = msg.from?.id;
               if (senderId == null) {
-                await bot.api.sendMessage(
-                  chatId,
-                  "You are not authorized to use this command.",
-                );
+                await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
                 return;
               }
               const senderUsername = msg.from?.username ?? "";
@@ -158,10 +127,7 @@ export const registerTelegramNativeCommands = ({
                   senderUsername,
                 })
               ) {
-                await bot.api.sendMessage(
-                  chatId,
-                  "You are not authorized to use this command.",
-                );
+                await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
                 return;
               }
             }
@@ -189,10 +155,7 @@ export const registerTelegramNativeCommands = ({
                   entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
               ));
           if (!commandAuthorized) {
-            await bot.api.sendMessage(
-              chatId,
-              "You are not authorized to use this command.",
-            );
+            await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
             return;
           }
 
@@ -203,28 +166,19 @@ export const registerTelegramNativeCommands = ({
             accountId,
             peer: {
               kind: isGroup ? "group" : "dm",
-              id: isGroup
-                ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
-                : String(chatId),
+              id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
           });
-          const skillFilter = firstDefined(
-            topicConfig?.skills,
-            groupConfig?.skills,
-          );
+          const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
           const systemPromptParts = [
             groupConfig?.systemPrompt?.trim() || null,
             topicConfig?.systemPrompt?.trim() || null,
           ].filter((entry): entry is string => Boolean(entry));
           const groupSystemPrompt =
-            systemPromptParts.length > 0
-              ? systemPromptParts.join("\n\n")
-              : undefined;
+            systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
           const ctxPayload = {
             Body: prompt,
-            From: isGroup
-              ? buildTelegramGroupFrom(chatId, resolvedThreadId)
-              : `telegram:${chatId}`,
+            From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",
             GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
@@ -253,8 +207,7 @@ export const registerTelegramNativeCommands = ({
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {
-              responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-                .responsePrefix,
+              responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
               deliver: async (payload) => {
                 await deliverReplies({
                   replies: [payload],
@@ -268,11 +221,7 @@ export const registerTelegramNativeCommands = ({
                 });
               },
               onError: (err, info) => {
-                runtime.error?.(
-                  danger(
-                    `telegram slash ${info.kind} reply failed: ${String(err)}`,
-                  ),
-                );
+                runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
               },
             },
             replyOptions: {
@@ -289,9 +238,7 @@ export const registerTelegramNativeCommands = ({
     };
     if (typeof api.setMyCommands === "function") {
       api.setMyCommands([]).catch((err) => {
-        runtime.error?.(
-          danger(`telegram clear commands failed: ${String(err)}`),
-        );
+        runtime.error?.(danger(`telegram clear commands failed: ${String(err)}`));
       });
     } else {
       logVerbose("telegram: setMyCommands unavailable; skipping clear");

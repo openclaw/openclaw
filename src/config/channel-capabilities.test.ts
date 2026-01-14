@@ -5,12 +5,8 @@ import type { ClawdbotConfig } from "./config.js";
 describe("resolveChannelCapabilities", () => {
   it("returns undefined for missing inputs", () => {
     expect(resolveChannelCapabilities({})).toBeUndefined();
-    expect(
-      resolveChannelCapabilities({ cfg: {} as ClawdbotConfig }),
-    ).toBeUndefined();
-    expect(
-      resolveChannelCapabilities({ cfg: {} as ClawdbotConfig, channel: "" }),
-    ).toBeUndefined();
+    expect(resolveChannelCapabilities({ cfg: {} as ClawdbotConfig })).toBeUndefined();
+    expect(resolveChannelCapabilities({ cfg: {} as ClawdbotConfig, channel: "" })).toBeUndefined();
   });
 
   it("normalizes and prefers per-account capabilities", () => {

@@ -1,11 +1,5 @@
-import {
-  type ChannelId,
-  getChannelPlugin,
-} from "../../channels/plugins/index.js";
-import {
-  type ClawdbotConfig,
-  readConfigFileSnapshot,
-} from "../../config/config.js";
+import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import { type ClawdbotConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 
@@ -18,9 +12,7 @@ export async function requireValidConfig(
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
-        ? snapshot.issues
-            .map((issue) => `- ${issue.path}: ${issue.message}`)
-            .join("\n")
+        ? snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n")
         : "Unknown validation issue.";
     runtime.error(`Config invalid:\n${issues}`);
     runtime.error("Fix the config or run clawdbot doctor.");
@@ -30,10 +22,7 @@ export async function requireValidConfig(
   return snapshot.config;
 }
 
-export function formatAccountLabel(params: {
-  accountId: string;
-  name?: string;
-}) {
+export function formatAccountLabel(params: { accountId: string; name?: string }) {
   const base = params.accountId || DEFAULT_ACCOUNT_ID;
   if (params.name?.trim()) return `${base} (${params.name.trim()})`;
   return base;
@@ -56,12 +45,8 @@ export function formatChannelAccountLabel(params: {
     accountId: params.accountId,
     name: params.name,
   });
-  const styledChannel = params.channelStyle
-    ? params.channelStyle(channelText)
-    : channelText;
-  const styledAccount = params.accountStyle
-    ? params.accountStyle(accountText)
-    : accountText;
+  const styledChannel = params.channelStyle ? params.channelStyle(channelText) : channelText;
+  const styledAccount = params.accountStyle ? params.accountStyle(accountText) : accountText;
   return `${styledChannel} ${styledAccount}`;
 }
 

@@ -39,9 +39,7 @@ const HANDLERS: CommandHandler[] = [
   handleAbortTrigger,
 ];
 
-export async function handleCommands(
-  params: HandleCommandsParams,
-): Promise<CommandHandlerResult> {
+export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
   const resetRequested =
     params.command.commandBodyNormalized === "/reset" ||
     params.command.commandBodyNormalized === "/new";
@@ -71,9 +69,7 @@ export async function handleCommands(
     chatType: params.sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
-    logVerbose(
-      `Send blocked by policy for session ${params.sessionKey ?? "unknown"}`,
-    );
+    logVerbose(`Send blocked by policy for session ${params.sessionKey ?? "unknown"}`);
     return { shouldContinue: false };
   }
 

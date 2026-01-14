@@ -14,141 +14,136 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
 
-  it.each(
-    THINKING_TAG_CASES,
-  )("streams <%s> reasoning via onReasoningStream without leaking into final text", ({
-    open,
-    close,
-  }) => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onReasoningStream = vi.fn();
-    const onBlockReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
-      runId: "run",
-      onReasoningStream,
-      onBlockReply,
-      blockReplyBreak: "message_end",
-      reasoningMode: "stream",
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: `${open}\nBecause`,
-      },
-    });
-
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: ` it helps\n${close}\n\nFinal answer`,
-      },
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
+  it.each(THINKING_TAG_CASES)(
+    "streams <%s> reasoning via onReasoningStream without leaking into final text",
+    ({ open, close }) => {
+      let handler: ((evt: unknown) => void) | undefined;
+      const session: StubSession = {
+        subscribe: (fn) => {
+          handler = fn;
+          return () => {};
         },
-      ],
-    } as AssistantMessage;
+      };
 
-    handler?.({ type: "message_end", message: assistantMessage });
+      const onReasoningStream = vi.fn();
+      const onBlockReply = vi.fn();
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      subscribeEmbeddedPiSession({
+        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+        runId: "run",
+        onReasoningStream,
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        reasoningMode: "stream",
+      });
 
-    const streamTexts = onReasoningStream.mock.calls
-      .map((call) => call[0]?.text)
-      .filter((value): value is string => typeof value === "string");
-    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
+      handler?.({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: `${open}\nBecause`,
+        },
+      });
 
-    expect(assistantMessage.content).toEqual([
-      { type: "thinking", thinking: "Because it helps" },
-      { type: "text", text: "Final answer" },
-    ]);
-  });
-  it.each(
-    THINKING_TAG_CASES,
-  )("suppresses <%s> blocks across chunk boundaries", ({ open, close }) => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
+      handler?.({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: ` it helps\n${close}\n\nFinal answer`,
+        },
+      });
 
-    const onBlockReply = vi.fn();
+      const assistantMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
+          },
+        ],
+      } as AssistantMessage;
 
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "text_end",
-      blockReplyChunking: {
-        minChars: 5,
-        maxChars: 50,
-        breakPreference: "newline",
-      },
-    });
+      handler?.({ type: "message_end", message: assistantMessage });
 
-    handler?.({ type: "message_start", message: { role: "assistant" } });
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: `${open}Reasoning chunk that should not leak`,
-      },
-    });
+      const streamTexts = onReasoningStream.mock.calls
+        .map((call) => call[0]?.text)
+        .filter((value): value is string => typeof value === "string");
+      expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
 
-    expect(onBlockReply).not.toHaveBeenCalled();
+      expect(assistantMessage.content).toEqual([
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ]);
+    },
+  );
+  it.each(THINKING_TAG_CASES)(
+    "suppresses <%s> blocks across chunk boundaries",
+    ({ open, close }) => {
+      let handler: ((evt: unknown) => void) | undefined;
+      const session: StubSession = {
+        subscribe: (fn) => {
+          handler = fn;
+          return () => {};
+        },
+      };
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: `${close}\n\nFinal answer`,
-      },
-    });
+      const onBlockReply = vi.fn();
 
-    handler?.({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: { type: "text_end" },
-    });
+      subscribeEmbeddedPiSession({
+        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+        runId: "run",
+        onBlockReply,
+        blockReplyBreak: "text_end",
+        blockReplyChunking: {
+          minChars: 5,
+          maxChars: 50,
+          breakPreference: "newline",
+        },
+      });
 
-    const payloadTexts = onBlockReply.mock.calls
-      .map((call) => call[0]?.text)
-      .filter((value): value is string => typeof value === "string");
-    expect(payloadTexts.length).toBeGreaterThan(0);
-    for (const text of payloadTexts) {
-      expect(text).not.toContain("Reasoning");
-      expect(text).not.toContain(open);
-    }
-    const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-    expect(combined).toBe("Final answer");
-  });
+      handler?.({ type: "message_start", message: { role: "assistant" } });
+
+      handler?.({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: `${open}Reasoning chunk that should not leak`,
+        },
+      });
+
+      expect(onBlockReply).not.toHaveBeenCalled();
+
+      handler?.({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta: `${close}\n\nFinal answer`,
+        },
+      });
+
+      handler?.({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_end" },
+      });
+
+      const payloadTexts = onBlockReply.mock.calls
+        .map((call) => call[0]?.text)
+        .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts.length).toBeGreaterThan(0);
+      for (const text of payloadTexts) {
+        expect(text).not.toContain("Reasoning");
+        expect(text).not.toContain(open);
+      }
+      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
+      expect(combined).toBe("Final answer");
+    },
+  );
 });

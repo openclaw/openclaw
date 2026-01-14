@@ -20,9 +20,7 @@ export function parsePort(raw: unknown): number | null {
   return parsed;
 }
 
-export function parsePortFromArgs(
-  programArguments: string[] | undefined,
-): number | null {
+export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
   if (!programArguments?.length) return null;
   for (let i = 0; i < programArguments.length; i += 1) {
     const arg = programArguments[i];
@@ -51,9 +49,7 @@ export function pickProbeHostForBind(
   return "127.0.0.1";
 }
 
-export function safeDaemonEnv(
-  env: Record<string, string> | undefined,
-): string[] {
+export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   if (!env) return [];
   const allow = [
     "CLAWDBOT_PROFILE",
@@ -138,9 +134,7 @@ export function renderRuntimeHints(
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
-      hints.push(
-        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
-      );
+      hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (process.platform === "win32") {
       const task = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
       hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
@@ -149,18 +143,13 @@ export function renderRuntimeHints(
   return hints;
 }
 
-export function renderGatewayServiceStartHints(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
+export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const base = ["clawdbot daemon install", "clawdbot gateway"];
   const profile = env.CLAWDBOT_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [
-        ...base,
-        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`,
-      ];
+      return [...base, `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);

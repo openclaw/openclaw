@@ -40,9 +40,7 @@ export function formatAssistantErrorText(
 
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
-    raw.match(
-      /tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i,
-    );
+    raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
@@ -66,9 +64,7 @@ export function formatAssistantErrorText(
     );
   }
 
-  const invalidRequest = raw.match(
-    /"type":"invalid_request_error".*?"message":"([^"]+)"/,
-  );
+  const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
@@ -80,9 +76,7 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function isRateLimitAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
@@ -98,16 +92,8 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [
-    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
-    "overloaded",
-  ],
-  timeout: [
-    "timeout",
-    "timed out",
-    "deadline exceeded",
-    "context deadline exceeded",
-  ],
+  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
+  timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
     /\b402\b/,
     "payment required",
@@ -140,10 +126,7 @@ const ERROR_PATTERNS = {
   ],
 } as const;
 
-function matchesErrorPatterns(
-  raw: string,
-  patterns: readonly ErrorPattern[],
-): boolean {
+function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
   if (!raw) return false;
   const value = raw.toLowerCase();
   return patterns.some((pattern) =>
@@ -172,9 +155,7 @@ export function isBillingErrorMessage(raw: string): boolean {
   );
 }
 
-export function isBillingAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isBillingErrorMessage(msg.errorMessage ?? "");
 }
@@ -191,9 +172,7 @@ export function isCloudCodeAssistFormatError(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
-export function isAuthAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
@@ -212,9 +191,7 @@ export function isFailoverErrorMessage(raw: string): boolean {
   return classifyFailoverReason(raw) !== null;
 }
 
-export function isFailoverAssistantError(
-  msg: AssistantMessage | undefined,
-): boolean {
+export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isFailoverErrorMessage(msg.errorMessage ?? "");
 }

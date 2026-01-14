@@ -64,9 +64,7 @@ function normalizeChoiceValue(value: unknown): string | null {
 
 function extractSelections(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value
-      .map(normalizeChoiceValue)
-      .filter((entry): entry is string => Boolean(entry));
+    return value.map(normalizeChoiceValue).filter((entry): entry is string => Boolean(entry));
   }
   const normalized = normalizeChoiceValue(value);
   if (!normalized) return [];
@@ -79,10 +77,7 @@ function extractSelections(value: unknown): string[] {
   return [normalized];
 }
 
-function readNestedValue(
-  value: unknown,
-  keys: Array<string | number>,
-): unknown {
+function readNestedValue(value: unknown, keys: Array<string | number>): unknown {
   let current: unknown = value;
   for (const key of keys) {
     if (!isRecord(current)) return undefined;
@@ -91,10 +86,7 @@ function readNestedValue(
   return current;
 }
 
-function readNestedString(
-  value: unknown,
-  keys: Array<string | number>,
-): string | undefined {
+function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
   const found = readNestedValue(value, keys);
   return typeof found === "string" && found.trim() ? found.trim() : undefined;
 }
@@ -115,12 +107,8 @@ export function extractMSTeamsPollVote(
   if (!pollId) return null;
 
   const directSelections = extractSelections(value.choices);
-  const nestedSelections = extractSelections(
-    readNestedValue(value, ["choices"]),
-  );
-  const dataSelections = extractSelections(
-    readNestedValue(value, ["data", "choices"]),
-  );
+  const nestedSelections = extractSelections(readNestedValue(value, ["choices"]));
+  const dataSelections = extractSelections(readNestedValue(value, ["data", "choices"]));
   const selections =
     directSelections.length > 0
       ? directSelections
@@ -147,10 +135,7 @@ export function buildMSTeamsPollCard(params: {
     typeof params.maxSelections === "number" && params.maxSelections > 1
       ? Math.floor(params.maxSelections)
       : 1;
-  const cappedMaxSelections = Math.min(
-    Math.max(1, maxSelections),
-    params.options.length,
-  );
+  const cappedMaxSelections = Math.min(Math.max(1, maxSelections), params.options.length);
   const choices = params.options.map((option, index) => ({
     title: option,
     value: String(index),
@@ -252,24 +237,18 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
   return Object.fromEntries(keep);
 }
 
-export function normalizeMSTeamsPollSelections(
-  poll: MSTeamsPoll,
-  selections: string[],
-) {
+export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => Number.parseInt(entry, 10))
     .filter((value) => Number.isFinite(value))
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
-  const limited =
-    maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
+  const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
   return Array.from(new Set(limited));
 }
 
-export function createMSTeamsPollStoreFs(
-  params?: MSTeamsPollStoreFsOptions,
-): MSTeamsPollStore {
+export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {
   const filePath = resolveMSTeamsStorePath({
     filename: STORE_FILENAME,
     env: params?.env,
@@ -303,19 +282,12 @@ export function createMSTeamsPollStoreFs(
       return data.polls[pollId] ?? null;
     });
 
-  const recordVote = async (params: {
-    pollId: string;
-    voterId: string;
-    selections: string[];
-  }) =>
+  const recordVote = async (params: { pollId: string; voterId: string; selections: string[] }) =>
     await withFileLock(filePath, empty, async () => {
       const data = await readStore();
       const poll = data.polls[params.pollId];
       if (!poll) return null;
-      const normalized = normalizeMSTeamsPollSelections(
-        poll,
-        params.selections,
-      );
+      const normalized = normalizeMSTeamsPollSelections(poll, params.selections);
       poll.votes[params.voterId] = normalized;
       poll.updatedAt = new Date().toISOString();
       data.polls[poll.id] = poll;

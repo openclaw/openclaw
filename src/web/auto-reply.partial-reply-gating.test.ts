@@ -10,8 +10,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -225,17 +224,13 @@ describe("partial reply gating", () => {
       replyResolver,
     );
 
-    let stored: Record<
-      string,
-      { lastChannel?: string; lastTo?: string }
-    > | null = null;
+    let stored: Record<string, { lastChannel?: string; lastTo?: string }> | null = null;
     for (let attempt = 0; attempt < 50; attempt += 1) {
       stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
         string,
         { lastChannel?: string; lastTo?: string }
       >;
-      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo)
-        break;
+      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     if (!stored) throw new Error("store not loaded");

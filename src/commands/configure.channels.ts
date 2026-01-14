@@ -45,8 +45,7 @@ export async function removeChannelConfigWizard(
 
     if (channel === "done") return next;
 
-    const label =
-      listChatChannels().find((meta) => meta.id === channel)?.label ?? channel;
+    const label = listChatChannels().find((meta) => meta.id === channel)?.label ?? channel;
     const confirmed = guardCancel(
       await confirm({
         message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
@@ -66,10 +65,9 @@ export async function removeChannelConfigWizard(
     };
 
     note(
-      [
-        `${label} removed from config.`,
-        "Note: credentials/sessions on disk are unchanged.",
-      ].join("\n"),
+      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
+        "\n",
+      ),
       "Channel removed",
     );
   }

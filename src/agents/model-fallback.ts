@@ -1,10 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import {
-  coerceToFailoverError,
-  describeFailoverError,
-  isFailoverError,
-} from "./failover-error.js";
+import { coerceToFailoverError, describeFailoverError, isFailoverError } from "./failover-error.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -33,9 +29,7 @@ function isAbortError(err: unknown): boolean {
   const name = "name" in err ? String(err.name) : "";
   if (name === "AbortError") return true;
   const message =
-    "message" in err && typeof err.message === "string"
-      ? err.message.toLowerCase()
-      : "";
+    "message" in err && typeof err.message === "string" ? err.message.toLowerCase() : "";
   return message.includes("aborted");
 }
 
@@ -70,10 +64,7 @@ function resolveImageFallbackCandidates(params: {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
-  const addCandidate = (
-    candidate: ModelCandidate,
-    enforceAllowlist: boolean,
-  ) => {
+  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
     if (!candidate.provider || !candidate.model) return;
     const key = modelKey(candidate.provider, candidate.model);
     if (seen.has(key)) return;
@@ -99,8 +90,7 @@ function resolveImageFallbackCandidates(params: {
       | { primary?: string }
       | string
       | undefined;
-    const primary =
-      typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
+    const primary = typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
     if (primary?.trim()) addRaw(primary, false);
   }
 
@@ -146,10 +136,7 @@ function resolveFallbackCandidates(params: {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
-  const addCandidate = (
-    candidate: ModelCandidate,
-    enforceAllowlist: boolean,
-  ) => {
+  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
     if (!candidate.provider || !candidate.model) return;
     const key = modelKey(candidate.provider, candidate.model);
     if (seen.has(key)) return;
@@ -180,11 +167,7 @@ function resolveFallbackCandidates(params: {
     addCandidate(resolved.ref, true);
   }
 
-  if (
-    params.fallbacksOverride === undefined &&
-    primary?.provider &&
-    primary.model
-  ) {
+  if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
   }
 
@@ -271,10 +254,9 @@ export async function runWithModelFallback<T>(params: {
           )
           .join(" | ")
       : "unknown";
-  throw new Error(
-    `All models failed (${attempts.length || candidates.length}): ${summary}`,
-    { cause: lastError instanceof Error ? lastError : undefined },
-  );
+  throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
+    cause: lastError instanceof Error ? lastError : undefined,
+  });
 }
 
 export async function runWithImageModelFallback<T>(params: {
@@ -340,14 +322,10 @@ export async function runWithImageModelFallback<T>(params: {
   const summary =
     attempts.length > 0
       ? attempts
-          .map(
-            (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}`,
-          )
+          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
           .join(" | ")
       : "unknown";
-  throw new Error(
-    `All image models failed (${attempts.length || candidates.length}): ${summary}`,
-    { cause: lastError instanceof Error ? lastError : undefined },
-  );
+  throw new Error(`All image models failed (${attempts.length || candidates.length}): ${summary}`, {
+    cause: lastError instanceof Error ? lastError : undefined,
+  });
 }

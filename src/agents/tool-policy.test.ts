@@ -1,18 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  expandToolGroups,
-  resolveToolProfilePolicy,
-  TOOL_GROUPS,
-} from "./tool-policy.js";
+import { expandToolGroups, resolveToolProfilePolicy, TOOL_GROUPS } from "./tool-policy.js";
 
 describe("tool-policy", () => {
   it("expands groups and normalizes aliases", () => {
-    const expanded = expandToolGroups([
-      "group:runtime",
-      "BASH",
-      "apply-patch",
-      "group:fs",
-    ]);
+    const expanded = expandToolGroups(["group:runtime", "BASH", "apply-patch", "group:fs"]);
     const set = new Set(expanded);
     expect(set.has("exec")).toBe(true);
     expect(set.has("bash")).toBe(true);

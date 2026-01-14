@@ -1,16 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  deliverOutboundPayloads,
-  normalizeOutboundPayloads,
-} from "./deliver.js";
+import { deliverOutboundPayloads, normalizeOutboundPayloads } from "./deliver.js";
 
 describe("deliverOutboundPayloads", () => {
   it("chunks telegram markdown and passes through accountId", async () => {
-    const sendTelegram = vi
-      .fn()
-      .mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
@@ -27,9 +22,7 @@ describe("deliverOutboundPayloads", () => {
 
       expect(sendTelegram).toHaveBeenCalledTimes(2);
       for (const call of sendTelegram.mock.calls) {
-        expect(call[2]).toEqual(
-          expect.objectContaining({ accountId: undefined, verbose: false }),
-        );
+        expect(call[2]).toEqual(expect.objectContaining({ accountId: undefined, verbose: false }));
       }
       expect(results).toHaveLength(2);
       expect(results[0]).toMatchObject({ channel: "telegram", chatId: "c1" });
@@ -43,9 +36,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("passes explicit accountId to sendTelegram", async () => {
-    const sendTelegram = vi
-      .fn()
-      .mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
       channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
     };
@@ -67,9 +58,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("uses signal media maxBytes from config", async () => {
-    const sendSignal = vi
-      .fn()
-      .mockResolvedValue({ messageId: "s1", timestamp: 123 });
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: ClawdbotConfig = { channels: { signal: { mediaMaxMb: 2 } } };
 
     const results = await deliverOutboundPayloads({
@@ -166,8 +155,6 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(results).toEqual([
-      { channel: "whatsapp", messageId: "w2", toJid: "jid" },
-    ]);
+    expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
   });
 });

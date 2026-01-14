@@ -21,25 +21,21 @@ describe("web logout", () => {
     vi.restoreAllMocks();
   });
 
-  it(
-    "deletes cached credentials when present",
-    { timeout: 15_000 },
-    async () => {
-      await withTempHome(async (home) => {
-        vi.resetModules();
-        const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
+  it("deletes cached credentials when present", { timeout: 15_000 }, async () => {
+    await withTempHome(async (home) => {
+      vi.resetModules();
+      const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
 
-        expect(isPathWithinBase(home, WA_WEB_AUTH_DIR)).toBe(true);
+      expect(isPathWithinBase(home, WA_WEB_AUTH_DIR)).toBe(true);
 
-        fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
-        fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
-        const result = await logoutWeb({ runtime: runtime as never });
+      fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
+      fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
+      const result = await logoutWeb({ runtime: runtime as never });
 
-        expect(result).toBe(true);
-        expect(fs.existsSync(WA_WEB_AUTH_DIR)).toBe(false);
-      });
-    },
-  );
+      expect(result).toBe(true);
+      expect(fs.existsSync(WA_WEB_AUTH_DIR)).toBe(false);
+    });
+  });
 
   it("no-ops when nothing to delete", { timeout: 15_000 }, async () => {
     await withTempHome(async () => {
@@ -72,9 +68,7 @@ describe("web logout", () => {
       expect(result).toBe(true);
       expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
       expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
-      expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(
-        false,
-      );
+      expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
     });
   });
 });

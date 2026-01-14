@@ -26,9 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -58,9 +56,7 @@ describe("subscribeEmbeddedPiSession", () => {
     handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe(
-      "  ```js\n  const x = 1;\n  ```",
-    );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("  ```js\n  const x = 1;\n  ```");
   });
   it("accepts longer fence markers for close", () => {
     let handler: ((evt: unknown) => void) | undefined;
@@ -74,9 +70,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",

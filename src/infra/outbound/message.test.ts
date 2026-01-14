@@ -26,10 +26,7 @@ describe("sendMessage channel normalization", () => {
       deps: { sendMSTeams },
     });
 
-    expect(sendMSTeams).toHaveBeenCalledWith(
-      "conversation:19:abc@thread.tacv2",
-      "hi",
-    );
+    expect(sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
     expect(result.channel).toBe("msteams");
   });
 
@@ -43,11 +40,7 @@ describe("sendMessage channel normalization", () => {
       deps: { sendIMessage },
     });
 
-    expect(sendIMessage).toHaveBeenCalledWith(
-      "someone@example.com",
-      "hi",
-      expect.any(Object),
-    );
+    expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
     expect(result.channel).toBe("imessage");
   });
 });

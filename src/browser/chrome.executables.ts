@@ -17,9 +17,7 @@ function exists(filePath: string) {
   }
 }
 
-function findFirstExecutable(
-  candidates: Array<BrowserExecutable>,
-): BrowserExecutable | null {
+function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
   for (const candidate of candidates) {
     if (exists(candidate.path)) return candidate;
   }
@@ -46,10 +44,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "chromium",
-      path: path.join(
-        os.homedir(),
-        "Applications/Chromium.app/Contents/MacOS/Chromium",
-      ),
+      path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
     },
     {
       kind: "chrome",
@@ -57,10 +52,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "chrome",
-      path: path.join(
-        os.homedir(),
-        "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      ),
+      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     },
   ];
 
@@ -84,8 +76,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   // Must use bracket notation: variable name contains parentheses
-  const programFilesX86 =
-    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
 
   const joinWin = path.win32.join;
   const candidates: Array<BrowserExecutable> = [];
@@ -94,13 +85,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
     // Chrome Canary (user install)
     candidates.push({
       kind: "canary",
-      path: joinWin(
-        localAppData,
-        "Google",
-        "Chrome SxS",
-        "Application",
-        "chrome.exe",
-      ),
+      path: joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"),
     });
     // Chromium (user install)
     candidates.push({
@@ -110,37 +95,19 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
     // Chrome (user install)
     candidates.push({
       kind: "chrome",
-      path: joinWin(
-        localAppData,
-        "Google",
-        "Chrome",
-        "Application",
-        "chrome.exe",
-      ),
+      path: joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
     });
   }
 
   // Chrome (system install, 64-bit)
   candidates.push({
     kind: "chrome",
-    path: joinWin(
-      programFiles,
-      "Google",
-      "Chrome",
-      "Application",
-      "chrome.exe",
-    ),
+    path: joinWin(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
   });
   // Chrome (system install, 32-bit on 64-bit Windows)
   candidates.push({
     kind: "chrome",
-    path: joinWin(
-      programFilesX86,
-      "Google",
-      "Chrome",
-      "Application",
-      "chrome.exe",
-    ),
+    path: joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
   });
 
   return findFirstExecutable(candidates);
@@ -152,9 +119,7 @@ export function resolveBrowserExecutableForPlatform(
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
     if (!exists(resolved.executablePath)) {
-      throw new Error(
-        `browser.executablePath not found: ${resolved.executablePath}`,
-      );
+      throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
     }
     return { kind: "custom", path: resolved.executablePath };
   }

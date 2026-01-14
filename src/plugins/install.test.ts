@@ -16,10 +16,7 @@ function makeTempDir() {
 
 function resolveNpmCliJs() {
   const fromEnv = process.env.npm_execpath;
-  if (
-    fromEnv?.includes(`${path.sep}npm${path.sep}`) &&
-    fromEnv?.endsWith("npm-cli.js")
-  ) {
+  if (fromEnv?.includes(`${path.sep}npm${path.sep}`) && fromEnv?.endsWith("npm-cli.js")) {
     return fromEnv ?? null;
   }
 
@@ -64,20 +61,12 @@ function packToArchive({
   const res = spawnSync(cmd, args, { encoding: "utf-8" });
   expect(res.status).toBe(0);
   if (res.status !== 0) {
-    throw new Error(
-      `npm pack failed: ${res.stderr || res.stdout || "<no output>"}`,
-    );
+    throw new Error(`npm pack failed: ${res.stderr || res.stdout || "<no output>"}`);
   }
 
-  const packed = (res.stdout || "")
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .at(-1);
+  const packed = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1);
   if (!packed) {
-    throw new Error(
-      `npm pack did not output a filename: ${res.stdout || "<no stdout>"}`,
-    );
+    throw new Error(`npm pack did not output a filename: ${res.stdout || "<no stdout>"}`);
   }
 
   const src = path.join(outDir, packed);
@@ -128,11 +117,7 @@ describe("installPluginFromArchive", () => {
       }),
       "utf-8",
     );
-    fs.writeFileSync(
-      path.join(pkgDir, "dist", "index.js"),
-      "export {};",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
 
     const archivePath = packToArchive({
       pkgDir,
@@ -147,15 +132,9 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.pluginId).toBe("voice-call");
-    expect(result.targetDir).toBe(
-      path.join(stateDir, "extensions", "voice-call"),
-    );
-    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(
-      true,
-    );
-    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(
-      true,
-    );
+    expect(result.targetDir).toBe(path.join(stateDir, "extensions", "voice-call"));
+    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
   });
 
   it("rejects installing when plugin already exists", async () => {
@@ -172,11 +151,7 @@ describe("installPluginFromArchive", () => {
       }),
       "utf-8",
     );
-    fs.writeFileSync(
-      path.join(pkgDir, "dist", "index.js"),
-      "export {};",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
 
     const archivePath = packToArchive({
       pkgDir,

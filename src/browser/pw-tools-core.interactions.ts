@@ -1,14 +1,6 @@
 import type { BrowserFormField } from "./client-actions-core.js";
-import {
-  ensurePageState,
-  getPageForTargetId,
-  refLocator,
-} from "./pw-session.js";
-import {
-  normalizeTimeoutMs,
-  requireRef,
-  toAIFriendlyError,
-} from "./pw-tools-core.shared.js";
+import { ensurePageState, getPageForTargetId, refLocator } from "./pw-session.js";
+import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
@@ -41,10 +33,7 @@ export async function clickViaPlaywright(opts: {
   ensurePageState(page);
   const ref = requireRef(opts.ref);
   const locator = refLocator(page, ref);
-  const timeout = Math.max(
-    500,
-    Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)),
-  );
+  const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
   try {
     if (opts.doubleClick) {
       await locator.dblclick({
@@ -191,10 +180,7 @@ export async function fillFormViaPlaywright(opts: {
     const locator = refLocator(page, ref);
     if (type === "checkbox" || type === "radio") {
       const checked =
-        rawValue === true ||
-        rawValue === 1 ||
-        rawValue === "1" ||
-        rawValue === "true";
+        rawValue === true || rawValue === 1 || rawValue === "1" || rawValue === "true";
       try {
         await locator.setChecked(checked, { timeout });
       } catch (err) {
@@ -311,10 +297,7 @@ export async function waitForViaPlaywright(opts: {
   if (opts.selector) {
     const selector = String(opts.selector).trim();
     if (selector) {
-      await page
-        .locator(selector)
-        .first()
-        .waitFor({ state: "visible", timeout });
+      await page.locator(selector).first().waitFor({ state: "visible", timeout });
     }
   }
   if (opts.url) {
@@ -346,15 +329,13 @@ export async function takeScreenshotViaPlaywright(opts: {
   ensurePageState(page);
   const type = opts.type ?? "png";
   if (opts.ref) {
-    if (opts.fullPage)
-      throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
     const locator = refLocator(page, opts.ref);
     const buffer = await locator.screenshot({ type });
     return { buffer };
   }
   if (opts.element) {
-    if (opts.fullPage)
-      throw new Error("fullPage is not supported for element screenshots");
+    if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
     const locator = page.locator(opts.element).first();
     const buffer = await locator.screenshot({ type });
     return { buffer };
@@ -376,8 +357,7 @@ export async function setInputFilesViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   if (!opts.paths.length) throw new Error("paths are required");
-  const inputRef =
-    typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
+  const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
   const element = typeof opts.element === "string" ? opts.element.trim() : "";
   if (inputRef && element) {
     throw new Error("inputRef and element are mutually exclusive");
@@ -386,9 +366,7 @@ export async function setInputFilesViaPlaywright(opts: {
     throw new Error("inputRef or element is required");
   }
 
-  const locator = inputRef
-    ? refLocator(page, inputRef)
-    : page.locator(element).first();
+  const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
 
   try {
     await locator.setInputFiles(opts.paths);

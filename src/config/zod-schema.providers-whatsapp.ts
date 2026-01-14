@@ -41,24 +41,18 @@ export const WhatsAppAccountSchema = z
       .object({
         emoji: z.string().optional(),
         direct: z.boolean().optional().default(true),
-        group: z
-          .enum(["always", "mentions", "never"])
-          .optional()
-          .default("mentions"),
+        group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
       .optional(),
   })
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
-    const allow = (value.allowFrom ?? [])
-      .map((v) => String(v).trim())
-      .filter(Boolean);
+    const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
     if (allow.includes("*")) return;
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["allowFrom"],
-      message:
-        'channels.whatsapp.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
+      message: 'channels.whatsapp.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
     });
   });
 
@@ -100,18 +94,13 @@ export const WhatsAppConfigSchema = z
       .object({
         emoji: z.string().optional(),
         direct: z.boolean().optional().default(true),
-        group: z
-          .enum(["always", "mentions", "never"])
-          .optional()
-          .default("mentions"),
+        group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
       .optional(),
   })
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
-    const allow = (value.allowFrom ?? [])
-      .map((v) => String(v).trim())
-      .filter(Boolean);
+    const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
     if (allow.includes("*")) return;
     ctx.addIssue({
       code: z.ZodIssueCode.custom,

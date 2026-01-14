@@ -10,9 +10,7 @@ import { initSessionState } from "./session.js";
 
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-thread-session-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-thread-session-"));
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -84,9 +82,7 @@ describe("initSessionState thread forking", () => {
   });
 
   it("records topic-specific session files when MessageThreadId is present", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-topic-session-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-topic-session-"));
     const storePath = path.join(root, "sessions.json");
 
     const cfg = {
@@ -134,9 +130,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("Reset triggers (/new, /reset) work with RawBody", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-rawbody-reset-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-rawbody-reset-"));
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as ClawdbotConfig;
 
@@ -158,9 +152,7 @@ describe("initSessionState RawBody", () => {
   });
 
   it("falls back to Body when RawBody is undefined", async () => {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-rawbody-fallback-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-rawbody-fallback-"));
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as ClawdbotConfig;
 

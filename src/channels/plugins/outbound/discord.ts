@@ -11,9 +11,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error(
-          "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
-        ),
+        error: new Error("Delivering to Discord requires --to <channelId|user:ID|channel:ID>"),
       };
     }
     return { ok: true, to: trimmed };

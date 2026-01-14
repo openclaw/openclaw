@@ -33,10 +33,7 @@ export type MSTeamsConversationStoreEntry = {
 };
 
 export type MSTeamsConversationStore = {
-  upsert: (
-    conversationId: string,
-    reference: StoredConversationReference,
-  ) => Promise<void>;
+  upsert: (conversationId: string, reference: StoredConversationReference) => Promise<void>;
   get: (conversationId: string) => Promise<StoredConversationReference | null>;
   list: () => Promise<MSTeamsConversationStoreEntry[]>;
   remove: (conversationId: string) => Promise<boolean>;

@@ -29,9 +29,7 @@ export async function cleanupResumeProcesses(
   const commandToken = path.basename(backend.command ?? "").trim();
   if (!commandToken) return;
 
-  const resumeTokens = resumeArgs.map((arg) =>
-    arg.replaceAll("{sessionId}", sessionId),
-  );
+  const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
   const pattern = [commandToken, ...resumeTokens]
     .filter(Boolean)
     .map((token) => escapeRegex(token))
@@ -45,10 +43,7 @@ export async function cleanupResumeProcesses(
   }
 }
 
-export function enqueueCliRun<T>(
-  key: string,
-  task: () => Promise<T>,
-): Promise<T> {
+export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
   const tracked = chained.finally(() => {
@@ -78,9 +73,7 @@ function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
     try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(
-        new Date(),
-      );
+      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
       return trimmed;
     } catch {
       // ignore invalid timezone
@@ -106,14 +99,7 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
     for (const part of parts) {
       if (part.type !== "literal") map[part.type] = part.value;
     }
-    if (
-      !map.weekday ||
-      !map.year ||
-      !map.month ||
-      !map.day ||
-      !map.hour ||
-      !map.minute
-    )
+    if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute)
       return undefined;
     return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
   } catch {
@@ -127,9 +113,7 @@ function buildModelAliasLines(cfg?: ClawdbotConfig) {
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
     if (!model) continue;
-    const alias = String(
-      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
-    ).trim();
+    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) continue;
     entries.push({ alias, model });
   }
@@ -149,9 +133,7 @@ export function buildSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
 }) {
-  const userTimezone = resolveUserTimezone(
-    params.config?.agents?.defaults?.userTimezone,
-  );
+  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
   const userTime = formatUserTime(new Date(), userTimezone);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -175,10 +157,7 @@ export function buildSystemPrompt(params: {
   });
 }
 
-export function normalizeCliModel(
-  modelId: string,
-  backend: CliBackendConfig,
-): string {
+export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();
   if (!trimmed) return trimmed;
   const direct = backend.modelAliases?.[trimmed];
@@ -191,19 +170,14 @@ export function normalizeCliModel(
 
 function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0
-      ? (raw[key] as number)
-      : undefined;
+    typeof raw[key] === "number" && raw[key] > 0 ? (raw[key] as number) : undefined;
   const input = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
-    pick("cache_read_input_tokens") ??
-    pick("cached_input_tokens") ??
-    pick("cacheRead");
+    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
-  if (!input && !output && !cacheRead && !cacheWrite && !total)
-    return undefined;
+  if (!input && !output && !cacheRead && !cacheWrite && !total) return undefined;
   return { input, output, cacheRead, cacheWrite, total };
 }
 
@@ -214,8 +188,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function collectText(value: unknown): string {
   if (!value) return "";
   if (typeof value === "string") return value;
-  if (Array.isArray(value))
-    return value.map((entry) => collectText(entry)).join("");
+  if (Array.isArray(value)) return value.map((entry) => collectText(entry)).join("");
   if (!isRecord(value)) return "";
   if (typeof value.text === "string") return value.text;
   if (typeof value.content === "string") return value.content;
@@ -242,10 +215,7 @@ function pickSessionId(
   return undefined;
 }
 
-export function parseCliJson(
-  raw: string,
-  backend: CliBackendConfig,
-): CliOutput | null {
+export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   let parsed: unknown;
@@ -265,10 +235,7 @@ export function parseCliJson(
   return { text: text.trim(), sessionId, usage };
 }
 
-export function parseCliJsonl(
-  raw: string,
-  backend: CliBackendConfig,
-): CliOutput | null {
+export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput | null {
   const lines = raw
     .split(/\r?\n/g)
     .map((line) => line.trim())
@@ -331,18 +298,15 @@ export function resolveSessionIdToSend(params: {
   return { sessionId: crypto.randomUUID(), isNew: true };
 }
 
-export function resolvePromptInput(params: {
-  backend: CliBackendConfig;
-  prompt: string;
-}): { argsPrompt?: string; stdin?: string } {
+export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: string }): {
+  argsPrompt?: string;
+  stdin?: string;
+} {
   const inputMode = params.backend.input ?? "arg";
   if (inputMode === "stdin") {
     return { stdin: params.prompt };
   }
-  if (
-    params.backend.maxPromptArgChars &&
-    params.prompt.length > params.backend.maxPromptArgChars
-  ) {
+  if (params.backend.maxPromptArgChars && params.prompt.length > params.backend.maxPromptArgChars) {
     return { stdin: params.prompt };
   }
   return { argsPrompt: params.prompt };
@@ -357,10 +321,7 @@ function resolveImageExtension(mimeType: string): string {
   return "bin";
 }
 
-export function appendImagePathsToPrompt(
-  prompt: string,
-  paths: string[],
-): string {
+export function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
   if (!paths.length) return prompt;
   const trimmed = prompt.trimEnd();
   const separator = trimmed ? "\n\n" : "";
@@ -370,9 +331,7 @@ export function appendImagePathsToPrompt(
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), "clawdbot-cli-images-"),
-  );
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cli-images-"));
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];
@@ -402,11 +361,7 @@ export function buildCliArgs(params: {
   if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (
-    !params.useResume &&
-    params.systemPrompt &&
-    params.backend.systemPromptArg
-  ) {
+  if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
   if (!params.useResume && params.sessionId) {

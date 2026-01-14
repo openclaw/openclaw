@@ -53,8 +53,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../gateway/server.js", () => ({
-  startGatewayServer: (port: number, opts?: unknown) =>
-    startGatewayServer(port, opts),
+  startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
 vi.mock("../globals.js", () => ({
@@ -111,10 +110,9 @@ describe("gateway-cli coverage", () => {
     program.exitOverride();
     registerGatewayCli(program);
 
-    await program.parseAsync(
-      ["gateway", "call", "health", "--params", '{"x":1}', "--json"],
-      { from: "user" },
-    );
+    await program.parseAsync(["gateway", "call", "health", "--params", '{"x":1}', "--json"], {
+      from: "user",
+    });
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
@@ -235,10 +233,7 @@ describe("gateway-cli coverage", () => {
     registerGatewayCli(program);
 
     await expect(
-      program.parseAsync(
-        ["gateway", "call", "status", "--params", "not-json"],
-        { from: "user" },
-      ),
+      program.parseAsync(["gateway", "call", "status", "--params", "not-json"], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
     expect(callGateway).not.toHaveBeenCalled();
@@ -283,18 +278,15 @@ describe("gateway-cli coverage", () => {
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
     await expect(
-      programStartFail.parseAsync(
-        ["gateway", "--port", "18789", "--allow-unconfigured"],
-        { from: "user" },
-      ),
+      programStartFail.parseAsync(["gateway", "--port", "18789", "--allow-unconfigured"], {
+        from: "user",
+      }),
     ).rejects.toThrow("__exit__:1");
     for (const listener of process.listeners("SIGTERM")) {
-      if (!beforeSigterm.has(listener))
-        process.removeListener("SIGTERM", listener);
+      if (!beforeSigterm.has(listener)) process.removeListener("SIGTERM", listener);
     }
     for (const listener of process.listeners("SIGINT")) {
-      if (!beforeSigint.has(listener))
-        process.removeListener("SIGINT", listener);
+      if (!beforeSigint.has(listener)) process.removeListener("SIGINT", listener);
     }
   });
 

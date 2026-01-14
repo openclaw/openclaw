@@ -9,28 +9,12 @@ export function registerMaintenanceCommands(program: Command) {
   program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
-    .option(
-      "--no-workspace-suggestions",
-      "Disable workspace memory system suggestions",
-      false,
-    )
+    .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
-    .option(
-      "--force",
-      "Apply aggressive repairs (overwrites custom service config)",
-      false,
-    )
-    .option(
-      "--non-interactive",
-      "Run without prompts (safe migrations only)",
-      false,
-    )
-    .option(
-      "--generate-gateway-token",
-      "Generate and configure a gateway token",
-      false,
-    )
+    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
+    .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
       try {
@@ -67,16 +51,9 @@ export function registerMaintenanceCommands(program: Command) {
   program
     .command("reset")
     .description("Reset local config/state (keeps the CLI installed)")
-    .option(
-      "--scope <scope>",
-      "config|config+creds+sessions|full (default: interactive prompt)",
-    )
+    .option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)")
     .option("--yes", "Skip confirmation prompts", false)
-    .option(
-      "--non-interactive",
-      "Disable prompts (requires --scope + --yes)",
-      false,
-    )
+    .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
       try {

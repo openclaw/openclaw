@@ -66,9 +66,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onToolResult = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-tool",
       verboseLevel: "on",
       onToolResult,
@@ -107,9 +105,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onToolResult = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-browser-tool",
       verboseLevel: "on",
       onToolResult,

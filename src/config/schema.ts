@@ -29,10 +29,7 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<
-      ConfigUiHint,
-      "label" | "help" | "advanced" | "sensitive" | "placeholder"
-    >
+    Pick<ConfigUiHint, "label" | "help" | "advanced" | "sensitive" | "placeholder">
   >;
 };
 
@@ -95,15 +92,13 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
   "tools.audio.transcription.args": "Audio Transcription Args",
-  "tools.audio.transcription.timeoutSeconds":
-    "Audio Transcription Timeout (sec)",
+  "tools.audio.transcription.timeoutSeconds": "Audio Transcription Timeout (sec)",
   "tools.profile": "Tool Profile",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "gateway.controlUi.basePath": "Control UI Base Path",
-  "gateway.http.endpoints.chatCompletions.enabled":
-    "OpenAI Chat Completions Endpoint",
+  "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
@@ -119,13 +114,11 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
-  "agents.defaults.memorySearch.chunking.overlap":
-    "Memory Chunk Overlap Tokens",
+  "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
   "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
   "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
-  "agents.defaults.memorySearch.sync.watchDebounceMs":
-    "Memory Watch Debounce (ms)",
+  "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "auth.profiles": "Auth Profiles",
@@ -169,8 +162,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.streamMode": "Telegram Draft Stream Mode",
   "channels.telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
   "channels.telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
-  "channels.telegram.draftChunk.breakPreference":
-    "Telegram Draft Chunk Break Preference",
+  "channels.telegram.draftChunk.breakPreference": "Telegram Draft Chunk Break Preference",
   "channels.telegram.retry.attempts": "Telegram Retry Attempts",
   "channels.telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
@@ -206,19 +198,15 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
-  "gateway.remote.sshIdentity":
-    "Optional SSH identity file path (passed to ssh -i).",
-  "gateway.auth.token":
-    "Recommended for all gateways; required for non-loopback binds.",
+  "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "gateway.auth.token": "Recommended for all gateways; required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
-  "gateway.reload.mode":
-    'Hot reload strategy for config changes ("hybrid" recommended).',
-  "gateway.reload.debounceMs":
-    "Debounce window (ms) before applying config changes.",
+  "gateway.reload.mode": 'Hot reload strategy for config changes ("hybrid" recommended).',
+  "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
@@ -226,28 +214,22 @@ const FIELD_HELP: Record<string, string> = {
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
-  "auth.order":
-    "Ordered auth profile IDs per provider (used for automatic failover).",
+  "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns.billingBackoffHours":
     "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
   "auth.cooldowns.billingBackoffHoursByProvider":
     "Optional per-provider overrides for billing backoff (hours).",
-  "auth.cooldowns.billingMaxHours":
-    "Cap (hours) for billing backoff (default: 24).",
-  "auth.cooldowns.failureWindowHours":
-    "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
+  "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
-  "agents.defaults.models":
-    "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
-  "agents.defaults.memorySearch.provider":
-    'Embedding provider ("openai" or "local").',
+  "agents.defaults.memorySearch.provider": 'Embedding provider ("openai" or "local").',
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom OpenAI-compatible base URL (e.g. for Gemini/OpenRouter proxies).",
-  "agents.defaults.memorySearch.remote.apiKey":
-    "Custom API key for the remote embedding provider.",
+  "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.local.modelPath":
@@ -258,34 +240,24 @@ const FIELD_HELP: Record<string, string> = {
     "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
   "agents.defaults.memorySearch.sync.onSearch":
     "Lazy sync: reindex on first search after a change.",
-  "agents.defaults.memorySearch.sync.watch":
-    "Watch memory files for changes (chokidar).",
+  "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
   "plugins.enabled": "Enable plugin/extension loading (default: true).",
-  "plugins.allow":
-    "Optional allowlist of plugin ids; when set, only listed plugins load.",
+  "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
-  "plugins.entries":
-    "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
-  "plugins.entries.*.enabled":
-    "Overrides plugin enable/disable for this entry (restart required).",
-  "plugins.entries.*.config":
-    "Plugin-defined config payload (schema is provided by the plugin).",
+  "plugins.entries": "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
+  "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
+  "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
-  "agents.defaults.imageModel.fallbacks":
-    "Ordered fallback image models (provider/model).",
-  "agents.defaults.cliBackends":
-    "Optional CLI backends for text-only fallback (claude-cli, etc.).",
-  "agents.defaults.humanDelay.mode":
-    'Delay style for block replies ("off", "natural", "custom").',
-  "agents.defaults.humanDelay.minMs":
-    "Minimum delay in ms for custom humanDelay (default: 800).",
-  "agents.defaults.humanDelay.maxMs":
-    "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+  "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
+  "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
+  "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
+  "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
   "commands.native":
     "Register native commands with channels that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
@@ -293,24 +265,16 @@ const FIELD_HELP: Record<string, string> = {
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
   "commands.bashForegroundMs":
     "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
-  "commands.config":
-    "Allow /config chat command to read/write config on disk (default: false).",
-  "commands.debug":
-    "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart":
-    "Allow /restart and gateway restart tool actions (default: false).",
-  "commands.useAccessGroups":
-    "Enforce access-group allowlists/policies for commands.",
-  "channels.discord.commands.native":
-    'Override native commands for Discord (bool or "auto").',
-  "channels.telegram.commands.native":
-    'Override native commands for Telegram (bool or "auto").',
-  "channels.slack.commands.native":
-    'Override native commands for Slack (bool or "auto").',
+  "commands.config": "Allow /config chat command to read/write config on disk (default: false).",
+  "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
+  "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
+  "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
+  "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
+  "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
+  "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
-  "messages.ackReaction":
-    "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
   "channels.telegram.dmPolicy":
@@ -325,18 +289,15 @@ const FIELD_HELP: Record<string, string> = {
     "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "channels.telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
-  "channels.telegram.retry.minDelayMs":
-    "Minimum retry delay in ms for Telegram outbound calls.",
+  "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",
   "channels.telegram.retry.maxDelayMs":
     "Maximum retry delay cap in ms for Telegram outbound calls.",
-  "channels.telegram.retry.jitter":
-    "Jitter factor (0-1) applied to Telegram retry delays.",
+  "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
   "channels.telegram.timeoutSeconds":
     "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   "channels.whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
-  "channels.whatsapp.selfChatMode":
-    "Same-phone setup (bot uses your personal WhatsApp number).",
+  "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
   "channels.signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
   "channels.imessage.dmPolicy":
@@ -345,14 +306,10 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
   "channels.discord.retry.attempts":
     "Max retry attempts for outbound Discord API calls (default: 3).",
-  "channels.discord.retry.minDelayMs":
-    "Minimum retry delay in ms for Discord outbound calls.",
-  "channels.discord.retry.maxDelayMs":
-    "Maximum retry delay cap in ms for Discord outbound calls.",
-  "channels.discord.retry.jitter":
-    "Jitter factor (0-1) applied to Discord retry delays.",
-  "channels.discord.maxLinesPerMessage":
-    "Soft max line count per Discord message (default: 17).",
+  "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",
+  "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
+  "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
+  "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
 };
@@ -403,10 +360,7 @@ function applySensitiveHints(hints: ConfigUiHints): ConfigUiHints {
   return next;
 }
 
-function applyPluginHints(
-  hints: ConfigUiHints,
-  plugins: PluginUiMetadata[],
-): ConfigUiHints {
+function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
   for (const plugin of plugins) {
     const id = plugin.id.trim();
@@ -465,9 +419,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
-  plugins?: PluginUiMetadata[];
-}): ConfigSchemaResponse {
+export function buildConfigSchema(params?: { plugins?: PluginUiMetadata[] }): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
   if (plugins.length === 0) return base;

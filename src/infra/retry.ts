@@ -32,12 +32,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const asFiniteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
-const clampNumber = (
-  value: unknown,
-  fallback: number,
-  min?: number,
-  max?: number,
-) => {
+const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
   const next = asFiniteNumber(value);
   if (next === undefined) return fallback;
   const floor = typeof min === "number" ? min : Number.NEGATIVE_INFINITY;
@@ -49,10 +44,7 @@ export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = Math.max(
-    1,
-    Math.round(clampNumber(overrides?.attempts, defaults.attempts, 1)),
-  );
+  const attempts = Math.max(1, Math.round(clampNumber(overrides?.attempts, defaults.attempts, 1)));
   const minDelayMs = Math.max(
     0,
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
@@ -113,8 +105,7 @@ export async function retryAsync<T>(
       if (attempt >= maxAttempts || !shouldRetry(err, attempt)) break;
 
       const retryAfterMs = options.retryAfterMs?.(err);
-      const hasRetryAfter =
-        typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
+      const hasRetryAfter = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
       const baseDelay = hasRetryAfter
         ? Math.max(retryAfterMs, minDelayMs)
         : minDelayMs * 2 ** (attempt - 1);

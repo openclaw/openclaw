@@ -35,11 +35,9 @@ export const updateHandlers: GatewayRequestHandlers = {
       typeof (params as { note?: unknown }).note === "string"
         ? (params as { note?: string }).note?.trim() || undefined
         : undefined;
-    const restartDelayMsRaw = (params as { restartDelayMs?: unknown })
-      .restartDelayMs;
+    const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
     const restartDelayMs =
-      typeof restartDelayMsRaw === "number" &&
-      Number.isFinite(restartDelayMsRaw)
+      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
         ? Math.max(0, Math.floor(restartDelayMsRaw))
         : undefined;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;

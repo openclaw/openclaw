@@ -21,10 +21,7 @@ export const AgentSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const AgentsListParamsSchema = Type.Object(
-  {},
-  { additionalProperties: false },
-);
+export const AgentsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const AgentsListResultSchema = Type.Object(
   {
@@ -36,10 +33,7 @@ export const AgentsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object(
-  {},
-  { additionalProperties: false },
-);
+export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ModelsListResultSchema = Type.Object(
   {
@@ -48,10 +42,7 @@ export const ModelsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const SkillsStatusParamsSchema = Type.Object(
-  {},
-  { additionalProperties: false },
-);
+export const SkillsStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const SkillsInstallParamsSchema = Type.Object(
   {

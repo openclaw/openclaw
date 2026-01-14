@@ -10,11 +10,7 @@ function resolveHomeDir(): string {
 
 export async function noteMacLaunchAgentOverrides() {
   if (process.platform !== "darwin") return;
-  const markerPath = path.join(
-    resolveHomeDir(),
-    ".clawdbot",
-    "disable-launchagent",
-  );
+  const markerPath = path.join(resolveHomeDir(), ".clawdbot", "disable-launchagent");
   const hasMarker = fs.existsSync(markerPath);
   if (!hasMarker) return;
 

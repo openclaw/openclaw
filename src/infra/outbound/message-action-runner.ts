@@ -13,10 +13,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import type {
-  GatewayClientMode,
-  GatewayClientName,
-} from "../../utils/message-channel.js";
+import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -97,10 +94,7 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   return result.content ?? result;
 }
 
-function readBooleanParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
+function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
   if (typeof raw === "boolean") return raw;
   if (typeof raw === "string") {
@@ -141,9 +135,7 @@ function resolveContextGuardTarget(
   if (!CONTEXT_GUARDED_ACTIONS.has(action)) return undefined;
 
   if (action === "thread-reply" || action === "thread-create") {
-    return (
-      readStringParam(params, "channelId") ?? readStringParam(params, "to")
-    );
+    return readStringParam(params, "channelId") ?? readStringParam(params, "to");
   }
 
   return readStringParam(params, "to") ?? readStringParam(params, "channelId");
@@ -165,8 +157,7 @@ function enforceContextIsolation(params: {
   const normalizedTarget =
     normalizeTargetForProvider(params.channel, target) ?? target.toLowerCase();
   const normalizedCurrent =
-    normalizeTargetForProvider(params.channel, currentTarget) ??
-    currentTarget.toLowerCase();
+    normalizeTargetForProvider(params.channel, currentTarget) ?? currentTarget.toLowerCase();
 
   if (!normalizedTarget || !normalizedCurrent) return;
   if (normalizedTarget === normalizedCurrent) return;
@@ -176,10 +167,7 @@ function enforceContextIsolation(params: {
   );
 }
 
-async function resolveChannel(
-  cfg: ClawdbotConfig,
-  params: Record<string, unknown>,
-) {
+async function resolveChannel(cfg: ClawdbotConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
     cfg,
@@ -197,8 +185,7 @@ export async function runMessageAction(
 
   const action = input.action;
   const channel = await resolveChannel(cfg, params);
-  const accountId =
-    readStringParam(params, "accountId") ?? input.defaultAccountId;
+  const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
 
   enforceContextIsolation({
@@ -294,8 +281,7 @@ export async function runMessageAction(
     const question = readStringParam(params, "pollQuestion", {
       required: true,
     });
-    const options =
-      readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+    const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
     if (options.length < 2) {
       throw new Error("pollOption requires at least two values");
     }
@@ -376,9 +362,7 @@ export async function runMessageAction(
     dryRun,
   });
   if (!handled) {
-    throw new Error(
-      `Message action ${action} not supported for channel ${channel}.`,
-    );
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
   return {
     kind: "action",

@@ -6,13 +6,10 @@ const CHANNEL_ONBOARDING_ADAPTERS = () =>
   new Map<ChannelChoice, ChannelOnboardingAdapter>(
     listChannelPlugins()
       .map((plugin) =>
-        plugin.onboarding
-          ? ([plugin.id as ChannelChoice, plugin.onboarding] as const)
-          : null,
+        plugin.onboarding ? ([plugin.id as ChannelChoice, plugin.onboarding] as const) : null,
       )
-      .filter(
-        (entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] =>
-          Boolean(entry),
+      .filter((entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] =>
+        Boolean(entry),
       ),
   );
 

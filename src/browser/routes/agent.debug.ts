@@ -5,23 +5,14 @@ import path from "node:path";
 import type express from "express";
 
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  handleRouteError,
-  readBody,
-  requirePwAi,
-  resolveProfileContext,
-} from "./agent.shared.js";
+import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
-export function registerBrowserAgentDebugRoutes(
-  app: express.Express,
-  ctx: BrowserRouteContext,
-) {
+export function registerBrowserAgentDebugRoutes(app: express.Express, ctx: BrowserRouteContext) {
   app.get("/console", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
-    const targetId =
-      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const level = typeof req.query.level === "string" ? req.query.level : "";
 
     try {
@@ -42,8 +33,7 @@ export function registerBrowserAgentDebugRoutes(
   app.get("/errors", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
-    const targetId =
-      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const clear = toBoolean(req.query.clear) ?? false;
 
     try {
@@ -64,8 +54,7 @@ export function registerBrowserAgentDebugRoutes(
   app.get("/requests", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
-    const targetId =
-      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const filter = typeof req.query.filter === "string" ? req.query.filter : "";
     const clear = toBoolean(req.query.clear) ?? false;
 

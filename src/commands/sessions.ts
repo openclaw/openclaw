@@ -1,16 +1,8 @@
 import { lookupContextTokens } from "../agents/context.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
+import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -42,8 +34,7 @@ const AGE_PAD = 9;
 const MODEL_PAD = 14;
 const TOKENS_PAD = 20;
 
-const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 const truncateKey = (key: string) => {
   if (key.length <= KEY_PAD) return key;
@@ -59,17 +50,11 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
-const formatTokensCell = (
-  total: number,
-  contextTokens: number | null,
-  rich: boolean,
-) => {
+const formatTokensCell = (total: number, contextTokens: number | null, rich: boolean) => {
   if (!total) return "-".padEnd(TOKENS_PAD);
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-  const pct = contextTokens
-    ? Math.min(999, Math.round((total / contextTokens) * 100))
-    : null;
+  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
   const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
   const padded = label.padEnd(TOKENS_PAD);
   return colorByPct(padded, pct, rich);
@@ -126,11 +111,7 @@ function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
   if (key === "global") return "global";
   if (key === "unknown") return "unknown";
   if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
-  if (
-    key.startsWith("group:") ||
-    key.includes(":group:") ||
-    key.includes(":channel:")
-  ) {
+  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "direct";
@@ -209,10 +190,7 @@ export async function sessionsCommand(
           sessions: rows.map((r) => ({
             ...r,
             contextTokens:
-              r.contextTokens ??
-              lookupContextTokens(r.model) ??
-              configContextTokens ??
-              null,
+              r.contextTokens ?? lookupContextTokens(r.model) ?? configContextTokens ?? null,
             model: r.model ?? configModel ?? null,
           })),
         },
@@ -247,8 +225,7 @@ export async function sessionsCommand(
 
   for (const row of rows) {
     const model = row.model ?? configModel;
-    const contextTokens =
-      row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
+    const contextTokens = row.contextTokens ?? lookupContextTokens(model) ?? configContextTokens;
     const input = row.inputTokens ?? 0;
     const output = row.outputTokens ?? 0;
     const total = row.totalTokens ?? input + output;

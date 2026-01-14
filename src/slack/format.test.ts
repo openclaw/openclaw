@@ -49,9 +49,7 @@ describe("markdownToSlackMrkdwn", () => {
   });
 
   it("preserves Slack angle-bracket markup (mentions/links)", () => {
-    const res = markdownToSlackMrkdwn(
-      "hi <@U123> see <https://example.com|docs> and <!here>",
-    );
+    const res = markdownToSlackMrkdwn("hi <@U123> see <https://example.com|docs> and <!here>");
     expect(res).toBe("hi <@U123> see <https://example.com|docs> and <!here>");
   });
 

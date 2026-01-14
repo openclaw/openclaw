@@ -6,10 +6,7 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
@@ -25,10 +22,7 @@ export function resolveProviderAuthOverview(params: {
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
   const withUnusableSuffix = (base: string, profileId: string) => {
-    const unusableUntil = resolveProfileUnusableUntilForDisplay(
-      store,
-      profileId,
-    );
+    const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
     if (!unusableUntil || now >= unusableUntil) return base;
     const stats = store.usageStats?.[profileId];
     const kind =
@@ -42,16 +36,10 @@ export function resolveProviderAuthOverview(params: {
     const profile = store.profiles[profileId];
     if (!profile) return `${profileId}=missing`;
     if (profile.type === "api_key") {
-      return withUnusableSuffix(
-        `${profileId}=${maskApiKey(profile.key)}`,
-        profileId,
-      );
+      return withUnusableSuffix(`${profileId}=${maskApiKey(profile.key)}`, profileId);
     }
     if (profile.type === "token") {
-      return withUnusableSuffix(
-        `${profileId}=token:${maskApiKey(profile.token)}`,
-        profileId,
-      );
+      return withUnusableSuffix(`${profileId}=token:${maskApiKey(profile.token)}`, profileId);
     }
     const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
     const suffix =
@@ -63,15 +51,9 @@ export function resolveProviderAuthOverview(params: {
     const base = `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
     return withUnusableSuffix(base, profileId);
   });
-  const oauthCount = profiles.filter(
-    (id) => store.profiles[id]?.type === "oauth",
-  ).length;
-  const tokenCount = profiles.filter(
-    (id) => store.profiles[id]?.type === "token",
-  ).length;
-  const apiKeyCount = profiles.filter(
-    (id) => store.profiles[id]?.type === "api_key",
-  ).length;
+  const oauthCount = profiles.filter((id) => store.profiles[id]?.type === "oauth").length;
+  const tokenCount = profiles.filter((id) => store.profiles[id]?.type === "token").length;
+  const apiKeyCount = profiles.filter((id) => store.profiles[id]?.type === "api_key").length;
 
   const envKey = resolveEnvApiKey(provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
@@ -85,8 +67,7 @@ export function resolveProviderAuthOverview(params: {
     }
     if (envKey) {
       const isOAuthEnv =
-        envKey.source.includes("OAUTH_TOKEN") ||
-        envKey.source.toLowerCase().includes("oauth");
+        envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth");
       return {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
@@ -112,8 +93,7 @@ export function resolveProviderAuthOverview(params: {
       ? {
           env: {
             value:
-              envKey.source.includes("OAUTH_TOKEN") ||
-              envKey.source.toLowerCase().includes("oauth")
+              envKey.source.includes("OAUTH_TOKEN") || envKey.source.toLowerCase().includes("oauth")
                 ? "OAuth (env)"
                 : maskApiKey(envKey.apiKey),
             source: envKey.source,

@@ -11,15 +11,10 @@ import {
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
 
-export function registerSlackReactionEvents(params: {
-  ctx: SlackMonitorContext;
-}) {
+export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
 
-  const handleReactionEvent = async (
-    event: SlackReactionEvent,
-    action: "added" | "removed",
-  ) => {
+  const handleReactionEvent = async (event: SlackReactionEvent, action: "added" | "removed") => {
     try {
       const item = event.item;
       if (!event.user) return;
@@ -67,9 +62,7 @@ export function registerSlackReactionEvents(params: {
       const channelLabel = channelName
         ? `#${normalizeSlackSlug(channelName) || channelName}`
         : `#${item.channel}`;
-      const authorInfo = event.item_user
-        ? await ctx.resolveUserName(event.item_user)
-        : undefined;
+      const authorInfo = event.item_user ? await ctx.resolveUserName(event.item_user) : undefined;
       const authorLabel = authorInfo?.name ?? event.item_user;
       const baseText = `Slack reaction ${action}: :${emojiLabel}: by ${actorLabel} in ${channelLabel} msg ${item.ts}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
@@ -82,18 +75,13 @@ export function registerSlackReactionEvents(params: {
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(
-        danger(`slack reaction handler failed: ${String(err)}`),
-      );
+      ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
     }
   };
 
-  ctx.app.event(
-    "reaction_added",
-    async ({ event }: SlackEventMiddlewareArgs<"reaction_added">) => {
-      await handleReactionEvent(event as SlackReactionEvent, "added");
-    },
-  );
+  ctx.app.event("reaction_added", async ({ event }: SlackEventMiddlewareArgs<"reaction_added">) => {
+    await handleReactionEvent(event as SlackReactionEvent, "added");
+  });
 
   ctx.app.event(
     "reaction_removed",

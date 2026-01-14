@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  parseTelegramTarget,
-  stripTelegramInternalPrefixes,
-} from "./targets.js";
+import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
@@ -11,9 +8,7 @@ describe("stripTelegramInternalPrefixes", () => {
   });
 
   it("strips telegram+group prefixes", () => {
-    expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe(
-      "-100123",
-    );
+    expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
   });
 
   it("is idempotent", () => {
@@ -62,9 +57,7 @@ describe("parseTelegramTarget", () => {
   });
 
   it("strips internal prefixes before parsing", () => {
-    expect(
-      parseTelegramTarget("telegram:group:-1001234567890:topic:456"),
-    ).toEqual({
+    expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
       messageThreadId: 456,
     });

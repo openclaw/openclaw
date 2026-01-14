@@ -4,11 +4,7 @@ import type { ChannelThreadingToolContext } from "../../channels/plugins/types.j
 import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import {
-  estimateUsageCost,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
@@ -73,8 +69,7 @@ export const formatResponseUsageLine = (params: {
   const output = usage.output;
   if (typeof input !== "number" && typeof output !== "number") return null;
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel =
-    typeof output === "number" ? formatTokenCount(output) : "?";
+  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   const cost =
     params.showCost && typeof input === "number" && typeof output === "number"
       ? estimateUsageCost({
@@ -92,10 +87,7 @@ export const formatResponseUsageLine = (params: {
   return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
 };
 
-export const appendUsageLine = (
-  payloads: ReplyPayload[],
-  line: string,
-): ReplyPayload[] => {
+export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
   let index = -1;
   for (let i = payloads.length - 1; i >= 0; i -= 1) {
     if (payloads[i]?.text) {
@@ -116,7 +108,5 @@ export const appendUsageLine = (
   return updated;
 };
 
-export const resolveEnforceFinalTag = (
-  run: FollowupRun["run"],
-  provider: string,
-) => Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
+  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));

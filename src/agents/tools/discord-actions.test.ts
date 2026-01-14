@@ -42,8 +42,7 @@ vi.mock("../../discord/send.js", () => ({
   deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
   editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
   editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
-  fetchChannelPermissionsDiscord: (...args: unknown[]) =>
-    fetchChannelPermissionsDiscord(...args),
+  fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
   fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
   listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
   listThreadsDiscord: (...args: unknown[]) => listThreadsDiscord(...args),
@@ -51,17 +50,14 @@ vi.mock("../../discord/send.js", () => ({
   pinMessageDiscord: (...args: unknown[]) => pinMessageDiscord(...args),
   reactMessageDiscord: (...args: unknown[]) => reactMessageDiscord(...args),
   readMessagesDiscord: (...args: unknown[]) => readMessagesDiscord(...args),
-  removeChannelPermissionDiscord: (...args: unknown[]) =>
-    removeChannelPermissionDiscord(...args),
-  removeOwnReactionsDiscord: (...args: unknown[]) =>
-    removeOwnReactionsDiscord(...args),
+  removeChannelPermissionDiscord: (...args: unknown[]) => removeChannelPermissionDiscord(...args),
+  removeOwnReactionsDiscord: (...args: unknown[]) => removeOwnReactionsDiscord(...args),
   removeReactionDiscord: (...args: unknown[]) => removeReactionDiscord(...args),
   searchMessagesDiscord: (...args: unknown[]) => searchMessagesDiscord(...args),
   sendMessageDiscord: (...args: unknown[]) => sendMessageDiscord(...args),
   sendPollDiscord: (...args: unknown[]) => sendPollDiscord(...args),
   sendStickerDiscord: (...args: unknown[]) => sendStickerDiscord(...args),
-  setChannelPermissionDiscord: (...args: unknown[]) =>
-    setChannelPermissionDiscord(...args),
+  setChannelPermissionDiscord: (...args: unknown[]) => setChannelPermissionDiscord(...args),
   unpinMessageDiscord: (...args: unknown[]) => unpinMessageDiscord(...args),
 }));
 
@@ -169,11 +165,7 @@ describe("handleDiscordGuildAction - channel management", () => {
 
   it("respects channel gating for channelCreate", async () => {
     await expect(
-      handleDiscordGuildAction(
-        "channelCreate",
-        { guildId: "G1", name: "test" },
-        channelsDisabled,
-      ),
+      handleDiscordGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
     ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
@@ -239,11 +231,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a channel", async () => {
-    await handleDiscordGuildAction(
-      "channelDelete",
-      { channelId: "C1" },
-      channelsEnabled,
-    );
+    await handleDiscordGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
     expect(deleteChannelDiscord).toHaveBeenCalledWith("C1");
   });
 
@@ -330,11 +318,7 @@ describe("handleDiscordGuildAction - channel management", () => {
   });
 
   it("deletes a category", async () => {
-    await handleDiscordGuildAction(
-      "categoryDelete",
-      { categoryId: "CAT1" },
-      channelsEnabled,
-    );
+    await handleDiscordGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
     expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1");
   });
 

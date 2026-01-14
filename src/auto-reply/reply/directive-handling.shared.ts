@@ -37,9 +37,7 @@ export function formatElevatedUnavailableText(params: {
   );
   const failures = params.failures ?? [];
   if (failures.length > 0) {
-    lines.push(
-      `Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`,
-    );
+    lines.push(`Failing gates: ${failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`);
   } else {
     lines.push(
       "Fix-it keys: tools.elevated.enabled, tools.elevated.allowFrom.<provider>, agents.list[].tools.elevated.*",

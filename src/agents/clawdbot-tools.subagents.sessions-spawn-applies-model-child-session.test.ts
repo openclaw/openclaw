@@ -5,9 +5,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-let configOverride: ReturnType<
-  typeof import("../config/config.js")["loadConfig"]
-> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -83,9 +81,7 @@ describe("clawdbot-tools: subagents", () => {
       modelApplied: true,
     });
 
-    const patchIndex = calls.findIndex(
-      (call) => call.method === "sessions.patch",
-    );
+    const patchIndex = calls.findIndex((call) => call.method === "sessions.patch");
     const agentIndex = calls.findIndex((call) => call.method === "agent");
     expect(patchIndex).toBeGreaterThan(-1);
     expect(agentIndex).toBeGreaterThan(-1);

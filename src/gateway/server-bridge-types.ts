@@ -7,16 +7,8 @@ import type { DedupeEntry } from "./server-shared.js";
 
 export type BridgeHandlersContext = {
   deps: CliDeps;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
-  bridgeSendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-  ) => void;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  bridgeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   bridgeSubscribe: (nodeId: string, sessionKey: string) => void;
   bridgeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;

@@ -10,10 +10,7 @@ import {
   resolveStorePath,
 } from "../../../config/sessions.js";
 
-export function resolveGroupPolicyFor(
-  cfg: ReturnType<typeof loadConfig>,
-  conversationId: string,
-) {
+export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conversationId: string) {
   const groupId = resolveGroupSessionKey({
     From: conversationId,
     ChatType: "group",
@@ -53,10 +50,7 @@ export function resolveGroupActivationFor(params: {
   });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
-  const requireMention = resolveGroupRequireMentionFor(
-    params.cfg,
-    params.conversationId,
-  );
+  const requireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId);
   const defaultActivation = requireMention === false ? "always" : "mention";
   return normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation;
 }

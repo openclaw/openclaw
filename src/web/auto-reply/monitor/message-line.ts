@@ -23,9 +23,7 @@ export function buildInboundLine(params: {
   });
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
   const senderLabel =
-    msg.chatType === "group"
-      ? `${msg.senderName ?? msg.senderE164 ?? "Someone"}: `
-      : "";
+    msg.chatType === "group" ? `${msg.senderName ?? msg.senderE164 ?? "Someone"}: ` : "";
   const replyContext = formatReplyContext(msg);
   const baseLine = `${prefixStr}${senderLabel}${msg.body}${
     replyContext ? `\n\n${replyContext}` : ""
@@ -34,8 +32,7 @@ export function buildInboundLine(params: {
   // Wrap with standardized envelope for the agent.
   return formatAgentEnvelope({
     channel: "WhatsApp",
-    from:
-      msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
+    from: msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
     timestamp: msg.timestamp,
     body: baseLine,
   });

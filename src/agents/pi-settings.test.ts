@@ -39,9 +39,7 @@ describe("ensurePiCompactionReserveTokens", () => {
 
 describe("resolveCompactionReserveTokensFloor", () => {
   it("returns the default when config is missing", () => {
-    expect(resolveCompactionReserveTokensFloor()).toBe(
-      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
+    expect(resolveCompactionReserveTokensFloor()).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
   });
 
   it("accepts configured floors, including zero", () => {

@@ -17,10 +17,7 @@ describe("cron schedule", () => {
   it("computes next run for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
-    const next = computeNextRunAtMs(
-      { kind: "every", everyMs: 30_000, anchorMs: anchor },
-      now,
-    );
+    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, now);
     expect(next).toBe(anchor + 30_000);
   });
 
@@ -34,10 +31,7 @@ describe("cron schedule", () => {
 
   it("advances when now matches anchor for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      { kind: "every", everyMs: 30_000, anchorMs: anchor },
-      anchor,
-    );
+    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
   });
 });

@@ -2,10 +2,7 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { saveSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import {
-  scheduleGatewaySigusr1Restart,
-  triggerClawdbotRestart,
-} from "../../infra/restart.js";
+import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -33,12 +30,8 @@ function resolveAbortTarget(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
 }) {
-  const targetSessionKey =
-    params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
-  const { entry, key } = resolveSessionEntryForKey(
-    params.sessionStore,
-    targetSessionKey,
-  );
+  const targetSessionKey = params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
   if (entry && key) return { entry, key, sessionId: entry.sessionId };
   if (params.sessionEntry && params.sessionKey) {
     return {
@@ -50,14 +43,9 @@ function resolveAbortTarget(params: {
   return { entry: undefined, key: targetSessionKey, sessionId: undefined };
 }
 
-export const handleActivationCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleActivationCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
-  const activationCommand = parseActivationCommand(
-    params.command.commandBodyNormalized,
-  );
+  const activationCommand = parseActivationCommand(params.command.commandBodyNormalized);
   if (!activationCommand.hasCommand) return null;
   if (!params.isGroup) {
     return {
@@ -94,14 +82,9 @@ export const handleActivationCommand: CommandHandler = async (
   };
 };
 
-export const handleSendPolicyCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleSendPolicyCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
-  const sendPolicyCommand = parseSendPolicyCommand(
-    params.command.commandBodyNormalized,
-  );
+  const sendPolicyCommand = parseSendPolicyCommand(params.command.commandBodyNormalized);
   if (!sendPolicyCommand.hasCommand) return null;
   if (!params.command.isAuthorizedSender) {
     logVerbose(
@@ -139,10 +122,7 @@ export const handleSendPolicyCommand: CommandHandler = async (
   };
 };
 
-export const handleRestartCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/restart") return null;
   if (!params.command.isAuthorizedSender) {
@@ -171,9 +151,7 @@ export const handleRestartCommand: CommandHandler = async (
   }
   const restartMethod = triggerClawdbotRestart();
   if (!restartMethod.ok) {
-    const detail = restartMethod.detail
-      ? ` Details: ${restartMethod.detail}`
-      : "";
+    const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,
       reply: {
@@ -189,10 +167,7 @@ export const handleRestartCommand: CommandHandler = async (
   };
 };
 
-export const handleStopCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleStopCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/stop") return null;
   if (!params.command.isAuthorizedSender) {
@@ -223,10 +198,7 @@ export const handleStopCommand: CommandHandler = async (
   return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
 };
 
-export const handleAbortTrigger: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (!isAbortTrigger(params.command.rawBodyNormalized)) return null;
   const abortTarget = resolveAbortTarget({

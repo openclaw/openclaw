@@ -1,9 +1,4 @@
-import type {
-  FollowupRun,
-  QueueDropPolicy,
-  QueueMode,
-  QueueSettings,
-} from "./types.js";
+import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
 export type FollowupQueueState = {
   items: FollowupRun[];
@@ -24,10 +19,7 @@ export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
 export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
 
-export function getFollowupQueue(
-  key: string,
-  settings: QueueSettings,
-): FollowupQueueState {
+export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
     existing.mode = settings.mode;

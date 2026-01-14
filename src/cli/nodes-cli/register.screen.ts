@@ -18,20 +18,14 @@ export function registerNodesScreenCommands(nodes: Command) {
   nodesCallOpts(
     screen
       .command("record")
-      .description(
-        "Capture a short screen recording from a node (prints MEDIA:<path>)",
-      )
+      .description("Capture a short screen recording from a node (prints MEDIA:<path>)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--screen <index>", "Screen index (0 = primary)", "0")
       .option("--duration <ms|10s>", "Clip duration (ms or 10s)", "10000")
       .option("--fps <fps>", "Frames per second", "10")
       .option("--no-audio", "Disable microphone audio capture")
       .option("--out <path>", "Output path")
-      .option(
-        "--invoke-timeout <ms>",
-        "Node invoke timeout in ms (default 120000)",
-        "120000",
-      )
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         try {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
@@ -47,9 +41,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             command: "screen.record",
             params: {
               durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
-              screenIndex: Number.isFinite(screenIndex)
-                ? screenIndex
-                : undefined,
+              screenIndex: Number.isFinite(screenIndex) ? screenIndex : undefined,
               fps: Number.isFinite(fps) ? fps : undefined,
               format: "mp4",
               includeAudio: opts.audio !== false,
@@ -60,22 +52,11 @@ export function registerNodesScreenCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli(
-            "node.invoke",
-            opts,
-            invokeParams,
-          )) as unknown;
-          const res =
-            typeof raw === "object" && raw !== null
-              ? (raw as { payload?: unknown })
-              : {};
+          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const parsed = parseScreenRecordPayload(res.payload);
-          const filePath =
-            opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });
-          const written = await writeScreenRecordToFile(
-            filePath,
-            parsed.base64,
-          );
+          const filePath = opts.out ?? screenRecordTempPath({ ext: parsed.format || "mp4" });
+          const written = await writeScreenRecordToFile(filePath, parsed.base64);
 
           if (opts.json) {
             defaultRuntime.log(

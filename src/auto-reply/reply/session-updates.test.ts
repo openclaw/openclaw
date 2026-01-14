@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  enqueueSystemEvent,
-  resetSystemEventsForTest,
-} from "../../infra/system-events.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { prependSystemEvents } from "./session-updates.js";
 
 describe("prependSystemEvents", () => {

@@ -5,10 +5,7 @@ import type { WebSocket } from "ws";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging.js";
-import {
-  isGatewayCliClient,
-  isWebchatClient,
-} from "../../../utils/message-channel.js";
+import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
 import { isLoopbackAddress } from "../../net.js";
@@ -23,15 +20,8 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";
-import {
-  MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
-  TICK_INTERVAL_MS,
-} from "../../server-constants.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-} from "../../server-methods/types.js";
+import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -71,11 +61,7 @@ export function attachGatewayWsMessageHandler(params: {
   setClient: (next: GatewayWsClient) => void;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
-  setLastFrameMeta: (meta: {
-    type?: string;
-    method?: string;
-    id?: string;
-  }) => void;
+  setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
@@ -109,8 +95,7 @@ export function attachGatewayWsMessageHandler(params: {
     logWsControl,
   } = params;
 
-  const isWebchatConnect = (p: ConnectParams | null | undefined) =>
-    isWebchatClient(p?.client);
+  const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
 
   socket.on("message", async (data) => {
     if (isClosed()) return;
@@ -174,9 +159,7 @@ export function attachGatewayWsMessageHandler(params: {
               `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"}`,
             );
           }
-          const closeReason = truncateCloseReason(
-            handshakeError || "invalid handshake",
-          );
+          const closeReason = truncateCloseReason(handshakeError || "invalid handshake");
           if (isRequestFrame) {
             queueMicrotask(() => close(1008, closeReason));
           } else {
@@ -187,8 +170,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const frame = parsed as RequestFrame;
         const connectParams = frame.params as ConnectParams;
-        const clientLabel =
-          connectParams.client.displayName ?? connectParams.client.id;
+        const clientLabel = connectParams.client.displayName ?? connectParams.client.id;
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
@@ -257,9 +239,7 @@ export function attachGatewayWsMessageHandler(params: {
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
         const clientId = connectParams.client.id;
         const instanceId = connectParams.client.instanceId;
-        const presenceKey = shouldTrackPresence
-          ? (instanceId ?? connId)
-          : undefined;
+        const presenceKey = shouldTrackPresence ? (instanceId ?? connId) : undefined;
 
         logWs("in", "connect", {
           connId,
@@ -280,10 +260,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         if (presenceKey) {
           upsertPresence(presenceKey, {
-            host:
-              connectParams.client.displayName ??
-              connectParams.client.id ??
-              os.hostname(),
+            host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
             ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
             version: connectParams.client.version,
             platform: connectParams.client.platform,
@@ -306,10 +283,7 @@ export function attachGatewayWsMessageHandler(params: {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
           server: {
-            version:
-              process.env.CLAWDBOT_VERSION ??
-              process.env.npm_package_version ??
-              "dev",
+            version: process.env.CLAWDBOT_VERSION ?? process.env.npm_package_version ?? "dev",
             commit: process.env.GIT_COMMIT,
             host: os.hostname(),
             connId,
@@ -344,9 +318,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
-          logHealth.error(
-            `post-connect health refresh failed: ${formatError(err)}`,
-          ),
+          logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;
       }
@@ -395,11 +367,7 @@ export function attachGatewayWsMessageHandler(params: {
         });
       })().catch((err) => {
         logGateway.error(`request handler failed: ${formatForLog(err)}`);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       });
     } catch (err) {
       logGateway.error(`parse/handle error: ${String(err)}`);

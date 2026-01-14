@@ -11,10 +11,7 @@ import { autoMigrateLegacyState } from "../../infra/state-migrations.js";
 import { defaultRuntime } from "../../runtime.js";
 import { emitCliBanner } from "../banner.js";
 
-export function registerPreActionHooks(
-  program: Command,
-  programVersion: string,
-) {
+export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     emitCliBanner(programVersion);
     if (actionCommand.name() === "doctor") return;

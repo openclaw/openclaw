@@ -26,11 +26,7 @@ describe("installSessionToolResultGuard", () => {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
-    expect(entries.map((m) => m.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-    ]);
+    expect(entries.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
     const synthetic = entries[1] as {
       toolCallId?: string;
       isError?: boolean;

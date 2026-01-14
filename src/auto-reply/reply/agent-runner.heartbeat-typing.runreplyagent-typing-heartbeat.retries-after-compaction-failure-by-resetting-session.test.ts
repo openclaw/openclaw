@@ -33,8 +33,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -123,9 +122,7 @@ function createMinimalRun(params?: {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("retries after compaction failure by resetting the session", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(
-      path.join(tmpdir(), "clawdbot-session-compaction-reset-"),
-    );
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-compaction-reset-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
     try {
       const sessionId = "session";
@@ -173,9 +170,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
   it("retries after context overflow payload by resetting the session", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(
-      path.join(tmpdir(), "clawdbot-session-overflow-reset-"),
-    );
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-overflow-reset-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
     try {
       const sessionId = "session";
@@ -188,9 +183,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       runEmbeddedPiAgentMock
         .mockImplementationOnce(async () => ({
-          payloads: [
-            { text: "Context overflow: prompt too large", isError: true },
-          ],
+          payloads: [{ text: "Context overflow: prompt too large", isError: true }],
           meta: {
             durationMs: 1,
             error: {

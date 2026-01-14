@@ -31,10 +31,7 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
   try {
     const parsed = JSON.parse(raw) as TelegramUpdateOffsetState;
     if (parsed?.version !== STORE_VERSION) return null;
-    if (
-      parsed.lastUpdateId !== null &&
-      typeof parsed.lastUpdateId !== "number"
-    ) {
+    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
       return null;
     }
     return parsed;
@@ -47,10 +44,7 @@ export async function readTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
-  const filePath = resolveTelegramUpdateOffsetPath(
-    params.accountId,
-    params.env,
-  );
+  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = safeParseState(raw);
@@ -67,16 +61,10 @@ export async function writeTelegramUpdateOffset(params: {
   updateId: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const filePath = resolveTelegramUpdateOffsetPath(
-    params.accountId,
-    params.env,
-  );
+  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
+  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,

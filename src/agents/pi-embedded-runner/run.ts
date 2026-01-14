@@ -14,11 +14,7 @@ import {
   evaluateContextWindowGuard,
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import {
   ensureAuthProfileStore,
@@ -58,13 +54,10 @@ type ApiKeyInfo = {
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
-  const sessionLane = resolveSessionLane(
-    params.sessionKey?.trim() || params.sessionId,
-  );
+  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
-    params.enqueue ??
-    ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
 
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
@@ -72,8 +65,7 @@ export async function runEmbeddedPiAgent(
       const resolvedWorkspace = resolveUserPath(params.workspaceDir);
       const prevCwd = process.cwd();
 
-      const provider =
-        (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
       await ensureClawdbotModelsJson(params.config, agentDir);
@@ -124,12 +116,9 @@ export async function runEmbeddedPiAgent(
         preferredProfile: explicitProfileId,
       });
       if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
-        throw new Error(
-          `Auth profile "${explicitProfileId}" is not configured for ${provider}.`,
-        );
+        throw new Error(`Auth profile "${explicitProfileId}" is not configured for ${provider}.`);
       }
-      const profileCandidates =
-        profileOrder.length > 0 ? profileOrder : [undefined];
+      const profileCandidates = profileOrder.length > 0 ? profileOrder : [undefined];
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -150,9 +139,8 @@ export async function runEmbeddedPiAgent(
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         if (model.provider === "github-copilot") {
-          const { resolveCopilotApiToken } = await import(
-            "../../providers/github-copilot-token.js"
-          );
+          const { resolveCopilotApiToken } =
+            await import("../../providers/github-copilot-token.js");
           const copilotToken = await resolveCopilotApiToken({
             githubToken: apiKeyInfo.apiKey,
           });
@@ -238,13 +226,7 @@ export async function runEmbeddedPiAgent(
             enforceFinalTag: params.enforceFinalTag,
           });
 
-          const {
-            aborted,
-            promptError,
-            timedOut,
-            sessionIdUsed,
-            lastAssistant,
-          } = attempt;
+          const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
@@ -273,11 +255,7 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
-            if (
-              promptFailoverReason &&
-              promptFailoverReason !== "timeout" &&
-              lastProfileId
-            ) {
+            if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
@@ -320,14 +298,11 @@ export async function runEmbeddedPiAgent(
           }
 
           const fallbackConfigured =
-            (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) >
-            0;
+            (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
-          const assistantFailoverReason = classifyFailoverReason(
-            lastAssistant?.errorMessage ?? "",
-          );
+          const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
@@ -406,8 +381,7 @@ export async function runEmbeddedPiAgent(
             sessionKey: params.sessionKey ?? params.sessionId,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
-            inlineToolResultsAllowed:
-              !params.onPartialReply && !params.onToolResult,
+            inlineToolResultsAllowed: !params.onPartialReply && !params.onToolResult,
           });
 
           log.debug(

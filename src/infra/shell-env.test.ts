@@ -9,21 +9,13 @@ import {
 describe("shell env fallback", () => {
   it("is disabled by default", () => {
     expect(shouldEnableShellEnvFallback({} as NodeJS.ProcessEnv)).toBe(false);
-    expect(shouldEnableShellEnvFallback({ CLAWDBOT_LOAD_SHELL_ENV: "0" })).toBe(
-      false,
-    );
-    expect(shouldEnableShellEnvFallback({ CLAWDBOT_LOAD_SHELL_ENV: "1" })).toBe(
-      true,
-    );
+    expect(shouldEnableShellEnvFallback({ CLAWDBOT_LOAD_SHELL_ENV: "0" })).toBe(false);
+    expect(shouldEnableShellEnvFallback({ CLAWDBOT_LOAD_SHELL_ENV: "1" })).toBe(true);
   });
 
   it("resolves timeout from env with default fallback", () => {
-    expect(resolveShellEnvFallbackTimeoutMs({} as NodeJS.ProcessEnv)).toBe(
-      15000,
-    );
-    expect(
-      resolveShellEnvFallbackTimeoutMs({ CLAWDBOT_SHELL_ENV_TIMEOUT_MS: "42" }),
-    ).toBe(42);
+    expect(resolveShellEnvFallbackTimeoutMs({} as NodeJS.ProcessEnv)).toBe(15000);
+    expect(resolveShellEnvFallbackTimeoutMs({ CLAWDBOT_SHELL_ENV_TIMEOUT_MS: "42" })).toBe(42);
     expect(
       resolveShellEnvFallbackTimeoutMs({
         CLAWDBOT_SHELL_ENV_TIMEOUT_MS: "nope",
@@ -39,9 +31,7 @@ describe("shell env fallback", () => {
       enabled: true,
       env,
       expectedKeys: ["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"],
-      exec: exec as unknown as Parameters<
-        typeof loadShellEnvFallback
-      >[0]["exec"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
     });
 
     expect(res.ok).toBe(true);
@@ -52,17 +42,13 @@ describe("shell env fallback", () => {
 
   it("imports expected keys without overriding existing env", () => {
     const env: NodeJS.ProcessEnv = {};
-    const exec = vi.fn(() =>
-      Buffer.from("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=discord\0"),
-    );
+    const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0DISCORD_BOT_TOKEN=discord\0"));
 
     const res1 = loadShellEnvFallback({
       enabled: true,
       env,
       expectedKeys: ["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"],
-      exec: exec as unknown as Parameters<
-        typeof loadShellEnvFallback
-      >[0]["exec"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
     });
 
     expect(res1.ok).toBe(true);
@@ -78,9 +64,7 @@ describe("shell env fallback", () => {
       enabled: true,
       env,
       expectedKeys: ["OPENAI_API_KEY", "DISCORD_BOT_TOKEN"],
-      exec: exec2 as unknown as Parameters<
-        typeof loadShellEnvFallback
-      >[0]["exec"],
+      exec: exec2 as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
     });
 
     expect(res2.ok).toBe(true);

@@ -11,9 +11,7 @@ import {
 
 describe("external CLI credential sync", () => {
   it("upgrades token to oauth when Claude CLI gets refreshToken", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-upgrade-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-upgrade-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -53,12 +51,8 @@ describe("external CLI credential sync", () => {
           // Should upgrade from token to oauth
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("oauth");
-          expect((cliProfile as { access: string }).access).toBe(
-            "new-oauth-access",
-          );
-          expect((cliProfile as { refresh: string }).refresh).toBe(
-            "new-refresh-token",
-          );
+          expect((cliProfile as { access: string }).access).toBe("new-oauth-access");
+          expect((cliProfile as { refresh: string }).refresh).toBe("new-refresh-token");
         },
         { prefix: "clawdbot-home-" },
       );
@@ -67,9 +61,7 @@ describe("external CLI credential sync", () => {
     }
   });
   it("syncs Codex CLI credentials into openai-codex:codex-cli", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-codex-sync-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-codex-sync-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -98,9 +90,9 @@ describe("external CLI credential sync", () => {
           const store = ensureAuthProfileStore(agentDir);
 
           expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeDefined();
-          expect(
-            (store.profiles[CODEX_CLI_PROFILE_ID] as { access: string }).access,
-          ).toBe("codex-access-token");
+          expect((store.profiles[CODEX_CLI_PROFILE_ID] as { access: string }).access).toBe(
+            "codex-access-token",
+          );
         },
         { prefix: "clawdbot-home-" },
       );

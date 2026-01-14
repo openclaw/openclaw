@@ -1,7 +1,4 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { CliDeps } from "../../cli/deps.js";
@@ -25,7 +22,7 @@ import {
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
-  ReturnType<typeof import("../../agents/pi-embedded.js")["runEmbeddedPiAgent"]>
+  ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
 
 export async function deliverAgentCommandResult(params: {
@@ -40,8 +37,7 @@ export async function deliverAgentCommandResult(params: {
   const { cfg, deps, runtime, opts, sessionEntry, payloads, result } = params;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryChannel =
-    resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
+  const deliveryChannel = resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
   // Channel docking: delivery channels are resolved via plugin registry.
   const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
     ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
@@ -58,8 +54,7 @@ export async function deliverAgentCommandResult(params: {
           channel: deliveryChannel,
           to: opts.to,
           cfg,
-          accountId:
-            targetMode === "implicit" ? sessionEntry?.lastAccountId : undefined,
+          accountId: targetMode === "implicit" ? sessionEntry?.lastAccountId : undefined,
           mode: targetMode,
         })
       : null;
@@ -111,11 +106,7 @@ export async function deliverAgentCommandResult(params: {
   if (!deliver) {
     for (const payload of deliveryPayloads) logPayload(payload);
   }
-  if (
-    deliver &&
-    deliveryChannel &&
-    !isInternalMessageChannel(deliveryChannel)
-  ) {
+  if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
       await deliverOutboundPayloads({
         cfg,

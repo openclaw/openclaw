@@ -1,9 +1,6 @@
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
 import { startNodeBridgeServer } from "../infra/bridge/server.js";
-import {
-  listSystemPresence,
-  upsertPresence,
-} from "../infra/system-presence.js";
+import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../infra/voicewake.js";
 import { isLoopbackAddress } from "./net.js";
 import {
@@ -11,11 +8,7 @@ import {
   getPresenceVersion,
   incrementPresenceVersion,
 } from "./server/health-state.js";
-import type {
-  BridgeEvent,
-  BridgeRequest,
-  BridgeResponse,
-} from "./server-bridge-types.js";
+import type { BridgeEvent, BridgeRequest, BridgeResponse } from "./server-bridge-types.js";
 
 export type GatewayNodeBridgeRuntime = {
   bridge: NodeBridgeServer | null;
@@ -38,10 +31,7 @@ export async function startGatewayNodeBridge(params: {
     },
   ) => void;
   bridgeUnsubscribeAll: (nodeId: string) => void;
-  handleBridgeRequest: (
-    nodeId: string,
-    req: BridgeRequest,
-  ) => Promise<BridgeResponse>;
+  handleBridgeRequest: (nodeId: string, req: BridgeRequest) => Promise<BridgeResponse>;
   handleBridgeEvent: (nodeId: string, evt: BridgeEvent) => Promise<void> | void;
   logBridge: { info: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<GatewayNodeBridgeRuntime> {
@@ -149,19 +139,13 @@ export async function startGatewayNodeBridge(params: {
         },
       });
       if (started.port > 0) {
-        params.logBridge.info(
-          `listening on tcp://${params.bridgeHost}:${started.port} (node)`,
-        );
+        params.logBridge.info(`listening on tcp://${params.bridgeHost}:${started.port} (node)`);
         return { bridge: started, nodePresenceTimers };
       }
     } catch (err) {
       params.logBridge.warn(`failed to start: ${String(err)}`);
     }
-  } else if (
-    params.bridgeEnabled &&
-    params.bridgePort > 0 &&
-    !params.bridgeHost
-  ) {
+  } else if (params.bridgeEnabled && params.bridgePort > 0 && !params.bridgeHost) {
     params.logBridge.warn(
       "bind policy requested tailnet IP, but no tailnet interface was found; refusing to start bridge",
     );

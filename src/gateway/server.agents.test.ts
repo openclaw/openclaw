@@ -20,10 +20,9 @@ describe("gateway server agents", () => {
 
     const { ws } = await startServerWithClient();
     const hello = await connectOk(ws);
-    expect(
-      (hello as unknown as { features?: { methods?: string[] } }).features
-        ?.methods,
-    ).toEqual(expect.arrayContaining(["agents.list"]));
+    expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
+      expect.arrayContaining(["agents.list"]),
+    );
 
     const res = await rpcReq<{
       defaultId: string;
@@ -36,11 +35,7 @@ describe("gateway server agents", () => {
     expect(res.payload?.defaultId).toBe("work");
     expect(res.payload?.mainKey).toBe("main");
     expect(res.payload?.scope).toBe("per-sender");
-    expect(res.payload?.agents.map((agent) => agent.id)).toEqual([
-      "work",
-      "home",
-      "main",
-    ]);
+    expect(res.payload?.agents.map((agent) => agent.id)).toEqual(["work", "home", "main"]);
     const work = res.payload?.agents.find((agent) => agent.id === "work");
     const home = res.payload?.agents.find((agent) => agent.id === "home");
     expect(work?.name).toBe("Work");

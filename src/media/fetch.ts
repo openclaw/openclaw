@@ -8,10 +8,7 @@ type FetchMediaResult = {
   fileName?: string;
 };
 
-export type FetchLike = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type FetchMediaOptions = {
   url: string;
@@ -23,9 +20,7 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
-function parseContentDispositionFileName(
-  header?: string | null,
-): string | undefined {
+function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) return undefined;
   const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
   if (starMatch?.[1]) {
@@ -42,10 +37,7 @@ function parseContentDispositionFileName(
   return undefined;
 }
 
-async function readErrorBodySnippet(
-  res: Response,
-  maxChars = 200,
-): Promise<string | undefined> {
+async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<string | undefined> {
   try {
     const text = await res.text();
     if (!text) return undefined;
@@ -58,9 +50,7 @@ async function readErrorBodySnippet(
   }
 }
 
-export async function fetchRemoteMedia(
-  options: FetchMediaOptions,
-): Promise<FetchMediaResult> {
+export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
   const { url, fetchImpl, filePathHint } = options;
   const fetcher: FetchLike | undefined = fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
@@ -76,8 +66,7 @@ export async function fetchRemoteMedia(
 
   if (!res.ok) {
     const statusText = res.statusText ? ` ${res.statusText}` : "";
-    const redirected =
-      res.url && res.url !== url ? ` (redirected to ${res.url})` : "";
+    const redirected = res.url && res.url !== url ? ` (redirected to ${res.url})` : "";
     let detail = `HTTP ${res.status}${statusText}`;
     if (!res.body) {
       detail = `HTTP ${res.status}${statusText}; empty response body`;
@@ -85,9 +74,7 @@ export async function fetchRemoteMedia(
       const snippet = await readErrorBodySnippet(res);
       if (snippet) detail += `; body: ${snippet}`;
     }
-    throw new Error(
-      `Failed to fetch media from ${url}${redirected}: ${detail}`,
-    );
+    throw new Error(`Failed to fetch media from ${url}${redirected}: ${detail}`);
   }
 
   const buffer = Buffer.from(await res.arrayBuffer());
@@ -100,18 +87,12 @@ export async function fetchRemoteMedia(
     // ignore parse errors; leave undefined
   }
 
-  const headerFileName = parseContentDispositionFileName(
-    res.headers.get("content-disposition"),
-  );
+  const headerFileName = parseContentDispositionFileName(res.headers.get("content-disposition"));
   let fileName =
-    headerFileName ||
-    fileNameFromUrl ||
-    (filePathHint ? path.basename(filePathHint) : undefined);
+    headerFileName || fileNameFromUrl || (filePathHint ? path.basename(filePathHint) : undefined);
 
   const filePathForMime =
-    headerFileName && path.extname(headerFileName)
-      ? headerFileName
-      : (filePathHint ?? url);
+    headerFileName && path.extname(headerFileName) ? headerFileName : (filePathHint ?? url);
   const contentType = await detectMime({
     buffer,
     headerMime: res.headers.get("content-type"),

@@ -23,9 +23,7 @@ const mockLoadConfig = vi.fn().mockReturnValue({
 });
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi
-  .fn()
-  .mockResolvedValue({ code: "PAIRCODE", created: true });
+const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -36,10 +34,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
 vi.mock("./session.js", () => {
@@ -68,8 +64,7 @@ vi.mock("./session.js", () => {
 });
 
 const { createWaSocket } = await import("./session.js");
-const _getSock = () =>
-  (createWaSocket as unknown as () => Promise<ReturnType<typeof mockSock>>)();
+const _getSock = () => (createWaSocket as unknown as () => Promise<ReturnType<typeof mockSock>>)();
 
 import crypto from "node:crypto";
 import fsSync from "node:fs";
@@ -176,10 +171,7 @@ describe("web monitor inbox", () => {
   });
 
   it("logs inbound bodies to file", async () => {
-    const logPath = path.join(
-      os.tmpdir(),
-      `clawdbot-log-test-${crypto.randomUUID()}.log`,
-    );
+    const logPath = path.join(os.tmpdir(), `clawdbot-log-test-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });
 
     const onMessage = vi.fn();

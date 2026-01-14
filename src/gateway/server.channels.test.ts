@@ -54,11 +54,9 @@ describe("gateway server channels", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const res = await rpcReq<{ cleared?: boolean; channel?: string }>(
-      ws,
-      "channels.logout",
-      { channel: "whatsapp" },
-    );
+    const res = await rpcReq<{ cleared?: boolean; channel?: string }>(ws, "channels.logout", {
+      channel: "whatsapp",
+    });
     expect(res.ok).toBe(true);
     expect(res.payload?.channel).toBe("whatsapp");
     expect(res.payload?.cleared).toBe(false);
@@ -70,8 +68,7 @@ describe("gateway server channels", () => {
   test("channels.logout clears telegram bot token from config", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
-    const { readConfigFileSnapshot, writeConfigFile } =
-      await loadConfigHelpers();
+    const { readConfigFileSnapshot, writeConfigFile } = await loadConfigHelpers();
     await writeConfigFile({
       channels: {
         telegram: {
@@ -97,9 +94,7 @@ describe("gateway server channels", () => {
     const snap = await readConfigFileSnapshot();
     expect(snap.valid).toBe(true);
     expect(snap.config?.channels?.telegram?.botToken).toBeUndefined();
-    expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
-      false,
-    );
+    expect(snap.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
 
     ws.close();
     await server.close();

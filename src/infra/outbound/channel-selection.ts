@@ -21,10 +21,7 @@ function isAccountEnabled(account: unknown): boolean {
   return enabled !== false;
 }
 
-async function isPluginConfigured(
-  plugin: ChannelPlugin,
-  cfg: ClawdbotConfig,
-): Promise<boolean> {
+async function isPluginConfigured(plugin: ChannelPlugin, cfg: ClawdbotConfig): Promise<boolean> {
   const accountIds = plugin.config.listAccountIds(cfg);
   if (accountIds.length === 0) return false;
 
@@ -78,8 +75,6 @@ export async function resolveMessageChannelSelection(params: {
     throw new Error("Channel is required (no configured channels detected).");
   }
   throw new Error(
-    `Channel is required when multiple channels are configured: ${configured.join(
-      ", ",
-    )}`,
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}`,
   );
 }

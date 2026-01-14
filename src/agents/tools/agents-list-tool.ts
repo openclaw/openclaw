@@ -9,10 +9,7 @@ import {
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const AgentsListToolSchema = Type.Object({});
 
@@ -22,14 +19,11 @@ type AgentListEntry = {
   configured: boolean;
 };
 
-export function createAgentsListTool(opts?: {
-  agentSessionKey?: string;
-}): AnyAgentTool {
+export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Agents",
     name: "agents_list",
-    description:
-      "List agent ids you can target with sessions_spawn (based on allowlists).",
+    description: "List agent ids you can target with sessions_spawn (based on allowlists).",
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = loadConfig();
@@ -46,8 +40,7 @@ export function createAgentsListTool(opts?: {
         parseAgentSessionKey(requesterInternalKey)?.agentId ?? DEFAULT_AGENT_ID,
       );
 
-      const allowAgents =
-        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
       const allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
@@ -55,12 +48,8 @@ export function createAgentsListTool(opts?: {
           .map((value) => normalizeAgentId(value)),
       );
 
-      const configuredAgents = Array.isArray(cfg.agents?.list)
-        ? cfg.agents?.list
-        : [];
-      const configuredIds = configuredAgents.map((entry) =>
-        normalizeAgentId(entry.id),
-      );
+      const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
+      const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";
@@ -77,9 +66,7 @@ export function createAgentsListTool(opts?: {
       }
 
       const all = Array.from(allowed);
-      const rest = all
-        .filter((id) => id !== requesterAgentId)
-        .sort((a, b) => a.localeCompare(b));
+      const rest = all.filter((id) => id !== requesterAgentId).sort((a, b) => a.localeCompare(b));
       const ordered = [requesterAgentId, ...rest];
       const agents: AgentListEntry[] = ordered.map((id) => ({
         id,

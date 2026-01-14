@@ -78,9 +78,7 @@ async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
     // ignore
   }
 
-  const rootPrefix = rootReal.endsWith(path.sep)
-    ? rootReal
-    : `${rootReal}${path.sep}`;
+  const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
   try {
     const lstat = await fs.lstat(candidate);
     if (lstat.isSymbolicLink()) return null;

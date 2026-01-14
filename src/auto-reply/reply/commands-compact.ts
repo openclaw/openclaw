@@ -73,24 +73,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: params.sessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
-    thinkLevel:
-      params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
       allowed: false,
       defaultLevel: "off",
     },
     customInstructions,
-    ownerNumbers:
-      params.command.ownerList.length > 0
-        ? params.command.ownerList
-        : undefined,
+    ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
   const totalTokens =
     params.sessionEntry.totalTokens ??
-    (params.sessionEntry.inputTokens ?? 0) +
-      (params.sessionEntry.outputTokens ?? 0);
+    (params.sessionEntry.inputTokens ?? 0) + (params.sessionEntry.outputTokens ?? 0);
   const contextSummary = formatContextUsageShort(
     totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,

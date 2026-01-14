@@ -34,9 +34,7 @@ export async function promptAuthChoiceGrouped(params: {
       return "skip";
     }
 
-    const group = availableGroups.find(
-      (candidate) => candidate.value === providerSelection,
-    );
+    const group = availableGroups.find((candidate) => candidate.value === providerSelection);
 
     if (!group || group.options.length === 0) {
       await params.prompter.note(

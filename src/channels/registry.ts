@@ -39,8 +39,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
     selectionLabel: "Telegram (Bot API)",
     docsPath: "/channels/telegram",
     docsLabel: "telegram",
-    blurb:
-      "simplest way to get started — register a bot with @BotFather and get going.",
+    blurb: "simplest way to get started — register a bot with @BotFather and get going.",
     selectionDocsPrefix: "",
     selectionDocsOmitLabel: true,
     selectionExtras: [WEBSITE_URL],
@@ -75,8 +74,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChatChannelMeta> = {
     selectionLabel: "Signal (signal-cli)",
     docsPath: "/channels/signal",
     docsLabel: "signal",
-    blurb:
-      'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
+    blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
   },
   imessage: {
     id: "imessage",
@@ -118,9 +116,7 @@ export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {
   return CHAT_CHANNEL_META[id];
 }
 
-export function normalizeChatChannelId(
-  raw?: string | null,
-): ChatChannelId | null {
+export function normalizeChatChannelId(raw?: string | null): ChatChannelId | null {
   const normalized = normalizeChannelKey(raw);
   if (!normalized) return null;
   const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;

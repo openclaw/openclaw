@@ -47,9 +47,7 @@ function summarizeInstallOutput(text: string): string | undefined {
   if (!preferred) return undefined;
   const normalized = preferred.replace(/\s+/g, " ").trim();
   const maxLen = 200;
-  return normalized.length > maxLen
-    ? `${normalized.slice(0, maxLen - 1)}…`
-    : normalized;
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen - 1)}…` : normalized;
 }
 
 function formatInstallFailureMessage(result: {
@@ -57,11 +55,8 @@ function formatInstallFailureMessage(result: {
   stdout: string;
   stderr: string;
 }): string {
-  const code =
-    typeof result.code === "number" ? `exit ${result.code}` : "unknown exit";
-  const summary =
-    summarizeInstallOutput(result.stderr) ??
-    summarizeInstallOutput(result.stdout);
+  const code = typeof result.code === "number" ? `exit ${result.code}` : "unknown exit";
+  const summary = summarizeInstallOutput(result.stderr) ?? summarizeInstallOutput(result.stdout);
   if (!summary) return `Install failed (${code})`;
   return `Install failed (${code}): ${summary}`;
 }
@@ -70,10 +65,7 @@ function resolveInstallId(spec: SkillInstallSpec, index: number): string {
   return (spec.id ?? `${spec.kind}-${index}`).trim();
 }
 
-function findInstallSpec(
-  entry: SkillEntry,
-  installId: string,
-): SkillInstallSpec | undefined {
+function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec | undefined {
   const specs = entry.clawdbot?.install ?? [];
   for (const [index, spec] of specs.entries()) {
     if (resolveInstallId(spec, index) === installId) return spec;
@@ -81,10 +73,7 @@ function findInstallSpec(
   return undefined;
 }
 
-function buildNodeInstallCommand(
-  packageName: string,
-  prefs: SkillsInstallPreferences,
-): string[] {
+function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
       return ["pnpm", "add", "-g", packageName];
@@ -128,10 +117,7 @@ function buildInstallCommand(
   }
 }
 
-async function resolveBrewBinDir(
-  timeoutMs: number,
-  brewExe?: string,
-): Promise<string | undefined> {
+async function resolveBrewBinDir(timeoutMs: number, brewExe?: string): Promise<string | undefined> {
   const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
   if (!exe) return undefined;
 
@@ -156,13 +142,8 @@ async function resolveBrewBinDir(
   return undefined;
 }
 
-export async function installSkill(
-  params: SkillInstallRequest,
-): Promise<SkillInstallResult> {
-  const timeoutMs = Math.min(
-    Math.max(params.timeoutMs ?? 300_000, 1_000),
-    900_000,
-  );
+export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
+  const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const entries = loadWorkspaceSkillEntries(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
@@ -211,12 +192,9 @@ export async function installSkill(
   }
   if (spec.kind === "uv" && !hasBinary("uv")) {
     if (brewExe) {
-      const brewResult = await runCommandWithTimeout(
-        [brewExe, "install", "uv"],
-        {
-          timeoutMs,
-        },
-      );
+      const brewResult = await runCommandWithTimeout([brewExe, "install", "uv"], {
+        timeoutMs,
+      });
       if (brewResult.code !== 0) {
         return {
           ok: false,
@@ -252,12 +230,9 @@ export async function installSkill(
 
   if (spec.kind === "go" && !hasBinary("go")) {
     if (brewExe) {
-      const brewResult = await runCommandWithTimeout(
-        [brewExe, "install", "go"],
-        {
-          timeoutMs,
-        },
-      );
+      const brewResult = await runCommandWithTimeout([brewExe, "install", "go"], {
+        timeoutMs,
+      });
       if (brewResult.code !== 0) {
         return {
           ok: false,

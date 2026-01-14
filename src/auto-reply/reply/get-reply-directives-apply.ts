@@ -1,12 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../thinking.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildStatusReply } from "./commands.js";
 import {
@@ -176,11 +171,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentElevatedLevel,
     });
     let statusReply: ReplyPayload | undefined;
-    if (
-      directives.hasStatusDirective &&
-      allowTextCommands &&
-      command.isAuthorizedSender
-    ) {
+    if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -192,8 +183,7 @@ export async function applyInlineDirectiveOverrides(params: {
         contextTokens,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: (currentVerboseLevel ?? "off") as VerboseLevel,
-        resolvedReasoningLevel: (currentReasoningLevel ??
-          "off") as ReasoningLevel,
+        resolvedReasoningLevel: (currentReasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
         isGroup,
@@ -284,9 +274,7 @@ export async function applyInlineDirectiveOverrides(params: {
   contextTokens = persisted.contextTokens;
 
   const perMessageQueueMode =
-    directives.hasQueueDirective && !directives.queueReset
-      ? directives.queueMode
-      : undefined;
+    directives.hasQueueDirective && !directives.queueReset ? directives.queueMode : undefined;
   const perMessageQueueOptions =
     directives.hasQueueDirective && !directives.queueReset
       ? {

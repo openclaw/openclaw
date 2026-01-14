@@ -21,9 +21,7 @@ export async function fetchMemberInfoDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildMember> {
   const rest = resolveDiscordRest(opts);
-  return (await rest.get(
-    Routes.guildMember(guildId, userId),
-  )) as APIGuildMember;
+  return (await rest.get(Routes.guildMember(guildId, userId))) as APIGuildMember;
 }
 
 export async function fetchRoleInfoDiscord(
@@ -34,25 +32,15 @@ export async function fetchRoleInfoDiscord(
   return (await rest.get(Routes.guildRoles(guildId))) as APIRole[];
 }
 
-export async function addRoleDiscord(
-  payload: DiscordRoleChange,
-  opts: DiscordReactOpts = {},
-) {
+export async function addRoleDiscord(payload: DiscordRoleChange, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
-  await rest.put(
-    Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId),
-  );
+  await rest.put(Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId));
   return { ok: true };
 }
 
-export async function removeRoleDiscord(
-  payload: DiscordRoleChange,
-  opts: DiscordReactOpts = {},
-) {
+export async function removeRoleDiscord(payload: DiscordRoleChange, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
-  await rest.delete(
-    Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId),
-  );
+  await rest.delete(Routes.guildMemberRole(payload.guildId, payload.userId, payload.roleId));
   return { ok: true };
 }
 
@@ -78,9 +66,7 @@ export async function fetchVoiceStatusDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<APIVoiceState> {
   const rest = resolveDiscordRest(opts);
-  return (await rest.get(
-    Routes.guildVoiceState(guildId, userId),
-  )) as APIVoiceState;
+  return (await rest.get(Routes.guildVoiceState(guildId, userId))) as APIVoiceState;
 }
 
 export async function listScheduledEventsDiscord(
@@ -88,9 +74,7 @@ export async function listScheduledEventsDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<APIGuildScheduledEvent[]> {
   const rest = resolveDiscordRest(opts);
-  return (await rest.get(
-    Routes.guildScheduledEvents(guildId),
-  )) as APIGuildScheduledEvent[];
+  return (await rest.get(Routes.guildScheduledEvents(guildId))) as APIGuildScheduledEvent[];
 }
 
 export async function createScheduledEventDiscord(
@@ -114,15 +98,12 @@ export async function timeoutMemberDiscord(
     const ms = payload.durationMinutes * 60 * 1000;
     until = new Date(Date.now() + ms).toISOString();
   }
-  return (await rest.patch(
-    Routes.guildMember(payload.guildId, payload.userId),
-    {
-      body: { communication_disabled_until: until ?? null },
-      headers: payload.reason
-        ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
-        : undefined,
-    },
-  )) as APIGuildMember;
+  return (await rest.patch(Routes.guildMember(payload.guildId, payload.userId), {
+    body: { communication_disabled_until: until ?? null },
+    headers: payload.reason
+      ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
+      : undefined,
+  })) as APIGuildMember;
 }
 
 export async function kickMemberDiscord(
@@ -144,15 +125,11 @@ export async function banMemberDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const deleteMessageDays =
-    typeof payload.deleteMessageDays === "number" &&
-    Number.isFinite(payload.deleteMessageDays)
+    typeof payload.deleteMessageDays === "number" && Number.isFinite(payload.deleteMessageDays)
       ? Math.min(Math.max(Math.floor(payload.deleteMessageDays), 0), 7)
       : undefined;
   await rest.put(Routes.guildBan(payload.guildId, payload.userId), {
-    body:
-      deleteMessageDays !== undefined
-        ? { delete_message_days: deleteMessageDays }
-        : undefined,
+    body: deleteMessageDays !== undefined ? { delete_message_days: deleteMessageDays } : undefined,
     headers: payload.reason
       ? { "X-Audit-Log-Reason": encodeURIComponent(payload.reason) }
       : undefined,

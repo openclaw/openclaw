@@ -52,8 +52,7 @@ export function buildGatewayConnectionDetails(
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
-    options.configPath ??
-    resolveConfigPath(process.env, resolveStateDir(process.env));
+    options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const localPort = resolveGatewayPort(config);
@@ -69,9 +68,7 @@ export function buildGatewayConnectionDetails(
       ? options.url.trim()
       : undefined;
   const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0
-      ? remote.url.trim()
-      : undefined;
+    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
@@ -86,8 +83,7 @@ export function buildGatewayConnectionDetails(
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
-  const bindDetail =
-    !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
   const message = [
     `Gateway target: ${url}`,
     `Source: ${urlSource}`,
@@ -107,25 +103,18 @@ export function buildGatewayConnectionDetails(
   };
 }
 
-export async function callGateway<T = unknown>(
-  opts: CallGatewayOptions,
-): Promise<T> {
+export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const config = loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const urlOverride =
-    typeof opts.url === "string" && opts.url.trim().length > 0
-      ? opts.url.trim()
-      : undefined;
+    typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
   const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0
-      ? remote.url.trim()
-      : undefined;
+    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   if (isRemoteMode && !urlOverride && !remoteUrl) {
     const configPath =
-      opts.configPath ??
-      resolveConfigPath(process.env, resolveStateDir(process.env));
+      opts.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
     throw new Error(
       [
         "gateway remote mode misconfigured: gateway.remote.url missing",
@@ -160,8 +149,7 @@ export async function callGateway<T = unknown>(
       : undefined) ||
     process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode
-      ? typeof remote?.password === "string" &&
-        remote.password.trim().length > 0
+      ? typeof remote?.password === "string" && remote.password.trim().length > 0
         ? remote.password.trim()
         : undefined
       : typeof authPassword === "string" && authPassword.trim().length > 0
@@ -171,11 +159,7 @@ export async function callGateway<T = unknown>(
   const formatCloseError = (code: number, reason: string) => {
     const reasonText = reason?.trim() || "no close reason";
     const hint =
-      code === 1006
-        ? "abnormal closure (no close frame)"
-        : code === 1000
-          ? "normal closure"
-          : "";
+      code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
     const suffix = hint ? ` ${hint}` : "";
     return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
   };

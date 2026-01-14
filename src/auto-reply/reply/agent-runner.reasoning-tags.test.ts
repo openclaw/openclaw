@@ -23,8 +23,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -118,11 +117,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       meta: {},
     });
     runWithModelFallbackMock.mockImplementationOnce(
-      async ({
-        run,
-      }: {
-        run: (provider: string, model: string) => Promise<unknown>;
-      }) => ({
+      async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
         result: await run("google-antigravity", "gemini-3"),
         provider: "google-antigravity",
         model: "gemini-3",
@@ -131,27 +126,19 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     await createRun();
 
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
-      | EmbeddedPiAgentParams
-      | undefined;
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as EmbeddedPiAgentParams | undefined;
     expect(call?.enforceFinalTag).toBe(true);
   });
 
   it("enforces <final> during memory flush on fallback providers", async () => {
-    runEmbeddedPiAgentMock.mockImplementation(
-      async (params: EmbeddedPiAgentParams) => {
-        if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
-          return { payloads: [], meta: {} };
-        }
-        return { payloads: [{ text: "ok" }], meta: {} };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedPiAgentParams) => {
+      if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+        return { payloads: [], meta: {} };
+      }
+      return { payloads: [{ text: "ok" }], meta: {} };
+    });
     runWithModelFallbackMock.mockImplementation(
-      async ({
-        run,
-      }: {
-        run: (provider: string, model: string) => Promise<unknown>;
-      }) => ({
+      async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
         result: await run("google-antigravity", "gemini-3"),
         provider: "google-antigravity",
         model: "gemini-3",
@@ -169,8 +156,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
 
     const flushCall = runEmbeddedPiAgentMock.mock.calls.find(
       ([params]) =>
-        (params as EmbeddedPiAgentParams | undefined)?.prompt ===
-        DEFAULT_MEMORY_FLUSH_PROMPT,
+        (params as EmbeddedPiAgentParams | undefined)?.prompt === DEFAULT_MEMORY_FLUSH_PROMPT,
     )?.[0] as EmbeddedPiAgentParams | undefined;
 
     expect(flushCall?.enforceFinalTag).toBe(true);

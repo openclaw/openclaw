@@ -53,18 +53,14 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) return;
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      logReconnectVerbose(
-        `Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`,
-      );
+      logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
     } catch (err) {
       if (abortSignal?.aborted) return;
       runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-      runtime.log?.(
-        `Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`,
-      );
+      runtime.log?.(`Signal SSE connection lost, reconnecting in ${delayMs / 1000}s...`);
       try {
         await sleepWithAbort(delayMs, abortSignal);
       } catch (sleepErr) {

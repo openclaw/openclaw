@@ -6,10 +6,7 @@ function throwAbortError(): never {
   throw err;
 }
 
-function combineAbortSignals(
-  a?: AbortSignal,
-  b?: AbortSignal,
-): AbortSignal | undefined {
+function combineAbortSignals(a?: AbortSignal, b?: AbortSignal): AbortSignal | undefined {
   if (!a && !b) return undefined;
   if (a && !b) return a;
   if (b && !a) return b;

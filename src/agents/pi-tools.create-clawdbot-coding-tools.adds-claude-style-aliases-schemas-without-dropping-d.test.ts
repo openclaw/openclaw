@@ -51,9 +51,7 @@ describe("createClawdbotCodingTools", () => {
         execute,
       };
 
-      const wrapped = __testing.wrapToolParamNormalization(tool, [
-        { keys: ["path", "file_path"] },
-      ]);
+      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
 
       await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
       expect(execute).toHaveBeenCalledWith(
@@ -66,9 +64,9 @@ describe("createClawdbotCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
-      await expect(
-        wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
-      ).rejects.toThrow(/Missing required parameter/);
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /Missing required parameter/,
+      );
     });
   });
 
@@ -96,9 +94,7 @@ describe("createClawdbotCodingTools", () => {
         path: imagePath,
       });
 
-      expect(result?.content?.some((block) => block.type === "image")).toBe(
-        true,
-      );
+      expect(result?.content?.some((block) => block.type === "image")).toBe(true);
       const text = result?.content?.find((block) => block.type === "text") as
         | { text?: string }
         | undefined;
@@ -126,16 +122,12 @@ describe("createClawdbotCodingTools", () => {
         path: textPath,
       });
 
-      expect(result?.content?.some((block) => block.type === "image")).toBe(
-        false,
-      );
-      const textBlocks = result?.content?.filter(
-        (block) => block.type === "text",
-      ) as Array<{ text?: string }> | undefined;
+      expect(result?.content?.some((block) => block.type === "image")).toBe(false);
+      const textBlocks = result?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
+        | undefined;
       expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
-      const combinedText = textBlocks
-        ?.map((block) => block.text ?? "")
-        .join("\n");
+      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
       expect(combinedText).toContain(contents);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });

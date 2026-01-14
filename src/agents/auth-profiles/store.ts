@@ -3,29 +3,14 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import {
-  AUTH_STORE_LOCK_OPTIONS,
-  AUTH_STORE_VERSION,
-  log,
-} from "./constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
-import {
-  ensureAuthStoreFile,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "./paths.js";
-import type {
-  AuthProfileCredential,
-  AuthProfileStore,
-  ProfileUsageStats,
-} from "./types.js";
+import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
+import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
-function _syncAuthProfileStore(
-  target: AuthProfileStore,
-  source: AuthProfileStore,
-): void {
+function _syncAuthProfileStore(target: AuthProfileStore, source: AuthProfileStore): void {
   target.version = source.version;
   target.profiles = source.profiles;
   target.order = source.order;
@@ -70,11 +55,7 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   for (const [key, value] of Object.entries(record)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (
-      typed.type !== "api_key" &&
-      typed.type !== "oauth" &&
-      typed.type !== "token"
-    ) {
+    if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
     }
     entries[key] = {
@@ -94,11 +75,7 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   for (const [key, value] of Object.entries(profiles)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (
-      typed.type !== "api_key" &&
-      typed.type !== "oauth" &&
-      typed.type !== "token"
-    ) {
+    if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
     }
     if (!typed.provider) continue;
@@ -188,9 +165,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
           type: "token",
           provider: String(cred.provider ?? provider),
           token: cred.token,
-          ...(typeof cred.expires === "number"
-            ? { expires: cred.expires }
-            : {}),
+          ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
           ...(cred.email ? { email: cred.email } : {}),
         };
       } else {
@@ -253,9 +228,7 @@ export function ensureAuthProfileStore(
           type: "token",
           provider: String(cred.provider ?? provider),
           token: cred.token,
-          ...(typeof cred.expires === "number"
-            ? { expires: cred.expires }
-            : {}),
+          ...(typeof cred.expires === "number" ? { expires: cred.expires } : {}),
           ...(cred.email ? { email: cred.email } : {}),
         };
       } else {
@@ -301,10 +274,7 @@ export function ensureAuthProfileStore(
   return store;
 }
 
-export function saveAuthProfileStore(
-  store: AuthProfileStore,
-  agentDir?: string,
-): void {
+export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
   const payload = {
     version: AUTH_STORE_VERSION,

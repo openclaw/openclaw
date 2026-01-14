@@ -5,12 +5,8 @@ export type NormalizedAllowFrom = {
   hasEntries: boolean;
 };
 
-export const normalizeAllowFrom = (
-  list?: Array<string | number>,
-): NormalizedAllowFrom => {
-  const entries = (list ?? [])
-    .map((value) => String(value).trim())
-    .filter(Boolean);
+export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAllowFrom => {
+  const entries = (list ?? []).map((value) => String(value).trim()).filter(Boolean);
   const hasWildcard = entries.includes("*");
   const normalized = entries
     .filter((value) => value !== "*")
@@ -42,7 +38,5 @@ export const isSenderAllowed = (params: {
   if (senderId && allow.entries.includes(senderId)) return true;
   const username = senderUsername?.toLowerCase();
   if (!username) return false;
-  return allow.entriesLower.some(
-    (entry) => entry === username || entry === `@${username}`,
-  );
+  return allow.entriesLower.some((entry) => entry === username || entry === `@${username}`);
 };

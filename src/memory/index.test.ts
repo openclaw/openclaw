@@ -39,10 +39,7 @@ describe("memory index", () => {
       path.join(workspaceDir, "memory", "2026-01-12.md"),
       "# Log\nAlpha memory line.\nAnother line.",
     );
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "Beta knowledge base entry.",
-    );
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta knowledge base entry.");
   });
 
   afterEach(async () => {
@@ -98,8 +95,6 @@ describe("memory index", () => {
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
     manager = result.manager;
-    await expect(
-      result.manager.readFile({ relPath: "NOTES.md" }),
-    ).rejects.toThrow("path required");
+    await expect(result.manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
   });
 });

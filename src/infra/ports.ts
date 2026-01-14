@@ -5,12 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
-import type {
-  PortListener,
-  PortListenerKind,
-  PortUsage,
-  PortUsageStatus,
-} from "./ports-types.js";
+import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -28,9 +23,7 @@ function isErrno(err: unknown): err is NodeJS.ErrnoException {
   return Boolean(err && typeof err === "object" && "code" in err);
 }
 
-export async function describePortOwner(
-  port: number,
-): Promise<string | undefined> {
+export async function describePortOwner(port: number): Promise<string | undefined> {
   const diagnostics = await inspectPortUsage(port);
   if (diagnostics.listeners.length === 0) return undefined;
   return formatPortDiagnostics(diagnostics).join("\n");
@@ -64,14 +57,8 @@ export async function handlePortError(
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<never> {
   // Uniform messaging for EADDRINUSE with optional owner details.
-  if (
-    err instanceof PortInUseError ||
-    (isErrno(err) && err.code === "EADDRINUSE")
-  ) {
-    const details =
-      err instanceof PortInUseError
-        ? err.details
-        : await describePortOwner(port);
+  if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
+    const details = err instanceof PortInUseError ? err.details : await describePortOwner(port);
     runtime.error(danger(`${context} failed: port ${port} is already in use.`));
     if (details) {
       runtime.error(info("Port listener details:"));
@@ -85,9 +72,7 @@ export async function handlePortError(
       }
     }
     runtime.error(
-      info(
-        "Resolve by stopping the process using the port or passing --port <free-port>.",
-      ),
+      info("Resolve by stopping the process using the port or passing --port <free-port>."),
     );
     runtime.exit(1);
   }
@@ -103,9 +88,5 @@ export async function handlePortError(
 
 export { PortInUseError };
 export type { PortListener, PortListenerKind, PortUsage, PortUsageStatus };
-export {
-  buildPortHints,
-  classifyPortListener,
-  formatPortDiagnostics,
-} from "./ports-format.js";
+export { buildPortHints, classifyPortListener, formatPortDiagnostics } from "./ports-format.js";
 export { inspectPortUsage } from "./ports-inspect.js";

@@ -5,9 +5,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-let configOverride: ReturnType<
-  typeof import("../config/config.js")["loadConfig"]
-> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -79,17 +77,14 @@ describe("clawdbot-tools: subagents", () => {
         };
       }
       if (request.method === "agent.wait") {
-        const params = request.params as
-          | { runId?: string; timeoutMs?: number }
-          | undefined;
+        const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
         waitCalls.push(params ?? {});
         const status = params?.runId === childRunId ? "timeout" : "ok";
         return { runId: params?.runId ?? "run-1", status };
       }
       if (request.method === "chat.history") {
         const params = request.params as { sessionKey?: string } | undefined;
-        const text =
-          sessionLastAssistantText.get(params?.sessionKey ?? "") ?? "";
+        const text = sessionLastAssistantText.get(params?.sessionKey ?? "") ?? "";
         return {
           messages: [{ role: "assistant", content: [{ type: "text", text }] }],
         };

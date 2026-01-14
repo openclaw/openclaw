@@ -95,11 +95,7 @@ function countJsonlLines(filePath: string): number {
 function findOtherStateDirs(stateDir: string): string[] {
   const resolvedState = path.resolve(stateDir);
   const roots =
-    process.platform === "darwin"
-      ? ["/Users"]
-      : process.platform === "linux"
-        ? ["/home"]
-        : [];
+    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
   for (const root of roots) {
     let entries: fs.Dirent[] = [];
@@ -132,11 +128,7 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".clawdbot");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(
-    agentId,
-    env,
-    homedir,
-  );
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const storeDir = path.dirname(storePath);
 
@@ -222,9 +214,7 @@ export async function noteStateIntegrity(
         }
       }
     } catch (err) {
-      warnings.push(
-        `- Failed to read config permissions (${configPath}): ${String(err)}`,
-      );
+      warnings.push(`- Failed to read config permissions (${configPath}): ${String(err)}`);
     }
   }
 
@@ -291,17 +281,13 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
-  const entries = Object.entries(store).filter(
-    ([, entry]) => entry && typeof entry === "object",
-  );
+  const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
       .slice()
       .sort((a, b) => {
-        const aUpdated =
-          typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
-        const bUpdated =
-          typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
+        const aUpdated = typeof a[1].updatedAt === "number" ? a[1].updatedAt : 0;
+        const bUpdated = typeof b[1].updatedAt === "number" ? b[1].updatedAt : 0;
         return bUpdated - aUpdated;
       })
       .slice(0, 5);
@@ -322,11 +308,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
-        mainEntry.sessionId,
-        mainEntry,
-        { agentId },
-      );
+      const transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, { agentId });
       if (!existsFile(transcriptPath)) {
         warnings.push(
           `- Main session transcript missing (${transcriptPath}). History will appear to reset.`,

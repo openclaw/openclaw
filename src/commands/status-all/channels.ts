@@ -59,14 +59,10 @@ function sha256HexPrefix(value: string, len = 8): string {
   return crypto.createHash("sha256").update(value).digest("hex").slice(0, len);
 }
 
-function formatTokenHint(
-  token: string,
-  opts: { showSecrets: boolean },
-): string {
+function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
   const t = token.trim();
   if (!t) return "empty";
-  if (!opts.showSecrets)
-    return `sha256:${sha256HexPrefix(t)} · len ${t.length}`;
+  if (!opts.showSecrets) return `sha256:${sha256HexPrefix(t)} · len ${t.length}`;
   const head = t.slice(0, 4);
   const tail = t.slice(-4);
   if (t.length <= 10) return `${t} · len ${t.length}`;
@@ -109,10 +105,7 @@ const buildAccountSnapshot = (params: {
   enabled: boolean;
   configured: boolean;
 }): ChannelAccountSnapshot => {
-  const described = params.plugin.config.describeAccount?.(
-    params.account,
-    params.cfg,
-  );
+  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
   return {
     enabled: params.enabled,
     configured: params.configured,
@@ -162,8 +155,7 @@ const buildAccountNotes = (params: {
   if (snapshot.dbPath) notes.push(`db:${snapshot.dbPath}`);
 
   const allowFrom =
-    plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ??
-    snapshot.allowFrom;
+    plugin.config.resolveAllowFrom?.({ cfg, accountId: snapshot.accountId }) ?? snapshot.allowFrom;
   if (allowFrom?.length) {
     const formatted = formatAllowFrom({
       plugin,
@@ -186,8 +178,7 @@ function resolveLinkFields(summary: unknown): {
   const linked = typeof rec.linked === "boolean" ? rec.linked : null;
   const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
   const self = asRecord(rec.self);
-  const selfE164 =
-    typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
+  const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
   return { linked, authAgeMs, selfE164 };
 }
 
@@ -205,8 +196,7 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
       "authDir",
     ]) {
       const raw =
-        (accountRec[key] as string | undefined) ??
-        (snapshotRec[key] as string | undefined);
+        (accountRec[key] as string | undefined) ?? (snapshotRec[key] as string | undefined);
       const ok = existsSyncMaybe(raw);
       if (ok === false) missing.push(String(raw));
     }
@@ -224,9 +214,7 @@ function summarizeTokenConfig(params: {
   if (enabled.length === 0) return { state: null, detail: null };
 
   const accountRecs = enabled.map((a) => asRecord(a.account));
-  const hasBotOrAppTokenFields = accountRecs.some(
-    (r) => "botToken" in r || "appToken" in r,
-  );
+  const hasBotOrAppTokenFields = accountRecs.some((r) => "botToken" in r || "appToken" in r);
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
   if (!hasBotOrAppTokenFields && !hasTokenField) {
@@ -260,12 +248,8 @@ function summarizeTokenConfig(params: {
       return { state: "setup", detail: "no tokens (need bot+app)" };
     }
 
-    const botSources = summarizeSources(
-      ready.map((a) => a.snapshot.botTokenSource ?? "none"),
-    );
-    const appSources = summarizeSources(
-      ready.map((a) => a.snapshot.appTokenSource ?? "none"),
-    );
+    const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
+    const appSources = summarizeSources(ready.map((a) => a.snapshot.appTokenSource ?? "none"));
 
     const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
     const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
@@ -277,10 +261,7 @@ function summarizeTokenConfig(params: {
       ? formatTokenHint(appToken, { showSecrets: params.showSecrets })
       : "";
 
-    const hint =
-      botHint || appHint
-        ? ` (bot ${botHint || "?"}, app ${appHint || "?"})`
-        : "";
+    const hint = botHint || appHint ? ` (bot ${botHint || "?"}, app ${appHint || "?"})` : "";
     return {
       state: "ok",
       detail: `tokens ok (bot ${botSources.label}, app ${appSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
@@ -335,8 +316,7 @@ export async function buildChannelsTable(
       cfg,
       accountIds,
     });
-    const resolvedAccountIds =
-      accountIds.length > 0 ? accountIds : [defaultAccountId];
+    const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
     for (const accountId of resolvedAccountIds) {
@@ -357,8 +337,7 @@ export async function buildChannelsTable(
     const anyEnabled = accounts.some((a) => a.enabled);
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
-    const defaultEntry =
-      accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
+    const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
@@ -366,8 +345,7 @@ export async function buildChannelsTable(
           cfg,
           defaultAccountId,
           snapshot:
-            defaultEntry?.snapshot ??
-            ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            defaultEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
         })
       : undefined;
 
@@ -400,10 +378,7 @@ export async function buildChannelsTable(
     const detail = (() => {
       if (!anyEnabled) {
         if (!defaultEntry) return "disabled";
-        return (
-          plugin.config.disabledReason?.(defaultEntry.account, cfg) ??
-          "disabled"
-        );
+        return plugin.config.disabledReason?.(defaultEntry.account, cfg) ?? "disabled";
       }
       if (missingPaths.length > 0) return `missing file (${missingPaths[0]})`;
       if (issues.length > 0) return issues[0]?.message ?? "misconfigured";
@@ -425,8 +400,7 @@ export async function buildChannelsTable(
 
       if (configuredAccounts.length > 0) {
         const head = "configured";
-        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding)
-          return head;
+        if (accounts.length <= 1 && !plugin.meta.forceAccountBinding) return head;
         return `${head} · accounts ${configuredAccounts.length}/${enabledAccounts.length || 1}`;
       }
 

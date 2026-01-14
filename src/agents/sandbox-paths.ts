@@ -25,11 +25,10 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
-export function resolveSandboxPath(params: {
-  filePath: string;
-  cwd: string;
-  root: string;
-}): { resolved: string; relative: string } {
+export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
+  resolved: string;
+  relative: string;
+} {
   const resolved = resolveToCwd(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
@@ -37,18 +36,12 @@ export function resolveSandboxPath(params: {
     return { resolved, relative: "" };
   }
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(
-      `Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`,
-    );
+    throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
   }
   return { resolved, relative };
 }
 
-export async function assertSandboxPath(params: {
-  filePath: string;
-  cwd: string;
-  root: string;
-}) {
+export async function assertSandboxPath(params: { filePath: string; cwd: string; root: string }) {
   const resolved = resolveSandboxPath(params);
   await assertNoSymlink(resolved.relative, path.resolve(params.root));
   return resolved;

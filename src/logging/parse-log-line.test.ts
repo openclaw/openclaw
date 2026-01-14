@@ -20,9 +20,7 @@ describe("parseLogLine", () => {
     expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
     expect(parsed?.level).toBe("info");
     expect(parsed?.subsystem).toBe("gateway/channels/whatsapp");
-    expect(parsed?.message).toBe(
-      '{"subsystem":"gateway/channels/whatsapp"} connected',
-    );
+    expect(parsed?.message).toBe('{"subsystem":"gateway/channels/whatsapp"} connected');
     expect(parsed?.raw).toBe(line);
   });
 

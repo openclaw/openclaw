@@ -19,9 +19,7 @@ describe("formatAgentEnvelope", () => {
 
     process.env.TZ = originalTz;
 
-    expect(body).toBe(
-      "[WebChat user1 mac-mini 10.0.0.5 2025-01-02T03:04Z] hello",
-    );
+    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 2025-01-02T03:04Z] hello");
   });
 
   it("formats timestamps in UTC regardless of local timezone", () => {

@@ -40,10 +40,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
           marker,
           indent,
         };
-      } else if (
-        open.markerChar === markerChar &&
-        markerLen >= open.markerLen
-      ) {
+      } else if (open.markerChar === markerChar && markerLen >= open.markerLen) {
         const end = lineEnd;
         spans.push({
           start: open.start,
@@ -73,10 +70,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
   return spans;
 }
 
-export function findFenceSpanAt(
-  spans: FenceSpan[],
-  index: number,
-): FenceSpan | undefined {
+export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {
   return spans.find((span) => index > span.start && index < span.end);
 }
 

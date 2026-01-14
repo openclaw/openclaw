@@ -12,10 +12,7 @@ async function readPackageName(dir: string): Promise<string | null> {
   }
 }
 
-async function findPackageRoot(
-  startDir: string,
-  maxDepth = 12,
-): Promise<string | null> {
+async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     const name = await readPackageName(current);

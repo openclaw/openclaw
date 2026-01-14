@@ -1,16 +1,7 @@
-import type {
-  PortListener,
-  PortListenerKind,
-  PortUsage,
-} from "./ports-types.js";
+import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-export function classifyPortListener(
-  listener: PortListener,
-  port: number,
-): PortListenerKind {
-  const raw = `${listener.commandLine ?? ""} ${listener.command ?? ""}`
-    .trim()
-    .toLowerCase();
+export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
+  const raw = `${listener.commandLine ?? ""} ${listener.command ?? ""}`.trim().toLowerCase();
   if (raw.includes("clawdbot") || raw.includes("clawdis")) return "gateway";
   if (raw.includes("ssh")) {
     const portToken = String(port);
@@ -23,14 +14,9 @@ export function classifyPortListener(
   return "unknown";
 }
 
-export function buildPortHints(
-  listeners: PortListener[],
-  port: number,
-): string[] {
+export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) return [];
-  const kinds = new Set(
-    listeners.map((listener) => classifyPortListener(listener, port)),
-  );
+  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
   const hints: string[] = [];
   if (kinds.has("gateway")) {
     hints.push(

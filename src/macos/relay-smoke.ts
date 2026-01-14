@@ -1,9 +1,6 @@
 export type RelaySmokeTest = "qr";
 
-export function parseRelaySmokeTest(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): RelaySmokeTest | null {
+export function parseRelaySmokeTest(args: string[], env: NodeJS.ProcessEnv): RelaySmokeTest | null {
   const smokeIdx = args.indexOf("--smoke");
   if (smokeIdx !== -1) {
     const value = args[smokeIdx + 1];
@@ -18,10 +15,7 @@ export function parseRelaySmokeTest(
 
   // Back-compat: only run env-based smoke mode when no CLI args are present,
   // to avoid surprising early-exit when users set env vars globally.
-  if (
-    args.length === 0 &&
-    (env.CLAWDBOT_SMOKE_QR === "1" || env.CLAWDBOT_SMOKE === "qr")
-  ) {
+  if (args.length === 0 && (env.CLAWDBOT_SMOKE_QR === "1" || env.CLAWDBOT_SMOKE === "qr")) {
     return "qr";
   }
 

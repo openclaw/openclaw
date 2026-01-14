@@ -18,10 +18,7 @@ describe("gateway server cron", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -35,9 +32,7 @@ describe("gateway server cron", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
     expect(addRes.ok).toBe(true);
-    expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe(
-      "string",
-    );
+    expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe("string");
 
     const listRes = await rpcReq(ws, "cron.list", {
       includeDisabled: true,
@@ -46,9 +41,7 @@ describe("gateway server cron", () => {
     const jobs = (listRes.payload as { jobs?: unknown } | null)?.jobs;
     expect(Array.isArray(jobs)).toBe(true);
     expect((jobs as unknown[]).length).toBe(1);
-    expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe(
-      "daily",
-    );
+    expect(((jobs as Array<{ name?: unknown }>)[0]?.name as string) ?? "").toBe("daily");
 
     ws.close();
     await server.close();
@@ -61,10 +54,7 @@ describe("gateway server cron", () => {
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     testState.sessionConfig = { mainKey: "primary" };
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -87,9 +77,7 @@ describe("gateway server cron", () => {
     expect(runRes.ok).toBe(true);
 
     const events = await waitForSystemEvent();
-    expect(events.some((event) => event.includes("cron route check"))).toBe(
-      true,
-    );
+    expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
     ws.close();
     await server.close();
@@ -102,10 +90,7 @@ describe("gateway server cron", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -124,9 +109,7 @@ describe("gateway server cron", () => {
       | undefined;
     expect(payload?.sessionTarget).toBe("main");
     expect(payload?.wakeMode).toBe("next-heartbeat");
-    expect((payload?.schedule as { kind?: unknown } | undefined)?.kind).toBe(
-      "at",
-    );
+    expect((payload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
 
     ws.close();
     await server.close();
@@ -138,10 +121,7 @@ describe("gateway server cron", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -184,10 +164,7 @@ describe("gateway server cron", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -225,10 +202,7 @@ describe("gateway server cron", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -261,15 +235,10 @@ describe("gateway server cron", () => {
   });
 
   test("writes cron run history to runs/<jobId>.jsonl", async () => {
-    const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-gw-cron-log-"),
-    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-log-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -323,9 +292,7 @@ describe("gateway server cron", () => {
     const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
     expect(Array.isArray(entries)).toBe(true);
     expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
-    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe(
-      "hello",
-    );
+    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
 
     ws.close();
     await server.close();
@@ -334,16 +301,11 @@ describe("gateway server cron", () => {
   });
 
   test("writes cron run history to per-job runs/ when store is jobs.json", async () => {
-    const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-gw-cron-log-jobs-"),
-    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-log-jobs-"));
     const cronDir = path.join(dir, "cron");
     testState.cronStorePath = path.join(cronDir, "jobs.json");
     await fs.mkdir(cronDir, { recursive: true });
-    await fs.writeFile(
-      testState.cronStorePath,
-      JSON.stringify({ version: 1, jobs: [] }),
-    );
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -396,9 +358,7 @@ describe("gateway server cron", () => {
     const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
     expect(Array.isArray(entries)).toBe(true);
     expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
-    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe(
-      "hello",
-    );
+    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
 
     ws.close();
     await server.close();
@@ -407,9 +367,7 @@ describe("gateway server cron", () => {
   });
 
   test("enables cron scheduler by default and runs due jobs automatically", async () => {
-    const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-gw-cron-default-on-"),
-    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-default-on-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     testState.cronEnabled = undefined;
 
@@ -417,10 +375,7 @@ describe("gateway server cron", () => {
       await fs.mkdir(path.dirname(testState.cronStorePath), {
         recursive: true,
       });
-      await fs.writeFile(
-        testState.cronStorePath,
-        JSON.stringify({ version: 1, jobs: [] }),
-      );
+      await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
       const { server, ws } = await startServerWithClient();
       await connectOk(ws);
@@ -431,10 +386,7 @@ describe("gateway server cron", () => {
         | { enabled?: unknown; storePath?: unknown }
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
-      const storePath =
-        typeof statusPayload?.storePath === "string"
-          ? statusPayload.storePath
-          : "";
+      const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
       expect(storePath).toContain("jobs.json");
 
       // Keep the job due immediately; we poll run logs instead of relying on
@@ -460,8 +412,7 @@ describe("gateway server cron", () => {
             limit: 10,
           });
           expect(runsRes.ok).toBe(true);
-          const entries = (runsRes.payload as { entries?: unknown } | null)
-            ?.entries;
+          const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
           if (Array.isArray(entries) && entries.length > 0) return entries;
           await new Promise((r) => setTimeout(r, 20));
         }

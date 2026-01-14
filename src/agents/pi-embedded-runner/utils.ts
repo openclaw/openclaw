@@ -9,9 +9,7 @@ export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
   return level;
 }
 
-export function resolveExecToolDefaults(
-  config?: ClawdbotConfig,
-): ExecToolDefaults | undefined {
+export function resolveExecToolDefaults(config?: ClawdbotConfig): ExecToolDefaults | undefined {
   const tools = config?.tools;
   if (!tools) return undefined;
   if (!tools.exec) return tools.bash;
@@ -23,9 +21,7 @@ export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
     try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(
-        new Date(),
-      );
+      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
       return trimmed;
     } catch {
       // ignore invalid timezone
@@ -35,10 +31,7 @@ export function resolveUserTimezone(configured?: string): string {
   return host?.trim() || "UTC";
 }
 
-export function formatUserTime(
-  date: Date,
-  timeZone: string,
-): string | undefined {
+export function formatUserTime(date: Date, timeZone: string): string | undefined {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone,
@@ -54,14 +47,7 @@ export function formatUserTime(
     for (const part of parts) {
       if (part.type !== "literal") map[part.type] = part.value;
     }
-    if (
-      !map.weekday ||
-      !map.year ||
-      !map.month ||
-      !map.day ||
-      !map.hour ||
-      !map.minute
-    ) {
+    if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
       return undefined;
     }
     return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;

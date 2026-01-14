@@ -1,13 +1,7 @@
 import { resolveAgentModelPrimary } from "../agents/agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { ClawdbotConfig } from "../config/config.js";

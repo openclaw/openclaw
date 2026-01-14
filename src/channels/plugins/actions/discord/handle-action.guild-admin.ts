@@ -12,9 +12,7 @@ type Ctx = Pick<ChannelMessageActionContext, "action" | "params" | "cfg">;
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
-  readParentIdParam: (
-    params: Record<string, unknown>,
-  ) => string | null | undefined;
+  readParentIdParam: (params: Record<string, unknown>) => string | null | undefined;
 }): Promise<AgentToolResult<unknown> | undefined> {
   const { ctx, resolveChannelId, readParentIdParam } = params;
   const { action, params: actionParams, cfg } = ctx;
@@ -24,10 +22,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const guildId = readStringParam(actionParams, "guildId", {
       required: true,
     });
-    return await handleDiscordAction(
-      { action: "memberInfo", guildId, userId },
-      cfg,
-    );
+    return await handleDiscordAction({ action: "memberInfo", guildId, userId }, cfg);
   }
 
   if (action === "role-info") {
@@ -125,8 +120,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const position = readNumberParam(actionParams, "position", {
       integer: true,
     });
-    const nsfw =
-      typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
+    const nsfw = typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
     return await handleDiscordAction(
       {
         action: "channelCreate",
@@ -152,8 +146,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       integer: true,
     });
     const parentId = readParentIdParam(actionParams);
-    const nsfw =
-      typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
+    const nsfw = typeof actionParams.nsfw === "boolean" ? actionParams.nsfw : undefined;
     const rateLimitPerUser = readNumberParam(actionParams, "rateLimitPerUser", {
       integer: true,
     });
@@ -176,10 +169,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const channelId = readStringParam(actionParams, "channelId", {
       required: true,
     });
-    return await handleDiscordAction(
-      { action: "channelDelete", channelId },
-      cfg,
-    );
+    return await handleDiscordAction({ action: "channelDelete", channelId }, cfg);
   }
 
   if (action === "channel-move") {
@@ -247,10 +237,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const categoryId = readStringParam(actionParams, "categoryId", {
       required: true,
     });
-    return await handleDiscordAction(
-      { action: "categoryDelete", categoryId },
-      cfg,
-    );
+    return await handleDiscordAction({ action: "categoryDelete", categoryId }, cfg);
   }
 
   if (action === "voice-status") {
@@ -258,10 +245,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     const userId = readStringParam(actionParams, "userId", { required: true });
-    return await handleDiscordAction(
-      { action: "voiceStatus", guildId, userId },
-      cfg,
-    );
+    return await handleDiscordAction({ action: "voiceStatus", guildId, userId }, cfg);
   }
 
   if (action === "event-list") {
@@ -335,9 +319,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     });
     const channelId = readStringParam(actionParams, "channelId");
     const includeArchived =
-      typeof actionParams.includeArchived === "boolean"
-        ? actionParams.includeArchived
-        : undefined;
+      typeof actionParams.includeArchived === "boolean" ? actionParams.includeArchived : undefined;
     const before = readStringParam(actionParams, "before");
     const limit = readNumberParam(actionParams, "limit", { integer: true });
     return await handleDiscordAction(

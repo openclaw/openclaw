@@ -31,9 +31,7 @@ const defaultLogger: PluginInstallLogger = {};
 function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return trimmed;
-  return trimmed.includes("/")
-    ? (trimmed.split("/").pop() ?? trimmed)
-    : trimmed;
+  return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
 
 function safeDirName(input: string): string {
@@ -77,20 +75,14 @@ async function ensureClawdbotExtensions(manifest: PackageManifest) {
   if (!Array.isArray(extensions)) {
     throw new Error("package.json missing clawdbot.extensions");
   }
-  const list = extensions
-    .map((e) => (typeof e === "string" ? e.trim() : ""))
-    .filter(Boolean);
+  const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
   if (list.length === 0) {
     throw new Error("package.json clawdbot.extensions is empty");
   }
   return list;
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -132,11 +124,7 @@ export async function installPluginFromArchive(params: {
 
   logger.info?.(`Extracting ${archivePath}…`);
   try {
-    await withTimeout(
-      tar.x({ file: archivePath, cwd: extractDir }),
-      timeoutMs,
-      "extract archive",
-    );
+    await withTimeout(tar.x({ file: archivePath, cwd: extractDir }), timeoutMs, "extract archive");
   } catch (err) {
     return { ok: false, error: `failed to extract archive: ${String(err)}` };
   }
@@ -192,10 +180,10 @@ export async function installPluginFromArchive(params: {
   const hasDeps = Object.keys(deps).length > 0;
   if (hasDeps) {
     logger.info?.("Installing plugin dependencies…");
-    const npmRes = await runCommandWithTimeout(
-      ["npm", "install", "--omit=dev", "--silent"],
-      { timeoutMs: Math.max(timeoutMs, 300_000), cwd: targetDir },
-    );
+    const npmRes = await runCommandWithTimeout(["npm", "install", "--omit=dev", "--silent"], {
+      timeoutMs: Math.max(timeoutMs, 300_000),
+      cwd: targetDir,
+    });
     if (npmRes.code !== 0) {
       return {
         ok: false,

@@ -42,15 +42,9 @@ describe("gateway session utils", () => {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
     } as ClawdbotConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe(
-      "agent:ops:work",
-    );
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe(
-      "agent:ops:work",
-    );
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe(
-      "agent:ops:work",
-    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {
@@ -58,12 +52,10 @@ describe("gateway session utils", () => {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops", default: true }] },
     } as ClawdbotConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "group:123" })).toBe(
-      "agent:ops:group:123",
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "group:123" })).toBe("agent:ops:group:123");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
+      "agent:alpha:main",
     );
-    expect(
-      resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" }),
-    ).toBe("agent:alpha:main");
   });
 
   test("resolveSessionStoreKey honors global scope", () => {
@@ -90,11 +82,7 @@ describe("gateway session utils", () => {
     } as ClawdbotConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
-    expect(target.storeKeys).toEqual(
-      expect.arrayContaining(["agent:ops:main", "main"]),
-    );
-    expect(target.storePath).toBe(
-      path.resolve(storeTemplate.replace("{agentId}", "ops")),
-    );
+    expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
+    expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
   });
 });

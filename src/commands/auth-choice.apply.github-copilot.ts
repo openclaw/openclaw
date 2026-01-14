@@ -1,8 +1,5 @@
 import { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 
 export async function applyAuthChoiceGitHubCopilot(
@@ -31,10 +28,7 @@ export async function applyAuthChoiceGitHubCopilot(
   try {
     await githubCopilotLoginCommand({ yes: true }, params.runtime);
   } catch (err) {
-    await params.prompter.note(
-      `GitHub Copilot login failed: ${String(err)}`,
-      "GitHub Copilot",
-    );
+    await params.prompter.note(`GitHub Copilot login failed: ${String(err)}`, "GitHub Copilot");
     return { config: nextConfig };
   }
 
@@ -61,10 +55,7 @@ export async function applyAuthChoiceGitHubCopilot(
         },
       },
     };
-    await params.prompter.note(
-      `Default model set to ${model}`,
-      "Model configured",
-    );
+    await params.prompter.note(`Default model set to ${model}`, "Model configured");
   }
 
   return { config: nextConfig };

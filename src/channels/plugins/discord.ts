@@ -11,10 +11,7 @@ import {
 import { probeDiscord } from "../../discord/probe.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
 import { discordMessageActions } from "./actions/discord.js";
 import {
@@ -62,8 +59,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   reload: { configPrefixes: ["channels.discord"] },
   config: {
     listAccountIds: (cfg) => listDiscordAccountIds(cfg),
-    resolveAccount: (cfg, accountId) =>
-      resolveDiscordAccount({ cfg, accountId }),
+    resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
     defaultAccountId: (cfg) => resolveDefaultDiscordAccountId(cfg),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -89,9 +85,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       tokenSource: account.tokenSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (
-        resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []
-      ).map((entry) => String(entry)),
+      (resolveDiscordAccount({ cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
+        String(entry),
+      ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -100,11 +96,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId =
-        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        cfg.channels?.discord?.accounts?.[resolvedAccountId],
-      );
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.discord?.accounts?.[resolvedAccountId]);
       const allowFromPath = useAccountPath
         ? `channels.discord.accounts.${resolvedAccountId}.dm.`
         : "channels.discord.dm.";
@@ -113,16 +106,14 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         allowFrom: account.config.dm?.allowFrom ?? [],
         allowFromPath,
         approveHint: formatPairingApproveHint("discord"),
-        normalizeEntry: (raw) =>
-          raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
+        normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };
     },
     collectWarnings: ({ account }) => {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const channelAllowlistConfigured =
-        Boolean(account.config.guilds) &&
-        Object.keys(account.config.guilds ?? {}).length > 0;
+        Boolean(account.config.guilds) && Object.keys(account.config.guilds ?? {}).length > 0;
       if (channelAllowlistConfigured) {
         return [
           `- Discord guilds: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
@@ -140,8 +131,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     stripPatterns: () => ["<@!?\\d+>"],
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) =>
-      cfg.channels?.discord?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg }) => cfg.channels?.discord?.replyToMode ?? "off",
   },
   messaging: {
     normalizeTarget: normalizeDiscordMessagingTarget,
@@ -187,11 +177,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
             discord: {
               ...next.channels?.discord,
               enabled: true,
-              ...(input.useEnv
-                ? {}
-                : input.token
-                  ? { token: input.token }
-                  : {}),
+              ...(input.useEnv ? {} : input.token ? { token: input.token } : {}),
             },
           },
         };
@@ -226,9 +212,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error(
-            "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
-          ),
+          error: new Error("Delivering to Discord requires --to <channelId|user:ID|channel:ID>"),
         };
       }
       return { ok: true, to: trimmed };
@@ -304,9 +288,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     },
     buildAccountSnapshot: ({ account, runtime, probe, audit }) => {
       const configured = Boolean(account.token?.trim());
-      const app =
-        runtime?.application ??
-        (probe as { application?: unknown })?.application;
+      const app = runtime?.application ?? (probe as { application?: unknown })?.application;
       const bot = runtime?.bot ?? (probe as { bot?: unknown })?.bot;
       return {
         accountId: account.accountId,
@@ -355,14 +337,10 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       } catch (err) {
         if (shouldLogVerbose()) {
-          ctx.log?.debug?.(
-            `[${account.accountId}] bot probe failed: ${String(err)}`,
-          );
+          ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
         }
       }
-      ctx.log?.info(
-        `[${account.accountId}] starting provider${discordBotLabel}`,
-      );
+      ctx.log?.info(`[${account.accountId}] starting provider${discordBotLabel}`);
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       const { monitorDiscordProvider } = await import("../../discord/index.js");
       return monitorDiscordProvider({

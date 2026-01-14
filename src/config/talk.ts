@@ -8,16 +8,14 @@ type TalkApiKeyDeps = {
   path?: typeof path;
 };
 
-export function readTalkApiKeyFromProfile(
-  deps: TalkApiKeyDeps = {},
-): string | null {
+export function readTalkApiKeyFromProfile(deps: TalkApiKeyDeps = {}): string | null {
   const fsImpl = deps.fs ?? fs;
   const osImpl = deps.os ?? os;
   const pathImpl = deps.path ?? path;
 
   const home = osImpl.homedir();
-  const candidates = [".profile", ".zprofile", ".zshrc", ".bashrc"].map(
-    (name) => pathImpl.join(home, name),
+  const candidates = [".profile", ".zprofile", ".zshrc", ".bashrc"].map((name) =>
+    pathImpl.join(home, name),
   );
   for (const candidate of candidates) {
     if (!fsImpl.existsSync(candidate)) continue;

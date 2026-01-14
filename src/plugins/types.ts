@@ -63,9 +63,7 @@ export type ClawdbotPluginCliContext = {
   logger: PluginLogger;
 };
 
-export type ClawdbotPluginCliRegistrar = (
-  ctx: ClawdbotPluginCliContext,
-) => void | Promise<void>;
+export type ClawdbotPluginCliRegistrar = (ctx: ClawdbotPluginCliContext) => void | Promise<void>;
 
 export type ClawdbotPluginServiceContext = {
   config: ClawdbotConfig;
@@ -107,14 +105,8 @@ export type ClawdbotPluginApi = {
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
     opts?: { name?: string; names?: string[] },
   ) => void;
-  registerGatewayMethod: (
-    method: string,
-    handler: GatewayRequestHandler,
-  ) => void;
-  registerCli: (
-    registrar: ClawdbotPluginCliRegistrar,
-    opts?: { commands?: string[] },
-  ) => void;
+  registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
+  registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: ClawdbotPluginService) => void;
   resolvePath: (input: string) => string;
 };

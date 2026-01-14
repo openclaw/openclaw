@@ -9,11 +9,7 @@ export function readSessionMessages(
   storePath: string | undefined,
   sessionFile?: string,
 ): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(
-    sessionId,
-    storePath,
-    sessionFile,
-  );
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
   const filePath = candidates.find((p) => fs.existsSync(p));
   if (!filePath) return [];
@@ -49,9 +45,7 @@ export function resolveSessionTranscriptCandidates(
   if (agentId) {
     candidates.push(resolveSessionTranscriptPath(sessionId, agentId));
   }
-  candidates.push(
-    path.join(os.homedir(), ".clawdbot", "sessions", `${sessionId}.jsonl`),
-  );
+  candidates.push(path.join(os.homedir(), ".clawdbot", "sessions", `${sessionId}.jsonl`));
   return candidates;
 }
 

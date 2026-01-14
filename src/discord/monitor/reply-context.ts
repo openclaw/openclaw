@@ -5,10 +5,7 @@ import { formatDiscordUserTag, resolveTimestampMs } from "./format.js";
 
 export function resolveReplyContext(
   message: Message,
-  resolveDiscordMessageText: (
-    message: Message,
-    options?: { includeForwarded?: boolean },
-  ) => string,
+  resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
 ): string | null {
   const referenced = message.referencedMessage;
   if (!referenced?.author) return null;
@@ -16,9 +13,7 @@ export function resolveReplyContext(
     includeForwarded: true,
   });
   if (!referencedText) return null;
-  const fromLabel = referenced.author
-    ? buildDirectLabel(referenced.author)
-    : "Unknown";
+  const fromLabel = referenced.author ? buildDirectLabel(referenced.author) : "Unknown";
   const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${formatDiscordUserTag(referenced.author)} user id:${referenced.author?.id ?? "unknown"}]`;
   return formatAgentEnvelope({
     channel: "Discord",
@@ -33,11 +28,7 @@ export function buildDirectLabel(author: User) {
   return `${username} user id:${author.id}`;
 }
 
-export function buildGuildLabel(params: {
-  guild?: Guild;
-  channelName: string;
-  channelId: string;
-}) {
+export function buildGuildLabel(params: { guild?: Guild; channelName: string; channelId: string }) {
   const { guild, channelName, channelId } = params;
   return `${guild?.name ?? "Guild"} #${channelName} channel id:${channelId}`;
 }

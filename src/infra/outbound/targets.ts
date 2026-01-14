@@ -1,11 +1,5 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
-import type {
-  ChannelId,
-  ChannelOutboundTargetMode,
-} from "../../channels/plugins/types.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
@@ -24,9 +18,7 @@ export type OutboundTarget = {
   reason?: string;
 };
 
-export type OutboundTargetResolution =
-  | { ok: true; to: string }
-  | { ok: false; error: Error };
+export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -151,7 +143,5 @@ export function resolveHeartbeatDeliveryTarget(params: {
     }
   }
 
-  return reason
-    ? { channel, to: resolved.to, reason }
-    : { channel, to: resolved.to };
+  return reason ? { channel, to: resolved.to, reason } : { channel, to: resolved.to };
 }

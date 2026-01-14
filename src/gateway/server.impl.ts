@@ -1,13 +1,7 @@
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
-import {
-  type ChannelId,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -76,25 +70,16 @@ const logHooks = log.child("hooks");
 const logWsControl = log.child("ws");
 const canvasRuntime = runtimeForLogger(logCanvas);
 const channelLogs = Object.fromEntries(
-  listChannelPlugins().map((plugin) => [
-    plugin.id,
-    logChannels.child(plugin.id),
-  ]),
+  listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
 ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
 const channelRuntimeEnvs = Object.fromEntries(
-  Object.entries(channelLogs).map(([id, logger]) => [
-    id,
-    runtimeForLogger(logger),
-  ]),
+  Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
 ) as Record<ChannelId, RuntimeEnv>;
 
 const METHODS = GATEWAY_METHODS;
 
 export type GatewayServer = {
-  close: (opts?: {
-    reason?: string;
-    restartExpectedMs?: number | null;
-  }) => Promise<void>;
+  close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
 };
 
 export type GatewayServerOptions = {
@@ -157,9 +142,7 @@ export async function startGatewayServer(
         "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
       );
     }
-    const { config: migrated, changes } = migrateLegacyConfig(
-      configSnapshot.parsed,
-    );
+    const { config: migrated, changes } = migrateLegacyConfig(configSnapshot.parsed);
     if (!migrated) {
       throw new Error(
         'Legacy config entries detected but auto-migration failed. Run "clawdbot doctor" to migrate.',
@@ -179,10 +162,7 @@ export async function startGatewayServer(
   initSubagentRegistry();
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(
-    cfgAtStart,
-    defaultAgentId,
-  );
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const { pluginRegistry, gatewayMethods } = loadGatewayPlugins({
     cfg: cfgAtStart,
     workspaceDir: defaultWorkspaceDir,
@@ -214,8 +194,7 @@ export async function startGatewayServer(
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
   const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
-  const { wizardSessions, findRunningWizard, purgeWizardSession } =
-    createWizardSessionTracker();
+  const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
@@ -250,8 +229,7 @@ export async function startGatewayServer(
     logHooks,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
-  let bridge: import("../infra/bridge/server.js").NodeBridgeServer | null =
-    null;
+  let bridge: import("../infra/bridge/server.js").NodeBridgeServer | null = null;
 
   const hasConnectedMobileNode = () => hasConnectedMobileNodeFromBridge(bridge);
   applyGatewayLaneConcurrency(cfgAtStart);
@@ -268,13 +246,8 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
   });
-  const {
-    getRuntimeSnapshot,
-    startChannels,
-    startChannel,
-    stopChannel,
-    markChannelLoggedOut,
-  } = channelManager;
+  const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
+    channelManager;
 
   const machineDisplayName = await getMachineDisplayName();
   const bridgeRuntime = await startGatewayBridgeRuntime({
@@ -311,23 +284,22 @@ export async function startGatewayServer(
   const bridgeSendToAllSubscribed = bridgeRuntime.bridgeSendToAllSubscribed;
   const broadcastVoiceWakeChanged = bridgeRuntime.broadcastVoiceWakeChanged;
 
-  const { tickInterval, healthInterval, dedupeCleanup } =
-    startGatewayMaintenanceTimers({
-      broadcast,
-      bridgeSendToAllSubscribed,
-      getPresenceVersion,
-      getHealthVersion,
-      refreshGatewayHealthSnapshot,
-      logHealth,
-      dedupe,
-      chatAbortControllers,
-      chatRunState,
-      chatRunBuffers,
-      chatDeltaSentAt,
-      removeChatRun,
-      agentRunSeq,
-      bridgeSendToSession,
-    });
+  const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
+    broadcast,
+    bridgeSendToAllSubscribed,
+    getPresenceVersion,
+    getHealthVersion,
+    refreshGatewayHealthSnapshot,
+    logHealth,
+    dedupe,
+    chatAbortControllers,
+    chatRunState,
+    chatRunBuffers,
+    chatDeltaSentAt,
+    removeChatRun,
+    agentRunSeq,
+    bridgeSendToSession,
+  });
 
   const agentUnsub = onAgentEvent(
     createAgentEventHandler({
@@ -346,9 +318,7 @@ export async function startGatewayServer(
 
   let heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
 
-  void cron
-    .start()
-    .catch((err) => logCron.error(`failed to start: ${String(err)}`));
+  void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
   attachGatewayWsHandlers({
     wss,
@@ -414,9 +384,7 @@ export async function startGatewayServer(
     logTailscale,
   });
 
-  let browserControl: Awaited<
-    ReturnType<typeof startBrowserControlServerIfEnabled>
-  > = null;
+  let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   ({ browserControl, pluginServices } = await startGatewaySidecars({
     cfg: cfgAtStart,
     pluginRegistry,
@@ -429,33 +397,31 @@ export async function startGatewayServer(
     logBrowser,
   }));
 
-  const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers(
-    {
-      deps,
-      broadcast,
-      getState: () => ({
-        hooksConfig,
-        heartbeatRunner,
-        cronState,
-        browserControl,
-      }),
-      setState: (nextState) => {
-        hooksConfig = nextState.hooksConfig;
-        heartbeatRunner = nextState.heartbeatRunner;
-        cronState = nextState.cronState;
-        cron = cronState.cron;
-        cronStorePath = cronState.storePath;
-        browserControl = nextState.browserControl;
-      },
-      startChannel,
-      stopChannel,
-      logHooks,
-      logBrowser,
-      logChannels,
-      logCron,
-      logReload,
+  const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
+    deps,
+    broadcast,
+    getState: () => ({
+      hooksConfig,
+      heartbeatRunner,
+      cronState,
+      browserControl,
+    }),
+    setState: (nextState) => {
+      hooksConfig = nextState.hooksConfig;
+      heartbeatRunner = nextState.heartbeatRunner;
+      cronState = nextState.cronState;
+      cron = cronState.cron;
+      cronStorePath = cronState.storePath;
+      browserControl = nextState.browserControl;
     },
-  );
+    startChannel,
+    stopChannel,
+    logHooks,
+    logBrowser,
+    logChannels,
+    logCron,
+    logReload,
+  });
 
   const configReloader = startGatewayConfigReloader({
     initialConfig: cfgAtStart,

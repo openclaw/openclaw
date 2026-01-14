@@ -72,19 +72,17 @@ export async function maybeInstallDaemon(params: {
       ) as GatewayDaemonRuntime;
     }
     const devMode =
-      process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-      process.argv[1]?.endsWith(".ts");
+      process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
     const nodePath = await resolvePreferredNodePath({
       env: process.env,
       runtime: daemonRuntime,
     });
-    const { programArguments, workingDirectory } =
-      await resolveGatewayProgramArguments({
-        port: params.port,
-        dev: devMode,
-        runtime: daemonRuntime,
-        nodePath,
-      });
+    const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+      port: params.port,
+      dev: devMode,
+      runtime: daemonRuntime,
+      nodePath,
+    });
     if (daemonRuntime === "node") {
       const systemNode = await resolveSystemNodeInfo({ env: process.env });
       const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
@@ -113,8 +111,7 @@ export async function maybeInstallDaemon(params: {
     await ensureSystemdUserLingerInteractive({
       runtime: params.runtime,
       prompter: {
-        confirm: async (p) =>
-          guardCancel(await confirm(p), params.runtime) === true,
+        confirm: async (p) => guardCancel(await confirm(p), params.runtime) === true,
         note,
       },
       reason:

@@ -17,9 +17,7 @@ export function extractModelDirective(
     /(?:^|\s)\/models?(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)?)?/i,
   );
 
-  const aliases = (options?.aliases ?? [])
-    .map((alias) => alias.trim())
-    .filter(Boolean);
+  const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null
@@ -41,9 +39,7 @@ export function extractModelDirective(
     rawProfile = parts.slice(1).join("@").trim() || undefined;
   }
 
-  const cleaned = match
-    ? body.replace(match[0], " ").replace(/\s+/g, " ").trim()
-    : body.trim();
+  const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
 
   return {
     cleaned,

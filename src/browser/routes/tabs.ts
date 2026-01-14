@@ -1,25 +1,15 @@
 import type express from "express";
 
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  getProfileContext,
-  jsonError,
-  toNumber,
-  toStringOrEmpty,
-} from "./utils.js";
+import { getProfileContext, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
 
-export function registerBrowserTabRoutes(
-  app: express.Express,
-  ctx: BrowserRouteContext,
-) {
+export function registerBrowserTabRoutes(app: express.Express, ctx: BrowserRouteContext) {
   app.get("/tabs", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx)
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);
     try {
       const reachable = await profileCtx.isReachable(300);
-      if (!reachable)
-        return res.json({ running: false, tabs: [] as unknown[] });
+      if (!reachable) return res.json({ running: false, tabs: [] as unknown[] });
       const tabs = await profileCtx.listTabs();
       res.json({ running: true, tabs });
     } catch (err) {
@@ -29,8 +19,7 @@ export function registerBrowserTabRoutes(
 
   app.post("/tabs/open", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx)
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);
     const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
     if (!url) return jsonError(res, 400, "url is required");
     try {
@@ -44,15 +33,11 @@ export function registerBrowserTabRoutes(
 
   app.post("/tabs/focus", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx)
-      return jsonError(res, profileCtx.status, profileCtx.error);
-    const targetId = toStringOrEmpty(
-      (req.body as { targetId?: unknown })?.targetId,
-    );
+    if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);
+    const targetId = toStringOrEmpty((req.body as { targetId?: unknown })?.targetId);
     if (!targetId) return jsonError(res, 400, "targetId is required");
     try {
-      if (!(await profileCtx.isReachable(300)))
-        return jsonError(res, 409, "browser not running");
+      if (!(await profileCtx.isReachable(300))) return jsonError(res, 409, "browser not running");
       await profileCtx.focusTab(targetId);
       res.json({ ok: true });
     } catch (err) {
@@ -64,13 +49,11 @@ export function registerBrowserTabRoutes(
 
   app.delete("/tabs/:targetId", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx)
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);
     const targetId = toStringOrEmpty(req.params.targetId);
     if (!targetId) return jsonError(res, 400, "targetId is required");
     try {
-      if (!(await profileCtx.isReachable(300)))
-        return jsonError(res, 409, "browser not running");
+      if (!(await profileCtx.isReachable(300))) return jsonError(res, 409, "browser not running");
       await profileCtx.closeTab(targetId);
       res.json({ ok: true });
     } catch (err) {
@@ -82,8 +65,7 @@ export function registerBrowserTabRoutes(
 
   app.post("/tabs/action", async (req, res) => {
     const profileCtx = getProfileContext(req, ctx);
-    if ("error" in profileCtx)
-      return jsonError(res, profileCtx.status, profileCtx.error);
+    if ("error" in profileCtx) return jsonError(res, profileCtx.status, profileCtx.error);
     const action = toStringOrEmpty((req.body as { action?: unknown })?.action);
     const index = toNumber((req.body as { index?: unknown })?.index);
     try {
@@ -109,8 +91,7 @@ export function registerBrowserTabRoutes(
       }
 
       if (action === "select") {
-        if (typeof index !== "number")
-          return jsonError(res, 400, "index is required");
+        if (typeof index !== "number") return jsonError(res, 400, "index is required");
         const tabs = await profileCtx.listTabs();
         const target = tabs[index];
         if (!target) return jsonError(res, 404, "tab not found");

@@ -11,9 +11,7 @@ type WhatsAppAccountStatus = {
   lastError?: unknown;
 };
 
-function readWhatsAppAccountStatus(
-  value: ChannelAccountSnapshot,
-): WhatsAppAccountStatus | null {
+function readWhatsAppAccountStatus(value: ChannelAccountSnapshot): WhatsAppAccountStatus | null {
   if (!isRecord(value)) return null;
   return {
     accountId: value.accountId,
@@ -40,9 +38,7 @@ export function collectWhatsAppStatusIssues(
     const running = account.running === true;
     const connected = account.connected === true;
     const reconnectAttempts =
-      typeof account.reconnectAttempts === "number"
-        ? account.reconnectAttempts
-        : null;
+      typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : null;
     const lastError = asString(account.lastError);
 
     if (!linked) {

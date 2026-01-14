@@ -6,8 +6,7 @@ const runCommandWithTimeoutMock = vi.fn();
 const runExecMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) =>
-    runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
   runExec: (...args: unknown[]) => runExecMock(...args),
 }));
 

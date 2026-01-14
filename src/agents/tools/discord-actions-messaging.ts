@@ -113,9 +113,7 @@ export async function handleDiscordMessagingAction(
       });
       const limitRaw = params.limit;
       const limit =
-        typeof limitRaw === "number" && Number.isFinite(limitRaw)
-          ? limitRaw
-          : undefined;
+        typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : undefined;
       const reactions = await fetchReactionsDiscord(channelId, messageId, {
         limit,
       });
@@ -149,14 +147,10 @@ export async function handleDiscordMessagingAction(
       });
       const allowMultiselectRaw = params.allowMultiselect;
       const allowMultiselect =
-        typeof allowMultiselectRaw === "boolean"
-          ? allowMultiselectRaw
-          : undefined;
+        typeof allowMultiselectRaw === "boolean" ? allowMultiselectRaw : undefined;
       const durationRaw = params.durationHours;
       const durationHours =
-        typeof durationRaw === "number" && Number.isFinite(durationRaw)
-          ? durationRaw
-          : undefined;
+        typeof durationRaw === "number" && Number.isFinite(durationRaw) ? durationRaw : undefined;
       const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
       await sendPollDiscord(
         to,
@@ -215,8 +209,7 @@ export async function handleDiscordMessagingAction(
       });
       const formattedMessages = messages.map((message) => ({
         ...message,
-        timestamp:
-          formatDiscordTimestamp(message.timestamp) ?? message.timestamp,
+        timestamp: formatDiscordTimestamp(message.timestamp) ?? message.timestamp,
       }));
       return jsonResult({ ok: true, messages: formattedMessages });
     }
@@ -278,8 +271,7 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId");
       const autoArchiveMinutesRaw = params.autoArchiveMinutes;
       const autoArchiveMinutes =
-        typeof autoArchiveMinutesRaw === "number" &&
-        Number.isFinite(autoArchiveMinutesRaw)
+        typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
           ? autoArchiveMinutesRaw
           : undefined;
       const thread = await createThreadDiscord(channelId, {
@@ -298,9 +290,7 @@ export async function handleDiscordMessagingAction(
       });
       const channelId = readStringParam(params, "channelId");
       const includeArchived =
-        typeof params.includeArchived === "boolean"
-          ? params.includeArchived
-          : undefined;
+        typeof params.includeArchived === "boolean" ? params.includeArchived : undefined;
       const before = readStringParam(params, "before");
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
@@ -387,14 +377,8 @@ export async function handleDiscordMessagingAction(
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? params.limit
           : undefined;
-      const channelIdList = [
-        ...(channelIds ?? []),
-        ...(channelId ? [channelId] : []),
-      ];
-      const authorIdList = [
-        ...(authorIds ?? []),
-        ...(authorId ? [authorId] : []),
-      ];
+      const channelIdList = [...(channelIds ?? []), ...(channelId ? [channelId] : [])];
+      const authorIdList = [...(authorIds ?? []), ...(authorId ? [authorId] : [])];
       const results = await searchMessagesDiscord({
         guildId,
         content,

@@ -5,10 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import type {
-  BridgeEvent,
-  BridgeHandlersContext,
-} from "./server-bridge-types.js";
+import type { BridgeEvent, BridgeHandlersContext } from "./server-bridge-types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -27,19 +24,15 @@ export const handleBridgeEvent = async (
         return;
       }
       const obj =
-        typeof payload === "object" && payload !== null
-          ? (payload as Record<string, unknown>)
-          : {};
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const text = typeof obj.text === "string" ? obj.text.trim() : "";
       if (!text) return;
       if (text.length > 20_000) return;
-      const sessionKeyRaw =
-        typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const sessionKeyRaw = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, store, entry, canonicalKey } =
-        loadSessionEntry(sessionKey);
+      const { storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       store[canonicalKey] = {
@@ -102,20 +95,14 @@ export const handleBridgeEvent = async (
       if (!message) return;
       if (message.length > 20_000) return;
 
-      const channelRaw =
-        typeof link?.channel === "string" ? link.channel.trim() : "";
+      const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
       const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to =
-        typeof link?.to === "string" && link.to.trim()
-          ? link.to.trim()
-          : undefined;
+      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
       const deliver = Boolean(link?.deliver) && Boolean(channel);
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
-      const sessionKey =
-        sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const { storePath, store, entry, canonicalKey } =
-        loadSessionEntry(sessionKey);
+      const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const { storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       store[canonicalKey] = {
@@ -143,9 +130,7 @@ export const handleBridgeEvent = async (
           to,
           channel,
           timeout:
-            typeof link?.timeoutSeconds === "number"
-              ? link.timeoutSeconds.toString()
-              : undefined,
+            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
         },
         defaultRuntime,
@@ -164,11 +149,8 @@ export const handleBridgeEvent = async (
         return;
       }
       const obj =
-        typeof payload === "object" && payload !== null
-          ? (payload as Record<string, unknown>)
-          : {};
-      const sessionKey =
-        typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       if (!sessionKey) return;
       ctx.bridgeSubscribe(nodeId, sessionKey);
       return;
@@ -182,11 +164,8 @@ export const handleBridgeEvent = async (
         return;
       }
       const obj =
-        typeof payload === "object" && payload !== null
-          ? (payload as Record<string, unknown>)
-          : {};
-      const sessionKey =
-        typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
+      const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       if (!sessionKey) return;
       ctx.bridgeUnsubscribe(nodeId, sessionKey);
       return;

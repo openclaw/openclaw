@@ -2,15 +2,10 @@ import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessagePollCommand(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessagePollCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        message.command("poll").description("Send a poll"),
-      ),
+      helpers.withRequiredMessageTarget(message.command("poll").description("Send a poll")),
     )
     .requiredOption("--poll-question <text>", "Poll question")
     .option(

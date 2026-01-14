@@ -38,10 +38,8 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -52,8 +50,7 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("@slack/bolt", () => {
   const handlers = new Map<string, (args: unknown) => Promise<void>>();
-  (globalThis as { __slackHandlers?: typeof handlers }).__slackHandlers =
-    handlers;
+  (globalThis as { __slackHandlers?: typeof handlers }).__slackHandlers = handlers;
   const client = {
     auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
     conversations: {
@@ -120,9 +117,7 @@ beforeEach(() => {
   updateLastRouteMock.mockReset();
   reactMock.mockReset();
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock
-    .mockReset()
-    .mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 describe("monitorSlackProvider tool results", () => {
@@ -241,8 +236,7 @@ describe("monitorSlackProvider tool results", () => {
       },
     };
 
-    let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } =
-      {};
+    let capturedCtx: { Body?: string; RawBody?: string; CommandBody?: string } = {};
     replyMock.mockImplementation(async (ctx) => {
       capturedCtx = ctx ?? {};
       return undefined;

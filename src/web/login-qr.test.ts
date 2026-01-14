@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
-    async (
-      _printQr: boolean,
-      _verbose: boolean,
-      opts?: { onQr?: (qr: string) => void },
-    ) => {
+    async (_printQr: boolean, _verbose: boolean, opts?: { onQr?: (qr: string) => void }) => {
       const sock = { ws: { close: vi.fn() } };
       if (opts?.onQr) {
         setImmediate(() => opts.onQr?.("qr-data"));
@@ -40,9 +36,7 @@ vi.mock("./qr-image.js", () => ({
 }));
 
 const { startWebLoginWithQr, waitForWebLogin } = await import("./login-qr.js");
-const { createWaSocket, waitForWaConnection, logoutWeb } = await import(
-  "./session.js"
-);
+const { createWaSocket, waitForWaConnection, logoutWeb } = await import("./session.js");
 
 describe("login-qr", () => {
   beforeEach(() => {

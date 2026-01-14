@@ -4,11 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  buildCommandsMessage,
-  buildHelpMessage,
-  buildStatusMessage,
-} from "./status.js";
+import { buildCommandsMessage, buildHelpMessage, buildStatusMessage } from "./status.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -105,9 +101,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    const optionsLine = text
-      .split("\n")
-      .find((line) => line.trim().startsWith("⚙️"));
+    const optionsLine = text.split("\n").find((line) => line.trim().startsWith("⚙️"));
     expect(optionsLine).toBeTruthy();
     expect(optionsLine).not.toContain("elevated");
   });
@@ -146,9 +140,7 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(normalizeTestText(text)).toContain(
-      "Model: google-antigravity/claude-sonnet-4-5",
-    );
+    expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-5");
   });
 
   it("handles missing agent config gracefully", () => {
@@ -200,9 +192,7 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain(
-      "Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)",
-    );
+    expect(text).toContain("Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)");
   });
 
   it("inserts usage summary beneath context line", () => {
@@ -258,9 +248,7 @@ describe("buildStatusMessage", () => {
     await withTempHome(
       async (dir) => {
         vi.resetModules();
-        const { buildStatusMessage: buildStatusMessageDynamic } = await import(
-          "./status.js"
-        );
+        const { buildStatusMessage: buildStatusMessageDynamic } = await import("./status.js");
 
         const sessionId = "sess-1";
         const logPath = path.join(
@@ -325,12 +313,8 @@ describe("buildCommandsMessage", () => {
       commands: { config: false, debug: false },
     } as ClawdbotConfig);
     expect(text).toContain("/commands - List all slash commands.");
-    expect(text).toContain(
-      "/think (aliases: /thinking, /t) - Set thinking level.",
-    );
-    expect(text).toContain(
-      "/compact (text-only) - Compact the session context.",
-    );
+    expect(text).toContain("/think (aliases: /thinking, /t) - Set thinking level.");
+    expect(text).toContain("/compact (text-only) - Compact the session context.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

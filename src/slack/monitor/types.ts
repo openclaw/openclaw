@@ -1,7 +1,4 @@
-import type {
-  ClawdbotConfig,
-  SlackSlashCommandConfig,
-} from "../../config/config.js";
+import type { ClawdbotConfig, SlackSlashCommandConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackFile, SlackMessageEvent } from "../types.js";
 

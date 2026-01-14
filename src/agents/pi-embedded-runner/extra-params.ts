@@ -84,9 +84,7 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  log.debug(
-    `creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`,
-  );
+  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
 
   const underlying = baseStreamFn ?? streamSimple;
   const wrappedStreamFn: StreamFn = (model, context, options) =>
@@ -116,15 +114,10 @@ export function applyExtraParamsToAgent(
     modelId,
     thinkLevel,
   });
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    extraParams,
-  );
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, extraParams);
 
   if (wrappedStreamFn) {
-    log.debug(
-      `applying extraParams to agent streamFn for ${provider}/${modelId}`,
-    );
+    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 }

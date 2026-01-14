@@ -47,19 +47,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 }) {
   const snapshot = await readConfigFileSnapshot();
   let cfg: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
-  if (
-    snapshot.exists &&
-    !snapshot.valid &&
-    snapshot.legacyIssues.length === 0
-  ) {
+  if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
     note("Config invalid; doctor will run with defaults.", "Config");
   }
 
   if (snapshot.legacyIssues.length > 0) {
     note(
-      snapshot.legacyIssues
-        .map((issue) => `- ${issue.path}: ${issue.message}`)
-        .join("\n"),
+      snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
       "Legacy config keys detected",
     );
     const migrate =
@@ -71,9 +65,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           });
     if (migrate) {
       // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
-      const { config: migrated, changes } = migrateLegacyConfig(
-        snapshot.parsed,
-      );
+      const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
       if (changes.length > 0) note(changes.join("\n"), "Doctor changes");
       if (migrated) cfg = migrated;
     }

@@ -28,9 +28,7 @@ function normalizeMime(mime?: string): string | undefined {
   return cleaned || undefined;
 }
 
-async function sniffMimeFromBase64(
-  base64: string,
-): Promise<string | undefined> {
+async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();
   if (!trimmed) return undefined;
 
@@ -95,23 +93,17 @@ export async function parseMessageWithAttachments(
       throw new Error(`attachment ${label}: invalid base64 content`);
     }
     if (sizeBytes <= 0 || sizeBytes > maxBytes) {
-      throw new Error(
-        `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
-      );
+      throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
     }
 
     const providedMime = normalizeMime(mime);
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
     if (sniffedMime && !isImageMime(sniffedMime)) {
-      log?.warn(
-        `attachment ${label}: detected non-image (${sniffedMime}), dropping`,
-      );
+      log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
       continue;
     }
     if (!sniffedMime && !isImageMime(providedMime)) {
-      log?.warn(
-        `attachment ${label}: unable to detect image mime type, dropping`,
-      );
+      log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
       continue;
     }
     if (sniffedMime && providedMime && sniffedMime !== providedMime) {
@@ -169,9 +161,7 @@ export function buildMessageWithAttachments(
       throw new Error(`attachment ${label}: invalid base64 content`);
     }
     if (sizeBytes <= 0 || sizeBytes > maxBytes) {
-      throw new Error(
-        `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
-      );
+      throw new Error(`attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`);
     }
 
     const safeLabel = label.replace(/\s+/g, "_");

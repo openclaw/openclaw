@@ -1,8 +1,5 @@
 import type { ClawdbotConfig } from "../config/types.js";
-import {
-  CHAT_COMMANDS,
-  getNativeCommandSurfaces,
-} from "./commands-registry.data.js";
+import { CHAT_COMMANDS, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandDetection,
@@ -56,35 +53,28 @@ export function listChatCommands(): ChatCommandDefinition[] {
   return [...CHAT_COMMANDS];
 }
 
-export function isCommandEnabled(
-  cfg: ClawdbotConfig,
-  commandKey: string,
-): boolean {
+export function isCommandEnabled(cfg: ClawdbotConfig, commandKey: string): boolean {
   if (commandKey === "config") return cfg.commands?.config === true;
   if (commandKey === "debug") return cfg.commands?.debug === true;
   if (commandKey === "bash") return cfg.commands?.bash === true;
   return true;
 }
 
-export function listChatCommandsForConfig(
-  cfg: ClawdbotConfig,
-): ChatCommandDefinition[] {
+export function listChatCommandsForConfig(cfg: ClawdbotConfig): ChatCommandDefinition[] {
   return CHAT_COMMANDS.filter((command) => isCommandEnabled(cfg, command.key));
 }
 
 export function listNativeCommandSpecs(): NativeCommandSpec[] {
-  return CHAT_COMMANDS.filter(
-    (command) => command.scope !== "text" && command.nativeName,
-  ).map((command) => ({
-    name: command.nativeName ?? command.key,
-    description: command.description,
-    acceptsArgs: Boolean(command.acceptsArgs),
-  }));
+  return CHAT_COMMANDS.filter((command) => command.scope !== "text" && command.nativeName).map(
+    (command) => ({
+      name: command.nativeName ?? command.key,
+      description: command.description,
+      acceptsArgs: Boolean(command.acceptsArgs),
+    }),
+  );
 }
 
-export function listNativeCommandSpecsForConfig(
-  cfg: ClawdbotConfig,
-): NativeCommandSpec[] {
+export function listNativeCommandSpecsForConfig(cfg: ClawdbotConfig): NativeCommandSpec[] {
   return listChatCommandsForConfig(cfg)
     .filter((command) => command.scope !== "text" && command.nativeName)
     .map((command) => ({
@@ -94,14 +84,10 @@ export function listNativeCommandSpecsForConfig(
     }));
 }
 
-export function findCommandByNativeName(
-  name: string,
-): ChatCommandDefinition | undefined {
+export function findCommandByNativeName(name: string): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
   return CHAT_COMMANDS.find(
-    (command) =>
-      command.scope !== "text" &&
-      command.nativeName?.toLowerCase() === normalized,
+    (command) => command.scope !== "text" && command.nativeName?.toLowerCase() === normalized,
   );
 }
 
@@ -110,16 +96,12 @@ export function buildCommandText(commandName: string, args?: string): string {
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
 }
 
-export function normalizeCommandBody(
-  raw: string,
-  options?: CommandNormalizeOptions,
-): string {
+export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) return trimmed;
 
   const newline = trimmed.indexOf("\n");
-  const singleLine =
-    newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
 
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
@@ -151,9 +133,7 @@ export function normalizeCommandBody(
   if (!tokenSpec) return commandBody;
   if (rest && !tokenSpec.acceptsArgs) return commandBody;
   const normalizedRest = rest?.trimStart();
-  return normalizedRest
-    ? `${tokenSpec.canonical} ${normalizedRest}`
-    : tokenSpec.canonical;
+  return normalizedRest ? `${tokenSpec.canonical} ${normalizedRest}` : tokenSpec.canonical;
 }
 
 export function isCommandMessage(raw: string): boolean {
@@ -181,9 +161,7 @@ export function getCommandDetection(_cfg?: ClawdbotConfig): CommandDetection {
   }
   cachedDetection = {
     exact,
-    regex: patterns.length
-      ? new RegExp(`^(?:${patterns.join("|")})$`, "i")
-      : /$^/,
+    regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
   };
   return cachedDetection;
 }
@@ -225,9 +203,7 @@ export function isNativeCommandSurface(surface?: string): boolean {
   return getNativeCommandSurfaces().has(surface.toLowerCase());
 }
 
-export function shouldHandleTextCommands(
-  params: ShouldHandleTextCommandsParams,
-): boolean {
+export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
   if (params.commandSource === "native") return true;
   if (params.cfg.commands?.text !== false) return true;
   return !isNativeCommandSurface(params.surface);

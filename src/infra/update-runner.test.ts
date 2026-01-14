@@ -68,8 +68,9 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
       [`git -C ${tempDir} rev-parse HEAD`]: { stdout: "abc123" },
       [`git -C ${tempDir} status --porcelain`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]:
-        { stdout: "origin/main" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        stdout: "origin/main",
+      },
       [`git -C ${tempDir} fetch --all --prune`]: { stdout: "" },
       [`git -C ${tempDir} rebase @{upstream}`]: { code: 1, stderr: "conflict" },
       [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
@@ -127,8 +128,6 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("not-clawdbot-root");
-    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(
-      false,
-    );
+    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(false);
   });
 });

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  type AuthProfileStore,
-  CLAUDE_CLI_PROFILE_ID,
-} from "../agents/auth-profiles.js";
+import { type AuthProfileStore, CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
@@ -90,9 +87,7 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "minimax-api")).toBe(true);
-    expect(options.some((opt) => opt.value === "minimax-api-lightning")).toBe(
-      true,
-    );
+    expect(options.some((opt) => opt.value === "minimax-api-lightning")).toBe(true);
   });
 
   it("includes Moonshot auth choice", () => {

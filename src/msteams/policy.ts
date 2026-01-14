@@ -20,9 +20,7 @@ export function resolveMSTeamsRouteConfig(params: {
   const conversationId = params.conversationId?.trim();
   const teamConfig = teamId ? params.cfg?.teams?.[teamId] : undefined;
   const channelConfig =
-    teamConfig && conversationId
-      ? teamConfig.channels?.[conversationId]
-      : undefined;
+    teamConfig && conversationId ? teamConfig.channels?.[conversationId] : undefined;
   return { teamConfig, channelConfig };
 }
 
@@ -74,8 +72,5 @@ export function isMSTeamsGroupAllowed(params: {
   if (allowFrom.includes("*")) return true;
   const senderId = params.senderId.toLowerCase();
   const senderName = params.senderName?.toLowerCase();
-  return (
-    allowFrom.includes(senderId) ||
-    (senderName ? allowFrom.includes(senderName) : false)
-  );
+  return allowFrom.includes(senderId) || (senderName ? allowFrom.includes(senderName) : false);
 }

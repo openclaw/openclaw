@@ -96,11 +96,7 @@ describe("gateway server chat", () => {
   test("chat.abort returns aborted=false for unknown runId", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify({}, null, 2),
-      "utf-8",
-    );
+    await fs.writeFile(testState.sessionStorePath, JSON.stringify({}, null, 2), "utf-8");
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -153,11 +149,7 @@ describe("gateway server chat", () => {
       });
     });
 
-    const sendResP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "send-mismatch-1",
-      10_000,
-    );
+    const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-mismatch-1", 10_000);
     ws.send(
       JSON.stringify({
         type: "req",
@@ -232,26 +224,19 @@ describe("gateway server chat", () => {
       }),
     );
 
-    const sendRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "send-complete-1",
-    );
+    const sendRes = await onceMessage(ws, (o) => o.type === "res" && o.id === "send-complete-1");
     expect(sendRes.ok).toBe(true);
 
     // chat.send returns before the run ends; wait until dedupe is populated
     // (meaning the run completed and the abort controller was cleared).
     let completed = false;
     for (let i = 0; i < 50; i++) {
-      const again = await rpcReq<{ runId?: string; status?: string }>(
-        ws,
-        "chat.send",
-        {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-complete-1",
-          timeoutMs: 30_000,
-        },
-      );
+      const again = await rpcReq<{ runId?: string; status?: string }>(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-complete-1",
+        timeoutMs: 30_000,
+      });
       if (again.ok && again.payload?.status === "ok") {
         completed = true;
         break;
@@ -308,10 +293,7 @@ describe("gateway server chat", () => {
 
     const final1P = onceMessage(
       ws,
-      (o) =>
-        o.type === "event" &&
-        o.event === "chat" &&
-        o.payload?.state === "final",
+      (o) => o.type === "event" && o.event === "chat" && o.payload?.state === "final",
       8000,
     );
 
@@ -330,10 +312,7 @@ describe("gateway server chat", () => {
 
     const final2P = onceMessage(
       ws,
-      (o) =>
-        o.type === "event" &&
-        o.event === "chat" &&
-        o.payload?.state === "final",
+      (o) => o.type === "event" && o.event === "chat" && o.payload?.state === "final",
       8000,
     );
 

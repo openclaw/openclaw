@@ -1,8 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-} from "../channels/plugins/types.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
@@ -144,21 +141,14 @@ export async function buildChannelSummary(
   for (const plugin of listChannelPlugins()) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
-      plugin.config.defaultAccountId?.(effective) ??
-      accountIds[0] ??
-      DEFAULT_ACCOUNT_ID;
-    const resolvedAccountIds =
-      accountIds.length > 0 ? accountIds : [defaultAccountId];
+      plugin.config.defaultAccountId?.(effective) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
+    const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
       const account = plugin.config.resolveAccount(effective, accountId);
       const enabled = resolveAccountEnabled(plugin, account, effective);
-      const configured = await resolveAccountConfigured(
-        plugin,
-        account,
-        effective,
-      );
+      const configured = await resolveAccountConfigured(plugin, account, effective);
       const snapshot = buildAccountSnapshot({
         plugin,
         account,
@@ -173,24 +163,20 @@ export async function buildChannelSummary(
     const configuredEntries = entries.filter((entry) => entry.configured);
     const anyEnabled = entries.some((entry) => entry.enabled);
     const fallbackEntry =
-      entries.find((entry) => entry.accountId === defaultAccountId) ??
-      entries[0];
+      entries.find((entry) => entry.accountId === defaultAccountId) ?? entries[0];
     const summary = plugin.status?.buildChannelSummary
       ? await plugin.status.buildChannelSummary({
           account: fallbackEntry?.account ?? {},
           cfg: effective,
           defaultAccountId,
           snapshot:
-            fallbackEntry?.snapshot ??
-            ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
+            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
         })
       : undefined;
 
     const summaryRecord = summary as Record<string, unknown> | undefined;
     const linked =
-      summaryRecord && typeof summaryRecord.linked === "boolean"
-        ? summaryRecord.linked
-        : null;
+      summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     const configured =
       summaryRecord && typeof summaryRecord.configured === "boolean"
         ? summaryRecord.configured
@@ -216,9 +202,7 @@ export async function buildChannelSummary(
     let line = `${baseLabel}: ${status}`;
 
     const authAgeMs =
-      summaryRecord && typeof summaryRecord.authAgeMs === "number"
-        ? summaryRecord.authAgeMs
-        : null;
+      summaryRecord && typeof summaryRecord.authAgeMs === "number" ? summaryRecord.authAgeMs : null;
     const self = summaryRecord?.self as { e164?: string | null } | undefined;
     if (self?.e164) line += ` ${self.e164}`;
     if (authAgeMs != null && authAgeMs >= 0) {

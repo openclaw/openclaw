@@ -91,11 +91,7 @@ export function resolveOpencodeZenAlias(modelIdOrAlias: string): string {
  */
 export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
   const lower = modelId.toLowerCase();
-  if (
-    lower.startsWith("claude-") ||
-    lower.startsWith("minimax") ||
-    lower.startsWith("alpha-gd4")
-  ) {
+  if (lower.startsWith("claude-") || lower.startsWith("minimax") || lower.startsWith("alpha-gd4")) {
     return "anthropic-messages";
   }
   if (lower.startsWith("gemini-")) {
@@ -274,9 +270,7 @@ interface ZenModelsResponse {
  * @param apiKey - OpenCode Zen API key for authentication
  * @returns Array of model definitions, or static fallback on failure
  */
-export async function fetchOpencodeZenModels(
-  apiKey?: string,
-): Promise<ModelDefinitionConfig[]> {
+export async function fetchOpencodeZenModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
   // Return cached models if still valid
   const now = Date.now();
   if (cachedModels && now - cacheTimestamp < CACHE_TTL_MS) {
@@ -298,9 +292,7 @@ export async function fetchOpencodeZenModels(
     });
 
     if (!response.ok) {
-      throw new Error(
-        `API returned ${response.status}: ${response.statusText}`,
-      );
+      throw new Error(`API returned ${response.status}: ${response.statusText}`);
     }
 
     const data = (await response.json()) as ZenModelsResponse;
@@ -316,9 +308,7 @@ export async function fetchOpencodeZenModels(
 
     return models;
   } catch (error) {
-    console.warn(
-      `[opencode-zen] Failed to fetch models, using static fallback: ${String(error)}`,
-    );
+    console.warn(`[opencode-zen] Failed to fetch models, using static fallback: ${String(error)}`);
     return getOpencodeZenStaticFallbackModels();
   }
 }

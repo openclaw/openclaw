@@ -6,10 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  approveNodePairing,
-  listNodePairing,
-} from "../src/infra/node-pairing.js";
+import { approveNodePairing, listNodePairing } from "../src/infra/node-pairing.js";
 
 type GatewayInstance = {
   name: string;
@@ -102,9 +99,7 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const bridgePort = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
   const gatewayToken = `gateway-${name}-${randomUUID()}`;
-  const homeDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), `clawdbot-e2e-${name}-`),
-  );
+  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `clawdbot-e2e-${name}-`));
   const configDir = path.join(homeDir, ".clawdbot");
   await fs.mkdir(configDir, { recursive: true });
   const configPath = path.join(configDir, "clawdbot.json");
@@ -157,13 +152,7 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
     child.stdout?.on("data", (d) => stdout.push(String(d)));
     child.stderr?.on("data", (d) => stderr.push(String(d)));
 
-    await waitForPortOpen(
-      child,
-      stdout,
-      stderr,
-      port,
-      GATEWAY_START_TIMEOUT_MS,
-    );
+    await waitForPortOpen(child, stdout, stderr, port, GATEWAY_START_TIMEOUT_MS);
 
     return {
       name,
@@ -216,10 +205,7 @@ const stopGatewayInstance = async (inst: GatewayInstance) => {
   await fs.rm(inst.homeDir, { recursive: true, force: true });
 };
 
-const runCliJson = async (
-  args: string[],
-  env: NodeJS.ProcessEnv,
-): Promise<unknown> => {
+const runCliJson = async (args: string[], env: NodeJS.ProcessEnv): Promise<unknown> => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn("node", ["dist/index.js", ...args], {
@@ -234,9 +220,7 @@ const runCliJson = async (
   const result = await new Promise<{
     code: number | null;
     signal: string | null;
-  }>((resolve) =>
-    child.once("exit", (code, signal) => resolve({ code, signal })),
-  );
+  }>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
   const out = stdout.join("").trim();
   if (result.code !== 0) {
     throw new Error(
@@ -257,43 +241,41 @@ const runCliJson = async (
 const postJson = async (url: string, body: unknown) => {
   const payload = JSON.stringify(body);
   const parsed = new URL(url);
-  return await new Promise<{ status: number; json: unknown }>(
-    (resolve, reject) => {
-      const req = httpRequest(
-        {
-          method: "POST",
-          hostname: parsed.hostname,
-          port: Number(parsed.port),
-          path: `${parsed.pathname}${parsed.search}`,
-          headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(payload),
-          },
+  return await new Promise<{ status: number; json: unknown }>((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: "POST",
+        hostname: parsed.hostname,
+        port: Number(parsed.port),
+        path: `${parsed.pathname}${parsed.search}`,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
         },
-        (res) => {
-          let data = "";
-          res.setEncoding("utf8");
-          res.on("data", (chunk) => {
-            data += chunk;
-          });
-          res.on("end", () => {
-            let json: unknown = null;
-            if (data.trim()) {
-              try {
-                json = JSON.parse(data);
-              } catch {
-                json = data;
-              }
+      },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          let json: unknown = null;
+          if (data.trim()) {
+            try {
+              json = JSON.parse(data);
+            } catch {
+              json = data;
             }
-            resolve({ status: res.statusCode ?? 0, json });
-          });
-        },
-      );
-      req.on("error", reject);
-      req.write(payload);
-      req.end();
-    },
-  );
+          }
+          resolve({ status: res.statusCode ?? 0, json });
+        });
+      },
+    );
+    req.on("error", reject);
+    req.write(payload);
+    req.end();
+  });
 };
 
 const createLineReader = (socket: net.Socket) => {
@@ -345,11 +327,7 @@ const readLineWithTimeout = async (
   return await Promise.race([readLine(), timer]);
 };
 
-const waitForPairRequest = async (
-  baseDir: string,
-  nodeId: string,
-  timeoutMs = 10_000,
-) => {
+const waitForPairRequest = async (baseDir: string, nodeId: string, timeoutMs = 10_000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const list = (await listNodePairing(baseDir)) as PairingList;
@@ -380,15 +358,16 @@ const pairNode = async (inst: GatewayInstance, nodeId: string) => {
   const approved = await approveNodePairing(requestId, baseDir);
   expect(approved).toBeTruthy();
 
-  const pairLine = JSON.parse(
-    await readLineWithTimeout(readLine, `pair-ok (${nodeId})`),
-  ) as { type?: string; token?: string };
+  const pairLine = JSON.parse(await readLineWithTimeout(readLine, `pair-ok (${nodeId})`)) as {
+    type?: string;
+    token?: string;
+  };
   expect(pairLine.type).toBe("pair-ok");
   expect(pairLine.token).toBeTruthy();
 
-  const helloLine = JSON.parse(
-    await readLineWithTimeout(readLine, `hello-ok (${nodeId})`),
-  ) as { type?: string };
+  const helloLine = JSON.parse(await readLineWithTimeout(readLine, `hello-ok (${nodeId})`)) as {
+    type?: string;
+  };
   expect(helloLine.type).toBe("hello-ok");
 
   return socket;
@@ -428,14 +407,14 @@ describe("gateway multi-instance e2e", () => {
       expect(healthB.ok).toBe(true);
 
       const [hookResA, hookResB] = await Promise.all([
-        postJson(
-          `http://127.0.0.1:${gwA.port}/hooks/wake?token=${gwA.hookToken}`,
-          { text: "wake a", mode: "now" },
-        ),
-        postJson(
-          `http://127.0.0.1:${gwB.port}/hooks/wake?token=${gwB.hookToken}`,
-          { text: "wake b", mode: "now" },
-        ),
+        postJson(`http://127.0.0.1:${gwA.port}/hooks/wake?token=${gwA.hookToken}`, {
+          text: "wake a",
+          mode: "now",
+        }),
+        postJson(`http://127.0.0.1:${gwB.port}/hooks/wake?token=${gwB.hookToken}`, {
+          text: "wake b",
+          mode: "now",
+        }),
       ]);
       expect(hookResA.status).toBe(200);
       expect((hookResA.json as { ok?: boolean } | undefined)?.ok).toBe(true);
@@ -446,31 +425,23 @@ describe("gateway multi-instance e2e", () => {
       const nodeBSocket = await pairNode(gwB, "node-b");
 
       const [nodeListA, nodeListB] = (await Promise.all([
-        runCliJson(
-          ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`],
-          {
-            CLAWDBOT_GATEWAY_TOKEN: gwA.gatewayToken,
-            CLAWDBOT_GATEWAY_PASSWORD: "",
-          },
-        ),
-        runCliJson(
-          ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`],
-          {
-            CLAWDBOT_GATEWAY_TOKEN: gwB.gatewayToken,
-            CLAWDBOT_GATEWAY_PASSWORD: "",
-          },
-        ),
+        runCliJson(["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`], {
+          CLAWDBOT_GATEWAY_TOKEN: gwA.gatewayToken,
+          CLAWDBOT_GATEWAY_PASSWORD: "",
+        }),
+        runCliJson(["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`], {
+          CLAWDBOT_GATEWAY_TOKEN: gwB.gatewayToken,
+          CLAWDBOT_GATEWAY_PASSWORD: "",
+        }),
       ])) as [NodeListPayload, NodeListPayload];
       expect(
         nodeListA.nodes?.some(
-          (n) =>
-            n.nodeId === "node-a" && n.connected === true && n.paired === true,
+          (n) => n.nodeId === "node-a" && n.connected === true && n.paired === true,
         ),
       ).toBe(true);
       expect(
         nodeListB.nodes?.some(
-          (n) =>
-            n.nodeId === "node-b" && n.connected === true && n.paired === true,
+          (n) => n.nodeId === "node-b" && n.connected === true && n.paired === true,
         ),
       ).toBe(true);
 

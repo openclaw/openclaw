@@ -45,12 +45,7 @@ export function readStringParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const {
-    required = false,
-    trim = true,
-    label = key,
-    allowEmpty = false,
-  } = options;
+  const { required = false, trim = true, label = key, allowEmpty = false } = options;
   const raw = params[key];
   if (typeof raw !== "string") {
     if (required) throw new Error(`${label} required`);
@@ -162,8 +157,7 @@ export function readReactionParams(
 ): ReactionParams {
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
-  const remove =
-    typeof params[removeKey] === "boolean" ? params[removeKey] : false;
+  const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
   const emoji = readStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,
@@ -219,8 +213,7 @@ export async function imageResultFromFile(params: {
   details?: Record<string, unknown>;
 }): Promise<AgentToolResult<unknown>> {
   const buf = await fs.readFile(params.path);
-  const mimeType =
-    (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
+  const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
   return await imageResult({
     label: params.label,
     path: params.path,

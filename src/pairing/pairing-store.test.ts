@@ -6,10 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveOAuthDir } from "../config/paths.js";
-import {
-  listChannelPairingRequests,
-  upsertChannelPairingRequest,
-} from "./pairing-store.js";
+import { listChannelPairingRequests, upsertChannelPairingRequest } from "./pairing-store.js";
 
 async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
   const previous = process.env.CLAWDBOT_STATE_DIR;

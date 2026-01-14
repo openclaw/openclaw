@@ -44,20 +44,13 @@ export function buildGroupDisplayName(params: {
   if (!params.room && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }
-  if (
-    token &&
-    !/^[@#]/.test(token) &&
-    !token.startsWith("g-") &&
-    !token.includes("#")
-  ) {
+  if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {
     token = `g-${token}`;
   }
   return token ? `${providerKey}:${token}` : providerKey;
 }
 
-export function resolveGroupSessionKey(
-  ctx: MsgContext,
-): GroupKeyResolution | null {
+export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
   if (!from) return null;
   const chatType = ctx.ChatType?.trim().toLowerCase();
@@ -71,9 +64,7 @@ export function resolveGroupSessionKey(
 
   const providerHint = ctx.Provider?.trim().toLowerCase();
   const hasLegacyGroupPrefix = from.startsWith("group:");
-  const raw = (
-    hasLegacyGroupPrefix ? from.slice("group:".length) : from
-  ).trim();
+  const raw = (hasLegacyGroupPrefix ? from.slice("group:".length) : from).trim();
 
   let provider: string | undefined;
   let kind: "group" | "channel" | undefined;

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isMessagingToolDuplicate,
-  normalizeTextForComparison,
-} from "./pi-embedded-helpers.js";
+import { isMessagingToolDuplicate, normalizeTextForComparison } from "./pi-embedded-helpers.js";
 
 describe("normalizeTextForComparison", () => {
   it("lowercases text", () => {
@@ -22,9 +19,7 @@ describe("normalizeTextForComparison", () => {
   });
 
   it("handles mixed normalization", () => {
-    expect(normalizeTextForComparison("  Hello 👋   WORLD  🌍  ")).toBe(
-      "hello world",
-    );
+    expect(normalizeTextForComparison("  Hello 👋   WORLD  🌍  ")).toBe("hello world");
   });
 });
 
@@ -63,10 +58,9 @@ describe("isMessagingToolDuplicate", () => {
 
   it("detects substring duplicates (LLM elaboration)", () => {
     expect(
-      isMessagingToolDuplicate(
-        'I sent the message: "Hello, this is a test message!"',
-        ["Hello, this is a test message!"],
-      ),
+      isMessagingToolDuplicate('I sent the message: "Hello, this is a test message!"', [
+        "Hello, this is a test message!",
+      ]),
     ).toBe(true);
   });
 

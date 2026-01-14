@@ -18,9 +18,7 @@ const LOADERS: Record<ChannelId, PluginLoader> = {
 
 const cache = new Map<ChannelId, ChannelPlugin>();
 
-export async function loadChannelPlugin(
-  id: ChannelId,
-): Promise<ChannelPlugin | undefined> {
+export async function loadChannelPlugin(id: ChannelId): Promise<ChannelPlugin | undefined> {
   const cached = cache.get(id);
   if (cached) return cached;
   const loader = LOADERS[id];

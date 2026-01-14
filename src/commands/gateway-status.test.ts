@@ -37,9 +37,7 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
         },
         sessions: { count: 0 },
       },
-      presence: [
-        { mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" },
-      ],
+      presence: [{ mode: "gateway", reason: "self", host: "local", ip: "127.0.0.1" }],
       configSnapshot: {
         path: "/tmp/cfg.json",
         exists: true,
@@ -69,9 +67,7 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
       },
       sessions: { count: 2 },
     },
-    presence: [
-      { mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" },
-    ],
+    presence: [{ mode: "gateway", reason: "self", host: "remote", ip: "100.64.0.2" }],
     configSnapshot: {
       path: "/tmp/remote.json",
       exists: true,
@@ -146,10 +142,7 @@ describe("gateway-status command", () => {
     );
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<
-      string,
-      unknown
-    >;
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     expect(parsed.ok).toBe(true);
     expect(parsed.targets).toBeTruthy();
     const targets = parsed.targets as Array<Record<string, unknown>>;
@@ -182,10 +175,7 @@ describe("gateway-status command", () => {
     expect(probeGateway).toHaveBeenCalled();
     expect(sshStop).toHaveBeenCalledTimes(1);
 
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<
-      string,
-      unknown
-    >;
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
   });

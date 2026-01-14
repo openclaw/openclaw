@@ -10,10 +10,7 @@ import {
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 
 export async function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
@@ -29,14 +26,10 @@ export async function resolveDeliveryTarget(
   mode: "explicit" | "implicit";
   error?: Error;
 }> {
-  const requestedRaw =
-    typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const requestedChannelHint =
-    normalizeMessageChannel(requestedRaw) ?? requestedRaw;
+  const requestedRaw = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const requestedChannelHint = normalizeMessageChannel(requestedRaw) ?? requestedRaw;
   const explicitTo =
-    typeof jobPayload.to === "string" && jobPayload.to.trim()
-      ? jobPayload.to.trim()
-      : undefined;
+    typeof jobPayload.to === "string" && jobPayload.to.trim() ? jobPayload.to.trim() : undefined;
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });

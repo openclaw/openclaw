@@ -72,12 +72,8 @@ describe("resolveAgentConfig", () => {
       },
     };
 
-    expect(resolveAgentModelPrimary(cfg, "linus")).toBe(
-      "anthropic/claude-opus-4",
-    );
-    expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual([
-      "openai/gpt-5.2",
-    ]);
+    expect(resolveAgentModelPrimary(cfg, "linus")).toBe("anthropic/claude-opus-4");
+    expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.2"]);
 
     // If fallbacks isn't present, we don't override the global fallbacks.
     const cfgNoOverride: ClawdbotConfig = {
@@ -92,9 +88,7 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toBe(
-      undefined,
-    );
+    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toBe(undefined);
 
     // Explicit empty list disables global fallbacks for that agent.
     const cfgDisable: ClawdbotConfig = {

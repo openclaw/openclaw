@@ -50,10 +50,7 @@ export function upsertAuthProfile(params: {
   saveAuthProfileStore(store, params.agentDir);
 }
 
-export function listProfilesForProvider(
-  store: AuthProfileStore,
-  provider: string,
-): string[] {
+export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {
   const providerKey = normalizeProviderId(provider);
   return Object.entries(store.profiles)
     .filter(([, cred]) => normalizeProviderId(cred.provider) === providerKey)

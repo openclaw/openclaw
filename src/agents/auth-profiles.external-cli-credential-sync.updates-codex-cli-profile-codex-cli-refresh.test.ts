@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import {
-  CODEX_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-} from "./auth-profiles.js";
+import { CODEX_CLI_PROFILE_ID, ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
   it("updates codex-cli profile when Codex CLI refresh token changes", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-codex-refresh-sync-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-codex-refresh-sync-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -48,10 +43,9 @@ describe("external CLI credential sync", () => {
           );
 
           const store = ensureAuthProfileStore(agentDir);
-          expect(
-            (store.profiles[CODEX_CLI_PROFILE_ID] as { refresh: string })
-              .refresh,
-          ).toBe("new-refresh");
+          expect((store.profiles[CODEX_CLI_PROFILE_ID] as { refresh: string }).refresh).toBe(
+            "new-refresh",
+          );
         },
         { prefix: "clawdbot-home-" },
       );

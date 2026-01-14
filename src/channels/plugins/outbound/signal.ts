@@ -24,8 +24,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     const maxBytes = resolveChannelMediaMaxBytes({
       cfg,
       resolveChannelLimitMb: ({ cfg, accountId }) =>
-        cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-        cfg.channels?.signal?.mediaMaxMb,
+        cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
       accountId,
     });
     const result = await send(to, text, {
@@ -39,8 +38,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     const maxBytes = resolveChannelMediaMaxBytes({
       cfg,
       resolveChannelLimitMb: ({ cfg, accountId }) =>
-        cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-        cfg.channels?.signal?.mediaMaxMb,
+        cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ?? cfg.channels?.signal?.mediaMaxMb,
       accountId,
     });
     const result = await send(to, text, {

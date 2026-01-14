@@ -53,18 +53,13 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
     fsSync.copyFileSync(backupPath, credsPath);
-    logger.warn(
-      { credsPath },
-      "restored corrupted WhatsApp creds.json from backup",
-    );
+    logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
   } catch {
     // ignore
   }
 }
 
-export async function webAuthExists(
-  authDir: string = resolveDefaultWebAuthDir(),
-) {
+export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()) {
   const resolvedAuthDir = resolveUserPath(authDir);
   maybeRestoreCredsFromBackup(resolvedAuthDir);
   const credsPath = resolveWebCredsPath(resolvedAuthDir);
@@ -107,9 +102,7 @@ export async function logoutWeb(params: {
   runtime?: RuntimeEnv;
 }) {
   const runtime = params.runtime ?? defaultRuntime;
-  const resolvedAuthDir = resolveUserPath(
-    params.authDir ?? resolveDefaultWebAuthDir(),
-  );
+  const resolvedAuthDir = resolveUserPath(params.authDir ?? resolveDefaultWebAuthDir());
   const exists = await webAuthExists(resolvedAuthDir);
   if (!exists) {
     runtime.log(info("No WhatsApp Web session found; nothing to delete."));
@@ -145,13 +138,9 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
  * Return the age (in milliseconds) of the cached WhatsApp web auth state, or null when missing.
  * Helpful for heartbeats/observability to spot stale credentials.
  */
-export function getWebAuthAgeMs(
-  authDir: string = resolveDefaultWebAuthDir(),
-): number | null {
+export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
   try {
-    const stats = fsSync.statSync(
-      resolveWebCredsPath(resolveUserPath(authDir)),
-    );
+    const stats = fsSync.statSync(resolveWebCredsPath(resolveUserPath(authDir)));
     return Date.now() - stats.mtimeMs;
   } catch {
     return null;
@@ -165,10 +154,7 @@ export function logWebSelfId(
 ) {
   // Human-friendly log of the currently linked personal web session.
   const { e164, jid } = readWebSelfId(authDir);
-  const details =
-    e164 || jid
-      ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
-      : "unknown";
+  const details = e164 || jid ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}` : "unknown";
   const prefix = includeChannelPrefix ? "Web Channel: " : "";
   runtime.log(info(`${prefix}${details}`));
 }

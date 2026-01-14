@@ -1,7 +1,4 @@
-import {
-  buildMentionRegexes,
-  normalizeMentionText,
-} from "../../auto-reply/reply/mentions.js";
+import { buildMentionRegexes, normalizeMentionText } from "../../auto-reply/reply/mentions.js";
 import type { loadConfig } from "../../config/config.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../../utils.js";
 import type { WebInboundMsg } from "./types.js";
@@ -25,18 +22,12 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-export function resolveMentionTargets(
-  msg: WebInboundMsg,
-  authDir?: string,
-): MentionTargets {
+export function resolveMentionTargets(msg: WebInboundMsg, authDir?: string): MentionTargets {
   const jidOptions = authDir ? { authDir } : undefined;
   const normalizedMentions = msg.mentionedJids?.length
-    ? msg.mentionedJids
-        .map((jid) => jidToE164(jid, jidOptions) ?? jid)
-        .filter(Boolean)
+    ? msg.mentionedJids.map((jid) => jidToE164(jid, jidOptions) ?? jid).filter(Boolean)
     : [];
-  const selfE164 =
-    msg.selfE164 ?? (msg.selfJid ? jidToE164(msg.selfJid, jidOptions) : null);
+  const selfE164 = msg.selfE164 ?? (msg.selfJid ? jidToE164(msg.selfJid, jidOptions) : null);
   const selfJid = msg.selfJid ? msg.selfJid.replace(/:\\d+/, "") : null;
   return { normalizedMentions, selfE164, selfJid };
 }
@@ -53,11 +44,7 @@ export function isBotMentionedFromTargets(
   const isSelfChat = isSelfChatMode(targets.selfE164, mentionCfg.allowFrom);
 
   if (msg.mentionedJids?.length && !isSelfChat) {
-    if (
-      targets.selfE164 &&
-      targets.normalizedMentions.includes(targets.selfE164)
-    )
-      return true;
+    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) return true;
     if (targets.selfJid && targets.selfE164) {
       // Some mentions use the bare JID; match on E.164 to be safe.
       if (targets.normalizedMentions.includes(targets.selfJid)) return true;
@@ -106,17 +93,10 @@ export function debugMention(
   return { wasMentioned: result, details };
 }
 
-export function resolveOwnerList(
-  mentionCfg: MentionConfig,
-  selfE164?: string | null,
-) {
+export function resolveOwnerList(mentionCfg: MentionConfig, selfE164?: string | null) {
   const allowFrom = mentionCfg.allowFrom;
   const raw =
-    Array.isArray(allowFrom) && allowFrom.length > 0
-      ? allowFrom
-      : selfE164
-        ? [selfE164]
-        : [];
+    Array.isArray(allowFrom) && allowFrom.length > 0 ? allowFrom : selfE164 ? [selfE164] : [];
   return raw
     .filter((entry): entry is string => Boolean(entry && entry !== "*"))
     .map((entry) => normalizeE164(entry))

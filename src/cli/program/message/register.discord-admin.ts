@@ -1,17 +1,11 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageDiscordAdminCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageDiscordAdminCommands(message: Command, helpers: MessageCliHelpers) {
   const role = message.command("role").description("Role actions");
   helpers
     .withMessageBase(
-      role
-        .command("info")
-        .description("List roles")
-        .requiredOption("--guild-id <id>", "Guild id"),
+      role.command("info").description("List roles").requiredOption("--guild-id <id>", "Guild id"),
     )
     .action(async (opts) => {
       await helpers.runMessageAction("role-info", opts);

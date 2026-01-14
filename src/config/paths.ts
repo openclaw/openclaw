@@ -9,9 +9,7 @@ import type { ClawdbotConfig } from "./types.js";
  * - Missing dependencies should produce actionable Nix-specific error messages
  * - Config is managed externally (read-only from Nix perspective)
  */
-export function resolveIsNixMode(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CLAWDBOT_NIX_MODE === "1";
 }
 
@@ -26,8 +24,7 @@ export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override =
-    env.CLAWDBOT_STATE_DIR?.trim() || env.CLAWDIS_STATE_DIR?.trim();
+  const override = env.CLAWDBOT_STATE_DIR?.trim() || env.CLAWDIS_STATE_DIR?.trim();
   if (override) return resolveUserPath(override);
   return path.join(homedir(), ".clawdbot");
 }

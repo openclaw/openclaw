@@ -42,8 +42,7 @@ function buildSystemNodeCandidates(
   if (platform === "win32") {
     const pathModule = getPathModule(platform);
     const programFiles = env.ProgramFiles ?? "C:\\Program Files";
-    const programFilesX86 =
-      env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const programFilesX86 = env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
     return [
       pathModule.join(programFiles, "nodejs", "node.exe"),
       pathModule.join(programFilesX86, "nodejs", "node.exe"),
@@ -65,11 +64,9 @@ async function resolveNodeVersion(
   execFileImpl: ExecFileAsync,
 ): Promise<string | null> {
   try {
-    const { stdout } = await execFileImpl(
-      nodePath,
-      ["-p", "process.versions.node"],
-      { encoding: "utf8" },
-    );
+    const { stdout } = await execFileImpl(nodePath, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
     const value = stdout.trim();
     return value ? value : null;
   } catch {
@@ -129,10 +126,7 @@ export async function resolveSystemNodeInfo(params: {
   const systemNode = await resolveSystemNodePath(env, platform);
   if (!systemNode) return null;
 
-  const version = await resolveNodeVersion(
-    systemNode,
-    params.execFile ?? execFileAsync,
-  );
+  const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
   return {
     path: systemNode,
     version,
@@ -146,9 +140,7 @@ export function renderSystemNodeWarning(
 ): string | null {
   if (!systemNode || systemNode.supported) return null;
   const versionLabel = systemNode.version ?? "unknown";
-  const selectedLabel = selectedNodePath
-    ? ` Using ${selectedNodePath} for the daemon.`
-    : "";
+  const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
 }
 

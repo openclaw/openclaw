@@ -4,10 +4,7 @@ import { resolveMSTeamsCredentials } from "../../../msteams/token.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom } from "./helpers.js";
 
 const channel = "msteams" as const;
@@ -15,9 +12,7 @@ const channel = "msteams" as const;
 function setMSTeamsDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.msteams?.allowFrom)?.map((entry) =>
-          String(entry),
-        )
+      ? addWildcardAllowFrom(cfg.channels?.msteams?.allowFrom)?.map((entry) => String(entry))
       : undefined;
   return {
     ...cfg,
@@ -32,9 +27,7 @@ function setMSTeamsDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   };
 }
 
-async function noteMSTeamsCredentialHelp(
-  prompter: WizardPrompter,
-): Promise<void> {
+async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       "1) Azure Bot registration → get App ID + Tenant ID",
@@ -59,15 +52,11 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const configured = Boolean(
-      resolveMSTeamsCredentials(cfg.channels?.msteams),
-    );
+    const configured = Boolean(resolveMSTeamsCredentials(cfg.channels?.msteams));
     return {
       channel,
       configured,
-      statusLines: [
-        `MS Teams: ${configured ? "configured" : "needs app credentials"}`,
-      ],
+      statusLines: [`MS Teams: ${configured ? "configured" : "needs app credentials"}`],
       selectionHint: configured ? "configured" : "needs app creds",
       quickstartScore: configured ? 2 : 0,
     };
@@ -76,14 +65,14 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
     const resolved = resolveMSTeamsCredentials(cfg.channels?.msteams);
     const hasConfigCreds = Boolean(
       cfg.channels?.msteams?.appId?.trim() &&
-        cfg.channels?.msteams?.appPassword?.trim() &&
-        cfg.channels?.msteams?.tenantId?.trim(),
+      cfg.channels?.msteams?.appPassword?.trim() &&
+      cfg.channels?.msteams?.tenantId?.trim(),
     );
     const canUseEnv = Boolean(
       !hasConfigCreds &&
-        process.env.MSTEAMS_APP_ID?.trim() &&
-        process.env.MSTEAMS_APP_PASSWORD?.trim() &&
-        process.env.MSTEAMS_TENANT_ID?.trim(),
+      process.env.MSTEAMS_APP_ID?.trim() &&
+      process.env.MSTEAMS_APP_PASSWORD?.trim() &&
+      process.env.MSTEAMS_TENANT_ID?.trim(),
     );
 
     let next = cfg;

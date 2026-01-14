@@ -9,9 +9,7 @@ import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 
 describe("msteams conversation store (fs)", () => {
   it("filters and prunes expired entries (but keeps legacy ones)", async () => {
-    const stateDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-msteams-store-"),
-    );
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "clawdbot-msteams-store-"));
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -33,10 +31,7 @@ describe("msteams conversation store (fs)", () => {
     const raw = await fs.promises.readFile(filePath, "utf-8");
     const json = JSON.parse(raw) as {
       version: number;
-      conversations: Record<
-        string,
-        StoredConversationReference & { lastSeenAt?: string }
-      >;
+      conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
     };
 
     json.conversations["19:old@thread.tacv2"] = {

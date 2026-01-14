@@ -58,9 +58,7 @@ export function defaultVoiceWakeTriggers() {
   return [...DEFAULT_TRIGGERS];
 }
 
-export async function loadVoiceWakeConfig(
-  baseDir?: string,
-): Promise<VoiceWakeConfig> {
+export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
   const filePath = resolvePath(baseDir);
   const existing = await readJSON<VoiceWakeConfig>(filePath);
   if (!existing) {

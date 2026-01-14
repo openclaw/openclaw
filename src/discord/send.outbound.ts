@@ -40,9 +40,7 @@ export async function sendMessageDiscord(
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(rest, recipient, request);
-  let result:
-    | { id: string; channel_id: string }
-    | { id: string | null; channel_id: string };
+  let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
   try {
     if (opts.mediaUrl) {
       result = await sendDiscordMedia(

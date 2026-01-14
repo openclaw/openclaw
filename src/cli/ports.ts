@@ -30,11 +30,9 @@ export function parseLsofOutput(output: string): PortProcess[] {
 
 export function listPortListeners(port: number): PortProcess[] {
   try {
-    const out = execFileSync(
-      "lsof",
-      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"],
-      { encoding: "utf-8" },
-    );
+    const out = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFc"], {
+      encoding: "utf-8",
+    });
     return parseLsofOutput(out);
   } catch (err: unknown) {
     const status = (err as { status?: number }).status;
@@ -86,10 +84,7 @@ export async function forceFreePortAndWait(
 ): Promise<ForceFreePortResult> {
   const timeoutMs = Math.max(opts.timeoutMs ?? 1500, 0);
   const intervalMs = Math.max(opts.intervalMs ?? 100, 1);
-  const sigtermTimeoutMs = Math.min(
-    Math.max(opts.sigtermTimeoutMs ?? 600, 0),
-    timeoutMs,
-  );
+  const sigtermTimeoutMs = Math.min(Math.max(opts.sigtermTimeoutMs ?? 600, 0), timeoutMs);
 
   const killed = forceFreePort(port);
   if (killed.length === 0) {
@@ -97,8 +92,7 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  const triesSigterm =
-    intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
+  const triesSigterm = intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
   for (let i = 0; i < triesSigterm; i++) {
     if (listPortListeners(port).length === 0) {
       return { killed, waitedMs, escalatedToSigkill: false };
@@ -115,8 +109,7 @@ export async function forceFreePortAndWait(
   killPids(remaining, "SIGKILL");
 
   const remainingBudget = Math.max(timeoutMs - waitedMs, 0);
-  const triesSigkill =
-    intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
+  const triesSigkill = intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
   for (let i = 0; i < triesSigkill; i++) {
     if (listPortListeners(port).length === 0) {
       return { killed, waitedMs, escalatedToSigkill: true };

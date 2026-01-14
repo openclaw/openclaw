@@ -46,8 +46,7 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
       }
     }
     const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker
-      .image;
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker.image;
     results.push({
       ...entry,
       image: actualImage,
@@ -81,8 +80,7 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
       }
     }
     const agentId = resolveSandboxAgentId(entry.sessionKey);
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId)
-      .browser.image;
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId).browser.image;
     results.push({
       ...entry,
       image: actualImage,
@@ -94,9 +92,7 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
   return results;
 }
 
-export async function removeSandboxContainer(
-  containerName: string,
-): Promise<void> {
+export async function removeSandboxContainer(containerName: string): Promise<void> {
   try {
     await execDocker(["rm", "-f", containerName], { allowFailure: true });
   } catch {
@@ -105,9 +101,7 @@ export async function removeSandboxContainer(
   await removeRegistryEntry(containerName);
 }
 
-export async function removeSandboxBrowserContainer(
-  containerName: string,
-): Promise<void> {
+export async function removeSandboxBrowserContainer(containerName: string): Promise<void> {
   try {
     await execDocker(["rm", "-f", containerName], { allowFailure: true });
   } catch {
@@ -118,9 +112,7 @@ export async function removeSandboxBrowserContainer(
   // Stop browser bridge if active
   for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
     if (bridge.containerName === containerName) {
-      await stopBrowserBridgeServer(bridge.bridge.server).catch(
-        () => undefined,
-      );
+      await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
       BROWSER_BRIDGES.delete(sessionKey);
     }
   }

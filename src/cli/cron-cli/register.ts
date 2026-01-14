@@ -19,10 +19,7 @@ export function registerCronCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/cron-jobs",
-          "docs.clawd.bot/cron-jobs",
-        )}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cron-jobs", "docs.clawd.bot/cron-jobs")}\n`,
     );
 
   registerCronStatusCommand(cron);

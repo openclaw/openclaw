@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildBootstrapContextFiles,
-  DEFAULT_BOOTSTRAP_MAX_CHARS,
-} from "./pi-embedded-helpers.js";
+import { buildBootstrapContextFiles, DEFAULT_BOOTSTRAP_MAX_CHARS } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -40,9 +35,7 @@ describe("buildBootstrapContextFiles", () => {
       maxChars,
       warn: (message) => warnings.push(message),
     });
-    expect(result?.content).toContain(
-      "[...truncated, read TOOLS.md for full content...]",
-    );
+    expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.startsWith(long.slice(0, 120))).toBe(true);
     expect(result?.content.endsWith(long.slice(-expectedTailChars))).toBe(true);
@@ -55,8 +48,6 @@ describe("buildBootstrapContextFiles", () => {
     const files = [makeFile({ content: long })];
     const [result] = buildBootstrapContextFiles(files);
     expect(result?.content).toBe(long);
-    expect(result?.content).not.toContain(
-      "[...truncated, read AGENTS.md for full content...]",
-    );
+    expect(result?.content).not.toContain("[...truncated, read AGENTS.md for full content...]");
   });
 });

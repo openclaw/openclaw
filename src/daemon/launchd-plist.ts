@@ -16,9 +16,7 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&lt;", "<")
     .replaceAll("&amp;", "&");
 
-const renderEnvDict = (
-  env: Record<string, string | undefined> | undefined,
-): string => {
+const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
   if (!env) return "";
   const entries = Object.entries(env).filter(
     ([, value]) => typeof value === "string" && value.trim(),
@@ -33,9 +31,7 @@ const renderEnvDict = (
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
 };
 
-export async function readLaunchAgentProgramArgumentsFromFile(
-  plistPath: string,
-): Promise<{
+export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string): Promise<{
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
@@ -43,22 +39,16 @@ export async function readLaunchAgentProgramArgumentsFromFile(
 } | null> {
   try {
     const plist = await fs.readFile(plistPath, "utf8");
-    const programMatch = plist.match(
-      /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i,
-    );
+    const programMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
     if (!programMatch) return null;
-    const args = Array.from(
-      programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi),
-    ).map((match) => plistUnescape(match[1] ?? "").trim());
+    const args = Array.from(programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
+      (match) => plistUnescape(match[1] ?? "").trim(),
+    );
     const workingDirMatch = plist.match(
       /<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/i,
     );
-    const workingDirectory = workingDirMatch
-      ? plistUnescape(workingDirMatch[1] ?? "").trim()
-      : "";
-    const envMatch = plist.match(
-      /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i,
-    );
+    const workingDirectory = workingDirMatch ? plistUnescape(workingDirMatch[1] ?? "").trim() : "";
+    const envMatch = plist.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i);
     const environment: Record<string, string> = {};
     if (envMatch) {
       for (const pair of envMatch[1].matchAll(

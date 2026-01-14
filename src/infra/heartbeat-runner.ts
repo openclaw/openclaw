@@ -7,10 +7,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -51,14 +48,8 @@ export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
 }
 
-export function resolveHeartbeatIntervalMs(
-  cfg: ClawdbotConfig,
-  overrideEvery?: string,
-) {
-  const raw =
-    overrideEvery ??
-    cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
+export function resolveHeartbeatIntervalMs(cfg: ClawdbotConfig, overrideEvery?: string) {
+  const raw = overrideEvery ?? cfg.agents?.defaults?.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY;
   if (!raw) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
@@ -79,8 +70,7 @@ export function resolveHeartbeatPrompt(cfg: ClawdbotConfig) {
 function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {
   return Math.max(
     0,
-    cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 }
 
@@ -103,11 +93,7 @@ function resolveHeartbeatReplyPayload(
   for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
     const payload = replyResult[idx];
     if (!payload) continue;
-    if (
-      payload.text ||
-      payload.mediaUrl ||
-      (payload.mediaUrls && payload.mediaUrls.length > 0)
-    ) {
+    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
   }
@@ -117,11 +103,7 @@ function resolveHeartbeatReplyPayload(
 function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
-  const payloads = Array.isArray(replyResult)
-    ? replyResult
-    : replyResult
-      ? [replyResult]
-      : [];
+  const payloads = Array.isArray(replyResult) ? replyResult : replyResult ? [replyResult] : [];
   return payloads.filter((payload) => {
     const text = typeof payload.text === "string" ? payload.text : "";
     return text.trimStart().startsWith("Reasoning:");
@@ -146,9 +128,7 @@ function resolveHeartbeatSender(params: {
     return candidates[0] ?? "heartbeat";
   }
   if (candidates.length > 0 && allowList.length > 0) {
-    const matched = candidates.find((candidate) =>
-      allowList.includes(candidate),
-    );
+    const matched = candidates.find((candidate) => allowList.includes(candidate));
     if (matched) return matched;
   }
   if (candidates.length > 0 && allowList.length === 0) {
@@ -182,9 +162,7 @@ function normalizeHeartbeatReply(
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
-  const hasMedia = Boolean(
-    payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0,
-  );
+  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
   if (stripped.shouldSkip && !hasMedia) {
     return {
       shouldSkip: true,
@@ -225,13 +203,11 @@ export async function runHeartbeatOnce(opts: {
     entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
       ? normalizeChannelId(entry.lastChannel)
       : undefined;
-  const senderProvider =
-    delivery.channel !== "none" ? delivery.channel : lastChannel;
+  const senderProvider = delivery.channel !== "none" ? delivery.channel : lastChannel;
   const senderAllowFrom = senderProvider
     ? (getChannelPlugin(senderProvider)?.config.resolveAllowFrom?.({
         cfg,
-        accountId:
-          senderProvider === lastChannel ? entry?.lastAccountId : undefined,
+        accountId: senderProvider === lastChannel ? entry?.lastAccountId : undefined,
       }) ?? [])
     : [];
   const sender = resolveHeartbeatSender({
@@ -248,25 +224,16 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const replyResult = await getReplyFromConfig(
-      ctx,
-      { isHeartbeat: true },
-      cfg,
-    );
+    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
-    const includeReasoning =
-      cfg.agents?.defaults?.heartbeat?.includeReasoning === true;
+    const includeReasoning = cfg.agents?.defaults?.heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
-      ? resolveHeartbeatReasoningPayloads(replyResult).filter(
-          (payload) => payload !== replyPayload,
-        )
+      ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
 
     if (
       !replyPayload ||
-      (!replyPayload.text &&
-        !replyPayload.mediaUrl &&
-        !replyPayload.mediaUrls?.length)
+      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -284,10 +251,7 @@ export async function runHeartbeatOnce(opts: {
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg);
     const normalized = normalizeHeartbeatReply(
       replyPayload,
-      resolveEffectiveMessagesConfig(
-        cfg,
-        resolveAgentIdFromSessionKey(sessionKey),
-      ).responsePrefix,
+      resolveEffectiveMessagesConfig(cfg, resolveAgentIdFromSessionKey(sessionKey)).responsePrefix,
       ackMaxChars,
     );
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
@@ -306,8 +270,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const mediaUrls =
-      replyPayload.mediaUrls ??
-      (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+      replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
     // Reasoning payloads are text-only; any attachments stay on the main reply.
     const previewText = shouldSkipMain
       ? reasoningPayloads
@@ -327,8 +290,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId =
-      delivery.channel === lastChannel ? entry?.lastAccountId : undefined;
+    const deliveryAccountId = delivery.channel === lastChannel ? entry?.lastAccountId : undefined;
     const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({

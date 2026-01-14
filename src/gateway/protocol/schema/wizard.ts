@@ -4,9 +4,7 @@ import { NonEmptyString } from "./primitives.js";
 
 export const WizardStartParamsSchema = Type.Object(
   {
-    mode: Type.Optional(
-      Type.Union([Type.Literal("local"), Type.Literal("remote")]),
-    ),
+    mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
     workspace: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -69,9 +67,7 @@ export const WizardStepSchema = Type.Object(
     initialValue: Type.Optional(Type.Unknown()),
     placeholder: Type.Optional(Type.String()),
     sensitive: Type.Optional(Type.Boolean()),
-    executor: Type.Optional(
-      Type.Union([Type.Literal("gateway"), Type.Literal("client")]),
-    ),
+    executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
   },
   { additionalProperties: false },
 );

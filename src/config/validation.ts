@@ -1,7 +1,4 @@
-import {
-  findDuplicateAgentDirs,
-  formatDuplicateAgentDirError,
-} from "./agent-dirs.js";
+import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { ClawdbotConfig, ConfigValidationIssue } from "./types.js";
@@ -9,9 +6,7 @@ import { ClawdbotSchema } from "./zod-schema.js";
 
 export function validateConfigObject(
   raw: unknown,
-):
-  | { ok: true; config: ClawdbotConfig }
-  | { ok: false; issues: ConfigValidationIssue[] } {
+): { ok: true; config: ClawdbotConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
     return {
@@ -46,8 +41,6 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelDefaults(
-      applySessionDefaults(validated.data as ClawdbotConfig),
-    ),
+    config: applyModelDefaults(applySessionDefaults(validated.data as ClawdbotConfig)),
   };
 }

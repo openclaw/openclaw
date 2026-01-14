@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
@@ -76,58 +73,49 @@ describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
     const makeResponse = (status: number, body: unknown): Response => {
       const payload = typeof body === "string" ? body : JSON.stringify(body);
-      const headers =
-        typeof body === "string"
-          ? undefined
-          : { "Content-Type": "application/json" };
+      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
       return new Response(payload, { status, headers });
     };
 
-    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
-      async (input) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input.url;
-        if (url.includes("api.anthropic.com")) {
-          return makeResponse(200, {
-            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-          });
-        }
-        if (url.includes("api.z.ai")) {
-          return makeResponse(200, {
-            success: true,
-            code: 200,
-            data: {
-              planName: "Pro",
-              limits: [
-                {
-                  type: "TOKENS_LIMIT",
-                  percentage: 25,
-                  unit: 3,
-                  number: 6,
-                  nextResetTime: "2026-01-07T06:00:00Z",
-                },
-              ],
-            },
-          });
-        }
-        if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
-          return makeResponse(200, {
-            base_resp: { status_code: 0, status_msg: "ok" },
-            data: {
-              total: 200,
-              remain: 50,
-              reset_at: "2026-01-07T05:00:00Z",
-              plan_name: "Coding Plan",
-            },
-          });
-        }
-        return makeResponse(404, "not found");
-      },
-    );
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.anthropic.com")) {
+        return makeResponse(200, {
+          five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+        });
+      }
+      if (url.includes("api.z.ai")) {
+        return makeResponse(200, {
+          success: true,
+          code: 200,
+          data: {
+            planName: "Pro",
+            limits: [
+              {
+                type: "TOKENS_LIMIT",
+                percentage: 25,
+                unit: 3,
+                number: 6,
+                nextResetTime: "2026-01-07T06:00:00Z",
+              },
+            ],
+          },
+        });
+      }
+      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+        return makeResponse(200, {
+          base_resp: { status_code: 0, status_msg: "ok" },
+          data: {
+            total: 200,
+            remain: 50,
+            reset_at: "2026-01-07T05:00:00Z",
+            plan_name: "Coding Plan",
+          },
+        });
+      }
+      return makeResponse(404, "not found");
+    });
 
     const summary = await loadProviderUsageSummary({
       now: Date.UTC(2026, 0, 7, 0, 0, 0),
@@ -182,42 +170,36 @@ describe("provider usage loading", () => {
         const store = ensureAuthProfileStore(agentDir, {
           allowKeychainPrompt: false,
         });
-        expect(listProfilesForProvider(store, "anthropic")).toContain(
-          "anthropic:default",
-        );
+        expect(listProfilesForProvider(store, "anthropic")).toContain("anthropic:default");
 
         const makeResponse = (status: number, body: unknown): Response => {
-          const payload =
-            typeof body === "string" ? body : JSON.stringify(body);
+          const payload = typeof body === "string" ? body : JSON.stringify(body);
           const headers =
-            typeof body === "string"
-              ? undefined
-              : { "Content-Type": "application/json" };
+            typeof body === "string" ? undefined : { "Content-Type": "application/json" };
           return new Response(payload, { status, headers });
         };
 
-        const mockFetch = vi.fn<
-          Parameters<typeof fetch>,
-          ReturnType<typeof fetch>
-        >(async (input, init) => {
-          const url =
-            typeof input === "string"
-              ? input
-              : input instanceof URL
-                ? input.toString()
-                : input.url;
-          if (url.includes("api.anthropic.com/api/oauth/usage")) {
-            const headers = (init?.headers ?? {}) as Record<string, string>;
-            expect(headers.Authorization).toBe("Bearer token-1");
-            return makeResponse(200, {
-              five_hour: {
-                utilization: 20,
-                resets_at: "2026-01-07T01:00:00Z",
-              },
-            });
-          }
-          return makeResponse(404, "not found");
-        });
+        const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
+          async (input, init) => {
+            const url =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : input.url;
+            if (url.includes("api.anthropic.com/api/oauth/usage")) {
+              const headers = (init?.headers ?? {}) as Record<string, string>;
+              expect(headers.Authorization).toBe("Bearer token-1");
+              return makeResponse(200, {
+                five_hour: {
+                  utilization: 20,
+                  resets_at: "2026-01-07T01:00:00Z",
+                },
+              });
+            }
+            return makeResponse(404, "not found");
+          },
+        );
 
         const summary = await loadProviderUsageSummary({
           now: Date.UTC(2026, 0, 7, 0, 0, 0),
@@ -275,34 +257,30 @@ describe("provider usage loading", () => {
         );
 
         const makeResponse = (status: number, body: unknown): Response => {
-          const payload =
-            typeof body === "string" ? body : JSON.stringify(body);
+          const payload = typeof body === "string" ? body : JSON.stringify(body);
           const headers =
-            typeof body === "string"
-              ? undefined
-              : { "Content-Type": "application/json" };
+            typeof body === "string" ? undefined : { "Content-Type": "application/json" };
           return new Response(payload, { status, headers });
         };
 
-        const mockFetch = vi.fn<
-          Parameters<typeof fetch>,
-          ReturnType<typeof fetch>
-        >(async (input, init) => {
-          const url =
-            typeof input === "string"
-              ? input
-              : input instanceof URL
-                ? input.toString()
-                : input.url;
-          if (url.includes("api.anthropic.com/api/oauth/usage")) {
-            const headers = (init?.headers ?? {}) as Record<string, string>;
-            expect(headers.Authorization).toBe("Bearer token-cli");
-            return makeResponse(200, {
-              five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-            });
-          }
-          return makeResponse(404, "not found");
-        });
+        const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
+          async (input, init) => {
+            const url =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : input.url;
+            if (url.includes("api.anthropic.com/api/oauth/usage")) {
+              const headers = (init?.headers ?? {}) as Record<string, string>;
+              expect(headers.Authorization).toBe("Bearer token-cli");
+              return makeResponse(200, {
+                five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+              });
+            }
+            return makeResponse(404, "not found");
+          },
+        );
 
         const summary = await loadProviderUsageSummary({
           now: Date.UTC(2026, 0, 7, 0, 0, 0),
@@ -327,29 +305,19 @@ describe("provider usage loading", () => {
       const makeResponse = (status: number, body: unknown): Response => {
         const payload = typeof body === "string" ? body : JSON.stringify(body);
         const headers =
-          typeof body === "string"
-            ? undefined
-            : { "Content-Type": "application/json" };
+          typeof body === "string" ? undefined : { "Content-Type": "application/json" };
         return new Response(payload, { status, headers });
       };
 
-      const mockFetch = vi.fn<
-        Parameters<typeof fetch>,
-        ReturnType<typeof fetch>
-      >(async (input) => {
+      const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
         const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input.url;
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
             type: "error",
             error: {
               type: "permission_error",
-              message:
-                "OAuth token does not meet scope requirement user:profile",
+              message: "OAuth token does not meet scope requirement user:profile",
             },
           });
         }
@@ -378,8 +346,7 @@ describe("provider usage loading", () => {
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
     } finally {
-      if (cookieSnapshot === undefined)
-        delete process.env.CLAUDE_AI_SESSION_KEY;
+      if (cookieSnapshot === undefined) delete process.env.CLAUDE_AI_SESSION_KEY;
       else process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
     }
   });

@@ -14,11 +14,7 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => entry.toLowerCase());
 }
 
-export function allowListMatches(params: {
-  allowList: string[];
-  id?: string;
-  name?: string;
-}) {
+export function allowListMatches(params: { allowList: string[]; id?: string; name?: string }) {
   const allowList = params.allowList;
   if (allowList.length === 0) return false;
   if (allowList.includes("*")) return true;

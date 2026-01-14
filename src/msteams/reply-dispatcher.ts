@@ -1,7 +1,4 @@
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-} from "../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../agents/identity.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ClawdbotConfig, MSTeamsReplyStyle } from "../config/types.js";
 import { danger } from "../globals.js";
@@ -41,8 +38,7 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   return createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(params.cfg, params.agentId)
-      .responsePrefix,
+    responsePrefix: resolveEffectiveMessagesConfig(params.cfg, params.agentId).responsePrefix,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     deliver: async (payload) => {
       const messages = renderReplyPayloadsToMessages([payload], {
@@ -72,9 +68,7 @@ export function createMSTeamsReplyDispatcher(params: {
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
       params.runtime.error?.(
-        danger(
-          `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-        ),
+        danger(`msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`),
       );
       params.log.error("reply failed", {
         kind: info.kind,

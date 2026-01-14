@@ -103,8 +103,7 @@ describe("embedding provider remote overrides", () => {
     await result.provider.embedQuery("hello");
 
     expect(authModule.resolveApiKeyForProvider).toHaveBeenCalledTimes(1);
-    const headers =
-      (fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>) ?? {};
+    const headers = (fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
 });

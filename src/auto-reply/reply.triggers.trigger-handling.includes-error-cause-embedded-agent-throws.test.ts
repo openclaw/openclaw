@@ -8,8 +8,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -49,10 +48,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
 
 vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
 
-import {
-  abortEmbeddedPiRun,
-  runEmbeddedPiAgent,
-} from "../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -101,9 +97,7 @@ afterEach(() => {
 describe("trigger handling", () => {
   it("includes the error cause when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(
-        new Error("sandbox is not defined"),
-      );
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(new Error("sandbox is not defined"));
 
       const res = await getReplyFromConfig(
         {
@@ -221,12 +215,11 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Group activation set to always");
-      const store = JSON.parse(
-        await fs.readFile(cfg.session.store, "utf-8"),
-      ) as Record<string, { groupActivation?: string }>;
-      expect(store["agent:main:whatsapp:group:123@g.us"]?.groupActivation).toBe(
-        "always",
-      );
+      const store = JSON.parse(await fs.readFile(cfg.session.store, "utf-8")) as Record<
+        string,
+        { groupActivation?: string }
+      >;
+      expect(store["agent:main:whatsapp:group:123@g.us"]?.groupActivation).toBe("always");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

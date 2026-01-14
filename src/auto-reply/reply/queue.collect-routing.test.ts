@@ -91,9 +91,7 @@ describe("followup queue deduplication", () => {
     scheduleFollowupDrain(key, runFollowup);
     await expect.poll(() => calls.length).toBe(1);
     // Should collect both unique messages
-    expect(calls[0]?.prompt).toContain(
-      "[Queued messages while agent was busy]",
-    );
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -282,9 +280,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await expect.poll(() => calls.length).toBe(1);
-    expect(calls[0]?.prompt).toContain(
-      "[Queued messages while agent was busy]",
-    );
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });

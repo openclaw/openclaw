@@ -51,9 +51,7 @@ describe("GatewayClient", () => {
             tickIntervalMs: 5,
           },
         };
-        socket.send(
-          JSON.stringify({ type: "res", id, ok: true, payload: helloOk }),
-        );
+        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
       });
     });
 

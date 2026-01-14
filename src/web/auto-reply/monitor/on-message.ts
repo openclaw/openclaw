@@ -25,9 +25,7 @@ export function createWebOnMessageHandler(params: {
   echoTracker: EchoTracker;
   backgroundTasks: Set<Promise<unknown>>;
   replyResolver: typeof getReplyFromConfig;
-  replyLogger: ReturnType<
-    typeof import("../../../logging.js")["getChildLogger"]
-  >;
+  replyLogger: ReturnType<(typeof import("../../../logging.js"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string };
 }) {
@@ -90,9 +88,7 @@ export function createWebOnMessageHandler(params: {
 
     // Skip if this is a message we just sent (echo detection)
     if (params.echoTracker.has(msg.body)) {
-      logVerbose(
-        "Skipping auto-reply: detected echo (message matches recently sent text)",
-      );
+      logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
       params.echoTracker.forget(msg.body);
       return;
     }

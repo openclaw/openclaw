@@ -2,26 +2,17 @@ import { logVerbose } from "../../globals.js";
 import { handleBashChatCommand } from "./bash-command.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export const handleBashCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleBashCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   const { command } = params;
   const bashSlashRequested =
-    command.commandBodyNormalized === "/bash" ||
-    command.commandBodyNormalized.startsWith("/bash ");
+    command.commandBodyNormalized === "/bash" || command.commandBodyNormalized.startsWith("/bash ");
   const bashBangRequested = command.commandBodyNormalized.startsWith("!");
-  if (
-    !bashSlashRequested &&
-    !(bashBangRequested && command.isAuthorizedSender)
-  ) {
+  if (!bashSlashRequested && !(bashBangRequested && command.isAuthorizedSender)) {
     return null;
   }
   if (!command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /bash from unauthorized sender: ${command.senderId || "<unknown>"}`,
-    );
+    logVerbose(`Ignoring /bash from unauthorized sender: ${command.senderId || "<unknown>"}`);
     return { shouldContinue: false };
   }
   const reply = await handleBashChatCommand({

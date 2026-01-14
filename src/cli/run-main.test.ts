@@ -17,14 +17,21 @@ describe("rewriteUpdateFlagArgv", () => {
   });
 
   it("preserves global flags that appear before --update", () => {
-    expect(
-      rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "p", "--update"]),
-    ).toEqual(["node", "entry.js", "--profile", "p", "update"]);
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "p", "--update"])).toEqual([
+      "node",
+      "entry.js",
+      "--profile",
+      "p",
+      "update",
+    ]);
   });
 
   it("keeps update options after the rewritten command", () => {
-    expect(
-      rewriteUpdateFlagArgv(["node", "entry.js", "--update", "--json"]),
-    ).toEqual(["node", "entry.js", "update", "--json"]);
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "--json"])).toEqual([
+      "node",
+      "entry.js",
+      "update",
+      "--json",
+    ]);
   });
 });

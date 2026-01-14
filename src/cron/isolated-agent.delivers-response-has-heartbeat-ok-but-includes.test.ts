@@ -11,8 +11,7 @@ import type { CronJob } from "./types.js";
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
@@ -103,9 +102,7 @@ describe("runCronIsolatedAgentTurn", () => {
       };
       // Media should still be delivered even if text is just HEARTBEAT_OK.
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [
-          { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
-        ],
+        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
         meta: {
           durationMs: 5,
           agentMeta: { sessionId: "s", provider: "p", model: "m" },

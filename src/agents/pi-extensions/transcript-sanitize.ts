@@ -7,11 +7,7 @@
  */
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-  ContextEvent,
-  ExtensionAPI,
-  ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
+import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { isGoogleModelApi } from "../pi-embedded-helpers.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";

@@ -27,8 +27,7 @@ vi.mock("../../slack/actions.js", () => ({
   pinSlackMessage: (...args: unknown[]) => pinSlackMessage(...args),
   reactSlackMessage: (...args: unknown[]) => reactSlackMessage(...args),
   readSlackMessages: (...args: unknown[]) => readSlackMessages(...args),
-  removeOwnSlackReactions: (...args: unknown[]) =>
-    removeOwnSlackReactions(...args),
+  removeOwnSlackReactions: (...args: unknown[]) => removeOwnSlackReactions(...args),
   removeSlackReaction: (...args: unknown[]) => removeSlackReaction(...args),
   sendSlackMessage: (...args: unknown[]) => sendSlackMessage(...args),
   unpinSlackMessage: (...args: unknown[]) => unpinSlackMessage(...args),
@@ -122,14 +121,10 @@ describe("handleSlackAction", () => {
       },
       cfg,
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith(
-      "channel:C123",
-      "Hello thread",
-      {
-        mediaUrl: undefined,
-        threadTs: "1234567890.123456",
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+    });
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
@@ -148,14 +143,10 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith(
-      "channel:C123",
-      "Auto-threaded",
-      {
-        mediaUrl: undefined,
-        threadTs: "1111111111.111111",
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Auto-threaded", {
+      mediaUrl: undefined,
+      threadTs: "1111111111.111111",
+    });
   });
 
   it("replyToMode=first threads first message then stops", async () => {
@@ -187,14 +178,10 @@ describe("handleSlackAction", () => {
       cfg,
       context,
     );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith(
-      "channel:C123",
-      "Second",
-      {
-        mediaUrl: undefined,
-        threadTs: undefined,
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+    });
   });
 
   it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
@@ -218,14 +205,10 @@ describe("handleSlackAction", () => {
       cfg,
       context,
     );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith(
-      "channel:C123",
-      "Explicit",
-      {
-        mediaUrl: undefined,
-        threadTs: "2222222222.222222",
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Explicit", {
+      mediaUrl: undefined,
+      threadTs: "2222222222.222222",
+    });
     expect(hasRepliedRef.value).toBe(true);
 
     await handleSlackAction(
@@ -233,29 +216,21 @@ describe("handleSlackAction", () => {
       cfg,
       context,
     );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith(
-      "channel:C123",
-      "Second",
-      {
-        mediaUrl: undefined,
-        threadTs: undefined,
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+    });
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
     const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
     sendSlackMessage.mockClear();
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "No ref" },
-      cfg,
-      {
-        currentChannelId: "C123",
-        currentThreadTs: "1111111111.111111",
-        replyToMode: "first",
-        // no hasRepliedRef
-      },
-    );
+    await handleSlackAction({ action: "sendMessage", to: "channel:C123", content: "No ref" }, cfg, {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first",
+      // no hasRepliedRef
+    });
     expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "No ref", {
       mediaUrl: undefined,
       threadTs: undefined,
@@ -300,14 +275,10 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith(
-      "channel:C999",
-      "Different channel",
-      {
-        mediaUrl: undefined,
-        threadTs: undefined,
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C999", "Different channel", {
+      mediaUrl: undefined,
+      threadTs: undefined,
+    });
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
@@ -327,14 +298,10 @@ describe("handleSlackAction", () => {
         replyToMode: "all",
       },
     );
-    expect(sendSlackMessage).toHaveBeenCalledWith(
-      "channel:C123",
-      "Explicit thread",
-      {
-        mediaUrl: undefined,
-        threadTs: "2222222222.222222",
-      },
-    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Explicit thread", {
+      mediaUrl: undefined,
+      threadTs: "2222222222.222222",
+    });
   });
 
   it("handles channel target without prefix when replyToMode=all", async () => {

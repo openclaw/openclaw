@@ -4,10 +4,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import {
-  type HookMappingResolved,
-  resolveHookMappings,
-} from "./hooks-mapping.js";
+import { type HookMappingResolved, resolveHookMappings } from "./hooks-mapping.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
 const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
@@ -19,9 +16,7 @@ export type HooksConfigResolved = {
   mappings: HookMappingResolved[];
 };
 
-export function resolveHooksConfig(
-  cfg: ClawdbotConfig,
-): HooksConfigResolved | null {
+export function resolveHooksConfig(cfg: ClawdbotConfig): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) return null;
   const token = cfg.hooks?.token?.trim();
   if (!token) {
@@ -29,8 +24,7 @@ export function resolveHooksConfig(
   }
   const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  const trimmed =
-    withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
+  const trimmed = withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
   if (trimmed === "/") {
     throw new Error("hooks.path may not be '/'");
   }
@@ -47,14 +41,9 @@ export function resolveHooksConfig(
   };
 }
 
-export function extractHookToken(
-  req: IncomingMessage,
-  url: URL,
-): string | undefined {
+export function extractHookToken(req: IncomingMessage, url: URL): string | undefined {
   const auth =
-    typeof req.headers.authorization === "string"
-      ? req.headers.authorization.trim()
-      : "";
+    typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
   if (auth.toLowerCase().startsWith("bearer ")) {
     const token = auth.slice(7).trim();
     if (token) return token;
@@ -147,10 +136,7 @@ export type HookAgentPayload = {
   timeoutSeconds?: number;
 };
 
-const HOOK_CHANNEL_VALUES = [
-  "last",
-  ...listChannelPlugins().map((plugin) => plugin.id),
-];
+const HOOK_CHANNEL_VALUES = ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
 
 export type HookMessageChannel = ChannelId | "last";
 
@@ -178,14 +164,11 @@ export function normalizeAgentPayload(
       value: HookAgentPayload;
     }
   | { ok: false; error: string } {
-  const message =
-    typeof payload.message === "string" ? payload.message.trim() : "";
+  const message = typeof payload.message === "string" ? payload.message.trim() : "";
   if (!message) return { ok: false, error: "message required" };
   const nameRaw = payload.name;
-  const name =
-    typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
-  const wakeMode =
-    payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
+  const name = typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
+  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const idFactory = opts?.idFactory ?? randomUUID;
   const sessionKey =
@@ -195,27 +178,19 @@ export function normalizeAgentPayload(
   const channel = resolveHookChannel(payload.channel);
   if (!channel) return { ok: false, error: HOOK_CHANNEL_ERROR };
   const toRaw = payload.to;
-  const to =
-    typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
+  const to = typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
   const modelRaw = payload.model;
-  const model =
-    typeof modelRaw === "string" && modelRaw.trim()
-      ? modelRaw.trim()
-      : undefined;
+  const model = typeof modelRaw === "string" && modelRaw.trim() ? modelRaw.trim() : undefined;
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking =
-    typeof thinkingRaw === "string" && thinkingRaw.trim()
-      ? thinkingRaw.trim()
-      : undefined;
+    typeof thinkingRaw === "string" && thinkingRaw.trim() ? thinkingRaw.trim() : undefined;
   const timeoutRaw = payload.timeoutSeconds;
   const timeoutSeconds =
-    typeof timeoutRaw === "number" &&
-    Number.isFinite(timeoutRaw) &&
-    timeoutRaw > 0
+    typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
       ? Math.floor(timeoutRaw)
       : undefined;
   return {

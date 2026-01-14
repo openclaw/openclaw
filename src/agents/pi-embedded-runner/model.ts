@@ -1,8 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import {
-  discoverAuthStorage,
-  discoverModels,
-} from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
@@ -15,9 +12,7 @@ export function buildModelAliasLines(cfg?: ClawdbotConfig) {
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
     if (!model) continue;
-    const alias = String(
-      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
-    ).trim();
+    const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
     if (!alias) continue;
     entries.push({ alias, model });
   }
@@ -67,10 +62,8 @@ export function resolveModel(
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow:
-          providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens:
-          providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+        contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+        maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }

@@ -54,9 +54,7 @@ beforeEach(() => {
     signal: null,
     killed: false,
   });
-  ensureAuthProfileStore
-    .mockReset()
-    .mockReturnValue({ version: 1, profiles: {} });
+  ensureAuthProfileStore.mockReset().mockReturnValue({ version: 1, profiles: {} });
   migrateLegacyConfig.mockReset().mockImplementation((raw: unknown) => ({
     config: raw as Record<string, unknown>,
     changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -80,9 +78,7 @@ beforeEach(() => {
   originalStateDir = process.env.CLAWDBOT_STATE_DIR;
   originalUpdateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
   process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "clawdbot-doctor-state-"),
-  );
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-doctor-state-"));
   process.env.CLAWDBOT_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
@@ -134,9 +130,7 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
   killed: false,
 });
 
-const ensureAuthProfileStore = vi
-  .fn()
-  .mockReturnValue({ version: 1, profiles: {} });
+const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
   path: "/tmp/clawdis.json",
@@ -335,9 +329,7 @@ describe("doctor command", () => {
       legacyIssues: [],
     });
 
-    const missingDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-missing-state-"),
-    );
+    const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
     process.env.CLAWDBOT_STATE_DIR = missingDir;
     note.mockClear();
@@ -348,9 +340,7 @@ describe("doctor command", () => {
       { nonInteractive: true, workspaceSuggestions: false },
     );
 
-    const stateNote = note.mock.calls.find(
-      (call) => call[1] === "State integrity",
-    );
+    const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
   }, 20_000);
@@ -384,8 +374,7 @@ describe("doctor command", () => {
 
     const warned = note.mock.calls.some(
       ([message, title]) =>
-        title === "OpenCode Zen" &&
-        String(message).includes("models.providers.opencode"),
+        title === "OpenCode Zen" && String(message).includes("models.providers.opencode"),
     );
     expect(warned).toBe(true);
   });

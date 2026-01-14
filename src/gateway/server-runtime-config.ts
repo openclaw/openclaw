@@ -38,17 +38,14 @@ export async function resolveGatewayRuntimeConfig(params: {
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
-  const bindHost =
-    params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
   const openAiChatCompletionsEnabled =
     params.openAiChatCompletionsEnabled ??
     params.cfg.gateway?.http?.endpoints?.chatCompletions?.enabled ??
     false;
-  const controlUiBasePath = normalizeControlUiBasePath(
-    params.cfg.gateway?.controlUi?.basePath,
-  );
+  const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const authBase = params.cfg.gateway?.auth ?? {};
   const authOverrides = params.auth ?? {};
   const authConfig = {
@@ -70,8 +67,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" &&
-    params.cfg.canvasHost?.enabled !== false;
+    process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
@@ -80,9 +76,7 @@ export async function resolveGatewayRuntimeConfig(params: {
     );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error(
-      "tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)",
-    );
+    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
   if (!isLoopbackHost(bindHost) && authMode === "none") {
     throw new Error(

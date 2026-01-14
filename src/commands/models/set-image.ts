@@ -2,10 +2,7 @@ import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveModelTarget, updateConfig } from "./shared.js";
 
-export async function modelsSetImageCommand(
-  modelRaw: string,
-  runtime: RuntimeEnv,
-) {
+export async function modelsSetImageCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const key = `${resolved.provider}/${resolved.model}`;
@@ -21,9 +18,7 @@ export async function modelsSetImageCommand(
         defaults: {
           ...cfg.agents?.defaults,
           imageModel: {
-            ...(existingModel?.fallbacks
-              ? { fallbacks: existingModel.fallbacks }
-              : undefined),
+            ...(existingModel?.fallbacks ? { fallbacks: existingModel.fallbacks } : undefined),
             primary: key,
           },
           models: nextModels,
@@ -33,7 +28,5 @@ export async function modelsSetImageCommand(
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  runtime.log(
-    `Image model: ${updated.agents?.defaults?.imageModel?.primary ?? modelRaw}`,
-  );
+  runtime.log(`Image model: ${updated.agents?.defaults?.imageModel?.primary ?? modelRaw}`);
 }

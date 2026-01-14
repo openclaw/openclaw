@@ -39,10 +39,7 @@ export function registerSetupCommand(program: Command) {
           );
           return;
         }
-        await setupCommand(
-          { workspace: opts.workspace as string | undefined },
-          defaultRuntime,
-        );
+        await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

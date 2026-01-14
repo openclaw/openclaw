@@ -41,10 +41,7 @@ export function resolveDiscordPrivilegedIntentsFromFlags(
     return "disabled";
   };
   return {
-    presence: resolve(
-      DISCORD_APP_FLAG_GATEWAY_PRESENCE,
-      DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED,
-    ),
+    presence: resolve(DISCORD_APP_FLAG_GATEWAY_PRESENCE, DISCORD_APP_FLAG_GATEWAY_PRESENCE_LIMITED),
     guildMembers: resolve(
       DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS,
       DISCORD_APP_FLAG_GATEWAY_GUILD_MEMBERS_LIMITED,
@@ -75,16 +72,12 @@ export async function fetchDiscordApplicationSummary(
     if (!res.ok) return undefined;
     const json = (await res.json()) as { id?: string; flags?: number };
     const flags =
-      typeof json.flags === "number" && Number.isFinite(json.flags)
-        ? json.flags
-        : undefined;
+      typeof json.flags === "number" && Number.isFinite(json.flags) ? json.flags : undefined;
     return {
       id: json.id ?? null,
       flags: flags ?? null,
       intents:
-        typeof flags === "number"
-          ? resolveDiscordPrivilegedIntentsFromFlags(flags)
-          : undefined,
+        typeof flags === "number" ? resolveDiscordPrivilegedIntentsFromFlags(flags) : undefined,
     };
   } catch {
     return undefined;
@@ -129,14 +122,9 @@ export async function probeDiscord(
     };
   }
   try {
-    const res = await fetchWithTimeout(
-      `${DISCORD_API_BASE}/users/@me`,
-      timeoutMs,
-      fetcher,
-      {
-        Authorization: `Bot ${normalized}`,
-      },
-    );
+    const res = await fetchWithTimeout(`${DISCORD_API_BASE}/users/@me`, timeoutMs, fetcher, {
+      Authorization: `Bot ${normalized}`,
+    });
     if (!res.ok) {
       result.status = res.status;
       result.error = `getMe failed (${res.status})`;
@@ -150,11 +138,7 @@ export async function probeDiscord(
     };
     if (includeApplication) {
       result.application =
-        (await fetchDiscordApplicationSummary(
-          normalized,
-          timeoutMs,
-          fetcher,
-        )) ?? undefined;
+        (await fetchDiscordApplicationSummary(normalized, timeoutMs, fetcher)) ?? undefined;
     }
     return { ...result, elapsedMs: Date.now() - started };
   } catch (err) {

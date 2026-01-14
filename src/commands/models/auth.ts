@@ -1,10 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-import {
-  confirm as clackConfirm,
-  select as clackSelect,
-  text as clackText,
-} from "@clack/prompts";
+import { confirm as clackConfirm, select as clackSelect, text as clackText } from "@clack/prompts";
 
 import {
   CLAUDE_CLI_PROFILE_ID,
@@ -15,10 +11,7 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../terminal/prompt-style.js";
+import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { updateConfig } from "./shared.js";
 
@@ -37,9 +30,7 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined
-        ? opt
-        : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
@@ -121,8 +112,7 @@ export async function modelsAuthPasteTokenCommand(
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-  const profileId =
-    opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -132,8 +122,7 @@ export async function modelsAuthPasteTokenCommand(
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() +
-        parseDurationMs(String(opts.expiresIn).trim(), { defaultUnit: "d" })
+      ? Date.now() + parseDurationMs(String(opts.expiresIn).trim(), { defaultUnit: "d" })
       : undefined;
 
   upsertAuthProfile({
@@ -146,18 +135,13 @@ export async function modelsAuthPasteTokenCommand(
     },
   });
 
-  await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }),
-  );
+  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
-export async function modelsAuthAddCommand(
-  _opts: Record<string, never>,
-  runtime: RuntimeEnv,
-) {
+export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
   const provider = (await select({
     message: "Token provider",
     options: [
@@ -229,8 +213,5 @@ export async function modelsAuthAddCommand(
       ).trim()
     : undefined;
 
-  await modelsAuthPasteTokenCommand(
-    { provider: providerId, profileId, expiresIn },
-    runtime,
-  );
+  await modelsAuthPasteTokenCommand({ provider: providerId, profileId, expiresIn }, runtime);
 }

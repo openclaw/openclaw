@@ -1,11 +1,7 @@
 import type { Command } from "commander";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
-import {
-  agentsAddCommand,
-  agentsDeleteCommand,
-  agentsListCommand,
-} from "../../commands/agents.js";
+import { agentsAddCommand, agentsDeleteCommand, agentsListCommand } from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -14,23 +10,14 @@ import { hasExplicitOptions } from "../command-options.js";
 import { createDefaultDeps } from "../deps.js";
 import { collectOption } from "./helpers.js";
 
-export function registerAgentCommands(
-  program: Command,
-  args: { agentChannelOptions: string },
-) {
+export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
   program
     .command("agent")
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .requiredOption("-m, --message <text>", "Message body for the agent")
-    .option(
-      "-t, --to <number>",
-      "Recipient number in E.164 used to derive the session key",
-    )
+    .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-id <id>", "Use an explicit session id")
-    .option(
-      "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high",
-    )
+    .option("--thinking <level>", "Thinking level: off | minimal | low | medium | high")
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",
@@ -61,14 +48,10 @@ Examples:
   clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
   clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 
-${theme.muted("Docs:")} ${formatDocsLink(
-          "/agent-send",
-          "docs.clawd.bot/agent-send",
-        )}`,
+${theme.muted("Docs:")} ${formatDocsLink("/agent-send", "docs.clawd.bot/agent-send")}`,
     )
     .action(async (opts) => {
-      const verboseLevel =
-        typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
+      const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
@@ -107,12 +90,7 @@ ${theme.muted("Docs:")} ${formatDocsLink(
     .option("--workspace <dir>", "Workspace directory for the new agent")
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
-    .option(
-      "--bind <channel[:accountId]>",
-      "Route channel binding (repeatable)",
-      collectOption,
-      [],
-    )
+    .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
@@ -130,9 +108,7 @@ ${theme.muted("Docs:")} ${formatDocsLink(
             workspace: opts.workspace as string | undefined,
             model: opts.model as string | undefined,
             agentDir: opts.agentDir as string | undefined,
-            bind: Array.isArray(opts.bind)
-              ? (opts.bind as string[])
-              : undefined,
+            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },

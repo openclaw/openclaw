@@ -8,10 +8,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -23,12 +20,7 @@ import {
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { buildStatusMessage } from "../status.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../thinking.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
@@ -132,9 +124,7 @@ export async function buildStatusReply(params: {
     defaultGroupActivation,
   } = params;
   if (!command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`,
-    );
+    logVerbose(`Ignoring /status from unauthorized sender: ${command.senderId || "<unknown>"}`);
     return undefined;
   }
   const statusAgentId = sessionKey
@@ -151,10 +141,7 @@ export async function buildStatusReply(params: {
         agentDir: statusAgentDir,
       });
       usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
-      if (
-        !usageLine &&
-        (resolvedVerboseLevel === "on" || resolvedElevatedLevel === "on")
-      ) {
+      if (!usageLine && (resolvedVerboseLevel === "on" || resolvedElevatedLevel === "on")) {
         const entry = usageSummary.providers[0];
         if (entry?.error) {
           usageLine = `📊 Usage: ${entry.displayName} (${entry.error})`;
@@ -172,13 +159,10 @@ export async function buildStatusReply(params: {
   const queueKey = sessionKey ?? sessionEntry?.sessionId;
   const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
   const queueOverrides = Boolean(
-    sessionEntry?.queueDebounceMs ??
-      sessionEntry?.queueCap ??
-      sessionEntry?.queueDrop,
+    sessionEntry?.queueDebounceMs ?? sessionEntry?.queueCap ?? sessionEntry?.queueDrop,
   );
   const groupActivation = isGroup
-    ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
-      defaultGroupActivation())
+    ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
   const agentDefaults = cfg.agents?.defaults ?? {};
   const statusText = buildStatusMessage({
@@ -202,12 +186,7 @@ export async function buildStatusReply(params: {
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel(
-      provider,
-      cfg,
-      sessionEntry,
-      statusAgentDir,
-    ),
+    modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry, statusAgentDir),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

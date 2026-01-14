@@ -16,9 +16,7 @@ const decode = (s: string) => Buffer.from(s, "base64").toString();
 const CLIENT_ID = decode(
   "***REMOVED***",
 );
-const CLIENT_SECRET = decode(
-  "***REMOVED***",
-);
+const CLIENT_SECRET = decode("***REMOVED***");
 const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -64,11 +62,7 @@ function isWSL2(): boolean {
  */
 export function isRemoteEnvironment(): boolean {
   // SSH session indicators
-  if (
-    process.env.SSH_CLIENT ||
-    process.env.SSH_TTY ||
-    process.env.SSH_CONNECTION
-  ) {
+  if (process.env.SSH_CLIENT || process.env.SSH_TTY || process.env.SSH_CONNECTION) {
     return true;
   }
 
@@ -162,10 +156,7 @@ function parseCallbackInput(
 /**
  * Exchange authorization code for tokens.
  */
-async function exchangeCodeForTokens(
-  code: string,
-  verifier: string,
-): Promise<OAuthCredentials> {
+async function exchangeCodeForTokens(code: string, verifier: string): Promise<OAuthCredentials> {
   const response = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
@@ -219,14 +210,11 @@ async function exchangeCodeForTokens(
  */
 async function getUserEmail(accessToken: string): Promise<string | undefined> {
   try {
-    const response = await fetch(
-      "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+    const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
       },
-    );
+    });
     if (response.ok) {
       const data = (await response.json()) as { email?: string };
       return data.email;
@@ -372,9 +360,7 @@ export async function loginAntigravityManual(
   console.log("=".repeat(60));
   console.log("\n1. Open the URL above in your LOCAL browser");
   console.log("2. Complete the Google sign-in");
-  console.log(
-    "3. Your browser will redirect to a localhost URL that won't load",
-  );
+  console.log("3. Your browser will redirect to a localhost URL that won't load");
   console.log("4. Copy the ENTIRE URL from your browser's address bar");
   console.log("5. Paste it below\n");
   console.log("The URL will look like:");

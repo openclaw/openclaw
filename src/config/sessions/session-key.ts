@@ -21,11 +21,7 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
  * Resolve the session key with a canonical direct-chat bucket (default: "main").
  * All non-group direct chats collapse to this bucket; groups stay isolated.
  */
-export function resolveSessionKey(
-  scope: SessionScope,
-  ctx: MsgContext,
-  mainKey?: string,
-) {
+export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?: string) {
   const explicit = ctx.SessionKey?.trim();
   if (explicit) return explicit;
   const raw = deriveSessionKey(scope, ctx);
@@ -35,10 +31,7 @@ export function resolveSessionKey(
     agentId: DEFAULT_AGENT_ID,
     mainKey: canonicalMainKey,
   });
-  const isGroup =
-    raw.startsWith("group:") ||
-    raw.includes(":group:") ||
-    raw.includes(":channel:");
+  const isGroup = raw.startsWith("group:") || raw.includes(":group:") || raw.includes(":channel:");
   if (!isGroup) return canonical;
   return `agent:${DEFAULT_AGENT_ID}:${raw}`;
 }

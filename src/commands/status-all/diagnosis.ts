@@ -65,14 +65,8 @@ export async function appendStatusAllDiagnosis(params: {
   const { lines, muted, ok, warn, fail } = params;
 
   const emitCheck = (label: string, status: "ok" | "warn" | "fail") => {
-    const icon =
-      status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
-    const colored =
-      status === "ok"
-        ? ok(label)
-        : status === "warn"
-          ? warn(label)
-          : fail(label);
+    const icon = status === "ok" ? ok("✓") : status === "warn" ? warn("!") : fail("✗");
+    const colored = status === "ok" ? ok(label) : status === "warn" ? warn(label) : fail(label);
     lines.push(`${icon} ${colored}`);
   };
 
@@ -86,21 +80,12 @@ export async function appendStatusAllDiagnosis(params: {
 
   lines.push("");
   if (params.snap) {
-    const status = !params.snap.exists
-      ? "fail"
-      : params.snap.valid
-        ? "ok"
-        : "warn";
+    const status = !params.snap.exists ? "fail" : params.snap.valid ? "ok" : "warn";
     emitCheck(`Config: ${params.snap.path ?? "(unknown)"}`, status);
-    const issues = [
-      ...(params.snap.legacyIssues ?? []),
-      ...(params.snap.issues ?? []),
-    ];
+    const issues = [...(params.snap.legacyIssues ?? []), ...(params.snap.issues ?? [])];
     const uniqueIssues = issues.filter(
       (issue, index) =>
-        issues.findIndex(
-          (x) => x.path === issue.path && x.message === issue.message,
-        ) === index,
+        issues.findIndex((x) => x.path === issue.path && x.message === issue.message) === index,
     );
     for (const issue of uniqueIssues.slice(0, 12)) {
       lines.push(`  - ${issue.path}: ${issue.message}`);
@@ -114,13 +99,8 @@ export async function appendStatusAllDiagnosis(params: {
 
   if (params.remoteUrlMissing) {
     lines.push("");
-    emitCheck(
-      "Gateway remote mode misconfigured (gateway.remote.url missing)",
-      "warn",
-    );
-    lines.push(
-      `  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`,
-    );
+    emitCheck("Gateway remote mode misconfigured (gateway.remote.url missing)", "warn");
+    lines.push(`  ${muted("Fix: set gateway.remote.url, or set gateway.mode=local.")}`);
   }
 
   if (params.sentinel?.payload) {
@@ -133,8 +113,7 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   const lastErrClean = params.lastErr?.trim() ?? "";
-  const isTrivialLastErr =
-    lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+  const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
     lines.push(`${muted("Gateway last log line:")}`);
@@ -159,10 +138,7 @@ export async function appendStatusAllDiagnosis(params: {
       params.tailscaleMode === "off"
         ? `Tailscale: off · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
         : `Tailscale: ${params.tailscaleMode} · ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(
-      label,
-      okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn",
-    );
+    emitCheck(label, okBackend && (params.tailscaleMode === "off" || hasDns) ? "ok" : "warn");
     if (params.tailscale.error) {
       lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
     }
@@ -203,19 +179,13 @@ export async function appendStatusAllDiagnosis(params: {
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
-      lines.push(
-        `${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`,
-      );
+      lines.push(`${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`);
       lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(
-        redactSecrets,
-      )) {
+      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
-      for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(
-        redactSecrets,
-      )) {
+      for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }

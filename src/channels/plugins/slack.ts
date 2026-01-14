@@ -1,7 +1,4 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import {
   listSlackAccountIds,
   type ResolvedSlackAccount,
@@ -82,9 +79,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       appTokenSource: account.appTokenSource,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map(
-        (entry) => String(entry),
-      ),
+      (resolveSlackAccount({ cfg, accountId }).dm?.allowFrom ?? []).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -93,11 +88,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
-      const resolvedAccountId =
-        accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
-      const useAccountPath = Boolean(
-        cfg.channels?.slack?.accounts?.[resolvedAccountId],
-      );
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.slack?.accounts?.[resolvedAccountId]);
       const allowFromPath = useAccountPath
         ? `channels.slack.accounts.${resolvedAccountId}.dm.`
         : "channels.slack.dm.";
@@ -113,8 +105,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const channelAllowlistConfigured =
-        Boolean(account.config.channels) &&
-        Object.keys(account.config.channels ?? {}).length > 0;
+        Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
       if (channelAllowlistConfigured) {
         return [
           `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
@@ -133,11 +124,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off",
     allowTagsWhenOff: true,
     buildToolContext: ({ cfg, accountId, context, hasRepliedRef }) => {
-      const configuredReplyToMode =
-        resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
-      const effectiveReplyToMode = context.ThreadLabel
-        ? "all"
-        : configuredReplyToMode;
+      const configuredReplyToMode = resolveSlackAccount({ cfg, accountId }).replyToMode ?? "off";
+      const effectiveReplyToMode = context.ThreadLabel ? "all" : configuredReplyToMode;
       return {
         currentChannelId: context.To?.startsWith("channel:")
           ? context.To.slice("channel:".length)
@@ -232,9 +220,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error(
-            "Delivering to Slack requires --to <channelId|user:ID|channel:ID>",
-          ),
+          error: new Error("Delivering to Slack requires --to <channelId|user:ID|channel:ID>"),
         };
       }
       return { ok: true, to: trimmed };

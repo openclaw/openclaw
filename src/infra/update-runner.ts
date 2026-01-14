@@ -110,12 +110,9 @@ async function resolveGitRoot(
   timeoutMs: number,
 ): Promise<string | null> {
   for (const dir of candidates) {
-    const res = await runCommand(
-      ["git", "-C", dir, "rev-parse", "--show-toplevel"],
-      {
-        timeoutMs,
-      },
-    );
+    const res = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
+      timeoutMs,
+    });
     if (res.code === 0) {
       const root = res.stdout.trim();
       if (root) return root;
@@ -174,17 +171,7 @@ type RunStepOptions = {
 };
 
 async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
-  const {
-    runCommand,
-    name,
-    argv,
-    cwd,
-    timeoutMs,
-    env,
-    progress,
-    stepIndex,
-    totalSteps,
-  } = opts;
+  const { runCommand, name, argv, cwd, timeoutMs, env, progress, stepIndex, totalSteps } = opts;
   const command = argv.join(" ");
 
   const stepInfo: UpdateStepInfo = {
@@ -220,11 +207,7 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   };
 }
 
-function managerScriptArgs(
-  manager: "pnpm" | "bun" | "npm",
-  script: string,
-  args: string[] = [],
-) {
+function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args: string[] = []) {
   if (manager === "pnpm") return ["pnpm", script, ...args];
   if (manager === "bun") return ["bun", "run", script, ...args];
   if (args.length > 0) return ["npm", "run", script, "--", ...args];
@@ -240,9 +223,7 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
 // Total number of visible steps in a successful git update flow
 const GIT_UPDATE_TOTAL_STEPS = 9;
 
-export async function runGatewayUpdate(
-  opts: UpdateRunnerOptions = {},
-): Promise<UpdateRunResult> {
+export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
   const runCommand =
     opts.runCommand ??
@@ -298,19 +279,15 @@ export async function runGatewayUpdate(
 
   if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
     // Get current SHA (not a visible step, no progress)
-    const beforeShaResult = await runCommand(
-      ["git", "-C", gitRoot, "rev-parse", "HEAD"],
-      { cwd: gitRoot, timeoutMs },
-    );
+    const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
+      cwd: gitRoot,
+      timeoutMs,
+    });
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
 
     const statusCheck = await runStep(
-      step(
-        "clean check",
-        ["git", "-C", gitRoot, "status", "--porcelain"],
-        gitRoot,
-      ),
+      step("clean check", ["git", "-C", gitRoot, "status", "--porcelain"], gitRoot),
     );
     steps.push(statusCheck);
     const hasUncommittedChanges =
@@ -330,15 +307,7 @@ export async function runGatewayUpdate(
     const upstreamStep = await runStep(
       step(
         "upstream check",
-        [
-          "git",
-          "-C",
-          gitRoot,
-          "rev-parse",
-          "--abbrev-ref",
-          "--symbolic-full-name",
-          "@{upstream}",
-        ],
+        ["git", "-C", gitRoot, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
         gitRoot,
       ),
     );
@@ -356,27 +325,19 @@ export async function runGatewayUpdate(
     }
 
     const fetchStep = await runStep(
-      step(
-        "git fetch",
-        ["git", "-C", gitRoot, "fetch", "--all", "--prune"],
-        gitRoot,
-      ),
+      step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune"], gitRoot),
     );
     steps.push(fetchStep);
 
     const rebaseStep = await runStep(
-      step(
-        "git rebase",
-        ["git", "-C", gitRoot, "rebase", "@{upstream}"],
-        gitRoot,
-      ),
+      step("git rebase", ["git", "-C", gitRoot, "rebase", "@{upstream}"], gitRoot),
     );
     steps.push(rebaseStep);
     if (rebaseStep.exitCode !== 0) {
-      const abortResult = await runCommand(
-        ["git", "-C", gitRoot, "rebase", "--abort"],
-        { cwd: gitRoot, timeoutMs },
-      );
+      const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
+        cwd: gitRoot,
+        timeoutMs,
+      });
       steps.push({
         name: "git rebase --abort",
         command: "git rebase --abort",
@@ -399,14 +360,10 @@ export async function runGatewayUpdate(
 
     const manager = await detectPackageManager(gitRoot);
 
-    const depsStep = await runStep(
-      step("deps install", managerInstallArgs(manager), gitRoot),
-    );
+    const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
     steps.push(depsStep);
 
-    const buildStep = await runStep(
-      step("build", managerScriptArgs(manager, "build"), gitRoot),
-    );
+    const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
     steps.push(buildStep);
 
     const uiBuildStep = await runStep(
@@ -426,11 +383,7 @@ export async function runGatewayUpdate(
 
     const failedStep = steps.find((s) => s.exitCode !== 0);
     const afterShaStep = await runStep(
-      step(
-        "git rev-parse HEAD (after)",
-        ["git", "-C", gitRoot, "rev-parse", "HEAD"],
-        gitRoot,
-      ),
+      step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );
     steps.push(afterShaStep);
     const afterVersion = await readPackageVersion(gitRoot);

@@ -38,9 +38,9 @@ describe("readStringOrNumberParam", () => {
   });
 
   it("throws when required and missing", () => {
-    expect(() =>
-      readStringOrNumberParam({}, "chatId", { required: true }),
-    ).toThrow(/chatId required/);
+    expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
+      /chatId required/,
+    );
   });
 });
 

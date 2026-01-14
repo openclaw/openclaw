@@ -33,10 +33,7 @@ Examples:
   clawdbot message poll --channel discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
   clawdbot message react --channel discord --to 123 --message-id 456 --emoji "✅"
 
-${theme.muted("Docs:")} ${formatDocsLink(
-          "/cli/message",
-          "docs.clawd.bot/cli/message",
-        )}`,
+${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.clawd.bot/cli/message")}`,
     )
     .action(() => {
       message.help({ error: true });

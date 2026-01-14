@@ -2,9 +2,7 @@ import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
 
 export type MSTeamsSdk = typeof import("@microsoft/agents-hosting");
-export type MSTeamsAuthConfig = ReturnType<
-  MSTeamsSdk["getAuthConfigWithDefaults"]
->;
+export type MSTeamsAuthConfig = ReturnType<MSTeamsSdk["getAuthConfigWithDefaults"]>;
 
 export async function loadMSTeamsSdk(): Promise<MSTeamsSdk> {
   return await import("@microsoft/agents-hosting");

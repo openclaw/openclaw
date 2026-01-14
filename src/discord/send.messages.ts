@@ -25,10 +25,7 @@ export async function readMessagesDiscord(
   if (query.before) params.before = query.before;
   if (query.after) params.after = query.after;
   if (query.around) params.around = query.around;
-  return (await rest.get(
-    Routes.channelMessages(channelId),
-    params,
-  )) as APIMessage[];
+  return (await rest.get(Routes.channelMessages(channelId), params)) as APIMessage[];
 }
 
 export async function fetchMessageDiscord(
@@ -37,9 +34,7 @@ export async function fetchMessageDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
-  return (await rest.get(
-    Routes.channelMessage(channelId, messageId),
-  )) as APIMessage;
+  return (await rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
 }
 
 export async function editMessageDiscord(
@@ -106,10 +101,7 @@ export async function createThreadDiscord(
   return await rest.post(route, { body });
 }
 
-export async function listThreadsDiscord(
-  payload: DiscordThreadList,
-  opts: DiscordReactOpts = {},
-) {
+export async function listThreadsDiscord(payload: DiscordThreadList, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
   if (payload.includeArchived) {
     if (!payload.channelId) {
@@ -118,10 +110,7 @@ export async function listThreadsDiscord(
     const params: Record<string, string | number> = {};
     if (payload.before) params.before = payload.before;
     if (payload.limit) params.limit = payload.limit;
-    return await rest.get(
-      Routes.channelThreads(payload.channelId, "public"),
-      params,
-    );
+    return await rest.get(Routes.channelThreads(payload.channelId, "public"), params);
   }
   return await rest.get(Routes.guildActiveThreads(payload.guildId));
 }
@@ -147,7 +136,5 @@ export async function searchMessagesDiscord(
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return await rest.get(
-    `/guilds/${query.guildId}/messages/search?${params.toString()}`,
-  );
+  return await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`);
 }

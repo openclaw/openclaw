@@ -27,9 +27,7 @@ type DiscordPermissionsAuditSummary = {
   }>;
 };
 
-function readDiscordAccountStatus(
-  value: ChannelAccountSnapshot,
-): DiscordAccountStatus | null {
+function readDiscordAccountStatus(value: ChannelAccountSnapshot): DiscordAccountStatus | null {
   if (!isRecord(value)) return null;
   return {
     accountId: value.accountId,
@@ -40,9 +38,7 @@ function readDiscordAccountStatus(
   };
 }
 
-function readDiscordApplicationSummary(
-  value: unknown,
-): DiscordApplicationSummary {
+function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
   if (!isRecord(value)) return {};
   const intentsRaw = value.intents;
   if (!isRecord(intentsRaw)) return {};
@@ -58,13 +54,10 @@ function readDiscordApplicationSummary(
   };
 }
 
-function readDiscordPermissionsAuditSummary(
-  value: unknown,
-): DiscordPermissionsAuditSummary {
+function readDiscordPermissionsAuditSummary(value: unknown): DiscordPermissionsAuditSummary {
   if (!isRecord(value)) return {};
   const unresolvedChannels =
-    typeof value.unresolvedChannels === "number" &&
-    Number.isFinite(value.unresolvedChannels)
+    typeof value.unresolvedChannels === "number" && Number.isFinite(value.unresolvedChannels)
       ? value.unresolvedChannels
       : undefined;
   const channelsRaw = value.channels;
@@ -110,8 +103,7 @@ export function collectDiscordStatusIssues(
         channel: "discord",
         accountId,
         kind: "intent",
-        message:
-          "Message Content Intent is disabled. Bot may not see normal channel messages.",
+        message: "Message Content Intent is disabled. Bot may not see normal channel messages.",
         fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
       });
     }
@@ -128,9 +120,7 @@ export function collectDiscordStatusIssues(
     }
     for (const channel of audit.channels ?? []) {
       if (channel.ok === true) continue;
-      const missing = channel.missing?.length
-        ? ` missing ${channel.missing.join(", ")}`
-        : "";
+      const missing = channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : "";
       const error = channel.error ? `: ${channel.error}` : "";
       issues.push({
         channel: "discord",

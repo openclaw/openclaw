@@ -3,20 +3,13 @@ import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
-import {
-  canvasSnapshotTempPath,
-  parseCanvasSnapshotPayload,
-} from "../nodes-canvas.js";
+import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-async function invokeCanvas(
-  opts: NodesRpcOpts,
-  command: string,
-  params?: Record<string, unknown>,
-) {
+async function invokeCanvas(opts: NodesRpcOpts, command: string, params?: Record<string, unknown>) {
   const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
   const invokeParams: Record<string, unknown> = {
     nodeId,
@@ -44,11 +37,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--format <png|jpg|jpeg>", "Image format", "jpg")
       .option("--max-width <px>", "Max width in px (optional)")
       .option("--quality <0-1>", "JPEG quality (optional)")
-      .option(
-        "--invoke-timeout <ms>",
-        "Node invoke timeout in ms (default 20000)",
-        "20000",
-      )
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         try {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
@@ -56,23 +45,13 @@ export function registerNodesCanvasCommands(nodes: Command) {
             .trim()
             .toLowerCase();
           const formatForParams =
-            formatOpt === "jpg"
-              ? "jpeg"
-              : formatOpt === "jpeg"
-                ? "jpeg"
-                : "png";
+            formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
           if (formatForParams !== "png" && formatForParams !== "jpeg") {
-            throw new Error(
-              `invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`,
-            );
+            throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
           }
 
-          const maxWidth = opts.maxWidth
-            ? Number.parseInt(String(opts.maxWidth), 10)
-            : undefined;
-          const quality = opts.quality
-            ? Number.parseFloat(String(opts.quality))
-            : undefined;
+          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
+          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
@@ -91,15 +70,8 @@ export function registerNodesCanvasCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli(
-            "node.invoke",
-            opts,
-            invokeParams,
-          )) as unknown;
-          const res =
-            typeof raw === "object" && raw !== null
-              ? (raw as { payload?: unknown })
-              : {};
+          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCanvasSnapshotPayload(res.payload);
           const filePath = canvasSnapshotTempPath({
             ext: payload.format === "jpeg" ? "jpg" : payload.format,
@@ -108,11 +80,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
 
           if (opts.json) {
             defaultRuntime.log(
-              JSON.stringify(
-                { file: { path: filePath, format: payload.format } },
-                null,
-                2,
-              ),
+              JSON.stringify({ file: { path: filePath, format: payload.format } }, null, 2),
             );
             return;
           }
@@ -230,9 +198,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
       }),
   );
 
-  const a2ui = canvas
-    .command("a2ui")
-    .description("Render A2UI content on the canvas");
+  const a2ui = canvas.command("a2ui").description("Render A2UI content on the canvas");
 
   nodesCallOpts(
     a2ui
@@ -283,9 +249,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           await invokeCanvas(opts, "canvas.a2ui.reset", undefined);
           if (!opts.json) defaultRuntime.log("canvas a2ui reset ok");
         } catch (err) {
-          defaultRuntime.error(
-            `nodes canvas a2ui reset failed: ${String(err)}`,
-          );
+          defaultRuntime.error(`nodes canvas a2ui reset failed: ${String(err)}`);
           defaultRuntime.exit(1);
         }
       }),

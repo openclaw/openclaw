@@ -14,8 +14,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -105,11 +104,7 @@ describe("queue followups", () => {
       await Promise.resolve();
 
       expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
-      expect(
-        prompts.some((p) =>
-          p.includes("[Queued messages while agent was busy]"),
-        ),
-      ).toBe(true);
+      expect(prompts.some((p) => p.includes("[Queued messages while agent was busy]"))).toBe(true);
     });
   });
 
@@ -132,23 +127,11 @@ describe("queue followups", () => {
         drop: "summarize",
       });
 
-      await getReplyFromConfig(
-        { Body: "one", From: "+1002", To: "+2000" },
-        {},
-        cfg,
-      );
-      await getReplyFromConfig(
-        { Body: "two", From: "+1002", To: "+2000" },
-        {},
-        cfg,
-      );
+      await getReplyFromConfig({ Body: "one", From: "+1002", To: "+2000" }, {}, cfg);
+      await getReplyFromConfig({ Body: "two", From: "+1002", To: "+2000" }, {}, cfg);
 
       vi.mocked(isEmbeddedPiRunActive).mockReturnValue(false);
-      await getReplyFromConfig(
-        { Body: "three", From: "+1002", To: "+2000" },
-        {},
-        cfg,
-      );
+      await getReplyFromConfig({ Body: "three", From: "+1002", To: "+2000" }, {}, cfg);
 
       await vi.runAllTimersAsync();
       await Promise.resolve();

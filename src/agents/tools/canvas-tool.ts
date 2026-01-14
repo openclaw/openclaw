@@ -3,18 +3,10 @@ import fs from "node:fs/promises";
 
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
-import {
-  canvasSnapshotTempPath,
-  parseCanvasSnapshotPayload,
-} from "../../cli/nodes-canvas.js";
+import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
-import {
-  type AnyAgentTool,
-  imageResult,
-  jsonResult,
-  readStringParam,
-} from "./common.js";
+import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
 
@@ -70,8 +62,7 @@ export function createCanvasTool(): AnyAgentTool {
       const gatewayOpts: GatewayCallOptions = {
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
         gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs:
-          typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
       };
 
       const nodeId = await resolveNodeId(
@@ -80,10 +71,7 @@ export function createCanvasTool(): AnyAgentTool {
         true,
       );
 
-      const invoke = async (
-        command: string,
-        invokeParams?: Record<string, unknown>,
-      ) =>
+      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
         await callGatewayTool("node.invoke", gatewayOpts, {
           nodeId,
           command,
@@ -97,8 +85,7 @@ export function createCanvasTool(): AnyAgentTool {
             x: typeof params.x === "number" ? params.x : undefined,
             y: typeof params.y === "number" ? params.y : undefined,
             width: typeof params.width === "number" ? params.width : undefined,
-            height:
-              typeof params.height === "number" ? params.height : undefined,
+            height: typeof params.height === "number" ? params.height : undefined,
           };
           const invokeParams: Record<string, unknown> = {};
           if (typeof params.target === "string" && params.target.trim()) {
@@ -140,20 +127,14 @@ export function createCanvasTool(): AnyAgentTool {
           return jsonResult({ ok: true });
         }
         case "snapshot": {
-          const formatRaw =
-            typeof params.format === "string"
-              ? params.format.toLowerCase()
-              : "png";
-          const format =
-            formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
+          const formatRaw = typeof params.format === "string" ? params.format.toLowerCase() : "png";
+          const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
           const maxWidth =
-            typeof params.maxWidth === "number" &&
-            Number.isFinite(params.maxWidth)
+            typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
               ? params.maxWidth
               : undefined;
           const quality =
-            typeof params.quality === "number" &&
-            Number.isFinite(params.quality)
+            typeof params.quality === "number" && Number.isFinite(params.quality)
               ? params.quality
               : undefined;
           const raw = (await invoke("canvas.snapshot", {

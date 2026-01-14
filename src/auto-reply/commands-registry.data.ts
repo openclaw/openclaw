@@ -1,8 +1,5 @@
 import { listChannelDocks } from "../channels/dock.js";
-import type {
-  ChatCommandDefinition,
-  CommandScope,
-} from "./commands-registry.types.js";
+import type { ChatCommandDefinition, CommandScope } from "./commands-registry.types.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -14,17 +11,12 @@ type DefineChatCommandInput = {
   scope?: CommandScope;
 };
 
-function defineChatCommand(
-  command: DefineChatCommandInput,
-): ChatCommandDefinition {
-  const aliases = (
-    command.textAliases ?? (command.textAlias ? [command.textAlias] : [])
-  )
+function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
+  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
     .map((alias) => alias.trim())
     .filter(Boolean);
   const scope =
-    command.scope ??
-    (command.nativeName ? (aliases.length ? "both" : "native") : "text");
+    command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
   return {
     key: command.key,
     nativeName: command.nativeName,
@@ -35,18 +27,12 @@ function defineChatCommand(
   };
 }
 
-function registerAlias(
-  commands: ChatCommandDefinition[],
-  key: string,
-  ...aliases: string[]
-): void {
+function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(
-    command.textAliases.map((alias) => alias.trim().toLowerCase()),
-  );
+  const existing = new Set(command.textAliases.map((alias) => alias.trim().toLowerCase()));
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) continue;

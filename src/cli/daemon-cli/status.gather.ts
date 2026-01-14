@@ -4,10 +4,7 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../../config/config.js";
-import type {
-  BridgeBindMode,
-  GatewayControlUiConfig,
-} from "../../config/types.js";
+import type { BridgeBindMode, GatewayControlUiConfig } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import { findExtraGatewayServices } from "../../daemon/inspect.js";
@@ -24,11 +21,7 @@ import {
 } from "../../infra/ports.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { probeGatewayStatus } from "./probe.js";
-import {
-  normalizeListenerAddress,
-  parsePortFromArgs,
-  pickProbeHostForBind,
-} from "./shared.js";
+import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
 type ConfigSummary = {
@@ -104,10 +97,7 @@ export type DaemonStatus = {
   extraServices: Array<{ label: string; detail: string; scope: string }>;
 };
 
-function shouldReportPortUsage(
-  status: PortUsageStatus | undefined,
-  rpcOk?: boolean,
-) {
+function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
   if (status !== "busy") return false;
   if (rpcOk === true) return false;
   return true;
@@ -142,10 +132,7 @@ export async function gatherDaemonStatus(
     ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
-  const cliConfigPath = resolveConfigPath(
-    process.env,
-    resolveStateDir(process.env),
-  );
+  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
   const daemonConfigPath = resolveConfigPath(
     mergedDaemonEnv as NodeJS.ProcessEnv,
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
@@ -175,16 +162,13 @@ export async function gatherDaemonStatus(
     path: daemonSnapshot?.path ?? daemonConfigPath,
     exists: daemonSnapshot?.exists ?? false,
     valid: daemonSnapshot?.valid ?? true,
-    ...(daemonSnapshot?.issues?.length
-      ? { issues: daemonSnapshot.issues }
-      : {}),
+    ...(daemonSnapshot?.issues?.length ? { issues: daemonSnapshot.issues } : {}),
     controlUi: daemonCfg.gateway?.controlUi,
   };
   const configMismatch = cliConfigSummary.path !== daemonConfigSummary.path;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  const daemonPort =
-    portFromArgs ?? resolveGatewayPort(daemonCfg, mergedDaemonEnv);
+  const daemonPort = portFromArgs ?? resolveGatewayPort(daemonCfg, mergedDaemonEnv);
   const portSource: GatewayStatusSummary["portSource"] = portFromArgs
     ? "service args"
     : "env/config";
@@ -199,9 +183,7 @@ export async function gatherDaemonStatus(
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride =
-    typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0
-      ? opts.rpc.url.trim()
-      : null;
+    typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0 ? opts.rpc.url.trim() : null;
   const probeUrl = probeUrlOverride ?? `ws://${probeHost}:${daemonPort}`;
   const probeNote =
     !probeUrlOverride && bindMode === "lan"
@@ -241,8 +223,7 @@ export async function gatherDaemonStatus(
   ).catch(() => []);
 
   const timeoutMsRaw = Number.parseInt(String(opts.rpc.timeout ?? "10000"), 10);
-  const timeoutMs =
-    Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
+  const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
 
   const rpc = opts.probe
     ? await probeGatewayStatus({
@@ -262,15 +243,8 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (
-    loaded &&
-    runtime?.status === "running" &&
-    portStatus &&
-    portStatus.status !== "busy"
-  ) {
-    lastError =
-      (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ??
-      undefined;
+  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
+    lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
   return {
@@ -306,12 +280,8 @@ export async function gatherDaemonStatus(
   };
 }
 
-export function renderPortDiagnosticsForCli(
-  status: DaemonStatus,
-  rpcOk?: boolean,
-): string[] {
-  if (!status.port || !shouldReportPortUsage(status.port.status, rpcOk))
-    return [];
+export function renderPortDiagnosticsForCli(status: DaemonStatus, rpcOk?: boolean): string[] {
+  if (!status.port || !shouldReportPortUsage(status.port.status, rpcOk)) return [];
   return formatPortDiagnostics({
     port: status.port.port,
     status: status.port.status,

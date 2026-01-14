@@ -13,9 +13,7 @@ export async function readLatestAssistantReply(params: {
     method: "chat.history",
     params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
   })) as { messages?: unknown[] };
-  const filtered = stripToolMessages(
-    Array.isArray(history?.messages) ? history.messages : [],
-  );
+  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
   const last = filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
   return last ? extractAssistantText(last) : undefined;
 }
@@ -43,8 +41,7 @@ export async function runAgentStep(params: {
     timeoutMs: 10_000,
   })) as { runId?: string; acceptedAt?: number };
 
-  const stepRunId =
-    typeof response?.runId === "string" && response.runId ? response.runId : "";
+  const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
   const stepWaitMs = Math.min(params.timeoutMs, 60_000);
   const wait = (await callGateway({

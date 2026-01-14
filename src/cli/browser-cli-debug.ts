@@ -67,10 +67,7 @@ export function registerBrowserDebugCommands(
         }
         defaultRuntime.log(
           result.errors
-            .map(
-              (e) =>
-                `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`,
-            )
+            .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
             .join("\n"),
         );
       } catch (err) {
@@ -120,9 +117,7 @@ export function registerBrowserDebugCommands(
       }
     });
 
-  const trace = browser
-    .command("trace")
-    .description("Record a Playwright trace");
+  const trace = browser.command("trace").description("Record a Playwright trace");
 
   trace
     .command("start")

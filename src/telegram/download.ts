@@ -8,10 +8,7 @@ export type TelegramFileInfo = {
   file_path?: string;
 };
 
-export async function getTelegramFile(
-  token: string,
-  fileId: string,
-): Promise<TelegramFileInfo> {
+export async function getTelegramFile(token: string, fileId: string): Promise<TelegramFileInfo> {
   const res = await fetch(
     `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`,
   );

@@ -40,9 +40,7 @@ function parseFenceLine(line: string): OpenFence | null {
 }
 
 function closeFenceLine(openFence: OpenFence) {
-  return `${openFence.indent}${openFence.markerChar.repeat(
-    openFence.markerLen,
-  )}`;
+  return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
 
 function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
@@ -78,8 +76,7 @@ function splitLongLine(
     }
     if (breakIdx <= 0) breakIdx = limit;
     out.push(remaining.slice(0, breakIdx));
-    const brokeOnSeparator =
-      breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
+    const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
     remaining = remaining.slice(breakIdx + (brokeOnSeparator ? 1 : 0));
   }
   if (remaining.length) out.push(remaining);
@@ -90,10 +87,7 @@ function splitLongLine(
  * Chunks outbound Discord text by both character count and (soft) line count,
  * while keeping fenced code blocks balanced across chunks.
  */
-export function chunkDiscordText(
-  text: string,
-  opts: ChunkDiscordTextOpts = {},
-): string[] {
+export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
   const maxChars = Math.max(1, Math.floor(opts.maxChars ?? DEFAULT_MAX_CHARS));
   const maxLines = Math.max(1, Math.floor(opts.maxLines ?? DEFAULT_MAX_LINES));
 
@@ -137,9 +131,7 @@ export function chunkDiscordText(
       }
     }
 
-    const reserveChars = nextOpenFence
-      ? closeFenceLine(nextOpenFence).length + 1
-      : 0;
+    const reserveChars = nextOpenFence ? closeFenceLine(nextOpenFence).length + 1 : 0;
     const reserveLines = nextOpenFence ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
@@ -154,11 +146,7 @@ export function chunkDiscordText(
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation
-        ? ""
-        : current.length > 0
-          ? "\n"
-          : "";
+      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
       const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);

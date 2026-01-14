@@ -10,9 +10,7 @@ import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-a
 
 const providerId = "discord";
 
-function readParentIdParam(
-  params: Record<string, unknown>,
-): string | null | undefined {
+function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
   if (params.clearParent === true) return null;
   if (params.parentId === null) return null;
   return readStringParam(params, "parentId");
@@ -24,8 +22,7 @@ export async function handleDiscordMessageAction(
   const { action, params, cfg } = ctx;
 
   const resolveChannelId = () =>
-    readStringParam(params, "channelId") ??
-    readStringParam(params, "to", { required: true });
+    readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
@@ -52,10 +49,8 @@ export async function handleDiscordMessageAction(
     const question = readStringParam(params, "pollQuestion", {
       required: true,
     });
-    const answers =
-      readStringArrayParam(params, "pollOption", { required: true }) ?? [];
-    const allowMultiselect =
-      typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+    const answers = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+    const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
     const durationHours = readNumberParam(params, "pollDurationHours", {
       integer: true,
     });
@@ -76,8 +71,7 @@ export async function handleDiscordMessageAction(
   if (action === "react") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-    const remove =
-      typeof params.remove === "boolean" ? params.remove : undefined;
+    const remove = typeof params.remove === "boolean" ? params.remove : undefined;
     return await handleDiscordAction(
       {
         action: "react",
@@ -138,17 +132,10 @@ export async function handleDiscordMessageAction(
 
   if (action === "pin" || action === "unpin" || action === "list-pins") {
     const messageId =
-      action === "list-pins"
-        ? undefined
-        : readStringParam(params, "messageId", { required: true });
+      action === "list-pins" ? undefined : readStringParam(params, "messageId", { required: true });
     return await handleDiscordAction(
       {
-        action:
-          action === "pin"
-            ? "pinMessage"
-            : action === "unpin"
-              ? "unpinMessage"
-              : "listPins",
+        action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
         channelId: resolveChannelId(),
         messageId,
       },
@@ -157,10 +144,7 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "permissions") {
-    return await handleDiscordAction(
-      { action: "permissions", channelId: resolveChannelId() },
-      cfg,
-    );
+    return await handleDiscordAction({ action: "permissions", channelId: resolveChannelId() }, cfg);
   }
 
   if (action === "thread-create") {
@@ -205,7 +189,5 @@ export async function handleDiscordMessageAction(
   });
   if (adminResult !== undefined) return adminResult;
 
-  throw new Error(
-    `Action ${String(action)} is not supported for provider ${providerId}.`,
-  );
+  throw new Error(`Action ${String(action)} is not supported for provider ${providerId}.`);
 }

@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 
-import {
-  sandboxListCommand,
-  sandboxRecreateCommand,
-} from "../commands/sandbox.js";
+import { sandboxListCommand, sandboxRecreateCommand } from "../commands/sandbox.js";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -69,10 +66,7 @@ Examples:
 };
 
 function createRunner(
-  commandFn: (
-    opts: CommandOptions,
-    runtime: typeof defaultRuntime,
-  ) => Promise<void>,
+  commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
 ) {
   return async (opts: CommandOptions) => {
     try {
@@ -93,11 +87,7 @@ export function registerSandboxCli(program: Command) {
     .addHelpText("after", EXAMPLES.main)
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/sandbox",
-          "docs.clawd.bot/sandbox",
-        )}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}\n`,
     )
     .action(() => {
       sandbox.help({ error: true });
@@ -154,10 +144,7 @@ export function registerSandboxCli(program: Command) {
   sandbox
     .command("explain")
     .description("Explain effective sandbox/tool policy for a session/agent")
-    .option(
-      "--session <key>",
-      "Session key to inspect (defaults to agent main)",
-    )
+    .option("--session <key>", "Session key to inspect (defaults to agent main)")
     .option("--agent <id>", "Agent id to inspect (defaults to derived agent)")
     .option("--json", "Output result as JSON", false)
     .addHelpText("after", EXAMPLES.explain)

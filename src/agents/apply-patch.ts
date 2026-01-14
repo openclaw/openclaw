@@ -282,10 +282,7 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
   }
   const first = lines[0];
   const last = lines[lines.length - 1];
-  if (
-    (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
-    last.endsWith("EOF")
-  ) {
+  if ((first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') && last.endsWith("EOF")) {
     const inner = lines.slice(1, lines.length - 1);
     const innerError = checkPatchBoundariesStrict(inner);
     if (!innerError) return inner;
@@ -308,10 +305,7 @@ function checkPatchBoundariesStrict(lines: string[]): string | null {
   return "The last line of the patch must be '*** End Patch'";
 }
 
-function parseOneHunk(
-  lines: string[],
-  lineNumber: number,
-): { hunk: Hunk; consumed: number } {
+function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consumed: number } {
   if (lines.length === 0) {
     throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
   }

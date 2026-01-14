@@ -1,7 +1,4 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
@@ -101,9 +98,7 @@ function resolveGatewayOptions(opts?: MessageGatewayOptions) {
   };
 }
 
-export async function sendMessage(
-  params: MessageSendParams,
-): Promise<MessageSendResult> {
+export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = params.cfg ?? loadConfig();
   const channel = params.channel?.trim()
     ? normalizeChannelId(params.channel)
@@ -187,9 +182,7 @@ export async function sendMessage(
   };
 }
 
-export async function sendPoll(
-  params: MessagePollParams,
-): Promise<MessagePollResult> {
+export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = params.cfg ?? loadConfig();
   const channel = params.channel?.trim()
     ? normalizeChannelId(params.channel)

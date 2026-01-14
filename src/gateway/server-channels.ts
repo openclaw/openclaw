@@ -1,9 +1,5 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import {
-  type ChannelId,
-  getChannelPlugin,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,9 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
-  channelAccounts: Partial<
-    Record<ChannelId, Record<string, ChannelAccountSnapshot>>
-  >;
+  channelAccounts: Partial<Record<ChannelId, Record<string, ChannelAccountSnapshot>>>;
 };
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -45,10 +39,7 @@ function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
   return plugin?.status?.defaultRuntime ?? { accountId: DEFAULT_ACCOUNT_ID };
 }
 
-function cloneDefaultRuntime(
-  channelId: ChannelId,
-  accountId: string,
-): ChannelAccountSnapshot {
+function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
@@ -63,17 +54,11 @@ export type ChannelManager = {
   startChannels: () => Promise<void>;
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
-  markChannelLoggedOut: (
-    channelId: ChannelId,
-    cleared: boolean,
-    accountId?: string,
-  ) => void;
+  markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
-export function createChannelManager(
-  opts: ChannelManagerOptions,
-): ChannelManager {
+export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
   const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
@@ -86,14 +71,9 @@ export function createChannelManager(
     return next;
   };
 
-  const getRuntime = (
-    channelId: ChannelId,
-    accountId: string,
-  ): ChannelAccountSnapshot => {
+  const getRuntime = (channelId: ChannelId, accountId: string): ChannelAccountSnapshot => {
     const store = getStore(channelId);
-    return (
-      store.runtimes.get(accountId) ?? cloneDefaultRuntime(channelId, accountId)
-    );
+    return store.runtimes.get(accountId) ?? cloneDefaultRuntime(channelId, accountId);
   };
 
   const setRuntime = (
@@ -114,9 +94,7 @@ export function createChannelManager(
     if (!startAccount) return;
     const cfg = loadConfig();
     const store = getStore(channelId);
-    const accountIds = accountId
-      ? [accountId]
-      : plugin.config.listAccountIds(cfg);
+    const accountIds = accountId ? [accountId] : plugin.config.listAccountIds(cfg);
     if (accountIds.length === 0) return;
 
     await Promise.all(
@@ -130,8 +108,7 @@ export function createChannelManager(
           setRuntime(channelId, id, {
             accountId: id,
             running: false,
-            lastError:
-              plugin.config.disabledReason?.(account, cfg) ?? "disabled",
+            lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
           });
           return;
         }
@@ -144,9 +121,7 @@ export function createChannelManager(
           setRuntime(channelId, id, {
             accountId: id,
             running: false,
-            lastError:
-              plugin.config.unconfiguredReason?.(account, cfg) ??
-              "not configured",
+            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
           });
           return;
         }
@@ -246,11 +221,7 @@ export function createChannelManager(
     }
   };
 
-  const markChannelLoggedOut = (
-    channelId: ChannelId,
-    cleared: boolean,
-    accountId?: string,
-  ) => {
+  const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {
     const plugin = getChannelPlugin(channelId);
     if (!plugin) return;
     const cfg = loadConfig();
@@ -292,24 +263,19 @@ export function createChannelManager(
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
         const configured = described?.configured;
-        const current =
-          store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         if (!next.running) {
           if (!enabled) {
-            next.lastError ??=
-              plugin.config.disabledReason?.(account, cfg) ?? "disabled";
+            next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
           } else if (configured === false) {
-            next.lastError ??=
-              plugin.config.unconfiguredReason?.(account, cfg) ??
-              "not configured";
+            next.lastError ??= plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
           }
         }
         accounts[id] = next;
       }
       const defaultAccount =
-        accounts[defaultAccountId] ??
-        cloneDefaultRuntime(plugin.id, defaultAccountId);
+        accounts[defaultAccountId] ?? cloneDefaultRuntime(plugin.id, defaultAccountId);
       channels[plugin.id] = defaultAccount;
       channelAccounts[plugin.id] = accounts;
     }

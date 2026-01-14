@@ -71,14 +71,7 @@ export type SessionConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
-  consoleLevel?:
-    | "silent"
-    | "fatal"
-    | "error"
-    | "warn"
-    | "info"
-    | "debug"
-    | "trace";
+  consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */
   redactSensitive?: "off" | "tools";
@@ -102,9 +95,7 @@ export type WebConfig = {
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").
-export type AgentElevatedAllowFromConfig = Partial<
-  Record<string, Array<string | number>>
->;
+export type AgentElevatedAllowFromConfig = Partial<Record<string, Array<string | number>>>;
 
 export type IdentityConfig = {
   name?: string;

@@ -11,10 +11,9 @@ import {
 describe("msteams messenger", () => {
   describe("renderReplyPayloadsToMessages", () => {
     it("filters silent replies", () => {
-      const messages = renderReplyPayloadsToMessages(
-        [{ text: SILENT_REPLY_TOKEN }],
-        { textChunkLimit: 4000 },
-      );
+      const messages = renderReplyPayloadsToMessages([{ text: SILENT_REPLY_TOKEN }], {
+        textChunkLimit: 4000,
+      });
       expect(messages).toEqual([]);
     });
 
@@ -150,8 +149,7 @@ describe("msteams messenger", () => {
         context: ctx,
         messages: ["one"],
         retry: { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 },
-        onRetry: (e) =>
-          retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
+        onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
       });
 
       expect(attempts).toEqual(["one", "one"]);

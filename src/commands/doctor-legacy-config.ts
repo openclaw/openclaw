@@ -19,9 +19,7 @@ function resolveLegacyConfigPath(env: NodeJS.ProcessEnv): string {
   return path.join(os.homedir(), ".clawdis", "clawdis.json");
 }
 
-function normalizeDefaultWorkspacePath(
-  value: string | undefined,
-): string | undefined {
+function normalizeDefaultWorkspacePath(value: string | undefined): string | undefined {
   if (!value) return value;
 
   const resolved = resolveUserPath(value);
@@ -43,17 +41,13 @@ function normalizeDefaultWorkspacePath(
   return next === resolved ? value : next;
 }
 
-export function replaceLegacyName(
-  value: string | undefined,
-): string | undefined {
+export function replaceLegacyName(value: string | undefined): string | undefined {
   if (!value) return value;
   const replacedClawdis = value.replace(/clawdis/g, "clawdbot");
   return replacedClawdis.replace(/clawd(?!bot)/g, "clawdbot");
 }
 
-export function replaceModernName(
-  value: string | undefined,
-): string | undefined {
+export function replaceModernName(value: string | undefined): string | undefined {
   if (!value) return value;
   if (!value.includes("clawdbot")) return value;
   return value.replace(/clawdbot/g, "clawdis");
@@ -83,21 +77,14 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
       let updatedSandbox = sandbox;
       let sandboxChanged = false;
 
-      const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(
-        sandbox.workspaceRoot,
-      );
-      if (
-        updatedWorkspaceRoot &&
-        updatedWorkspaceRoot !== sandbox.workspaceRoot
-      ) {
+      const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(sandbox.workspaceRoot);
+      if (updatedWorkspaceRoot && updatedWorkspaceRoot !== sandbox.workspaceRoot) {
         updatedSandbox = {
           ...updatedSandbox,
           workspaceRoot: updatedWorkspaceRoot,
         };
         sandboxChanged = true;
-        changes.push(
-          `Updated agents.defaults.sandbox.workspaceRoot → ${updatedWorkspaceRoot}`,
-        );
+        changes.push(`Updated agents.defaults.sandbox.workspaceRoot → ${updatedWorkspaceRoot}`);
       }
 
       const dockerImage = sandbox.docker?.image;
@@ -111,17 +98,12 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
           },
         };
         sandboxChanged = true;
-        changes.push(
-          `Updated agents.defaults.sandbox.docker.image → ${updatedDockerImage}`,
-        );
+        changes.push(`Updated agents.defaults.sandbox.docker.image → ${updatedDockerImage}`);
       }
 
       const containerPrefix = sandbox.docker?.containerPrefix;
       const updatedContainerPrefix = replaceLegacyName(containerPrefix);
-      if (
-        updatedContainerPrefix &&
-        updatedContainerPrefix !== containerPrefix
-      ) {
+      if (updatedContainerPrefix && updatedContainerPrefix !== containerPrefix) {
         updatedSandbox = {
           ...updatedSandbox,
           docker: {
@@ -163,9 +145,7 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
       if (updatedWorkspace && updatedWorkspace !== agent.workspace) {
         updatedAgent = { ...updatedAgent, workspace: updatedWorkspace };
         agentChanged = true;
-        changes.push(
-          `Updated agents.list (id "${agent.id}") workspace → ${updatedWorkspace}`,
-        );
+        changes.push(`Updated agents.list (id "${agent.id}") workspace → ${updatedWorkspace}`);
       }
 
       const sandbox = agent.sandbox;
@@ -173,13 +153,8 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
         let updatedSandbox = sandbox;
         let sandboxChanged = false;
 
-        const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(
-          sandbox.workspaceRoot,
-        );
-        if (
-          updatedWorkspaceRoot &&
-          updatedWorkspaceRoot !== sandbox.workspaceRoot
-        ) {
+        const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(sandbox.workspaceRoot);
+        if (updatedWorkspaceRoot && updatedWorkspaceRoot !== sandbox.workspaceRoot) {
           updatedSandbox = {
             ...updatedSandbox,
             workspaceRoot: updatedWorkspaceRoot,
@@ -208,10 +183,7 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
 
         const containerPrefix = sandbox.docker?.containerPrefix;
         const updatedContainerPrefix = replaceLegacyName(containerPrefix);
-        if (
-          updatedContainerPrefix &&
-          updatedContainerPrefix !== containerPrefix
-        ) {
+        if (updatedContainerPrefix && updatedContainerPrefix !== containerPrefix) {
           updatedSandbox = {
             ...updatedSandbox,
             docker: {
@@ -324,13 +296,9 @@ export async function maybeMigrateLegacyConfigFile(runtime: RuntimeEnv) {
       ? (parsed.agent as Record<string, unknown>)
       : undefined;
   const defaultWorkspace =
-    typeof parsedDefaults?.workspace === "string"
-      ? parsedDefaults.workspace
-      : undefined;
+    typeof parsedDefaults?.workspace === "string" ? parsedDefaults.workspace : undefined;
   const legacyWorkspace =
-    typeof parsedLegacyAgent?.workspace === "string"
-      ? parsedLegacyAgent.workspace
-      : undefined;
+    typeof parsedLegacyAgent?.workspace === "string" ? parsedLegacyAgent.workspace : undefined;
   const agentWorkspace = defaultWorkspace ?? legacyWorkspace;
   const workspaceLabel = defaultWorkspace
     ? "agents.defaults.workspace"
@@ -351,16 +319,11 @@ export async function maybeMigrateLegacyConfigFile(runtime: RuntimeEnv) {
   );
 
   let nextConfig = legacySnapshot.valid ? legacySnapshot.config : null;
-  const { config: migratedConfig, changes } = migrateLegacyConfig(
-    legacySnapshot.parsed,
-  );
+  const { config: migratedConfig, changes } = migrateLegacyConfig(legacySnapshot.parsed);
   if (migratedConfig) {
     nextConfig = migratedConfig;
   } else if (!nextConfig) {
-    note(
-      `Legacy config at ${legacyConfigPath} is invalid; skipping migration.`,
-      "Legacy config",
-    );
+    note(`Legacy config at ${legacyConfigPath} is invalid; skipping migration.`, "Legacy config");
     return;
   }
 

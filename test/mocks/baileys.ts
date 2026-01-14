@@ -44,9 +44,7 @@ export function createMockBaileys(): {
 
   const mod: MockBaileysModule = {
     DisconnectReason: { loggedOut: 401 },
-    fetchLatestBaileysVersion: vi
-      .fn()
-      .mockResolvedValue({ version: [1, 2, 3] }),
+    fetchLatestBaileysVersion: vi.fn().mockResolvedValue({ version: [1, 2, 3] }),
     makeCacheableSignalKeyStore: vi.fn((keys: unknown) => keys),
     makeWASocket,
     useMultiFileAuthState: vi.fn(async () => ({

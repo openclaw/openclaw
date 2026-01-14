@@ -1,9 +1,7 @@
 import os from "node:os";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
-function resolveLoginctlUser(
-  env: Record<string, string | undefined>,
-): string | null {
+function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
   const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
   if (fromEnv) return fromEnv;
   try {
@@ -24,11 +22,9 @@ export async function readSystemdUserLingerStatus(
   const user = resolveLoginctlUser(env);
   if (!user) return null;
   try {
-    const { stdout } = await runExec(
-      "loginctl",
-      ["show-user", user, "-p", "Linger"],
-      { timeoutMs: 5_000 },
-    );
+    const { stdout } = await runExec("loginctl", ["show-user", user, "-p", "Linger"], {
+      timeoutMs: 5_000,
+    });
     const line = stdout
       .split("\n")
       .map((entry) => entry.trim())
@@ -52,8 +48,7 @@ export async function enableSystemdUserLinger(params: {
   if (!user) {
     return { ok: false, stdout: "", stderr: "Missing user", code: 1 };
   }
-  const needsSudo =
-    typeof process.getuid === "function" ? process.getuid() !== 0 : true;
+  const needsSudo = typeof process.getuid === "function" ? process.getuid() !== 0 : true;
   const sudoArgs =
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]

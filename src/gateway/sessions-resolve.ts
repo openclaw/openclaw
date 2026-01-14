@@ -13,9 +13,7 @@ import {
   resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
-export type SessionsResolveResult =
-  | { ok: true; key: string }
-  | { ok: false; error: ErrorShape };
+export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
 
 export function resolveSessionKeyFromResolveParams(params: {
   cfg: ClawdbotConfig;
@@ -29,19 +27,13 @@ export function resolveSessionKeyFromResolveParams(params: {
   if (hasKey && hasLabel) {
     return {
       ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Provide either key or label (not both)",
-      ),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "Provide either key or label (not both)"),
     };
   }
   if (!hasKey && !hasLabel) {
     return {
       ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "Either key or label is required",
-      ),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "Either key or label is required"),
     };
   }
 
@@ -52,10 +44,7 @@ export function resolveSessionKeyFromResolveParams(params: {
     if (!existingKey) {
       return {
         ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `No session found: ${key}`,
-        ),
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
       };
     }
     return { ok: true, key: target.canonicalKey };

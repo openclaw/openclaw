@@ -8,15 +8,9 @@ import {
   type SkillStatusEntry,
   type SkillStatusReport,
 } from "../agents/skills-status.js";
-import {
-  formatSkillInfo,
-  formatSkillsCheck,
-  formatSkillsList,
-} from "./skills-cli.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.js";
 
-function createMockSkill(
-  overrides: Partial<SkillStatusEntry> = {},
-): SkillStatusEntry {
+function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
   return {
     name: "test-skill",
     description: "A test skill",
@@ -131,9 +125,7 @@ describe("skills-cli", () => {
     });
 
     it("outputs JSON with --json flag", () => {
-      const report = createMockReport([
-        createMockSkill({ name: "json-skill" }),
-      ]);
+      const report = createMockReport([createMockSkill({ name: "json-skill" })]);
       const output = formatSkillsList(report, { json: true });
       const parsed = JSON.parse(output);
       expect(parsed.skills).toHaveLength(1);
@@ -181,9 +173,7 @@ describe("skills-cli", () => {
     });
 
     it("outputs JSON with --json flag", () => {
-      const report = createMockReport([
-        createMockSkill({ name: "info-skill" }),
-      ]);
+      const report = createMockReport([createMockSkill({ name: "info-skill" })]);
       const output = formatSkillInfo(report, "info-skill", { json: true });
       const parsed = JSON.parse(output);
       expect(parsed.name).toBe("info-skill");

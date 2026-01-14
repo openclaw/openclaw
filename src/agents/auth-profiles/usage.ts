@@ -1,14 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
-import {
-  saveAuthProfileStore,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
-import type {
-  AuthProfileFailureReason,
-  AuthProfileStore,
-  ProfileUsageStats,
-} from "./types.js";
+import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
@@ -21,10 +14,7 @@ function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
 /**
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  */
-export function isProfileInCooldown(
-  store: AuthProfileStore,
-  profileId: string,
-): boolean {
+export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
   const stats = store.usageStats?.[profileId];
   if (!stats) return false;
   const unusableUntil = resolveProfileUnusableUntil(stats);
@@ -102,9 +92,7 @@ function resolveAuthCooldownConfig(params: {
   } as const;
 
   const resolveHours = (value: unknown, fallback: number) =>
-    typeof value === "number" && Number.isFinite(value) && value > 0
-      ? value
-      : fallback;
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 
   const cooldowns = params.cfg?.auth?.cooldowns;
   const billingOverride = (() => {
@@ -120,10 +108,7 @@ function resolveAuthCooldownConfig(params: {
     billingOverride ?? cooldowns?.billingBackoffHours,
     defaults.billingBackoffHours,
   );
-  const billingMaxHours = resolveHours(
-    cooldowns?.billingMaxHours,
-    defaults.billingMaxHours,
-  );
+  const billingMaxHours = resolveHours(cooldowns?.billingMaxHours, defaults.billingMaxHours);
   const failureWindowHours = resolveHours(
     cooldowns?.failureWindowHours,
     defaults.failureWindowHours,
@@ -172,9 +157,7 @@ function computeNextProfileUsageStats(params: {
 
   const baseErrorCount = windowExpired ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = windowExpired
-    ? {}
-    : { ...params.existing.failureCounts };
+  const failureCounts = windowExpired ? {} : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -246,9 +229,7 @@ export async function markAuthProfileFailure(params: {
   store.usageStats = store.usageStats ?? {};
   const existing = store.usageStats[profileId] ?? {};
   const now = Date.now();
-  const providerKey = normalizeProviderId(
-    store.profiles[profileId]?.provider ?? "",
-  );
+  const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
   const cfgResolved = resolveAuthCooldownConfig({
     cfg,
     providerId: providerKey,

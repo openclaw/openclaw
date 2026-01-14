@@ -60,9 +60,7 @@ function buildContextPruningExtension(params: {
 }
 
 function resolveCompactionMode(cfg?: ClawdbotConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard"
-    ? "safeguard"
-    : "default";
+  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
 }
 
 export function buildEmbeddedExtensionPaths(params: {

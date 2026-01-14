@@ -33,9 +33,7 @@ export async function transcribeInboundAudio(
   }
 
   const timeoutMs = Math.max(
-    (toolTranscriber?.timeoutSeconds ??
-      legacyTranscriber?.timeoutSeconds ??
-      45) * 1000,
+    (toolTranscriber?.timeoutSeconds ?? legacyTranscriber?.timeoutSeconds ?? 45) * 1000,
     1_000,
   );
   let tmpPath: string | undefined;
@@ -46,10 +44,7 @@ export async function transcribeInboundAudio(
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const arrayBuf = await res.arrayBuffer();
       const buffer = Buffer.from(arrayBuf);
-      tmpPath = path.join(
-        os.tmpdir(),
-        `clawdbot-audio-${crypto.randomUUID()}.ogg`,
-      );
+      tmpPath = path.join(os.tmpdir(), `clawdbot-audio-${crypto.randomUUID()}.ogg`);
       await fs.writeFile(tmpPath, buffer);
       mediaPath = tmpPath;
       if (shouldLogVerbose()) {
@@ -62,12 +57,10 @@ export async function transcribeInboundAudio(
 
     const templCtx: MsgContext = { ...ctx, MediaPath: mediaPath };
     const argv = hasToolTranscriber
-      ? [AUDIO_TRANSCRIPTION_BINARY, ...(toolTranscriber?.args ?? [])].map(
-          (part, index) => (index === 0 ? part : applyTemplate(part, templCtx)),
+      ? [AUDIO_TRANSCRIPTION_BINARY, ...(toolTranscriber?.args ?? [])].map((part, index) =>
+          index === 0 ? part : applyTemplate(part, templCtx),
         )
-      : (legacyTranscriber?.command ?? []).map((part) =>
-          applyTemplate(part, templCtx),
-        );
+      : (legacyTranscriber?.command ?? []).map((part) => applyTemplate(part, templCtx));
     if (shouldLogVerbose()) {
       logVerbose(`Transcribing audio via command: ${argv.join(" ")}`);
     }

@@ -62,17 +62,12 @@ describe("models-config", () => {
         await ensureClawdbotModelsJson({ models: { providers: {} } });
 
         const agentDir = resolveClawdbotAgentDir();
-        const raw = await fs.readFile(
-          path.join(agentDir, "models.json"),
-          "utf8",
-        );
+        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { baseUrl?: string }>;
         };
 
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
-          "https://api.default.test",
-        );
+        expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.default.test");
       } finally {
         process.env.COPILOT_GITHUB_TOKEN = previous;
       }
@@ -111,8 +106,7 @@ describe("models-config", () => {
         );
 
         vi.doMock("../providers/github-copilot-token.js", () => ({
-          DEFAULT_COPILOT_API_BASE_URL:
-            "https://api.individual.githubcopilot.com",
+          DEFAULT_COPILOT_API_BASE_URL: "https://api.individual.githubcopilot.com",
           resolveCopilotApiToken: vi.fn().mockResolvedValue({
             token: "copilot",
             expiresAt: Date.now() + 60 * 60 * 1000,
@@ -125,17 +119,12 @@ describe("models-config", () => {
 
         await ensureClawdbotModelsJson({ models: { providers: {} } }, agentDir);
 
-        const raw = await fs.readFile(
-          path.join(agentDir, "models.json"),
-          "utf8",
-        );
+        const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { baseUrl?: string }>;
         };
 
-        expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
-          "https://api.copilot.example",
-        );
+        expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
       } finally {
         if (previous === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
         else process.env.COPILOT_GITHUB_TOKEN = previous;

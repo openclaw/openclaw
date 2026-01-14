@@ -21,10 +21,7 @@ export function appendRawStream(payload: Record<string, unknown>) {
     }
   }
   try {
-    void fs.promises.appendFile(
-      RAW_STREAM_PATH,
-      `${JSON.stringify(payload)}\n`,
-    );
+    void fs.promises.appendFile(RAW_STREAM_PATH, `${JSON.stringify(payload)}\n`);
   } catch {
     // ignore raw stream write failures
   }

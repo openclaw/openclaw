@@ -1,9 +1,4 @@
-import type {
-  NodeListNode,
-  PairedNode,
-  PairingList,
-  PendingRequest,
-} from "./types.js";
+import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./types.js";
 
 export function formatAge(msAgo: number) {
   const s = Math.max(0, Math.floor(msAgo / 1000));
@@ -17,22 +12,14 @@ export function formatAge(msAgo: number) {
 }
 
 export function parsePairingList(value: unknown): PairingList {
-  const obj =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {};
-  const pending = Array.isArray(obj.pending)
-    ? (obj.pending as PendingRequest[])
-    : [];
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
   const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
   return { pending, paired };
 }
 
 export function parseNodeList(value: unknown): NodeListNode[] {
-  const obj =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {};
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
 }
 
@@ -43,8 +30,6 @@ export function formatPermissions(raw: unknown) {
     .filter(([key]) => key.length > 0)
     .sort((a, b) => a[0].localeCompare(b[0]));
   if (entries.length === 0) return null;
-  const parts = entries.map(
-    ([key, granted]) => `${key}=${granted ? "yes" : "no"}`,
-  );
+  const parts = entries.map(([key, granted]) => `${key}=${granted ? "yes" : "no"}`);
   return `[${parts.join(", ")}]`;
 }

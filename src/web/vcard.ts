@@ -47,11 +47,7 @@ function normalizeVcardKey(key: string): string | undefined {
 }
 
 function cleanVcardValue(value: string): string {
-  return value
-    .replace(/\\n/gi, " ")
-    .replace(/\\,/g, ",")
-    .replace(/\\;/g, ";")
-    .trim();
+  return value.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
 }
 
 function normalizeVcardName(value: string): string {

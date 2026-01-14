@@ -36,9 +36,7 @@ function ensureAgentRunListener() {
     const phase = evt.data?.phase;
     if (phase === "start") {
       const startedAt =
-        typeof evt.data?.startedAt === "number"
-          ? (evt.data.startedAt as number)
-          : undefined;
+        typeof evt.data?.startedAt === "number" ? (evt.data.startedAt as number) : undefined;
       agentRunStarts.set(evt.runId, startedAt ?? Date.now());
       return;
     }
@@ -48,13 +46,8 @@ function ensureAgentRunListener() {
         ? (evt.data.startedAt as number)
         : agentRunStarts.get(evt.runId);
     const endedAt =
-      typeof evt.data?.endedAt === "number"
-        ? (evt.data.endedAt as number)
-        : undefined;
-    const error =
-      typeof evt.data?.error === "string"
-        ? (evt.data.error as string)
-        : undefined;
+      typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : undefined;
+    const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
     agentRunStarts.delete(evt.runId);
     recordAgentRunSnapshot({
       runId: evt.runId,
@@ -106,13 +99,8 @@ export async function waitForAgentJob(params: {
           ? (evt.data.startedAt as number)
           : agentRunStarts.get(evt.runId);
       const endedAt =
-        typeof evt.data?.endedAt === "number"
-          ? (evt.data.endedAt as number)
-          : undefined;
-      const error =
-        typeof evt.data?.error === "string"
-          ? (evt.data.error as string)
-          : undefined;
+        typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : undefined;
+      const error = typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
       const snapshot: AgentRunSnapshot = {
         runId: evt.runId,
         status: phase === "error" ? "error" : "ok",

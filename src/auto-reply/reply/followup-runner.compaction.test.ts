@@ -48,10 +48,7 @@ describe("createFollowupRunner compaction", () => {
 
     runEmbeddedPiAgentMock.mockImplementationOnce(
       async (params: {
-        onAgentEvent?: (evt: {
-          stream: string;
-          data: Record<string, unknown>;
-        }) => void;
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
       }) => {
         params.onAgentEvent?.({
           stream: "compaction",
@@ -102,9 +99,7 @@ describe("createFollowupRunner compaction", () => {
     await runner(queued);
 
     expect(onBlockReply).toHaveBeenCalled();
-    expect(onBlockReply.mock.calls[0][0].text).toContain(
-      "Auto-compaction complete",
-    );
+    expect(onBlockReply.mock.calls[0][0].text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 });

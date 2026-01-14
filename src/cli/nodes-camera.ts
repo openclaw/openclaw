@@ -20,9 +20,7 @@ export type CameraClipPayload = {
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function asString(value: unknown): string | undefined {
@@ -30,9 +28,7 @@ function asString(value: unknown): string | undefined {
 }
 
 function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
@@ -57,12 +53,7 @@ export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   const base64 = asString(obj.base64);
   const durationMs = asNumber(obj.durationMs);
   const hasAudio = asBoolean(obj.hasAudio);
-  if (
-    !format ||
-    !base64 ||
-    durationMs === undefined ||
-    hasAudio === undefined
-  ) {
+  if (!format || !base64 || durationMs === undefined || hasAudio === undefined) {
     throw new Error("invalid camera.clip payload");
   }
   return { format, base64, durationMs, hasAudio };
@@ -79,10 +70,7 @@ export function cameraTempPath(opts: {
   const id = opts.id ?? randomUUID();
   const facingPart = opts.facing ? `-${opts.facing}` : "";
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(
-    tmpDir,
-    `clawdbot-camera-${opts.kind}${facingPart}-${id}${ext}`,
-  );
+  return path.join(tmpDir, `clawdbot-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
 export async function writeBase64ToFile(filePath: string, base64: string) {

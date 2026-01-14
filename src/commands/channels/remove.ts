@@ -5,18 +5,10 @@ import {
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
 import { type ClawdbotConfig, writeConfigFile } from "../../config/config.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import {
-  type ChatChannel,
-  channelLabel,
-  requireValidConfig,
-  shouldUseWizard,
-} from "./shared.js";
+import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
   channel?: string;
@@ -102,8 +94,7 @@ export async function channelsRemoveCommand(
   }
 
   const resolvedAccountId =
-    normalizeAccountId(accountId) ??
-    resolveChannelDefaultAccountId({ plugin, cfg });
+    normalizeAccountId(accountId) ?? resolveChannelDefaultAccountId({ plugin, cfg });
   const accountKey = resolvedAccountId || DEFAULT_ACCOUNT_ID;
 
   let next = { ...cfg };

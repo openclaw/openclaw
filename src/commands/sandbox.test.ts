@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  SandboxBrowserInfo,
-  SandboxContainerInfo,
-} from "../agents/sandbox.js";
+import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 
 // --- Mocks ---
 
@@ -32,9 +29,7 @@ import { sandboxListCommand, sandboxRecreateCommand } from "./sandbox.js";
 
 const NOW = Date.now();
 
-function createContainer(
-  overrides: Partial<SandboxContainerInfo> = {},
-): SandboxContainerInfo {
+function createContainer(overrides: Partial<SandboxContainerInfo> = {}): SandboxContainerInfo {
   return {
     containerName: "clawd-sandbox-test",
     sessionKey: "test-session",
@@ -47,9 +42,7 @@ function createContainer(
   };
 }
 
-function createBrowser(
-  overrides: Partial<SandboxBrowserInfo> = {},
-): SandboxBrowserInfo {
+function createBrowser(overrides: Partial<SandboxBrowserInfo> = {}): SandboxBrowserInfo {
   return {
     containerName: "clawd-browser-test",
     sessionKey: "test-session",
@@ -82,17 +75,11 @@ function setupDefaultMocks() {
   mocks.clackConfirm.mockResolvedValue(true);
 }
 
-function expectLogContains(
-  runtime: ReturnType<typeof createMockRuntime>,
-  text: string,
-) {
+function expectLogContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
   expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
-function expectErrorContains(
-  runtime: ReturnType<typeof createMockRuntime>,
-  text: string,
-) {
+function expectErrorContains(runtime: ReturnType<typeof createMockRuntime>, text: string) {
   expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(text));
 }
 
@@ -116,10 +103,7 @@ describe("sandboxListCommand", () => {
       });
       mocks.listSandboxContainers.mockResolvedValue([container1, container2]);
 
-      await sandboxListCommand(
-        { browser: false, json: false },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expectLogContains(runtime, "📦 Sandbox Containers");
       expectLogContains(runtime, container1.containerName);
@@ -131,10 +115,7 @@ describe("sandboxListCommand", () => {
       const browser = createBrowser({ containerName: "browser-1" });
       mocks.listSandboxBrowsers.mockResolvedValue([browser]);
 
-      await sandboxListCommand(
-        { browser: true, json: false },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: true, json: false }, runtime as never);
 
       expectLogContains(runtime, "🌐 Sandbox Browser Containers");
       expectLogContains(runtime, browser.containerName);
@@ -145,10 +126,7 @@ describe("sandboxListCommand", () => {
       const mismatchContainer = createContainer({ imageMatch: false });
       mocks.listSandboxContainers.mockResolvedValue([mismatchContainer]);
 
-      await sandboxListCommand(
-        { browser: false, json: false },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expectLogContains(runtime, "⚠️");
       expectLogContains(runtime, "image mismatch");
@@ -156,10 +134,7 @@ describe("sandboxListCommand", () => {
     });
 
     it("should display message when no containers found", async () => {
-      await sandboxListCommand(
-        { browser: false, json: false },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
     });
@@ -170,10 +145,7 @@ describe("sandboxListCommand", () => {
       const container = createContainer();
       mocks.listSandboxContainers.mockResolvedValue([container]);
 
-      await sandboxListCommand(
-        { browser: false, json: true },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: false, json: true }, runtime as never);
 
       const loggedJson = runtime.log.mock.calls[0][0];
       const parsed = JSON.parse(loggedJson);
@@ -186,14 +158,9 @@ describe("sandboxListCommand", () => {
 
   describe("error handling", () => {
     it("should handle errors gracefully", async () => {
-      mocks.listSandboxContainers.mockRejectedValue(
-        new Error("Docker not available"),
-      );
+      mocks.listSandboxContainers.mockRejectedValue(new Error("Docker not available"));
 
-      await sandboxListCommand(
-        { browser: false, json: false },
-        runtime as never,
-      );
+      await sandboxListCommand({ browser: false, json: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No sandbox containers found.");
     });
@@ -211,15 +178,9 @@ describe("sandboxRecreateCommand", () => {
 
   describe("validation", () => {
     it("should error if no filter is specified", async () => {
-      await sandboxRecreateCommand(
-        { all: false, browser: false, force: false },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: false, browser: false, force: false }, runtime as never);
 
-      expectErrorContains(
-        runtime,
-        "Please specify --all, --session <key>, or --agent <id>",
-      );
+      expectErrorContains(runtime, "Please specify --all, --session <key>, or --agent <id>");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
       expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
@@ -231,10 +192,7 @@ describe("sandboxRecreateCommand", () => {
         runtime as never,
       );
 
-      expectErrorContains(
-        runtime,
-        "Please specify only one of: --all, --session, --agent",
-      );
+      expectErrorContains(runtime, "Please specify only one of: --all, --session, --agent");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
       expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
@@ -253,9 +211,7 @@ describe("sandboxRecreateCommand", () => {
       );
 
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(1);
-      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(
-        match.containerName,
-      );
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(match.containerName);
     });
 
     it("should filter by agent (exact + subkeys)", async () => {
@@ -270,22 +226,15 @@ describe("sandboxRecreateCommand", () => {
       );
 
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
-      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(
-        agent.containerName,
-      );
-      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(
-        agentSub.containerName,
-      );
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(agent.containerName);
+      expect(mocks.removeSandboxContainer).toHaveBeenCalledWith(agentSub.containerName);
     });
 
     it("should remove all when --all flag set", async () => {
       const containers = [createContainer(), createContainer()];
       mocks.listSandboxContainers.mockResolvedValue(containers);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
     });
@@ -294,10 +243,7 @@ describe("sandboxRecreateCommand", () => {
       const browsers = [createBrowser(), createBrowser()];
       mocks.listSandboxBrowsers.mockResolvedValue(browsers);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: true, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: true, force: true }, runtime as never);
 
       expect(mocks.removeSandboxBrowserContainer).toHaveBeenCalledTimes(2);
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
@@ -309,10 +255,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
       mocks.clackConfirm.mockResolvedValue(true);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: false },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
 
       expect(mocks.clackConfirm).toHaveBeenCalled();
       expect(mocks.removeSandboxContainer).toHaveBeenCalled();
@@ -322,10 +265,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
       mocks.clackConfirm.mockResolvedValue(false);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: false },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
@@ -335,10 +275,7 @@ describe("sandboxRecreateCommand", () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
       mocks.clackConfirm.mockResolvedValue(Symbol.for("clack:cancel"));
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: false },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: false }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
@@ -347,10 +284,7 @@ describe("sandboxRecreateCommand", () => {
     it("should skip confirmation with --force", async () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
       expect(mocks.clackConfirm).not.toHaveBeenCalled();
       expect(mocks.removeSandboxContainer).toHaveBeenCalled();
@@ -359,14 +293,9 @@ describe("sandboxRecreateCommand", () => {
 
   describe("execution", () => {
     it("should show message when no containers match", async () => {
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
-      expect(runtime.log).toHaveBeenCalledWith(
-        "No containers found matching the criteria.",
-      );
+      expect(runtime.log).toHaveBeenCalledWith("No containers found matching the criteria.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();
     });
 
@@ -379,10 +308,7 @@ describe("sandboxRecreateCommand", () => {
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error("Removal failed"));
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
       expectErrorContains(runtime, "Failed to remove");
       expectLogContains(runtime, "1 removed, 1 failed");
@@ -392,10 +318,7 @@ describe("sandboxRecreateCommand", () => {
     it("should display success message", async () => {
       mocks.listSandboxContainers.mockResolvedValue([createContainer()]);
 
-      await sandboxRecreateCommand(
-        { all: true, browser: false, force: true },
-        runtime as never,
-      );
+      await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
       expectLogContains(runtime, "✓ Removed");
       expectLogContains(runtime, "1 removed, 0 failed");

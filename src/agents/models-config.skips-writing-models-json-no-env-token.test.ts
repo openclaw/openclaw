@@ -70,9 +70,7 @@ describe("models-config", () => {
           agentDir,
         );
 
-        await expect(
-          fs.stat(path.join(agentDir, "models.json")),
-        ).rejects.toThrow();
+        await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toThrow();
         expect(result.wrote).toBe(false);
       } finally {
         if (previous === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
@@ -85,8 +83,7 @@ describe("models-config", () => {
         else process.env.MINIMAX_API_KEY = previousMinimax;
         if (previousMoonshot === undefined) delete process.env.MOONSHOT_API_KEY;
         else process.env.MOONSHOT_API_KEY = previousMoonshot;
-        if (previousSynthetic === undefined)
-          delete process.env.SYNTHETIC_API_KEY;
+        if (previousSynthetic === undefined) delete process.env.SYNTHETIC_API_KEY;
         else process.env.SYNTHETIC_API_KEY = previousSynthetic;
       }
     });
@@ -105,9 +102,7 @@ describe("models-config", () => {
         providers: Record<string, { baseUrl?: string }>;
       };
 
-      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe(
-        "http://localhost:4000/v1",
-      );
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
     });
   });
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
@@ -133,9 +128,7 @@ describe("models-config", () => {
             }
           >;
         };
-        expect(parsed.providers.minimax?.baseUrl).toBe(
-          "https://api.minimax.io/anthropic",
-        );
+        expect(parsed.providers.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");
@@ -169,13 +162,9 @@ describe("models-config", () => {
             }
           >;
         };
-        expect(parsed.providers.synthetic?.baseUrl).toBe(
-          "https://api.synthetic.new/anthropic",
-        );
+        expect(parsed.providers.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
         expect(parsed.providers.synthetic?.apiKey).toBe("SYNTHETIC_API_KEY");
-        const ids = parsed.providers.synthetic?.models?.map(
-          (model) => model.id,
-        );
+        const ids = parsed.providers.synthetic?.models?.map((model) => model.id);
         expect(ids).toContain("hf:MiniMaxAI/MiniMax-M2.1");
       } finally {
         if (prevKey === undefined) delete process.env.SYNTHETIC_API_KEY;

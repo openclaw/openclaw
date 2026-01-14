@@ -41,9 +41,7 @@ describe("resolveSendPolicy", () => {
       channel: "discord",
       chatType: "group",
     };
-    expect(
-      resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" }),
-    ).toBe("deny");
+    expect(resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" })).toBe("deny");
   });
 
   it("rule match by keyPrefix", () => {

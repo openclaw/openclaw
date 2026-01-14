@@ -18,11 +18,7 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 function isImageBlock(block: unknown): block is ImageContentBlock {
   if (!block || typeof block !== "object") return false;
   const rec = block as Record<string, unknown>;
-  return (
-    rec.type === "image" &&
-    typeof rec.data === "string" &&
-    typeof rec.mimeType === "string"
-  );
+  return rec.type === "image" && typeof rec.data === "string" && typeof rec.mimeType === "string";
 }
 
 function isTextBlock(block: unknown): block is TextContentBlock {
@@ -60,19 +56,12 @@ async function resizeImageBase64IfNeeded(params: {
         resized: false,
       };
     }
-  } else if (
-    !overBytes &&
-    width <= params.maxDimensionPx &&
-    height <= params.maxDimensionPx
-  ) {
+  } else if (!overBytes && width <= params.maxDimensionPx && height <= params.maxDimensionPx) {
     return { base64: params.base64, mimeType: params.mimeType, resized: false };
   }
 
   const qualities = [85, 75, 65, 55, 45, 35];
-  const sideStart =
-    maxDim > 0
-      ? Math.min(params.maxDimensionPx, maxDim)
-      : params.maxDimensionPx;
+  const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
   const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
     .map((v) => Math.min(params.maxDimensionPx, v))
     .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
@@ -103,9 +92,7 @@ async function resizeImageBase64IfNeeded(params: {
   const best = smallest?.buffer ?? buf;
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
   const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
-  throw new Error(
-    `Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`,
-  );
+  throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
 }
 
 export async function sanitizeContentBlocksImages(
@@ -113,10 +100,7 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: { maxDimensionPx?: number; maxBytes?: number } = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = Math.max(
-    opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX,
-    1,
-  );
+  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
   const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
   const out: ToolContentBlock[] = [];
 

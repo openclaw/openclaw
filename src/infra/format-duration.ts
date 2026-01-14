@@ -21,10 +21,7 @@ export type FormatDurationMsOptions = {
   unit?: "s" | "seconds";
 };
 
-export function formatDurationMs(
-  ms: number,
-  options: FormatDurationMsOptions = {},
-): string {
+export function formatDurationMs(ms: number, options: FormatDurationMsOptions = {}): string {
   if (!Number.isFinite(ms)) return "unknown";
   if (ms < 1000) return `${ms}ms`;
   return formatDurationSeconds(ms, {

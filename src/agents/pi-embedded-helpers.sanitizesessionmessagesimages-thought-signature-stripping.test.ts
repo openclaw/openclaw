@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeSessionMessagesImages } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -34,8 +32,6 @@ describe("sanitizeSessionMessagesImages - thought_signature stripping", () => {
     const content = (out[0] as { content?: unknown[] }).content;
     expect(content).toHaveLength(2);
     expect("thought_signature" in ((content?.[0] ?? {}) as object)).toBe(false);
-    expect(
-      (content?.[1] as { thought_signature?: unknown })?.thought_signature,
-    ).toBe("AQID");
+    expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe("AQID");
   });
 });

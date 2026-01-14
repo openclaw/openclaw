@@ -27,10 +27,7 @@ import { handleOpenAiHttpRequest } from "./openai-http.js";
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: {
-    text: string;
-    mode: "now" | "next-heartbeat";
-  }) => void;
+  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: {
     message: string;
     name: string;
@@ -51,10 +48,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export type HooksRequestHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<boolean>;
+export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 export function createHooksRequestHandler(
   opts: {
@@ -64,14 +58,7 @@ export function createHooksRequestHandler(
     logHooks: SubsystemLogger;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const {
-    getHooksConfig,
-    bindHost,
-    port,
-    logHooks,
-    dispatchAgentHook,
-    dispatchWakeHook,
-  } = opts;
+  const { getHooksConfig, bindHost, port, logHooks, dispatchAgentHook, dispatchWakeHook } = opts;
   return async (req, res) => {
     const hooksConfig = getHooksConfig();
     if (!hooksConfig) return false;
@@ -112,14 +99,11 @@ export function createHooksRequestHandler(
       return true;
     }
 
-    const payload =
-      typeof body.value === "object" && body.value !== null ? body.value : {};
+    const payload = typeof body.value === "object" && body.value !== null ? body.value : {};
     const headers = normalizeHookHeaders(req);
 
     if (subPath === "wake") {
-      const normalized = normalizeWakePayload(
-        payload as Record<string, unknown>,
-      );
+      const normalized = normalizeWakePayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -130,9 +114,7 @@ export function createHooksRequestHandler(
     }
 
     if (subPath === "agent") {
-      const normalized = normalizeAgentPayload(
-        payload as Record<string, unknown>,
-      );
+      const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -225,8 +207,7 @@ export function createGatewayHttpServer(opts: {
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
       if (openAiChatCompletionsEnabled) {
-        if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth }))
-          return;
+        if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth })) return;
       }
       if (canvasHost) {
         if (await handleA2uiHttpRequest(req, res)) return;

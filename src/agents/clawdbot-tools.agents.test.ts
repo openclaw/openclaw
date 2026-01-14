@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let configOverride: ReturnType<
-  typeof import("../config/config.js")["loadConfig"]
-> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -41,8 +39,7 @@ describe("agents_list", () => {
       requester: "main",
       allowAny: false,
     });
-    const agents = (result.details as { agents?: Array<{ id: string }> })
-      .agents;
+    const agents = (result.details as { agents?: Array<{ id: string }> }).agents;
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
@@ -123,11 +120,7 @@ describe("agents_list", () => {
         agents?: Array<{ id: string }>;
       }
     ).agents;
-    expect(agents?.map((agent) => agent.id)).toEqual([
-      "main",
-      "coder",
-      "research",
-    ]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
   it("marks allowlisted-but-unconfigured agents", async () => {

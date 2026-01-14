@@ -22,10 +22,7 @@ export type SubsystemLogger = {
   child: (name: string) => SubsystemLogger;
 };
 
-function shouldLogToConsole(
-  level: LogLevel,
-  settings: { level: LogLevel },
-): boolean {
+function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
   if (settings.level === "silent") return false;
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
@@ -47,37 +44,18 @@ function getColorForConsole(): ChalkInstance {
     process.env.FORCE_COLOR.trim() !== "0";
   if (process.env.NO_COLOR && !hasForceColor) return new Chalk({ level: 0 });
   const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
-  return hasTty || isRichConsoleEnv()
-    ? new Chalk({ level: 1 })
-    : new Chalk({ level: 0 });
+  return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
 }
 
-const SUBSYSTEM_COLORS = [
-  "cyan",
-  "green",
-  "yellow",
-  "blue",
-  "magenta",
-  "red",
-] as const;
-const SUBSYSTEM_COLOR_OVERRIDES: Record<
-  string,
-  (typeof SUBSYSTEM_COLORS)[number]
-> = {
+const SUBSYSTEM_COLORS = ["cyan", "green", "yellow", "blue", "magenta", "red"] as const;
+const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number]> = {
   "gmail-watcher": "blue",
 };
-const SUBSYSTEM_PREFIXES_TO_DROP = [
-  "gateway",
-  "channels",
-  "providers",
-] as const;
+const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>(CHAT_CHANNEL_ORDER);
 
-function pickSubsystemColor(
-  color: ChalkInstance,
-  subsystem: string,
-): ChalkInstance {
+function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
   if (override) return color[override];
   let hash = 0;
@@ -94,9 +72,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   const original = parts.join("/") || subsystem;
   while (
     parts.length > 0 &&
-    SUBSYSTEM_PREFIXES_TO_DROP.includes(
-      parts[0] as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number],
-    )
+    SUBSYSTEM_PREFIXES_TO_DROP.includes(parts[0] as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
   ) {
     parts.shift();
   }
@@ -132,10 +108,7 @@ export function stripRedundantSubsystemPrefixForConsole(
   const prefix = message.slice(0, displaySubsystem.length);
   if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) return message;
 
-  const next = message.slice(
-    displaySubsystem.length,
-    displaySubsystem.length + 1,
-  );
+  const next = message.slice(displaySubsystem.length, displaySubsystem.length + 1);
   if (next !== ":" && next !== " ") return message;
 
   let i = displaySubsystem.length;
@@ -153,9 +126,7 @@ function formatConsoleLine(opts: {
   meta?: Record<string, unknown>;
 }): string {
   const displaySubsystem =
-    opts.style === "json"
-      ? opts.subsystem
-      : formatSubsystemForConsole(opts.subsystem);
+    opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
       time: new Date().toISOString(),
@@ -176,14 +147,8 @@ function formatConsoleLine(opts: {
         : opts.level === "debug" || opts.level === "trace"
           ? color.gray
           : color.cyan;
-  const displayMessage = stripRedundantSubsystemPrefixForConsole(
-    opts.message,
-    displaySubsystem,
-  );
-  const time =
-    opts.style === "pretty"
-      ? color.gray(new Date().toISOString().slice(11, 19))
-      : "";
+  const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
+  const time = opts.style === "pretty" ? color.gray(new Date().toISOString().slice(11, 19)) : "";
   const prefixToken = prefixColor(prefix);
   const head = [time, prefixToken].filter(Boolean).join(" ");
   return `${head} ${levelColor(displayMessage)}`;
@@ -192,16 +157,10 @@ function formatConsoleLine(opts: {
 function writeConsoleLine(level: LogLevel, line: string) {
   const sanitized =
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
-      ? line
-          .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?")
-          .replace(/[\uD800-\uDFFF]/g, "?")
+      ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
   const sink = loggingState.rawConsole ?? console;
-  if (
-    loggingState.forceConsoleToStderr ||
-    level === "error" ||
-    level === "fatal"
-  ) {
+  if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
     (sink.error ?? console.error)(sanitized);
   } else if (level === "warn") {
     (sink.warn ?? console.warn)(sanitized);
@@ -218,9 +177,9 @@ function logToFile(
 ) {
   if (level === "silent") return;
   const safeLevel = level as Exclude<LogLevel, "silent">;
-  const method = (fileLogger as unknown as Record<string, unknown>)[
-    safeLevel
-  ] as unknown as ((...args: unknown[]) => void) | undefined;
+  const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as unknown as
+    | ((...args: unknown[]) => void)
+    | undefined;
   if (typeof method !== "function") return;
   if (meta && Object.keys(meta).length > 0) {
     method.call(fileLogger, meta, message);
@@ -235,11 +194,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (!fileLogger) fileLogger = getChildLogger({ subsystem });
     return fileLogger;
   };
-  const emit = (
-    level: LogLevel,
-    message: string,
-    meta?: Record<string, unknown>,
-  ) => {
+  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     let consoleMessageOverride: string | undefined;
     let fileMeta = meta;
@@ -258,10 +213,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     const line = formatConsoleLine({
       level,
       subsystem,
-      message:
-        consoleSettings.style === "json"
-          ? message
-          : (consoleMessageOverride ?? message),
+      message: consoleSettings.style === "json" ? message : (consoleMessageOverride ?? message),
       style: consoleSettings.style,
       meta: fileMeta,
     });

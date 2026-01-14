@@ -43,11 +43,7 @@ describe("sendMessageIMessage", () => {
   it("sends to chat_id targets", async () => {
     await sendMessageIMessage("chat_id:123", "hi");
     const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(requestMock).toHaveBeenCalledWith(
-      "send",
-      expect.any(Object),
-      expect.any(Object),
-    );
+    expect(requestMock).toHaveBeenCalledWith("send", expect.any(Object), expect.any(Object));
     expect(params.chat_id).toBe(123);
     expect(params.text).toBe("hi");
   });

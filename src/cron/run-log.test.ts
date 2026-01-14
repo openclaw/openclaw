@@ -4,19 +4,13 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  appendCronRunLog,
-  readCronRunLogEntries,
-  resolveCronRunLogPath,
-} from "./run-log.js";
+import { appendCronRunLog, readCronRunLogEntries, resolveCronRunLogPath } from "./run-log.js";
 
 describe("cron run log", () => {
   it("resolves store path to per-job runs/<jobId>.jsonl", () => {
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
     const p = resolveCronRunLogPath({ storePath, jobId: "job-1" });
-    expect(
-      p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl")),
-    ).toBe(true);
+    expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
   });
 
   it("appends JSONL and prunes by line count", async () => {
@@ -50,9 +44,7 @@ describe("cron run log", () => {
   });
 
   it("reads newest entries and filters by jobId", async () => {
-    const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-cron-log-read-"),
-    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cron-log-read-"));
     const logPathA = path.join(dir, "runs", "a.jsonl");
     const logPathB = path.join(dir, "runs", "b.jsonl");
 

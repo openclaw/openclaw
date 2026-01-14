@@ -78,9 +78,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     services: [],
     diagnostics: [],
   };
-  const coreGatewayMethods = new Set(
-    Object.keys(registryParams.coreGatewayHandlers ?? {}),
-  );
+  const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
@@ -93,9 +91,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const factory: ClawdbotPluginToolFactory =
-      typeof tool === "function"
-        ? tool
-        : (_ctx: ClawdbotPluginToolContext) => tool;
+      typeof tool === "function" ? tool : (_ctx: ClawdbotPluginToolContext) => tool;
 
     if (typeof tool !== "function") {
       names.push(tool.name);
@@ -138,9 +134,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registrar: ClawdbotPluginCliRegistrar,
     opts?: { commands?: string[] },
   ) => {
-    const commands = (opts?.commands ?? [])
-      .map((cmd) => cmd.trim())
-      .filter(Boolean);
+    const commands = (opts?.commands ?? []).map((cmd) => cmd.trim()).filter(Boolean);
     record.cliCommands.push(...commands);
     registry.cliRegistrars.push({
       pluginId: record.id,
@@ -150,10 +144,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerService = (
-    record: PluginRecord,
-    service: ClawdbotPluginService,
-  ) => {
+  const registerService = (record: PluginRecord, service: ClawdbotPluginService) => {
     const id = service.id.trim();
     if (!id) return;
     record.services.push(id);
@@ -188,8 +179,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       logger: normalizeLogger(registryParams.logger),
       registerTool: (tool, opts) => registerTool(record, tool, opts),
-      registerGatewayMethod: (method, handler) =>
-        registerGatewayMethod(record, method, handler),
+      registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       resolvePath: (input: string) => resolveUserPath(input),

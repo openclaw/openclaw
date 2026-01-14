@@ -13,9 +13,7 @@ export function resolveTargetIdFromTabs(
   if (exact) return { ok: true, targetId: exact.targetId };
 
   const lower = needle.toLowerCase();
-  const matches = tabs
-    .map((t) => t.targetId)
-    .filter((id) => id.toLowerCase().startsWith(lower));
+  const matches = tabs.map((t) => t.targetId).filter((id) => id.toLowerCase().startsWith(lower));
 
   const only = matches.length === 1 ? matches[0] : undefined;
   if (only) return { ok: true, targetId: only };

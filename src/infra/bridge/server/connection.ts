@@ -101,20 +101,15 @@ export function createNodeBridgeConnectionHandler(params: {
       const family = String(frame.deviceFamily ?? "")
         .trim()
         .toLowerCase();
-      if (platform.includes("ios") || platform.includes("ipados"))
-        return ["canvas", "camera"];
+      if (platform.includes("ios") || platform.includes("ipados")) return ["canvas", "camera"];
       if (platform.includes("android")) return ["canvas", "camera"];
-      if (family === "ipad" || family === "iphone" || family === "ios")
-        return ["canvas", "camera"];
+      if (family === "ipad" || family === "iphone" || family === "ios") return ["canvas", "camera"];
       if (family === "android") return ["canvas", "camera"];
       return undefined;
     };
 
-    const normalizePermissions = (
-      raw: unknown,
-    ): Record<string, boolean> | undefined => {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw))
-        return undefined;
+    const normalizePermissions = (raw: unknown): Record<string, boolean> | undefined => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
       const entries = Object.entries(raw as Record<string, unknown>)
         .map(([key, value]) => [String(key).trim(), value === true] as const)
         .filter(([key]) => key.length > 0);
@@ -136,11 +131,7 @@ export function createNodeBridgeConnectionHandler(params: {
         return;
       }
 
-      const verified = await verifyNodeToken(
-        nodeId,
-        token,
-        opts.pairingBaseDir,
-      );
+      const verified = await verifyNodeToken(nodeId, token, opts.pairingBaseDir);
       if (!verified.ok || !verified.node) {
         sendError("UNAUTHORIZED", "invalid token");
         return;
@@ -212,15 +203,11 @@ export function createNodeBridgeConnectionHandler(params: {
       requestId: string;
       nodeId: string;
       ts: number;
-    }): Promise<
-      { ok: true; token: string } | { ok: false; reason: string }
-    > => {
+    }): Promise<{ ok: true; token: string } | { ok: false; reason: string }> => {
       const deadline = Date.now() + 5 * 60 * 1000;
       while (!abort.signal.aborted && Date.now() < deadline) {
         const list = await listNodePairing(opts.pairingBaseDir);
-        const stillPending = list.pending.some(
-          (p) => p.requestId === request.requestId,
-        );
+        const stillPending = list.pending.some((p) => p.requestId === request.requestId);
         if (stillPending) {
           await sleep(250);
           continue;
@@ -301,9 +288,7 @@ export function createNodeBridgeConnectionHandler(params: {
         version: req.version,
         deviceFamily: req.deviceFamily,
         modelIdentifier: req.modelIdentifier,
-        caps: Array.isArray(req.caps)
-          ? req.caps.map((c) => String(c)).filter(Boolean)
-          : undefined,
+        caps: Array.isArray(req.caps) ? req.caps.map((c) => String(c)).filter(Boolean) : undefined,
         commands: Array.isArray(req.commands)
           ? req.commands.map((c) => String(c)).filter(Boolean)
           : undefined,

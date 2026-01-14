@@ -22,11 +22,9 @@ describe("msteams inbound", () => {
 
   describe("normalizeMSTeamsConversationId", () => {
     it("strips the ;messageid suffix", () => {
-      expect(
-        normalizeMSTeamsConversationId(
-          "19:abc@thread.tacv2;messageid=deadbeef",
-        ),
-      ).toBe("19:abc@thread.tacv2");
+      expect(normalizeMSTeamsConversationId("19:abc@thread.tacv2;messageid=deadbeef")).toBe(
+        "19:abc@thread.tacv2",
+      );
     });
   });
 

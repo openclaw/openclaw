@@ -162,9 +162,7 @@ function buildSkillStatus(
       ? requiredAnyBins
       : [];
   const missingOs =
-    requiredOs.length > 0 && !requiredOs.includes(process.platform)
-      ? requiredOs
-      : [];
+    requiredOs.length > 0 && !requiredOs.includes(process.platform) ? requiredOs : [];
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
@@ -176,16 +174,12 @@ function buildSkillStatus(
     missingEnv.push(envName);
   }
 
-  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map(
-    (pathStr) => {
-      const value = resolveConfigPath(config, pathStr);
-      const satisfied = isConfigPathTruthy(config, pathStr);
-      return { path: pathStr, value, satisfied };
-    },
-  );
-  const missingConfig = configChecks
-    .filter((check) => !check.satisfied)
-    .map((check) => check.path);
+  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map((pathStr) => {
+    const value = resolveConfigPath(config, pathStr);
+    const satisfied = isConfigPathTruthy(config, pathStr);
+    return { path: pathStr, value, satisfied };
+  });
+  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
   const missing = always
     ? { bins: [], anyBins: [], env: [], config: [], os: [] }
@@ -229,10 +223,7 @@ function buildSkillStatus(
     },
     missing,
     configChecks,
-    install: normalizeInstallOptions(
-      entry,
-      prefs ?? resolveSkillsInstallPreferences(config),
-    ),
+    install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
   };
 }
 
@@ -244,16 +235,12 @@ export function buildWorkspaceSkillStatus(
     entries?: SkillEntry[];
   },
 ): SkillStatusReport {
-  const managedSkillsDir =
-    opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const skillEntries =
-    opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const skillEntries = opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
     workspaceDir,
     managedSkillsDir,
-    skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs),
-    ),
+    skills: skillEntries.map((entry) => buildSkillStatus(entry, opts?.config, prefs)),
   };
 }

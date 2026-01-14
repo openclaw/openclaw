@@ -26,9 +26,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
@@ -46,58 +44,50 @@ describe("subscribeEmbeddedPiSession", () => {
     handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "Reasoning:\n_Because it helps_",
-    );
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
     expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   });
-  it.each(
-    THINKING_TAG_CASES,
-  )("promotes <%s> tags to thinking blocks at write-time", ({
-    open,
-    close,
-  }) => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    const onBlockReply = vi.fn();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-      reasoningMode: "on",
-    });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
+  it.each(THINKING_TAG_CASES)(
+    "promotes <%s> tags to thinking blocks at write-time",
+    ({ open, close }) => {
+      let handler: ((evt: unknown) => void) | undefined;
+      const session: StubSession = {
+        subscribe: (fn) => {
+          handler = fn;
+          return () => {};
         },
-      ],
-    } as AssistantMessage;
+      };
 
-    handler?.({ type: "message_end", message: assistantMessage });
+      const onBlockReply = vi.fn();
 
-    expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "Reasoning:\n_Because it helps_",
-    );
-    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+      subscribeEmbeddedPiSession({
+        session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+        runId: "run",
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        reasoningMode: "on",
+      });
 
-    expect(assistantMessage.content).toEqual([
-      { type: "thinking", thinking: "Because it helps" },
-      { type: "text", text: "Final answer" },
-    ]);
-  });
+      const assistantMessage = {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
+          },
+        ],
+      } as AssistantMessage;
+
+      handler?.({ type: "message_end", message: assistantMessage });
+
+      expect(onBlockReply).toHaveBeenCalledTimes(2);
+      expect(onBlockReply.mock.calls[0][0].text).toBe("Reasoning:\n_Because it helps_");
+      expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
+
+      expect(assistantMessage.content).toEqual([
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ]);
+    },
+  );
 });

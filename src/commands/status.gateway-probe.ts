@@ -13,14 +13,11 @@ export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
       ? remote.token.trim()
       : undefined
     : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-      (typeof authToken === "string" && authToken.trim().length > 0
-        ? authToken.trim()
-        : undefined);
+      (typeof authToken === "string" && authToken.trim().length > 0 ? authToken.trim() : undefined);
   const password =
     process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode
-      ? typeof remote?.password === "string" &&
-        remote.password.trim().length > 0
+      ? typeof remote?.password === "string" && remote.password.trim().length > 0
         ? remote.password.trim()
         : undefined
       : typeof authPassword === "string" && authPassword.trim().length > 0
@@ -37,8 +34,7 @@ export function pickGatewaySelfPresence(presence: unknown): {
 } | null {
   if (!Array.isArray(presence)) return null;
   const entries = presence as Array<Record<string, unknown>>;
-  const self =
-    entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
+  const self = entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
   if (!self) return null;
   return {
     host: typeof self.host === "string" ? self.host : undefined,

@@ -32,9 +32,7 @@ export type SignalInstallResult = {
 };
 
 function looksLikeArchive(name: string): boolean {
-  return (
-    name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip")
-  );
+  return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
 }
 
 function pickAsset(assets: ReleaseAsset[], platform: NodeJS.Platform) {
@@ -61,19 +59,14 @@ function pickAsset(assets: ReleaseAsset[], platform: NodeJS.Platform) {
 
   if (platform === "win32") {
     return (
-      byName(/windows|win/) ||
-      withName.find((asset) => looksLikeArchive(asset.name.toLowerCase()))
+      byName(/windows|win/) || withName.find((asset) => looksLikeArchive(asset.name.toLowerCase()))
     );
   }
 
   return withName.find((asset) => looksLikeArchive(asset.name.toLowerCase()));
 }
 
-async function downloadToFile(
-  url: string,
-  dest: string,
-  maxRedirects = 5,
-): Promise<void> {
+async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const req = request(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
@@ -102,9 +95,7 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
   const candidates: string[] = [];
   const enqueue = async (dir: string, depth: number) => {
     if (depth > 3) return;
-    const entries = await fs
-      .readdir(dir, { withFileTypes: true })
-      .catch(() => []);
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -118,9 +109,7 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
   return candidates[0] ?? null;
 }
 
-export async function installSignalCli(
-  runtime: RuntimeEnv,
-): Promise<SignalInstallResult> {
+export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   if (process.platform === "win32") {
     return {
       ok: false,
@@ -128,8 +117,7 @@ export async function installSignalCli(
     };
   }
 
-  const apiUrl =
-    "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
+  const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const response = await fetch(apiUrl, {
     headers: {
       "User-Agent": "clawdbot",
@@ -168,19 +156,13 @@ export async function installSignalCli(
   await fs.mkdir(installRoot, { recursive: true });
 
   if (assetName.endsWith(".zip")) {
-    await runCommandWithTimeout(
-      ["unzip", "-q", archivePath, "-d", installRoot],
-      {
-        timeoutMs: 60_000,
-      },
-    );
+    await runCommandWithTimeout(["unzip", "-q", archivePath, "-d", installRoot], {
+      timeoutMs: 60_000,
+    });
   } else if (assetName.endsWith(".tar.gz") || assetName.endsWith(".tgz")) {
-    await runCommandWithTimeout(
-      ["tar", "-xzf", archivePath, "-C", installRoot],
-      {
-        timeoutMs: 60_000,
-      },
-    );
+    await runCommandWithTimeout(["tar", "-xzf", archivePath, "-C", installRoot], {
+      timeoutMs: 60_000,
+    });
   } else {
     return { ok: false, error: `Unsupported archive type: ${assetName}` };
   }

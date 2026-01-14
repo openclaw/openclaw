@@ -5,11 +5,7 @@ import {
   getRoleSnapshotStats,
   type RoleSnapshotOptions,
 } from "./pw-role-snapshot.js";
-import {
-  ensurePageState,
-  getPageForTargetId,
-  type WithSnapshotForAI,
-} from "./pw-session.js";
+import { ensurePageState, getPageForTargetId, type WithSnapshotForAI } from "./pw-session.js";
 
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
@@ -25,16 +21,11 @@ export async function snapshotAiViaPlaywright(opts: {
 
   const maybe = page as unknown as WithSnapshotForAI;
   if (!maybe._snapshotForAI) {
-    throw new Error(
-      "Playwright _snapshotForAI is not available. Upgrade playwright-core.",
-    );
+    throw new Error("Playwright _snapshotForAI is not available. Upgrade playwright-core.");
   }
 
   const result = await maybe._snapshotForAI({
-    timeout: Math.max(
-      500,
-      Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000)),
-    ),
+    timeout: Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000))),
     track: "response",
   });
   let snapshot = String(result?.full ?? "");
@@ -78,10 +69,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       : page.locator(":root");
 
   const ariaSnapshot = await locator.ariaSnapshot();
-  const built = buildRoleSnapshotFromAriaSnapshot(
-    String(ariaSnapshot ?? ""),
-    opts.options,
-  );
+  const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
   state.roleRefs = built.refs;
   state.roleRefsFrameSelector = frameSelector || undefined;
   return {

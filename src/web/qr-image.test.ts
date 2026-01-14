@@ -18,8 +18,6 @@ describe("renderQrPngBase64", () => {
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');
     expect(source).toContain("qrcode-terminal/vendor/QRCode/index.js");
-    expect(source).toContain(
-      "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js",
-    );
+    expect(source).toContain("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js");
   });
 });

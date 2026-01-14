@@ -149,9 +149,7 @@ describe("pw-tools-core", () => {
     });
 
     expect(waitForTimeout).toHaveBeenCalledWith(50);
-    expect(
-      currentPage.locator as ReturnType<typeof vi.fn>,
-    ).toHaveBeenCalledWith("#main");
+    expect(currentPage.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
     expect(waitForSelector).toHaveBeenCalledWith({
       state: "visible",
       timeout: 1234,

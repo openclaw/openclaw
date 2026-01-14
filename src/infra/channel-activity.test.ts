@@ -39,17 +39,13 @@ describe("channel activity", () => {
       direction: "inbound",
       at: 2,
     });
-    expect(getChannelActivity({ channel: "whatsapp", accountId: "a" })).toEqual(
-      {
-        inboundAt: 1,
-        outboundAt: null,
-      },
-    );
-    expect(getChannelActivity({ channel: "whatsapp", accountId: "b" })).toEqual(
-      {
-        inboundAt: 2,
-        outboundAt: null,
-      },
-    );
+    expect(getChannelActivity({ channel: "whatsapp", accountId: "a" })).toEqual({
+      inboundAt: 1,
+      outboundAt: null,
+    });
+    expect(getChannelActivity({ channel: "whatsapp", accountId: "b" })).toEqual({
+      inboundAt: 2,
+      outboundAt: null,
+    });
   });
 });

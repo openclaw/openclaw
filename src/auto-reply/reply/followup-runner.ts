@@ -66,14 +66,10 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (
-    payloads: ReplyPayload[],
-    queued: FollowupRun,
-  ) => {
+  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
-    const shouldRouteToOriginating =
-      isRoutableChannel(originatingChannel) && originatingTo;
+    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
@@ -168,8 +164,7 @@ export function createFollowupRunner(params: {
               blockReplyBreak: queued.run.blockReplyBreak,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") return;
-                const phase =
-                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const willRetry = Boolean(evt.data.willRetry);
                 if (phase === "end" && !willRetry) {
                   autoCompactionCompleted = true;
@@ -182,9 +177,7 @@ export function createFollowupRunner(params: {
         fallbackModel = fallbackResult.model;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        defaultRuntime.error?.(
-          `Followup agent failed before reply: ${message}`,
-        );
+        defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }
 
@@ -194,16 +187,13 @@ export function createFollowupRunner(params: {
         const text = payload.text;
         if (!text || !text.includes("HEARTBEAT_OK")) return [payload];
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        const hasMedia =
-          Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
         if (stripped.shouldSkip && !hasMedia) return [];
         return [{ ...payload, text: stripped.text }];
       });
       const replyToChannel =
         queued.originatingChannel ??
-        (queued.run.messageProvider?.toLowerCase() as
-          | OriginatingChannelType
-          | undefined);
+        (queued.run.messageProvider?.toLowerCase() as OriginatingChannelType | undefined);
       const replyToMode = resolveReplyToMode(
         queued.run.config,
         replyToChannel,
@@ -247,8 +237,7 @@ export function createFollowupRunner(params: {
 
       if (storePath && sessionKey) {
         const usage = runResult.meta.agentMeta?.usage;
-        const modelUsed =
-          runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+        const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
         const contextTokensUsed =
           agentCfgContextTokens ??
           lookupContextTokens(modelUsed) ??
@@ -263,13 +252,11 @@ export function createFollowupRunner(params: {
               update: async (entry) => {
                 const input = usage.input ?? 0;
                 const output = usage.output ?? 0;
-                const promptTokens =
-                  input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+                const promptTokens = input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
                 return {
                   inputTokens: input,
                   outputTokens: output,
-                  totalTokens:
-                    promptTokens > 0 ? promptTokens : (usage.total ?? input),
+                  totalTokens: promptTokens > 0 ? promptTokens : (usage.total ?? input),
                   modelProvider: fallbackProvider ?? entry.modelProvider,
                   model: modelUsed,
                   contextTokens: contextTokensUsed ?? entry.contextTokens,
@@ -278,9 +265,7 @@ export function createFollowupRunner(params: {
               },
             });
           } catch (err) {
-            logVerbose(
-              `failed to persist followup usage update: ${String(err)}`,
-            );
+            logVerbose(`failed to persist followup usage update: ${String(err)}`);
           }
         } else if (modelUsed || contextTokensUsed) {
           try {
@@ -295,9 +280,7 @@ export function createFollowupRunner(params: {
               }),
             });
           } catch (err) {
-            logVerbose(
-              `failed to persist followup model/context update: ${String(err)}`,
-            );
+            logVerbose(`failed to persist followup model/context update: ${String(err)}`);
           }
         }
       }

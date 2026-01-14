@@ -17,20 +17,13 @@ import {
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 
-type LoadedConfig = ReturnType<
-  typeof import("../../config/config.js").loadConfig
->;
+type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
 type Logger = ReturnType<typeof import("../../logging.js").getChildLogger>;
 
-export type DiscordMessageEvent = Parameters<
-  MessageCreateListener["handle"]
->[0];
+export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
-export type DiscordMessageHandler = (
-  data: DiscordMessageEvent,
-  client: Client,
-) => Promise<void>;
+export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) => Promise<void>;
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
@@ -55,13 +48,8 @@ function logSlowDiscordListener(params: {
   }
 }
 
-export function registerDiscordListener(
-  listeners: Array<object>,
-  listener: object,
-) {
-  if (
-    listeners.some((existing) => existing.constructor === listener.constructor)
-  ) {
+export function registerDiscordListener(listeners: Array<object>, listener: object) {
+  if (listeners.some((existing) => existing.constructor === listener.constructor)) {
     return false;
   }
   listeners.push(listener);
@@ -98,10 +86,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
       accountId: string;
       runtime: RuntimeEnv;
       botUserId?: string;
-      guildEntries?: Record<
-        string,
-        import("./allow-list.js").DiscordGuildEntryResolved
-      >;
+      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
       logger: Logger;
     },
   ) {
@@ -139,10 +124,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
       accountId: string;
       runtime: RuntimeEnv;
       botUserId?: string;
-      guildEntries?: Record<
-        string,
-        import("./allow-list.js").DiscordGuildEntryResolved
-      >;
+      guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
       logger: Logger;
     },
   ) {
@@ -180,10 +162,7 @@ async function handleDiscordReactionEvent(params: {
   cfg: LoadedConfig;
   accountId: string;
   botUserId?: string;
-  guildEntries?: Record<
-    string,
-    import("./allow-list.js").DiscordGuildEntryResolved
-  >;
+  guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
 }) {
   try {
@@ -203,8 +182,7 @@ async function handleDiscordReactionEvent(params: {
 
     const channel = await client.fetchChannel(data.channel_id);
     if (!channel) return;
-    const channelName =
-      "name" in channel ? (channel.name ?? undefined) : undefined;
+    const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
     const channelConfig = resolveDiscordChannelConfig({
       guildInfo,
@@ -233,18 +211,13 @@ async function handleDiscordReactionEvent(params: {
     const emojiLabel = formatDiscordReactionEmoji(data.emoji);
     const actorLabel = formatDiscordUserTag(user);
     const guildSlug =
-      guildInfo?.slug ||
-      (data.guild?.name
-        ? normalizeDiscordSlug(data.guild.name)
-        : data.guild_id);
+      guildInfo?.slug || (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : data.guild_id);
     const channelLabel = channelSlug
       ? `#${channelSlug}`
       : channelName
         ? `#${normalizeDiscordSlug(channelName)}`
         : `#${data.channel_id}`;
-    const authorLabel = message?.author
-      ? formatDiscordUserTag(message.author)
-      : undefined;
+    const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
     const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
     const route = resolveAgentRoute({
@@ -259,8 +232,6 @@ async function handleDiscordReactionEvent(params: {
       contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
     });
   } catch (err) {
-    params.logger.error(
-      danger(`discord reaction handler failed: ${String(err)}`),
-    );
+    params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }
 }

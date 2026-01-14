@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
-import {
-  formatHealthChannelLines,
-  type HealthSummary,
-} from "../../commands/health.js";
+import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
 import { WIDE_AREA_DISCOVERY_DOMAIN } from "../../infra/widearea-dns.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -28,11 +25,7 @@ export function registerGatewayCli(program: Command) {
       .description("Run the WebSocket Gateway")
       .addHelpText(
         "after",
-        () =>
-          `\n${theme.muted("Docs:")} ${formatDocsLink(
-            "/gateway",
-            "docs.clawd.bot/gateway",
-          )}\n`,
+        () => `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway", "docs.clawd.bot/gateway")}\n`,
       ),
   );
 
@@ -48,10 +41,7 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("call")
       .description("Call a Gateway method")
-      .argument(
-        "<method>",
-        "Method name (health/status/system-presence/cron.*)",
-      )
+      .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts) => {
         try {
@@ -86,11 +76,8 @@ export function registerGatewayCli(program: Command) {
           }
           const rich = isRich();
           const obj =
-            result && typeof result === "object"
-              ? (result as Record<string, unknown>)
-              : {};
-          const durationMs =
-            typeof obj.durationMs === "number" ? obj.durationMs : null;
+            result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+          const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
           defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
           defaultRuntime.log(
             `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
@@ -109,23 +96,11 @@ export function registerGatewayCli(program: Command) {
 
   gateway
     .command("status")
-    .description(
-      "Show gateway reachability + discovery + health + status summary (local + remote)",
-    )
-    .option(
-      "--url <url>",
-      "Explicit Gateway WebSocket URL (still probes localhost)",
-    )
-    .option(
-      "--ssh <target>",
-      "SSH target for remote gateway tunnel (user@host or user@host:port)",
-    )
+    .description("Show gateway reachability + discovery + health + status summary (local + remote)")
+    .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
-    .option(
-      "--ssh-auto",
-      "Try to derive an SSH target from Bonjour discovery",
-      false,
-    )
+    .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
     .option("--token <token>", "Gateway token (applies to all probes)")
     .option("--password <password>", "Gateway password (applies to all probes)")
     .option("--timeout <ms>", "Overall probe budget in ms", "3000")

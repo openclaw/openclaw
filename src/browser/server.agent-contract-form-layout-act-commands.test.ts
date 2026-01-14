@@ -106,20 +106,18 @@ const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(
-    async (_resolved: unknown, profile: { cdpPort: number }) => {
-      launchCalls.push({ port: profile.cdpPort });
-      reachable = true;
-      return {
-        pid: 123,
-        exe: { kind: "chrome", path: "/fake/chrome" },
-        userDataDir: "/tmp/clawd",
-        cdpPort: profile.cdpPort,
-        startedAt: Date.now(),
-        proc,
-      };
-    },
-  ),
+  launchClawdChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
+    launchCalls.push({ port: profile.cdpPort });
+    reachable = true;
+    return {
+      pid: 123,
+      exe: { kind: "chrome", path: "/fake/chrome" },
+      userDataDir: "/tmp/clawd",
+      cdpPort: profile.cdpPort,
+      startedAt: Date.now(),
+      proc,
+    };
+  }),
   resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;
@@ -390,9 +388,10 @@ describe("browser control server", () => {
     });
     expect(responseBody).toMatchObject({ ok: true });
 
-    const consoleRes = (await realFetch(`${base}/console?level=error`).then(
-      (r) => r.json(),
-    )) as { ok: boolean; messages?: unknown[] };
+    const consoleRes = (await realFetch(`${base}/console?level=error`).then((r) => r.json())) as {
+      ok: boolean;
+      messages?: unknown[];
+    };
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
 

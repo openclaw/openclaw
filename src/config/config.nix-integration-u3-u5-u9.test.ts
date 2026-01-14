@@ -43,13 +43,10 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("STATE_DIR_CLAWDBOT respects CLAWDBOT_STATE_DIR override", async () => {
-      await withEnvOverride(
-        { CLAWDBOT_STATE_DIR: "/custom/state/dir" },
-        async () => {
-          const { STATE_DIR_CLAWDBOT } = await import("./config.js");
-          expect(STATE_DIR_CLAWDBOT).toBe(path.resolve("/custom/state/dir"));
-        },
-      );
+      await withEnvOverride({ CLAWDBOT_STATE_DIR: "/custom/state/dir" }, async () => {
+        const { STATE_DIR_CLAWDBOT } = await import("./config.js");
+        expect(STATE_DIR_CLAWDBOT).toBe(path.resolve("/custom/state/dir"));
+      });
     });
 
     it("CONFIG_PATH_CLAWDBOT defaults to ~/.clawdbot/clawdbot.json when env not set", async () => {
@@ -57,36 +54,24 @@ describe("Nix integration (U3, U5, U9)", () => {
         { CLAWDBOT_CONFIG_PATH: undefined, CLAWDBOT_STATE_DIR: undefined },
         async () => {
           const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toMatch(
-            /\.clawdbot[\\/]clawdbot\.json$/,
-          );
+          expect(CONFIG_PATH_CLAWDBOT).toMatch(/\.clawdbot[\\/]clawdbot\.json$/);
         },
       );
     });
 
     it("CONFIG_PATH_CLAWDBOT respects CLAWDBOT_CONFIG_PATH override", async () => {
-      await withEnvOverride(
-        { CLAWDBOT_CONFIG_PATH: "/nix/store/abc/clawdbot.json" },
-        async () => {
-          const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toBe(
-            path.resolve("/nix/store/abc/clawdbot.json"),
-          );
-        },
-      );
+      await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "/nix/store/abc/clawdbot.json" }, async () => {
+        const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
+        expect(CONFIG_PATH_CLAWDBOT).toBe(path.resolve("/nix/store/abc/clawdbot.json"));
+      });
     });
 
     it("CONFIG_PATH_CLAWDBOT expands ~ in CLAWDBOT_CONFIG_PATH override", async () => {
       await withTempHome(async (home) => {
-        await withEnvOverride(
-          { CLAWDBOT_CONFIG_PATH: "~/.clawdbot/custom.json" },
-          async () => {
-            const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-            expect(CONFIG_PATH_CLAWDBOT).toBe(
-              path.join(home, ".clawdbot", "custom.json"),
-            );
-          },
-        );
+        await withEnvOverride({ CLAWDBOT_CONFIG_PATH: "~/.clawdbot/custom.json" }, async () => {
+          const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
+          expect(CONFIG_PATH_CLAWDBOT).toBe(path.join(home, ".clawdbot", "custom.json"));
+        });
       });
     });
 
@@ -151,21 +136,13 @@ describe("Nix integration (U3, U5, U9)", () => {
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
 
-        expect(cfg.plugins?.load?.paths?.[0]).toBe(
-          path.join(home, "plugins", "demo-plugin"),
-        );
-        expect(cfg.agents?.defaults?.workspace).toBe(
-          path.join(home, "ws-default"),
-        );
-        expect(cfg.agents?.list?.[0]?.workspace).toBe(
-          path.join(home, "ws-agent"),
-        );
+        expect(cfg.plugins?.load?.paths?.[0]).toBe(path.join(home, "plugins", "demo-plugin"));
+        expect(cfg.agents?.defaults?.workspace).toBe(path.join(home, "ws-default"));
+        expect(cfg.agents?.list?.[0]?.workspace).toBe(path.join(home, "ws-agent"));
         expect(cfg.agents?.list?.[0]?.agentDir).toBe(
           path.join(home, ".clawdbot", "agents", "main"),
         );
-        expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(
-          path.join(home, "sandbox-root"),
-        );
+        expect(cfg.agents?.list?.[0]?.sandbox?.workspaceRoot).toBe(path.join(home, "sandbox-root"));
         expect(cfg.channels?.whatsapp?.accounts?.personal?.authDir).toBe(
           path.join(home, ".clawdbot", "credentials", "wa-personal"),
         );
@@ -176,9 +153,7 @@ describe("Nix integration (U3, U5, U9)", () => {
   describe("U6: gateway port resolution", () => {
     it("uses default when env and config are unset", async () => {
       await withEnvOverride({ CLAWDBOT_GATEWAY_PORT: undefined }, async () => {
-        const { DEFAULT_GATEWAY_PORT, resolveGatewayPort } = await import(
-          "./config.js"
-        );
+        const { DEFAULT_GATEWAY_PORT, resolveGatewayPort } = await import("./config.js");
         expect(resolveGatewayPort({})).toBe(DEFAULT_GATEWAY_PORT);
       });
     });
@@ -234,9 +209,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         vi.resetModules();
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
-        expect(cfg.channels?.telegram?.tokenFile).toBe(
-          "/run/agenix/telegram-token",
-        );
+        expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
         expect(cfg.channels?.telegram?.botToken).toBeUndefined();
       });
     });
@@ -262,9 +235,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
         expect(cfg.channels?.telegram?.botToken).toBe("fallback:token");
-        expect(cfg.channels?.telegram?.tokenFile).toBe(
-          "/run/agenix/telegram-token",
-        );
+        expect(cfg.channels?.telegram?.tokenFile).toBe("/run/agenix/telegram-token");
       });
     });
   });

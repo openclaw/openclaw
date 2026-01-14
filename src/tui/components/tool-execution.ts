@@ -1,8 +1,5 @@
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
-import {
-  formatToolDetail,
-  resolveToolDisplay,
-} from "../../agents/tool-display.js";
+import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 
 type ToolResultContent = {
@@ -124,9 +121,7 @@ export class ToolExecutionComponent extends Container {
     if (!this.expanded && text) {
       const lines = text.split("\n");
       const preview =
-        lines.length > PREVIEW_LINES
-          ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…`
-          : text;
+        lines.length > PREVIEW_LINES ? `${lines.slice(0, PREVIEW_LINES).join("\n")}\n…` : text;
       this.output.setText(preview);
     } else {
       this.output.setText(text);

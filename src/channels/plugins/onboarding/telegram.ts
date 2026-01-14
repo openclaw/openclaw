@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listTelegramAccountIds,
   resolveDefaultTelegramAccountId,
@@ -11,19 +8,14 @@ import {
 } from "../../../telegram/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "telegram" as const;
 
 function setTelegramDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.telegram?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.telegram?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -62,9 +54,7 @@ async function promptTelegramAllowFrom(params: {
   const entry = await prompter.text({
     message: "Telegram allowFrom (user id)",
     placeholder: "123456789",
-    initialValue: existingAllowFrom[0]
-      ? String(existingAllowFrom[0])
-      : undefined,
+    initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
       if (!raw) return "Required";
@@ -105,8 +95,7 @@ async function promptTelegramAllowFrom(params: {
           ...cfg.channels?.telegram?.accounts,
           [accountId]: {
             ...cfg.channels?.telegram?.accounts?.[accountId],
-            enabled:
-              cfg.channels?.telegram?.accounts?.[accountId]?.enabled ?? true,
+            enabled: cfg.channels?.telegram?.accounts?.[accountId]?.enabled ?? true,
             dmPolicy: "allowlist",
             allowFrom: unique,
           },
@@ -135,9 +124,7 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
       channel,
       configured,
       statusLines: [`Telegram: ${configured ? "configured" : "needs token"}`],
-      selectionHint: configured
-        ? "recommended · configured"
-        : "recommended · newcomer-friendly",
+      selectionHint: configured ? "recommended · configured" : "recommended · newcomer-friendly",
       quickstartScore: configured ? 1 : 10,
     };
   },
@@ -171,8 +158,7 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
     });
     const accountConfigured = Boolean(resolvedAccount.token);
     const allowEnv = telegramAccountId === DEFAULT_ACCOUNT_ID;
-    const canUseEnv =
-      allowEnv && Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
+    const canUseEnv = allowEnv && Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
     const hasConfigToken = Boolean(
       resolvedAccount.config.botToken || resolvedAccount.config.tokenFile,
     );
@@ -252,9 +238,7 @@ export const telegramOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.telegram?.accounts,
                 [telegramAccountId]: {
                   ...next.channels?.telegram?.accounts?.[telegramAccountId],
-                  enabled:
-                    next.channels?.telegram?.accounts?.[telegramAccountId]
-                      ?.enabled ?? true,
+                  enabled: next.channels?.telegram?.accounts?.[telegramAccountId]?.enabled ?? true,
                   botToken: token,
                 },
               },

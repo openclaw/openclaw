@@ -1,8 +1,4 @@
-import type {
-  ClawdbotConfig,
-  HumanDelayConfig,
-  IdentityConfig,
-} from "../config/config.js";
+import type { ClawdbotConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
@@ -14,10 +10,7 @@ export function resolveAgentIdentity(
   return resolveAgentConfig(cfg, agentId)?.identity;
 }
 
-export function resolveAckReaction(
-  cfg: ClawdbotConfig,
-  agentId: string,
-): string {
+export function resolveAckReaction(cfg: ClawdbotConfig, agentId: string): string {
   const configured = cfg.messages?.ackReaction;
   if (configured !== undefined) return configured.trim();
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
@@ -44,15 +37,10 @@ export function resolveMessagePrefix(
   const hasAllowFrom = opts?.hasAllowFrom === true;
   if (hasAllowFrom) return "";
 
-  return (
-    resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[clawdbot]"
-  );
+  return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[clawdbot]";
 }
 
-export function resolveResponsePrefix(
-  cfg: ClawdbotConfig,
-  agentId: string,
-): string | undefined {
+export function resolveResponsePrefix(cfg: ClawdbotConfig, agentId: string): string | undefined {
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) {
     if (configured === "auto") {

@@ -6,11 +6,7 @@ function unwrapCause(err: unknown): unknown {
   return cause ?? null;
 }
 
-function enhanceBrowserFetchError(
-  url: string,
-  err: unknown,
-  timeoutMs: number,
-): Error {
+function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
   const cause = unwrapCause(err);
   const code = extractErrorCode(cause) ?? extractErrorCode(err) ?? "";
 
@@ -35,9 +31,7 @@ function enhanceBrowserFetchError(
     );
   }
 
-  return new Error(
-    `Can't reach the clawd browser control server at ${url}. ${hint} (${msg})`,
-  );
+  return new Error(`Can't reach the clawd browser control server at ${url}. ${hint} (${msg})`);
 }
 
 export async function fetchBrowserJson<T>(

@@ -59,8 +59,7 @@ function createUpdateProgress(enabled: boolean): ProgressController {
 
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
-      const icon =
-        step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
+      const icon = step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
@@ -110,11 +109,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   }
 
   const statusColor =
-    result.status === "ok"
-      ? theme.success
-      : result.status === "skipped"
-        ? theme.warn
-        : theme.error;
+    result.status === "ok" ? theme.success : result.status === "skipped" ? theme.warn : theme.error;
 
   defaultRuntime.log("");
   defaultRuntime.log(
@@ -128,8 +123,7 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   }
 
   if (result.before?.version || result.before?.sha) {
-    const before =
-      result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
+    const before = result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
     defaultRuntime.log(`  Before: ${theme.muted(before)}`);
   }
   if (result.after?.version || result.after?.sha) {
@@ -157,15 +151,11 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   }
 
   defaultRuntime.log("");
-  defaultRuntime.log(
-    `Total time: ${theme.muted(formatDuration(result.durationMs))}`,
-  );
+  defaultRuntime.log(`Total time: ${theme.muted(formatDuration(result.durationMs))}`);
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
-  const timeoutMs = opts.timeout
-    ? Number.parseInt(opts.timeout, 10) * 1000
-    : undefined;
+  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
 
   if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
     defaultRuntime.error("--timeout must be a positive integer (seconds)");
@@ -255,18 +245,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       if (!opts.json) {
         defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
         defaultRuntime.log(
-          theme.muted(
-            "You may need to restart the daemon manually: clawdbot daemon restart",
-          ),
+          theme.muted("You may need to restart the daemon manually: clawdbot daemon restart"),
         );
       }
     }
   } else if (!opts.json) {
     defaultRuntime.log("");
     defaultRuntime.log(
-      theme.muted(
-        "Tip: Run `clawdbot daemon restart` to apply updates to a running gateway.",
-      ),
+      theme.muted("Tip: Run `clawdbot daemon restart` to apply updates to a running gateway."),
     );
   }
 }
@@ -276,15 +262,8 @@ export function registerUpdateCli(program: Command) {
     .command("update")
     .description("Update Clawdbot to the latest version")
     .option("--json", "Output result as JSON", false)
-    .option(
-      "--restart",
-      "Restart the gateway daemon after a successful update",
-      false,
-    )
-    .option(
-      "--timeout <seconds>",
-      "Timeout for each update step in seconds (default: 1200)",
-    )
+    .option("--restart", "Restart the gateway daemon after a successful update", false)
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
     .addHelpText(
       "after",
       () =>

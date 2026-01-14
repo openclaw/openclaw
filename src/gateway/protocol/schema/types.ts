@@ -80,11 +80,7 @@ import type {
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
 } from "./sessions.js";
-import type {
-  PresenceEntrySchema,
-  SnapshotSchema,
-  StateVersionSchema,
-} from "./snapshot.js";
+import type { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import type {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,

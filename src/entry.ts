@@ -13,10 +13,7 @@ const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 
 function hasExperimentalWarningSuppressed(nodeOptions: string): boolean {
   if (!nodeOptions) return false;
-  return (
-    nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) ||
-    nodeOptions.includes("--no-warnings")
-  );
+  return nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings");
 }
 
 function ensureExperimentalWarningSuppressed(): void {
@@ -24,16 +21,11 @@ function ensureExperimentalWarningSuppressed(): void {
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
   if (hasExperimentalWarningSuppressed(nodeOptions)) return;
   process.env.CLAWDBOT_NODE_OPTIONS_READY = "1";
-  process.env.NODE_OPTIONS =
-    `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
-  const result = spawnSync(
-    process.execPath,
-    [...process.execArgv, ...process.argv.slice(1)],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
+  process.env.NODE_OPTIONS = `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
+  const result = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: process.env,
+  });
   if (result.signal) process.exit(1);
   process.exit(result.status ?? 1);
 }

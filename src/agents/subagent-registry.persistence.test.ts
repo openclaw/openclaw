@@ -42,9 +42,7 @@ describe("subagent registry persistence", () => {
   });
 
   it("persists runs to disk and resumes after restart", async () => {
-    tempStateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-subagent-"),
-    );
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-subagent-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
 
     vi.resetModules();
@@ -85,9 +83,7 @@ describe("subagent registry persistence", () => {
   });
 
   it("retries announce even when announceHandled was persisted", async () => {
-    tempStateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-subagent-"),
-    );
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-subagent-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
 
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");

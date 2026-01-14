@@ -38,26 +38,19 @@ export async function editChannelDiscord(
   if (payload.position !== undefined) body.position = payload.position;
   if (payload.parentId !== undefined) body.parent_id = payload.parentId;
   if (payload.nsfw !== undefined) body.nsfw = payload.nsfw;
-  if (payload.rateLimitPerUser !== undefined)
-    body.rate_limit_per_user = payload.rateLimitPerUser;
+  if (payload.rateLimitPerUser !== undefined) body.rate_limit_per_user = payload.rateLimitPerUser;
   return (await rest.patch(Routes.channel(payload.channelId), {
     body,
   })) as APIChannel;
 }
 
-export async function deleteChannelDiscord(
-  channelId: string,
-  opts: DiscordReactOpts = {},
-) {
+export async function deleteChannelDiscord(channelId: string, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
   await rest.delete(Routes.channel(channelId));
   return { ok: true, channelId };
 }
 
-export async function moveChannelDiscord(
-  payload: DiscordChannelMove,
-  opts: DiscordReactOpts = {},
-) {
+export async function moveChannelDiscord(payload: DiscordChannelMove, opts: DiscordReactOpts = {}) {
   const rest = resolveDiscordRest(opts);
   const body: Array<Record<string, unknown>> = [
     {
@@ -80,10 +73,7 @@ export async function setChannelPermissionDiscord(
   };
   if (payload.allow !== undefined) body.allow = payload.allow;
   if (payload.deny !== undefined) body.deny = payload.deny;
-  await rest.put(
-    `/channels/${payload.channelId}/permissions/${payload.targetId}`,
-    { body },
-  );
+  await rest.put(`/channels/${payload.channelId}/permissions/${payload.targetId}`, { body });
   return { ok: true };
 }
 

@@ -10,9 +10,7 @@ export const HookMappingSchema = z
       })
       .optional(),
     action: z.union([z.literal("wake"), z.literal("agent")]).optional(),
-    wakeMode: z
-      .union([z.literal("now"), z.literal("next-heartbeat")])
-      .optional(),
+    wakeMode: z.union([z.literal("now"), z.literal("next-heartbeat")]).optional(),
     name: z.string().optional(),
     sessionKey: z.string().optional(),
     messageTemplate: z.string().optional(),
@@ -63,9 +61,7 @@ export const HooksGmailSchema = z
       .optional(),
     tailscale: z
       .object({
-        mode: z
-          .union([z.literal("off"), z.literal("serve"), z.literal("funnel")])
-          .optional(),
+        mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
         path: z.string().optional(),
         target: z.string().optional(),
       })

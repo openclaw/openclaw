@@ -23,21 +23,15 @@ export async function prepareSessionManagerForRun(params: {
   const sm = params.sessionManager as {
     sessionId: string;
     flushed: boolean;
-    fileEntries: Array<
-      SessionHeaderEntry | SessionMessageEntry | { type: string }
-    >;
+    fileEntries: Array<SessionHeaderEntry | SessionMessageEntry | { type: string }>;
     byId?: Map<string, unknown>;
     labelsById?: Map<string, unknown>;
     leafId?: string | null;
   };
 
-  const header = sm.fileEntries.find(
-    (e): e is SessionHeaderEntry => e.type === "session",
-  );
+  const header = sm.fileEntries.find((e): e is SessionHeaderEntry => e.type === "session");
   const hasAssistant = sm.fileEntries.some(
-    (e) =>
-      e.type === "message" &&
-      (e as SessionMessageEntry).message?.role === "assistant",
+    (e) => e.type === "message" && (e as SessionMessageEntry).message?.role === "assistant",
   );
 
   if (!params.hadSessionFile && header) {

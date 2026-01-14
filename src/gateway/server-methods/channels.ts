@@ -6,10 +6,7 @@ import {
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-} from "../../channels/plugins/types.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -44,10 +41,7 @@ export async function logoutChannelAccount(params: {
     params.plugin.config.defaultAccountId?.(params.cfg) ||
     params.plugin.config.listAccountIds(params.cfg)[0] ||
     DEFAULT_ACCOUNT_ID;
-  const account = params.plugin.config.resolveAccount(
-    params.cfg,
-    resolvedAccountId,
-  );
+  const account = params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
   await params.context.stopChannel(params.channelId, resolvedAccountId);
   const result = await params.plugin.gateway?.logoutAccount?.({
     cfg: params.cfg,
@@ -59,14 +53,9 @@ export async function logoutChannelAccount(params: {
     throw new Error(`Channel ${params.channelId} does not support logout`);
   }
   const cleared = Boolean(result.cleared);
-  const loggedOut =
-    typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
+  const loggedOut = typeof result.loggedOut === "boolean" ? result.loggedOut : cleared;
   if (loggedOut) {
-    params.context.markChannelLoggedOut(
-      params.channelId,
-      true,
-      resolvedAccountId,
-    );
+    params.context.markChannelLoggedOut(params.channelId, true, resolvedAccountId);
   }
   return {
     channel: params.channelId,
@@ -91,8 +80,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs =
-      typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
+    const timeoutMs = typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
     const cfg = loadConfig();
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
@@ -108,8 +96,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const accounts = runtime.channelAccounts[channelId];
       const defaultRuntime = runtime.channels[channelId];
       const raw =
-        accounts?.[accountId] ??
-        (accountId === defaultAccountId ? defaultRuntime : undefined);
+        accounts?.[accountId] ?? (accountId === defaultAccountId ? defaultRuntime : undefined);
       if (!raw) return undefined;
       return raw;
     };
@@ -174,11 +161,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
             });
           }
         }
-        const runtimeSnapshot = resolveRuntimeSnapshot(
-          channelId,
-          accountId,
-          defaultAccountId,
-        );
+        const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
         const snapshot = await buildChannelAccountSnapshot({
           plugin,
           cfg,
@@ -201,33 +184,26 @@ export const channelsHandlers: GatewayRequestHandlers = {
         accounts.push(snapshot);
       }
       const defaultAccount =
-        accounts.find((entry) => entry.accountId === defaultAccountId) ??
-        accounts[0];
+        accounts.find((entry) => entry.accountId === defaultAccountId) ?? accounts[0];
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: plugins.map((plugin) => plugin.id),
-      channelLabels: Object.fromEntries(
-        plugins.map((plugin) => [plugin.id, plugin.meta.label]),
-      ),
+      channelLabels: Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.meta.label])),
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,
     };
     const channelsMap = payload.channels as Record<string, unknown>;
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
-    const defaultAccountIdMap = payload.channelDefaultAccountId as Record<
-      string,
-      unknown
-    >;
+    const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     for (const plugin of plugins) {
       const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
         await buildChannelAccounts(plugin.id);
       const fallbackAccount =
-        resolvedAccounts[defaultAccountId] ??
-        plugin.config.resolveAccount(cfg, defaultAccountId);
+        resolvedAccounts[defaultAccountId] ?? plugin.config.resolveAccount(cfg, defaultAccountId);
       const summary = plugin.status?.buildChannelSummary
         ? await plugin.status.buildChannelSummary({
             account: fallbackAccount,
@@ -262,16 +238,12 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId =
-      typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid channels.logout channel",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.logout channel"),
       );
       return;
     }
@@ -280,25 +252,18 @@ export const channelsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `channel ${channelId} does not support logout`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${channelId} does not support logout`),
       );
       return;
     }
     const accountIdRaw = (params as { accountId?: unknown }).accountId;
-    const accountId =
-      typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
+    const accountId = typeof accountIdRaw === "string" ? accountIdRaw.trim() : undefined;
     const snapshot = await readConfigFileSnapshot();
     if (!snapshot.valid) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "config invalid; fix it before logging out",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "config invalid; fix it before logging out"),
       );
       return;
     }
@@ -312,11 +277,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       });
       respond(true, payload, undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
 };

@@ -3,18 +3,15 @@ import type { LegacyConfigRule } from "./legacy.shared.js";
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
-    message:
-      "whatsapp config moved to channels.whatsapp (auto-migrated on load).",
+    message: "whatsapp config moved to channels.whatsapp (auto-migrated on load).",
   },
   {
     path: ["telegram"],
-    message:
-      "telegram config moved to channels.telegram (auto-migrated on load).",
+    message: "telegram config moved to channels.telegram (auto-migrated on load).",
   },
   {
     path: ["discord"],
-    message:
-      "discord config moved to channels.discord (auto-migrated on load).",
+    message: "discord config moved to channels.discord (auto-migrated on load).",
   },
   {
     path: ["slack"],
@@ -26,13 +23,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["imessage"],
-    message:
-      "imessage config moved to channels.imessage (auto-migrated on load).",
+    message: "imessage config moved to channels.imessage (auto-migrated on load).",
   },
   {
     path: ["msteams"],
-    message:
-      "msteams config moved to channels.msteams (auto-migrated on load).",
+    message: "msteams config moved to channels.msteams (auto-migrated on load).",
   },
   {
     path: ["routing", "allowFrom"],
@@ -41,13 +36,11 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["routing", "bindings"],
-    message:
-      "routing.bindings was moved; use top-level bindings instead (auto-migrated on load).",
+    message: "routing.bindings was moved; use top-level bindings instead (auto-migrated on load).",
   },
   {
     path: ["routing", "agents"],
-    message:
-      "routing.agents was moved; use agents.list instead (auto-migrated on load).",
+    message: "routing.agents was moved; use agents.list instead (auto-migrated on load).",
   },
   {
     path: ["routing", "defaultAgentId"],
@@ -71,8 +64,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["routing", "queue"],
-    message:
-      "routing.queue was moved; use messages.queue instead (auto-migrated on load).",
+    message: "routing.queue was moved; use messages.queue instead (auto-migrated on load).",
   },
   {
     path: ["routing", "transcribeAudio"],
@@ -86,8 +78,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["identity"],
-    message:
-      "identity was moved; use agents.list[].identity instead (auto-migrated on load).",
+    message: "identity was moved; use agents.list[].identity instead (auto-migrated on load).",
   },
   {
     path: ["agent"],
@@ -108,8 +99,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["agent", "allowedModels"],
-    message:
-      "agent.allowedModels was replaced by agents.defaults.models (auto-migrated on load).",
+    message: "agent.allowedModels was replaced by agents.defaults.models (auto-migrated on load).",
   },
   {
     path: ["agent", "modelAliases"],
@@ -128,7 +118,6 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   },
   {
     path: ["gateway", "token"],
-    message:
-      "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
+    message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
 ];

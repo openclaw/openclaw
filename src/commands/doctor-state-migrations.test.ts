@@ -15,9 +15,7 @@ import {
 let tempRoot: string | null = null;
 
 async function makeTempRoot() {
-  const root = await fs.promises.mkdtemp(
-    path.join(os.tmpdir(), "clawdbot-doctor-"),
-  );
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "clawdbot-doctor-"));
   tempRoot = root;
   return root;
 }
@@ -94,9 +92,7 @@ describe("doctor legacy state migrations", () => {
     });
     await runLegacyStateMigrations({ detected, now: () => 123 });
 
-    expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe(
-      "legacy2",
-    );
+    expect(fs.readFileSync(path.join(targetAgentDir, "baz.txt"), "utf-8")).toBe("legacy2");
     const backupDir = path.join(root, "agents", "main", "agent.legacy-123");
     expect(fs.existsSync(path.join(backupDir, "foo.txt"))).toBe(true);
   });

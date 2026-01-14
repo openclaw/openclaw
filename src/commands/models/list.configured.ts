@@ -43,12 +43,9 @@ export function resolveConfiguredEntries(cfg: ClawdbotConfig) {
   const imageModelConfig = cfg.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
-  const modelFallbacks =
-    typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
+  const modelFallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
   const imageFallbacks =
-    typeof imageModelConfig === "object"
-      ? (imageModelConfig?.fallbacks ?? [])
-      : [];
+    typeof imageModelConfig === "object" ? (imageModelConfig?.fallbacks ?? []) : [];
   const imagePrimary = imageModelConfig?.primary?.trim() ?? "";
 
   modelFallbacks.forEach((raw, idx) => {

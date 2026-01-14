@@ -5,14 +5,8 @@ import path from "node:path";
 import type { Command } from "commander";
 
 import { loadConfig } from "../config/config.js";
-import {
-  pickPrimaryTailnetIPv4,
-  pickPrimaryTailnetIPv6,
-} from "../infra/tailnet.js";
-import {
-  getWideAreaZonePath,
-  WIDE_AREA_DISCOVERY_DOMAIN,
-} from "../infra/widearea-dns.js";
+import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { getWideAreaZonePath, WIDE_AREA_DISCOVERY_DOMAIN } from "../infra/widearea-dns.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
 
@@ -50,9 +44,7 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
   });
   if (res.error) throw res.error;
   if (res.status !== 0) {
-    throw new Error(
-      `sudo tee ${filePath} failed: exit ${res.status ?? "unknown"}`,
-    );
+    throw new Error(`sudo tee ${filePath} failed: exit ${res.status ?? "unknown"}`);
   }
 }
 
@@ -102,9 +94,7 @@ export function registerDnsCli(program: Command) {
 
   dns
     .command("setup")
-    .description(
-      "Set up CoreDNS to serve clawdbot.internal for unicast DNS-SD (Wide-Area Bonjour)",
-    )
+    .description("Set up CoreDNS to serve clawdbot.internal for unicast DNS-SD (Wide-Area Bonjour)")
     .option(
       "--apply",
       "Install/update CoreDNS config and (re)start the service (requires sudo)",
@@ -135,9 +125,7 @@ export function registerDnsCli(program: Command) {
       );
       console.log("");
       console.log("Tailscale admin (DNS → Nameservers):");
-      console.log(
-        `- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
-      );
+      console.log(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`);
       console.log(`- Restrict to domain (Split DNS): clawdbot.internal`);
 
       if (!opts.apply) {
@@ -150,9 +138,7 @@ export function registerDnsCli(program: Command) {
         throw new Error("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error(
-          "no tailnet IP detected; ensure Tailscale is running on this machine",
-        );
+        throw new Error("no tailnet IP detected; ensure Tailscale is running on this machine");
       }
 
       const prefix = detectBrewPrefix();
@@ -176,9 +162,7 @@ export function registerDnsCli(program: Command) {
         ensureImportLine(corefilePath, importGlob);
       }
 
-      const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string =>
-        Boolean(v?.trim()),
-      );
+      const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
 
       const server = [
         `${WIDE_AREA_DISCOVERY_DOMAIN.replace(/\.$/, "")}:53 {`,

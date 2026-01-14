@@ -4,10 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
-import {
-  buildAgentMainSessionKey,
-  normalizeAgentId,
-} from "../routing/session-key.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
@@ -106,8 +103,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
 
   return {
     message: lastUser,
-    extraSystemPrompt:
-      systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
   };
 }
 
@@ -120,9 +116,7 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   return normalizeAgentId(raw);
 }
 
-function resolveAgentIdFromModel(
-  model: string | undefined,
-): string | undefined {
+function resolveAgentIdFromModel(model: string | undefined): string | undefined {
   const raw = model?.trim();
   if (!raw) return undefined;
 
@@ -169,10 +163,7 @@ export async function handleOpenAiHttpRequest(
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(
-    req.url ?? "/",
-    `http://${req.headers.host || "localhost"}`,
-  );
+  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
   if (url.pathname !== "/v1/chat/completions") return false;
 
   if (req.method !== "POST") {
@@ -241,9 +232,7 @@ export async function handleOpenAiHttpRequest(
         deps,
       );
 
-      const payloads = (
-        result as { payloads?: Array<{ text?: string }> } | null
-      )?.payloads;
+      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
@@ -291,12 +280,7 @@ export async function handleOpenAiHttpRequest(
     if (evt.stream === "assistant") {
       const delta = evt.data?.delta;
       const text = evt.data?.text;
-      const content =
-        typeof delta === "string"
-          ? delta
-          : typeof text === "string"
-            ? text
-            : "";
+      const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
       if (!content) return;
 
       if (!wroteRole) {
@@ -373,9 +357,7 @@ export async function handleOpenAiHttpRequest(
           });
         }
 
-        const payloads = (
-          result as { payloads?: Array<{ text?: string }> } | null
-        )?.payloads;
+        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
         const content =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads

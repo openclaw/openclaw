@@ -38,8 +38,7 @@ describeLive("pi embedded extra params (live)", () => {
         messages: [
           {
             role: "user",
-            content:
-              "Write the alphabet letters A through Z as words separated by commas.",
+            content: "Write the alphabet letters A through Z as words separated by commas.",
             timestamp: Date.now(),
           },
         ],

@@ -3,15 +3,9 @@ import {
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
 } from "../../agents/identity.js";
-import {
-  formatAgentEnvelope,
-  formatThreadStarterEnvelope,
-} from "../../auto-reply/envelope.js";
+import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import {
-  buildHistoryContextFromMap,
-  clearHistoryEntries,
-} from "../../auto-reply/reply/history.js";
+import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
@@ -28,11 +22,7 @@ import {
   resolveDiscordMessageText,
   resolveMediaList,
 } from "./message-utils.js";
-import {
-  buildDirectLabel,
-  buildGuildLabel,
-  resolveReplyContext,
-} from "./reply-context.js";
+import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   maybeCreateDiscordAutoThread,
@@ -41,9 +31,7 @@ import {
 } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
-export async function processDiscordMessage(
-  ctx: DiscordMessagePreflightContext,
-) {
+export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
     cfg,
     discordConfig,
@@ -115,9 +103,7 @@ export async function processDiscordMessage(
       }).then(
         () => true,
         (err) => {
-          logVerbose(
-            `discord react failed for channel ${message.channelId}: ${String(err)}`,
-          );
+          logVerbose(`discord react failed for channel ${message.channelId}: ${String(err)}`);
           return false;
         },
       )
@@ -130,8 +116,7 @@ export async function processDiscordMessage(
         channelName: channelName ?? message.channelId,
         channelId: message.channelId,
       });
-  const groupRoom =
-    isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
+  const groupRoom = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupRoom;
   const channelDescription = channelInfo?.topic?.trim();
   const systemPromptParts = [
@@ -216,9 +201,7 @@ export async function processDiscordMessage(
     Body: combinedBody,
     RawBody: baseText,
     CommandBody: baseText,
-    From: isDirectMessage
-      ? `discord:${author.id}`
-      : `group:${message.channelId}`,
+    From: isDirectMessage ? `discord:${author.id}` : `group:${message.channelId}`,
     To: discordTo,
     SessionKey: threadKeys.sessionKey,
     AccountId: route.accountId,
@@ -230,9 +213,7 @@ export async function processDiscordMessage(
     GroupSubject: groupSubject,
     GroupRoom: groupRoom,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
-    GroupSpace: isGuildMessage
-      ? (guildInfo?.id ?? guildSlug) || undefined
-      : undefined,
+    GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: effectiveWasMentioned,
@@ -295,34 +276,30 @@ export async function processDiscordMessage(
   }
 
   let didSendReply = false;
-  const { dispatcher, replyOptions, markDispatchIdle } =
-    createReplyDispatcherWithTyping({
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-        .responsePrefix,
-      humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-      deliver: async (payload: ReplyPayload) => {
-        const replyToId = replyReference.use();
-        await deliverDiscordReply({
-          replies: [payload],
-          target: deliverTarget,
-          token,
-          accountId,
-          rest: client.rest,
-          runtime,
-          replyToId,
-          textLimit,
-          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-        });
-        didSendReply = true;
-        replyReference.markSent();
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          danger(`discord ${info.kind} reply failed: ${String(err)}`),
-        );
-      },
-      onReplyStart: () => sendTyping({ client, channelId: message.channelId }),
-    });
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    deliver: async (payload: ReplyPayload) => {
+      const replyToId = replyReference.use();
+      await deliverDiscordReply({
+        replies: [payload],
+        target: deliverTarget,
+        token,
+        accountId,
+        rest: client.rest,
+        runtime,
+        replyToId,
+        textLimit,
+        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+      });
+      didSendReply = true;
+      replyReference.markSent();
+    },
+    onError: (err, info) => {
+      runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
+    },
+    onReplyStart: () => sendTyping({ client, channelId: message.channelId }),
+  });
 
   const { queuedFinal, counts } = await dispatchReplyFromConfig({
     ctx: ctxPayload,
@@ -339,12 +316,7 @@ export async function processDiscordMessage(
   });
   markDispatchIdle();
   if (!queuedFinal) {
-    if (
-      isGuildMessage &&
-      shouldClearHistory &&
-      historyLimit > 0 &&
-      didSendReply
-    ) {
+    if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
       clearHistoryEntries({
         historyMap: guildHistories,
         historyKey: message.channelId,
@@ -372,12 +344,7 @@ export async function processDiscordMessage(
       });
     });
   }
-  if (
-    isGuildMessage &&
-    shouldClearHistory &&
-    historyLimit > 0 &&
-    didSendReply
-  ) {
+  if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
     clearHistoryEntries({
       historyMap: guildHistories,
       historyKey: message.channelId,

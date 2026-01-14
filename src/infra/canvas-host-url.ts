@@ -46,19 +46,11 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
 
   const scheme =
     params.scheme ??
-    (parseForwardedProto(params.forwardedProto)?.trim() === "https"
-      ? "https"
-      : "http");
+    (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
 
   const override = normalizeHost(params.hostOverride, true);
-  const requestHost = normalizeHost(
-    parseHostHeader(params.requestHost),
-    !!override,
-  );
-  const localAddress = normalizeHost(
-    params.localAddress,
-    Boolean(override || requestHost),
-  );
+  const requestHost = normalizeHost(parseHostHeader(params.requestHost), !!override);
+  const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
 
   const host = override || requestHost || localAddress;
   if (!host) return undefined;

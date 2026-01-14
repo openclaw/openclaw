@@ -49,12 +49,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   });
 
   handler.onMembersAdded(async (context, next) => {
-    const membersAdded =
-      (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
+    const membersAdded = (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
     for (const member of membersAdded) {
-      if (
-        member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id
-      ) {
+      if (member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id) {
         deps.log.debug("member added", { member: member.id });
         // Don't send welcome message - let the user initiate conversation.
       }

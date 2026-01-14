@@ -8,10 +8,7 @@ export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
   withMessageTarget: (command: Command) => Command;
   withRequiredMessageTarget: (command: Command) => Command;
-  runMessageAction: (
-    action: string,
-    opts: Record<string, unknown>,
-  ) => Promise<void>;
+  runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
 };
 
 export function createMessageCliHelpers(
@@ -37,10 +34,7 @@ export function createMessageCliHelpers(
       "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
     );
 
-  const runMessageAction = async (
-    action: string,
-    opts: Record<string, unknown>,
-  ) => {
+  const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));
     const deps = createDefaultDeps();
     try {

@@ -21,27 +21,16 @@ export function isMessagingToolDuplicateNormalized(
   normalizedSentTexts: string[],
 ): boolean {
   if (normalizedSentTexts.length === 0) return false;
-  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
-    return false;
+  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) return false;
   return normalizedSentTexts.some((normalizedSent) => {
-    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH)
-      return false;
-    return (
-      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
-    );
+    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH) return false;
+    return normalized.includes(normalizedSent) || normalizedSent.includes(normalized);
   });
 }
 
-export function isMessagingToolDuplicate(
-  text: string,
-  sentTexts: string[],
-): boolean {
+export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boolean {
   if (sentTexts.length === 0) return false;
   const normalized = normalizeTextForComparison(text);
-  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
-    return false;
-  return isMessagingToolDuplicateNormalized(
-    normalized,
-    sentTexts.map(normalizeTextForComparison),
-  );
+  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) return false;
+  return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
 }

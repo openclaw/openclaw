@@ -51,9 +51,7 @@ export class IMessageRpcClient {
 
   constructor(opts: IMessageRpcClientOptions = {}) {
     this.cliPath = opts.cliPath?.trim() || "imsg";
-    this.dbPath = opts.dbPath?.trim()
-      ? resolveUserPath(opts.dbPath)
-      : undefined;
+    this.dbPath = opts.dbPath?.trim() ? resolveUserPath(opts.dbPath) : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
     this.closed = new Promise((resolve) => {

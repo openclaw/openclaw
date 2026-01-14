@@ -15,10 +15,7 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
-import {
-  createSubsystemLogger,
-  setConsoleSubsystemFilter,
-} from "../../logging.js";
+import { createSubsystemLogger, setConsoleSubsystemFilter } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
@@ -57,12 +54,8 @@ type GatewayRunParams = {
 
 const gatewayLog = createSubsystemLogger("gateway");
 
-async function runGatewayCommand(
-  opts: GatewayRunOpts,
-  params: GatewayRunParams = {},
-) {
-  const isDevProfile =
-    process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() === "dev";
+async function runGatewayCommand(opts: GatewayRunOpts, params: GatewayRunParams = {}) {
+  const isDevProfile = process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
@@ -81,9 +74,7 @@ async function runGatewayCommand(
     setConsoleSubsystemFilter(["agent/claude-cli"]);
     process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT = "1";
   }
-  const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as
-    | string
-    | undefined;
+  const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as string | undefined;
   const wsLogStyle: GatewayWsLogStyle =
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
   if (
@@ -122,12 +113,11 @@ async function runGatewayCommand(
   }
   if (opts.force) {
     try {
-      const { killed, waitedMs, escalatedToSigkill } =
-        await forceFreePortAndWait(port, {
-          timeoutMs: 2000,
-          intervalMs: 100,
-          sigtermTimeoutMs: 700,
-        });
+      const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
+        timeoutMs: 2000,
+        intervalMs: 100,
+        sigtermTimeoutMs: 700,
+      });
       if (killed.length === 0) {
         gatewayLog.info(`force: no listeners on port ${port}`);
       } else {
@@ -137,14 +127,10 @@ async function runGatewayCommand(
           );
         }
         if (escalatedToSigkill) {
-          gatewayLog.info(
-            `force: escalated to SIGKILL while freeing port ${port}`,
-          );
+          gatewayLog.info(`force: escalated to SIGKILL while freeing port ${port}`);
         }
         if (waitedMs > 0) {
-          gatewayLog.info(
-            `force: waited ${waitedMs}ms for port ${port} to free`,
-          );
+          gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`);
         }
       }
     } catch (err) {
@@ -167,15 +153,11 @@ async function runGatewayCommand(
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
   const tailscaleMode =
-    tailscaleRaw === "off" ||
-    tailscaleRaw === "serve" ||
-    tailscaleRaw === "funnel"
+    tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
       ? tailscaleRaw
       : null;
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error(
-      'Invalid --tailscale (use "off", "serve", or "funnel")',
-    );
+    defaultRuntime.error('Invalid --tailscale (use "off", "serve", or "funnel")');
     defaultRuntime.exit(1);
     return;
   }
@@ -199,16 +181,11 @@ async function runGatewayCommand(
   }
   const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
   const bind =
-    bindRaw === "loopback" ||
-    bindRaw === "lan" ||
-    bindRaw === "auto" ||
-    bindRaw === "custom"
+    bindRaw === "loopback" || bindRaw === "lan" || bindRaw === "auto" || bindRaw === "custom"
       ? bindRaw
       : null;
   if (!bind) {
-    defaultRuntime.error(
-      'Invalid --bind (use "loopback", "lan", "auto", or "custom")',
-    );
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "auto", or "custom")');
     defaultRuntime.exit(1);
     return;
   }
@@ -231,9 +208,7 @@ async function runGatewayCommand(
   const passwordValue = resolvedAuth.password;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
-    authHints.push(
-      'Found "gateway.token" in config. Use "gateway.auth.token" instead.',
-    );
+    authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
   }
   if (miskeys.hasRemoteToken) {
     authHints.push(
@@ -306,9 +281,7 @@ async function runGatewayCommand(
   } catch (err) {
     if (
       err instanceof GatewayLockError ||
-      (err &&
-        typeof err === "object" &&
-        (err as { name?: string }).name === "GatewayLockError")
+      (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
@@ -333,10 +306,7 @@ async function runGatewayCommand(
   }
 }
 
-export function addGatewayRunCommand(
-  cmd: Command,
-  params: GatewayRunParams = {},
-): Command {
+export function addGatewayRunCommand(cmd: Command, params: GatewayRunParams = {}): Command {
   return cmd
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
@@ -349,10 +319,7 @@ export function addGatewayRunCommand(
     )
     .option("--auth <mode>", 'Gateway auth mode ("token"|"password")')
     .option("--password <password>", "Password for auth mode=password")
-    .option(
-      "--tailscale <mode>",
-      'Tailscale exposure mode ("off"|"serve"|"funnel")',
-    )
+    .option("--tailscale <mode>", 'Tailscale exposure mode ("off"|"serve"|"funnel")')
     .option(
       "--tailscale-reset-on-exit",
       "Reset Tailscale serve/funnel configuration on shutdown",
@@ -363,32 +330,20 @@ export function addGatewayRunCommand(
       "Allow gateway start without gateway.mode=local in config",
       false,
     )
-    .option(
-      "--dev",
-      "Create a dev config + workspace if missing (no BOOTSTRAP.md)",
-      false,
-    )
+    .option("--dev", "Create a dev config + workspace if missing (no BOOTSTRAP.md)", false)
     .option(
       "--reset",
       "Reset dev config + credentials + sessions + workspace (requires --dev)",
       false,
     )
-    .option(
-      "--force",
-      "Kill any existing listener on the target port before starting",
-      false,
-    )
+    .option("--force", "Kill any existing listener on the target port before starting", false)
     .option("--verbose", "Verbose logging to stdout/stderr", false)
     .option(
       "--claude-cli-logs",
       "Only show claude-cli logs in the console (includes stdout/stderr)",
       false,
     )
-    .option(
-      "--ws-log <style>",
-      'WebSocket log style ("auto"|"full"|"compact")',
-      "auto",
-    )
+    .option("--ws-log <style>", 'WebSocket log style ("auto"|"full"|"compact")', "auto")
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")

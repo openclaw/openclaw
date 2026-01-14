@@ -71,11 +71,7 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(
-      [
-        "-----BEGIN PRIVATE KEY-----",
-        "…redacted…",
-        "-----END PRIVATE KEY-----",
-      ].join("\n"),
+      ["-----BEGIN PRIVATE KEY-----", "…redacted…", "-----END PRIVATE KEY-----"].join("\n"),
     );
   });
 

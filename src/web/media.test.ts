@@ -64,10 +64,7 @@ describe("web media loading", () => {
       status: 200,
     } as Response);
 
-    const result = await loadWebMedia(
-      "https://example.com/download",
-      1024 * 1024,
-    );
+    const result = await loadWebMedia("https://example.com/download", 1024 * 1024);
 
     expect(result.kind).toBe("document");
     expect(result.contentType).toBe("application/pdf");
@@ -87,9 +84,7 @@ describe("web media loading", () => {
       url: "https://example.com/missing.jpg",
     } as Response);
 
-    await expect(
-      loadWebMedia("https://example.com/missing.jpg", 1024 * 1024),
-    ).rejects.toThrow(
+    await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
     );
 
@@ -113,10 +108,7 @@ describe("web media loading", () => {
       status: 200,
     } as Response);
 
-    const result = await loadWebMedia(
-      "https://example.com/download?id=1",
-      1024 * 1024,
-    );
+    const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
     expect(result.kind).toBe("document");
     expect(result.fileName).toBe("report.pdf");
@@ -172,27 +164,20 @@ describe("web media loading", () => {
 
   it("preserves GIF from URL without JPEG conversion", async () => {
     const gifBytes = new Uint8Array([
-      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
-      0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02,
-      0x01, 0x44, 0x00, 0x3b,
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
     ]);
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
       body: true,
       arrayBuffer: async () =>
-        gifBytes.buffer.slice(
-          gifBytes.byteOffset,
-          gifBytes.byteOffset + gifBytes.byteLength,
-        ),
+        gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
       headers: { get: () => "image/gif" },
       status: 200,
     } as Response);
 
-    const result = await loadWebMedia(
-      "https://example.com/animation.gif",
-      1024 * 1024,
-    );
+    const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/gif");

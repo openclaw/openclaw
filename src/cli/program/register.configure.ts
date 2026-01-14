@@ -25,9 +25,7 @@ export function registerConfigureCommand(program: Command) {
         try {
           const sections: string[] = Array.isArray(opts.section)
             ? opts.section
-                .map((value: unknown) =>
-                  typeof value === "string" ? value.trim() : "",
-                )
+                .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))
                 .filter(Boolean)
             : [];
           if (sections.length === 0) {
@@ -35,9 +33,7 @@ export function registerConfigureCommand(program: Command) {
             return;
           }
 
-          const invalid = sections.filter(
-            (s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never),
-          );
+          const invalid = sections.filter((s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never));
           if (invalid.length > 0) {
             defaultRuntime.error(
               `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,

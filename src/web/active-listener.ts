@@ -76,9 +76,7 @@ export function setActiveWebListener(
   }
 }
 
-export function getActiveWebListener(
-  accountId?: string | null,
-): ActiveWebListener | null {
+export function getActiveWebListener(accountId?: string | null): ActiveWebListener | null {
   const id = resolveWebAccountId(accountId);
   return listeners.get(id) ?? null;
 }

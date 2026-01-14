@@ -31,8 +31,7 @@ export async function promptRemoteGatewayConfig(
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
 
-  const hasBonjourTool =
-    (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
+  const hasBonjourTool = (await detectBinary("dns-sd")) || (await detectBinary("avahi-browse"));
   const wantsDiscover = hasBonjourTool
     ? await prompter.confirm({
         message: "Discover gateway on LAN (Bonjour)?",
@@ -53,11 +52,7 @@ export async function promptRemoteGatewayConfig(
   if (wantsDiscover) {
     const spin = prompter.progress("Searching for gateways…");
     const beacons = await discoverGatewayBeacons({ timeoutMs: 2000 });
-    spin.stop(
-      beacons.length > 0
-        ? `Found ${beacons.length} gateway(s)`
-        : "No gateways found",
-    );
+    spin.stop(beacons.length > 0 ? `Found ${beacons.length} gateway(s)` : "No gateways found");
 
     if (beacons.length > 0) {
       const selection = await prompter.select({
@@ -113,8 +108,7 @@ export async function promptRemoteGatewayConfig(
     message: "Gateway WebSocket URL",
     initialValue: suggestedUrl,
     validate: (value) =>
-      String(value).trim().startsWith("ws://") ||
-      String(value).trim().startsWith("wss://")
+      String(value).trim().startsWith("ws://") || String(value).trim().startsWith("wss://")
         ? undefined
         : "URL must start with ws:// or wss://",
   });

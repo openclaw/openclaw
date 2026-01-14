@@ -10,18 +10,13 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { monitorWebChannel } from "./auto-reply.js";
-import {
-  resetBaileysMocks,
-  resetLoadConfigMock,
-  setLoadConfigMock,
-} from "./test-helpers.js";
+import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
 let previousHome: string | undefined;
 let tempHome: string | undefined;
@@ -147,18 +142,13 @@ describe("web auto-reply", () => {
     closeResolvers[0]?.();
     const waitForSecondCall = async () => {
       const started = Date.now();
-      while (
-        listenerFactory.mock.calls.length < 2 &&
-        Date.now() - started < 200
-      ) {
+      while (listenerFactory.mock.calls.length < 2 && Date.now() - started < 200) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     };
     await waitForSecondCall();
     expect(listenerFactory).toHaveBeenCalledTimes(2);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Retry 1"),
-    );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
 
     controller.abort();
     closeResolvers[1]?.();
@@ -174,9 +164,7 @@ describe("web auto-reply", () => {
       | undefined;
     const listenerFactory = vi.fn(
       async (opts: {
-        onMessage: (
-          msg: import("./inbound.js").WebInboundMessage,
-        ) => Promise<void>;
+        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
       }) => {
         capturedOnMessage = opts.onMessage;
         let resolveClose: (reason: unknown) => void = () => {};
@@ -240,52 +228,46 @@ describe("web auto-reply", () => {
     await run;
   }, 15_000);
 
-  it(
-    "stops after hitting max reconnect attempts",
-    { timeout: 20000 },
-    async () => {
-      const closeResolvers: Array<() => void> = [];
-      const sleep = vi.fn(async () => {});
-      const listenerFactory = vi.fn(async () => {
-        const onClose = new Promise<void>((res) => closeResolvers.push(res));
-        return { close: vi.fn(), onClose };
-      });
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
+  it("stops after hitting max reconnect attempts", { timeout: 20000 }, async () => {
+    const closeResolvers: Array<() => void> = [];
+    const sleep = vi.fn(async () => {});
+    const listenerFactory = vi.fn(async () => {
+      const onClose = new Promise<void>((res) => closeResolvers.push(res));
+      return { close: vi.fn(), onClose };
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
 
-      const run = monitorWebChannel(
-        false,
-        listenerFactory,
-        true,
-        async () => ({ text: "ok" }),
-        runtime as never,
-        undefined,
-        {
-          heartbeatSeconds: 1,
-          reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
-          sleep,
-        },
-      );
+    const run = monitorWebChannel(
+      false,
+      listenerFactory,
+      true,
+      async () => ({ text: "ok" }),
+      runtime as never,
+      undefined,
+      {
+        heartbeatSeconds: 1,
+        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+        sleep,
+      },
+    );
 
-      await Promise.resolve();
-      expect(listenerFactory).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    expect(listenerFactory).toHaveBeenCalledTimes(1);
 
-      closeResolvers.shift()?.();
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      expect(listenerFactory).toHaveBeenCalledTimes(2);
+    closeResolvers.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    expect(listenerFactory).toHaveBeenCalledTimes(2);
 
-      closeResolvers.shift()?.();
-      await new Promise((resolve) => setTimeout(resolve, 15));
-      await run;
+    closeResolvers.shift()?.();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    await run;
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("max attempts reached"),
-      );
-    },
-  );
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
+  });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
     const originalTz = process.env.TZ;
@@ -308,9 +290,7 @@ describe("web auto-reply", () => {
         | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
         | undefined;
       const listenerFactory = async (opts: {
-        onMessage: (
-          msg: import("./inbound.js").WebInboundMessage,
-        ) => Promise<void>;
+        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
       }) => {
         capturedOnMessage = opts.onMessage;
         return { close: vi.fn() };
@@ -348,13 +328,9 @@ describe("web auto-reply", () => {
       expect(resolver).toHaveBeenCalledTimes(2);
       const firstArgs = resolver.mock.calls[0][0];
       const secondArgs = resolver.mock.calls[1][0];
-      expect(firstArgs.Body).toContain(
-        "[WhatsApp +1 2025-01-01T00:00Z] [clawdbot] first",
-      );
+      expect(firstArgs.Body).toContain("[WhatsApp +1 2025-01-01T00:00Z] [clawdbot] first");
       expect(firstArgs.Body).not.toContain("second");
-      expect(secondArgs.Body).toContain(
-        "[WhatsApp +1 2025-01-01T01:00Z] [clawdbot] second",
-      );
+      expect(secondArgs.Body).toContain("[WhatsApp +1 2025-01-01T01:00Z] [clawdbot] second");
       expect(secondArgs.Body).not.toContain("first");
 
       // Max listeners bumped to avoid warnings in multi-instance test runs

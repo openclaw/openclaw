@@ -22,8 +22,7 @@ export function parsePort(raw: unknown): number | null {
 
 export const toOptionString = (value: unknown): string | undefined => {
   if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "bigint")
-    return value.toString();
+  if (typeof value === "number" || typeof value === "bigint") return value.toString();
   return undefined;
 };
 
@@ -59,15 +58,11 @@ export function extractGatewayMiskeys(parsed: unknown): {
   const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
   const remote = (gateway as Record<string, unknown>).remote;
   const hasRemoteToken =
-    remote && typeof remote === "object"
-      ? "token" in (remote as Record<string, unknown>)
-      : false;
+    remote && typeof remote === "object" ? "token" in (remote as Record<string, unknown>) : false;
   return { hasGatewayToken, hasRemoteToken };
 }
 
-export function renderGatewayServiceStopHints(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
+export function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.env): string[] {
   const profile = env.CLAWDBOT_PROFILE;
   switch (process.platform) {
     case "darwin":

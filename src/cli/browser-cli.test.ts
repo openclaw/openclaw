@@ -17,14 +17,7 @@ describe("browser CLI --browser-profile flag", () => {
       capturedProfile = parent?.browserProfile;
     });
 
-    program.parse([
-      "node",
-      "test",
-      "browser",
-      "--browser-profile",
-      "onasset",
-      "status",
-    ]);
+    program.parse(["node", "test", "browser", "--browser-profile", "onasset", "status"]);
 
     expect(capturedProfile).toBe("onasset");
   });

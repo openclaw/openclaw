@@ -157,12 +157,8 @@ function computeRetryDelayMs(
   return clampMs(exponential, opts.maxDelayMs);
 }
 
-function shouldRetry(
-  classification: ReturnType<typeof classifyMSTeamsSendError>,
-): boolean {
-  return (
-    classification.kind === "throttled" || classification.kind === "transient"
-  );
+function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>): boolean {
+  return classification.kind === "throttled" || classification.kind === "transient";
 }
 
 export function renderReplyPayloadsToMessages(
@@ -175,8 +171,7 @@ export function renderReplyPayloadsToMessages(
   const mediaMode = options.mediaMode ?? "split";
 
   for (const payload of replies) {
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
 
     if (!text && mediaList.length === 0) continue;
@@ -187,9 +182,7 @@ export function renderReplyPayloadsToMessages(
     }
 
     if (mediaMode === "inline") {
-      const combined = text
-        ? `${text}\n\n${mediaList.join("\n")}`
-        : mediaList.join("\n");
+      const combined = text ? `${text}\n\n${mediaList.join("\n")}` : mediaList.join("\n");
       pushTextMessages(out, combined, { chunkText, chunkLimit });
       continue;
     }
@@ -234,15 +227,10 @@ export async function sendMSTeamsMessages(params: {
         return await sendOnce();
       } catch (err) {
         const classification = classifyMSTeamsSendError(err);
-        const canRetry =
-          attempt < retryOptions.maxAttempts && shouldRetry(classification);
+        const canRetry = attempt < retryOptions.maxAttempts && shouldRetry(classification);
         if (!canRetry) throw err;
 
-        const delayMs = computeRetryDelayMs(
-          attempt,
-          classification,
-          retryOptions,
-        );
+        const delayMs = computeRetryDelayMs(attempt, classification, retryOptions);
         const nextAttempt = attempt + 1;
         params.onRetry?.({
           messageIndex: meta.messageIndex,
@@ -286,22 +274,18 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const messageIds: string[] = [];
-  await params.adapter.continueConversation(
-    params.appId,
-    proactiveRef,
-    async (ctx) => {
-      for (const [idx, message] of messages.entries()) {
-        const response = await sendWithRetry(
-          async () =>
-            await ctx.sendActivity({
-              type: "message",
-              text: message,
-            }),
-          { messageIndex: idx, messageCount: messages.length },
-        );
-        messageIds.push(extractMessageId(response) ?? "unknown");
-      }
-    },
-  );
+  await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
+    for (const [idx, message] of messages.entries()) {
+      const response = await sendWithRetry(
+        async () =>
+          await ctx.sendActivity({
+            type: "message",
+            text: message,
+          }),
+        { messageIndex: idx, messageCount: messages.length },
+      );
+      messageIds.push(extractMessageId(response) ?? "unknown");
+    }
+  });
   return messageIds;
 }

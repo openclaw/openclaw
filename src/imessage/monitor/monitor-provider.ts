@@ -1,7 +1,4 @@
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-} from "../../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
@@ -12,10 +9,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-} from "../../auto-reply/reply/mentions.js";
+import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -44,9 +38,7 @@ import { deliverReplies } from "./deliver.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
-export async function monitorIMessageProvider(
-  opts: MonitorIMessageOpts = {},
-): Promise<void> {
+export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
   const accountInfo = resolveIMessageAccount({
@@ -61,25 +53,17 @@ export async function monitorIMessageProvider(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const textLimit = resolveTextChunkLimit(
-    cfg,
-    "imessage",
-    accountInfo.accountId,
-  );
+  const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       imessageCfg.groupAllowFrom ??
-      (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0
-        ? imessageCfg.allowFrom
-        : []),
+      (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
   const groupPolicy = imessageCfg.groupPolicy ?? "open";
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
-  const includeAttachments =
-    opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
-  const mediaMaxBytes =
-    (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
+  const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
+  const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
 
   const handleMessage = async (raw: unknown) => {
     const params = raw as { message?: IMessagePayload | null };
@@ -115,26 +99,18 @@ export async function monitorIMessageProvider(
     // If the owner explicitly configures a chat_id under imessage.groups, treat
     // that thread as a "group" for permission gating and session isolation.
     const treatAsGroupByConfig = Boolean(
-      groupIdCandidate &&
-        groupListPolicy.allowlistEnabled &&
-        groupListPolicy.groupConfig,
+      groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
     );
 
     const isGroup = Boolean(message.is_group) || treatAsGroupByConfig;
     if (isGroup && !chatId) return;
 
     const groupId = isGroup ? groupIdCandidate : undefined;
-    const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(
-      () => [],
-    );
-    const effectiveDmAllowFrom = Array.from(
-      new Set([...allowFrom, ...storeAllowFrom]),
-    )
+    const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(() => []);
+    const effectiveDmAllowFrom = Array.from(new Set([...allowFrom, ...storeAllowFrom]))
       .map((v) => String(v).trim())
       .filter(Boolean);
-    const effectiveGroupAllowFrom = Array.from(
-      new Set([...groupAllowFrom, ...storeAllowFrom]),
-    )
+    const effectiveGroupAllowFrom = Array.from(new Set([...groupAllowFrom, ...storeAllowFrom]))
       .map((v) => String(v).trim())
       .filter(Boolean);
 
@@ -145,9 +121,7 @@ export async function monitorIMessageProvider(
       }
       if (groupPolicy === "allowlist") {
         if (effectiveGroupAllowFrom.length === 0) {
-          logVerbose(
-            "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
-          );
+          logVerbose("Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)");
           return;
         }
         const allowed = isAllowedIMessageSender({
@@ -158,16 +132,12 @@ export async function monitorIMessageProvider(
           chatIdentifier,
         });
         if (!allowed) {
-          logVerbose(
-            `Blocked iMessage sender ${sender} (not in groupAllowFrom)`,
-          );
+          logVerbose(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
           return;
         }
       }
       if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
-        logVerbose(
-          `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
-        );
+        logVerbose(`imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`);
         return;
       }
     }
@@ -216,15 +186,11 @@ export async function monitorIMessageProvider(
                 },
               );
             } catch (err) {
-              logVerbose(
-                `imessage pairing reply failed for ${senderId}: ${String(err)}`,
-              );
+              logVerbose(`imessage pairing reply failed for ${senderId}: ${String(err)}`);
             }
           }
         } else {
-          logVerbose(
-            `Blocked iMessage sender ${sender} (dmPolicy=${dmPolicy})`,
-          );
+          logVerbose(`Blocked iMessage sender ${sender} (dmPolicy=${dmPolicy})`);
         }
         return;
       }
@@ -236,16 +202,12 @@ export async function monitorIMessageProvider(
       accountId: accountInfo.accountId,
       peer: {
         kind: isGroup ? "group" : "dm",
-        id: isGroup
-          ? String(chatId ?? "unknown")
-          : normalizeIMessageHandle(sender),
+        id: isGroup ? String(chatId ?? "unknown") : normalizeIMessageHandle(sender),
       },
     });
     const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
-    const mentioned = isGroup
-      ? matchesMentionPatterns(messageText, mentionRegexes)
-      : true;
+    const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
     const requireMention = resolveChannelGroupRequireMention({
       cfg,
       channel: "imessage",
@@ -273,29 +235,17 @@ export async function monitorIMessageProvider(
       commandAuthorized &&
       hasControlCommand(messageText);
     const effectiveWasMentioned = mentioned || shouldBypassMention;
-    if (
-      isGroup &&
-      requireMention &&
-      canDetectMention &&
-      !mentioned &&
-      !shouldBypassMention
-    ) {
+    if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);
       return;
     }
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    const firstAttachment = attachments?.find(
-      (entry) => entry?.original_path && !entry?.missing,
-    );
+    const firstAttachment = attachments?.find((entry) => entry?.original_path && !entry?.missing);
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;
     const kind = mediaKindFromMime(mediaType ?? undefined);
-    const placeholder = kind
-      ? `<media:${kind}>`
-      : attachments?.length
-        ? "<media:attachment>"
-        : "";
+    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
     const bodyText = messageText || placeholder;
     if (!bodyText) return;
 
@@ -303,9 +253,7 @@ export async function monitorIMessageProvider(
     const fromLabel = isGroup
       ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
       : `${normalizeIMessageHandle(sender)} id:${sender}`;
-    const createdAt = message.created_at
-      ? Date.parse(message.created_at)
-      : undefined;
+    const createdAt = message.created_at ? Date.parse(message.created_at) : undefined;
     const body = formatAgentEnvelope({
       channel: "iMessage",
       from: fromLabel,
@@ -351,9 +299,7 @@ export async function monitorIMessageProvider(
       AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
-      GroupMembers: isGroup
-        ? (message.participants ?? []).filter(Boolean).join(", ")
-        : undefined,
+      GroupMembers: isGroup ? (message.participants ?? []).filter(Boolean).join(", ") : undefined,
       SenderName: sender,
       SenderId: sender,
       Provider: "imessage",
@@ -396,8 +342,7 @@ export async function monitorIMessageProvider(
 
     let didSendReply = false;
     const dispatcher = createReplyDispatcher({
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-        .responsePrefix,
+      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
         await deliverReplies({
@@ -412,9 +357,7 @@ export async function monitorIMessageProvider(
         didSendReply = true;
       },
       onError: (err, info) => {
-        runtime.error?.(
-          danger(`imessage ${info.kind} reply failed: ${String(err)}`),
-        );
+        runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
 
@@ -474,10 +417,9 @@ export async function monitorIMessageProvider(
   abort?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    const result = await client.request<{ subscription?: number }>(
-      "watch.subscribe",
-      { attachments: includeAttachments },
-    );
+    const result = await client.request<{ subscription?: number }>("watch.subscribe", {
+      attachments: includeAttachments,
+    });
     subscriptionId = result?.subscription ?? null;
     await client.waitForClose();
   } catch (err) {

@@ -1,7 +1,4 @@
-import {
-  getChannelPlugin,
-  normalizeChannelId,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 
 export type MessagingToolSend = {
   tool: string;
@@ -35,15 +32,11 @@ export function isMessagingToolSendAction(
   return Boolean(plugin.actions.extractToolSend({ args })?.to);
 }
 
-export function normalizeTargetForProvider(
-  provider: string,
-  raw?: string,
-): string | undefined {
+export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
   if (!raw) return undefined;
   const providerId = normalizeChannelId(provider);
   const plugin = providerId ? getChannelPlugin(providerId) : undefined;
   const normalized =
-    plugin?.messaging?.normalizeTarget?.(raw) ??
-    (raw.trim().toLowerCase() || undefined);
+    plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim().toLowerCase() || undefined);
   return normalized || undefined;
 }

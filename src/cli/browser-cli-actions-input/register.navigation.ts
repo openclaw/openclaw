@@ -15,10 +15,7 @@ export function registerBrowserNavigationCommands(
     .argument("<url>", "URL to navigate to")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (url: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserNavigate(baseUrl, {
           url,
@@ -43,10 +40,7 @@ export function registerBrowserNavigationCommands(
     .argument("<height>", "Viewport height", (v: string) => Number(v))
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (width: number, height: number, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       if (!Number.isFinite(width) || !Number.isFinite(height)) {
         defaultRuntime.error(danger("width and height must be numbers"));
         defaultRuntime.exit(1);

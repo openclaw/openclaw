@@ -1,22 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import {
-  beforeEach,
-  describe,
-  expect,
-  it,
-  type MockInstance,
-  vi,
-} from "vitest";
+import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
@@ -46,9 +38,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 function mockConfig(
   home: string,
   storePath: string,
-  agentOverrides?: Partial<
-    NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>
-  >,
+  agentOverrides?: Partial<NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>>,
   telegramOverrides?: Partial<NonNullable<ClawdbotConfig["telegram"]>>,
 ) {
   configSpy.mockReturnValue({
@@ -99,10 +89,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
 
-      await agentCommand(
-        { message: "hi", to: "+1222", thinking: "high", verbose: "on" },
-        runtime,
-      );
+      await agentCommand({ message: "hi", to: "+1222", thinking: "high", verbose: "on" }, runtime);
 
       const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
         string,
@@ -138,10 +125,7 @@ describe("agentCommand", () => {
       );
       mockConfig(home, store);
 
-      await agentCommand(
-        { message: "resume me", sessionId: "session-123" },
-        runtime,
-      );
+      await agentCommand({ message: "resume me", sessionId: "session-123" }, runtime);
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
@@ -240,9 +224,7 @@ describe("agentCommand", () => {
 
       await agentCommand({ message: "hi", to: "+1999", json: true }, runtime);
 
-      const logged = (runtime.log as MockInstance).mock.calls.at(
-        -1,
-      )?.[0] as string;
+      const logged = (runtime.log as MockInstance).mock.calls.at(-1)?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -271,9 +253,7 @@ describe("agentCommand", () => {
       mockConfig(home, store, undefined, { botToken: "t-1" });
       const deps = {
         sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi
-          .fn()
-          .mockResolvedValue({ messageId: "t1", chatId: "123" }),
+        sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "t1", chatId: "123" }),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
         sendMessageIMessage: vi.fn(),

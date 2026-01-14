@@ -2,16 +2,11 @@ import type { ChannelType, Client, User } from "@buape/carbon";
 import type { HistoryEntry } from "../../auto-reply/reply/history.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { resolveAgentRoute } from "../../routing/resolve-route.js";
-import type {
-  DiscordChannelConfigResolved,
-  DiscordGuildEntryResolved,
-} from "./allow-list.js";
+import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
-export type LoadedConfig = ReturnType<
-  typeof import("../../config/config.js").loadConfig
->;
+export type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 export type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;

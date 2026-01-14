@@ -56,10 +56,7 @@ describe("history helpers", () => {
       entry: { sender: "C", body: "three" },
     });
 
-    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual([
-      "two",
-      "three",
-    ]);
+    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["two", "three"]);
   });
 
   it("builds context from map and appends entry", () => {
@@ -78,11 +75,7 @@ describe("history helpers", () => {
       formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual([
-      "one",
-      "two",
-      "three",
-    ]);
+    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
     expect(result).toContain(HISTORY_CONTEXT_MARKER);
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");

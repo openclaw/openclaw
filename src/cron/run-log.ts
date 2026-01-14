@@ -13,10 +13,7 @@ export type CronRunLogEntry = {
   nextRunAtMs?: number;
 };
 
-export function resolveCronRunLogPath(params: {
-  storePath: string;
-  jobId: string;
-}) {
+export function resolveCronRunLogPath(params: { storePath: string; jobId: string }) {
   const storePath = path.resolve(params.storePath);
   const dir = path.dirname(storePath);
   return path.join(dir, "runs", `${params.jobId}.jsonl`);
@@ -24,10 +21,7 @@ export function resolveCronRunLogPath(params: {
 
 const writesByPath = new Map<string, Promise<void>>();
 
-async function pruneIfNeeded(
-  filePath: string,
-  opts: { maxBytes: number; keepLines: number },
-) {
+async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLines: number }) {
   const stat = await fs.stat(filePath).catch(() => null);
   if (!stat || stat.size <= opts.maxBytes) return;
 
@@ -69,9 +63,7 @@ export async function readCronRunLogEntries(
 ): Promise<CronRunLogEntry[]> {
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
   const jobId = opts?.jobId?.trim() || undefined;
-  const raw = await fs
-    .readFile(path.resolve(filePath), "utf-8")
-    .catch(() => "");
+  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
   if (!raw.trim()) return [];
   const parsed: CronRunLogEntry[] = [];
   const lines = raw.split("\n");
@@ -82,8 +74,7 @@ export async function readCronRunLogEntries(
       const obj = JSON.parse(line) as Partial<CronRunLogEntry> | null;
       if (!obj || typeof obj !== "object") continue;
       if (obj.action !== "finished") continue;
-      if (typeof obj.jobId !== "string" || obj.jobId.trim().length === 0)
-        continue;
+      if (typeof obj.jobId !== "string" || obj.jobId.trim().length === 0) continue;
       if (typeof obj.ts !== "number" || !Number.isFinite(obj.ts)) continue;
       if (jobId && obj.jobId !== jobId) continue;
       parsed.push(obj as CronRunLogEntry);

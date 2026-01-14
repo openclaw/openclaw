@@ -14,8 +14,7 @@ export function resolveTelegramDraftStreamingChunking(
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
-  const providerChunkLimit =
-    getChannelDock("telegram")?.outbound?.textChunkLimit;
+  const providerChunkLimit = getChannelDock("telegram")?.outbound?.textChunkLimit;
   const textLimit = resolveTextChunkLimit(cfg, "telegram", accountId, {
     fallbackLimit: providerChunkLimit,
   });
@@ -35,8 +34,7 @@ export function resolveTelegramDraftStreamingChunking(
   );
   const minChars = Math.min(minRequested, maxChars);
   const breakPreference =
-    draftCfg?.breakPreference === "newline" ||
-    draftCfg?.breakPreference === "sentence"
+    draftCfg?.breakPreference === "newline" || draftCfg?.breakPreference === "sentence"
       ? draftCfg.breakPreference
       : "paragraph";
   return { minChars, maxChars, breakPreference };

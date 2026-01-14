@@ -5,9 +5,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-let configOverride: ReturnType<
-  typeof import("../config/config.js")["loadConfig"]
-> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -124,9 +122,9 @@ describe("clawdbot-tools: subagents", () => {
       status: "accepted",
       modelApplied: false,
     });
-    expect(
-      String((result.details as { warning?: string }).warning ?? ""),
-    ).toContain("invalid model");
+    expect(String((result.details as { warning?: string }).warning ?? "")).toContain(
+      "invalid model",
+    );
     expect(calls.some((call) => call.method === "agent")).toBe(true);
   });
   it("sessions_spawn supports legacy timeoutSeconds alias", async () => {

@@ -5,9 +5,7 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 
 type ToolCall = { id: string; name?: string };
 
-function extractAssistantToolCalls(
-  msg: Extract<AgentMessage, { role: "assistant" }>,
-): ToolCall[] {
+function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
   const content = msg.content;
   if (!Array.isArray(content)) return [];
 
@@ -16,11 +14,7 @@ function extractAssistantToolCalls(
     if (!block || typeof block !== "object") continue;
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
     if (typeof rec.id !== "string" || !rec.id) continue;
-    if (
-      rec.type === "toolCall" ||
-      rec.type === "toolUse" ||
-      rec.type === "functionCall"
-    ) {
+    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -30,9 +24,7 @@ function extractAssistantToolCalls(
   return toolCalls;
 }
 
-function extractToolResultId(
-  msg: Extract<AgentMessage, { role: "toolResult" }>,
-): string | null {
+function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) return toolCallId;
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
@@ -59,18 +51,14 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
     const role = (message as { role?: unknown }).role;
 
     if (role === "toolResult") {
-      const id = extractToolResultId(
-        message as Extract<AgentMessage, { role: "toolResult" }>,
-      );
+      const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
       if (id) pending.delete(id);
       return originalAppend(message as never);
     }
 
     const toolCalls =
       role === "assistant"
-        ? extractAssistantToolCalls(
-            message as Extract<AgentMessage, { role: "assistant" }>,
-          )
+        ? extractAssistantToolCalls(message as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     // If previous tool calls are still pending, flush before non-tool results.
@@ -94,8 +82,7 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage =
-    guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
 
   return {
     flushPendingToolResults,

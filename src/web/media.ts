@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import {
-  type MediaKind,
-  maxBytesForKind,
-  mediaKindFromMime,
-} from "../media/constants.js";
+import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import { resizeToJpeg } from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
@@ -43,7 +39,8 @@ async function loadWebMediaInternal(
     if (optimized.buffer.length > cap) {
       throw new Error(
         `Media could not be reduced below ${(cap / (1024 * 1024)).toFixed(0)}MB (got ${(
-          optimized.buffer.length / (1024 * 1024)
+          optimized.buffer.length /
+          (1024 * 1024)
         ).toFixed(2)}MB)`,
       );
     }
@@ -60,19 +57,15 @@ async function loadWebMediaInternal(
     kind: MediaKind;
     fileName?: string;
   }): Promise<WebMediaResult> => {
-    const cap = Math.min(
-      maxBytes ?? maxBytesForKind(params.kind),
-      maxBytesForKind(params.kind),
-    );
+    const cap = Math.min(maxBytes ?? maxBytesForKind(params.kind), maxBytesForKind(params.kind));
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {
         if (params.buffer.length > cap) {
           throw new Error(
-            `${
-              isGif ? "GIF" : "Media"
-            } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-              params.buffer.length / (1024 * 1024)
+            `${isGif ? "GIF" : "Media"} exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+              params.buffer.length /
+              (1024 * 1024)
             ).toFixed(2)}MB)`,
           );
         }
@@ -91,7 +84,8 @@ async function loadWebMediaInternal(
     if (params.buffer.length > cap) {
       throw new Error(
         `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-          params.buffer.length / (1024 * 1024)
+          params.buffer.length /
+          (1024 * 1024)
         ).toFixed(2)}MB)`,
       );
     }
@@ -127,10 +121,7 @@ async function loadWebMediaInternal(
   });
 }
 
-export async function loadWebMedia(
-  mediaUrl: string,
-  maxBytes?: number,
-): Promise<WebMediaResult> {
+export async function loadWebMedia(mediaUrl: string, maxBytes?: number): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: true,

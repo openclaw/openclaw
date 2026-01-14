@@ -101,10 +101,7 @@ describe("buildSandboxCreateArgs", () => {
       tmpfs: [],
       network: "none",
       capDrop: [],
-      binds: [
-        "/home/user/source:/source:rw",
-        "/var/run/docker.sock:/var/run/docker.sock",
-      ],
+      binds: ["/home/user/source:/source:rw", "/var/run/docker.sock:/var/run/docker.sock"],
     };
 
     const args = buildSandboxCreateArgs({

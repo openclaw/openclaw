@@ -8,11 +8,7 @@ vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
 
-import {
-  sendMessageWhatsApp,
-  sendPollWhatsApp,
-  sendReactionWhatsApp,
-} from "./outbound.js";
+import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./outbound.js";
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
@@ -43,12 +39,7 @@ describe("web outbound", () => {
       toJid: "1555@s.whatsapp.net",
     });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
-    expect(sendMessage).toHaveBeenCalledWith(
-      "+1555",
-      "hi",
-      undefined,
-      undefined,
-    );
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
   it("throws a helpful error when no active listener exists", async () => {
@@ -94,12 +85,7 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/video.mp4",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "clip",
-      buf,
-      "video/mp4",
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "clip", buf, "video/mp4");
   });
 
   it("marks gif playback for video when requested", async () => {
@@ -114,13 +100,9 @@ describe("web outbound", () => {
       mediaUrl: "/tmp/anim.mp4",
       gifPlayback: true,
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "gif",
-      buf,
-      "video/mp4",
-      { gifPlayback: true },
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "gif", buf, "video/mp4", {
+      gifPlayback: true,
+    });
   });
 
   it("maps image with caption", async () => {
@@ -134,12 +116,7 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/pic.jpg",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "pic",
-      buf,
-      "image/jpeg",
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
   it("maps other kinds to document with filename", async () => {
@@ -154,12 +131,7 @@ describe("web outbound", () => {
       verbose: false,
       mediaUrl: "/tmp/file.pdf",
     });
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "doc",
-      buf,
-      "application/pdf",
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf");
   });
 
   it("sends polls via active listener", async () => {

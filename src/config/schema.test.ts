@@ -30,15 +30,10 @@ describe("config schema", () => {
     });
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
-    expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe(
-      "Voice Call Config",
+    expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
+    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label).toBe(
+      "Auth Token",
     );
-    expect(
-      res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.label,
-    ).toBe("Auth Token");
-    expect(
-      res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]
-        ?.sensitive,
-    ).toBe(true);
+    expect(res.uiHints["plugins.entries.voice-call.config.twilio.authToken"]?.sensitive).toBe(true);
   });
 });

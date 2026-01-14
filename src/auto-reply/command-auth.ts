@@ -14,10 +14,7 @@ export type CommandAuthorization = {
   to?: string;
 };
 
-function resolveProviderFromContext(
-  ctx: MsgContext,
-  cfg: ClawdbotConfig,
-): ChannelId | undefined {
+function resolveProviderFromContext(ctx: MsgContext, cfg: ClawdbotConfig): ChannelId | undefined {
   const direct =
     normalizeChannelId(ctx.Provider) ??
     normalizeChannelId(ctx.Surface) ??
@@ -79,12 +76,9 @@ export function resolveCommandAuthorization(params: {
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
   });
   const allowAll =
-    allowFromList.length === 0 ||
-    allowFromList.some((entry) => entry.trim() === "*");
+    allowFromList.length === 0 || allowFromList.some((entry) => entry.trim() === "*");
 
-  const ownerCandidates = allowAll
-    ? []
-    : allowFromList.filter((entry) => entry !== "*");
+  const ownerCandidates = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidates.length === 0 && to) {
     const normalizedTo = formatAllowFromList({
       dock,

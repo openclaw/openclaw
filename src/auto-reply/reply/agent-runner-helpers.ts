@@ -9,9 +9,7 @@ const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));
 
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
-  hasAudioMedia(
-    payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
-  );
+  hasAudioMedia(payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined));
 
 export const createShouldEmitToolResult = (params: {
   sessionKey?: string;

@@ -100,17 +100,15 @@ export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<
-    typeof import("@mariozechner/pi-coding-agent")
-  >("@mariozechner/pi-coding-agent");
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
 
   return {
     ...actual,
     discoverModels: (...args: unknown[]) => {
       if (!piSdkMock.enabled) {
-        return (actual.discoverModels as (...args: unknown[]) => unknown)(
-          ...args,
-        );
+        return (actual.discoverModels as (...args: unknown[]) => unknown)(...args);
       }
       piSdkMock.discoverCalls += 1;
       return piSdkMock.models;
@@ -142,9 +140,8 @@ vi.mock("../infra/tailnet.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/sessions.js")>(
-    "../config/sessions.js",
-  );
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
     saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
@@ -158,11 +155,8 @@ vi.mock("../config/sessions.js", async () => {
 });
 
 vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>(
-    "../config/config.js",
-  );
-  const resolveConfigPath = () =>
-    path.join(os.homedir(), ".clawdbot", "clawdbot.json");
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const resolveConfigPath = () => path.join(os.homedir(), ".clawdbot", "clawdbot.json");
 
   const readConfigFileSnapshot = async () => {
     if (testState.legacyIssues.length > 0) {
@@ -278,10 +272,8 @@ vi.mock("../config/config.js", async () => {
       hooks: testState.hooksConfig,
       cron: (() => {
         const cron: Record<string, unknown> = {};
-        if (typeof testState.cronEnabled === "boolean")
-          cron.enabled = testState.cronEnabled;
-        if (typeof testState.cronStorePath === "string")
-          cron.store = testState.cronStorePath;
+        if (typeof testState.cronEnabled === "boolean") cron.enabled = testState.cronEnabled;
+        if (typeof testState.cronStorePath === "string") cron.store = testState.cronStorePath;
         return Object.keys(cron).length > 0 ? cron : undefined;
       })(),
     }),
@@ -303,13 +295,12 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../agents/pi-embedded.js")
-  >("../agents/pi-embedded.js");
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+    "../agents/pi-embedded.js",
+  );
   return {
     ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) =>
-      embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedPiRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -328,9 +319,7 @@ vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../web/outbound.js", () => ({
-  sendMessageWhatsApp: vi
-    .fn()
-    .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  sendMessageWhatsApp: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,

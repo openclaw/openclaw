@@ -1,8 +1,4 @@
-import {
-  CHAT_CHANNEL_ORDER,
-  type ChatChannelId,
-  normalizeChatChannelId,
-} from "../registry.js";
+import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeChatChannelId } from "../registry.js";
 import { discordPlugin } from "./discord.js";
 import { imessagePlugin } from "./imessage.js";
 import { msteamsPlugin } from "./msteams.js";

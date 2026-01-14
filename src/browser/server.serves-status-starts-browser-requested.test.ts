@@ -106,20 +106,18 @@ const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(
-    async (_resolved: unknown, profile: { cdpPort: number }) => {
-      launchCalls.push({ port: profile.cdpPort });
-      reachable = true;
-      return {
-        pid: 123,
-        exe: { kind: "chrome", path: "/fake/chrome" },
-        userDataDir: "/tmp/clawd",
-        cdpPort: profile.cdpPort,
-        startedAt: Date.now(),
-        proc,
-      };
-    },
-  ),
+  launchClawdChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
+    launchCalls.push({ port: profile.cdpPort });
+    reachable = true;
+    return {
+      pid: 123,
+      exe: { kind: "chrome", path: "/fake/chrome" },
+      userDataDir: "/tmp/clawd",
+      cdpPort: profile.cdpPort,
+      startedAt: Date.now(),
+      proc,
+    };
+  }),
   resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;

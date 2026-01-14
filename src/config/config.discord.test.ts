@@ -57,12 +57,8 @@ describe("config discord", () => {
       expect(cfg.channels?.discord?.enabled).toBe(true);
       expect(cfg.channels?.discord?.dm?.groupEnabled).toBe(true);
       expect(cfg.channels?.discord?.dm?.groupChannels).toEqual(["clawd-dm"]);
-      expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe(
-        "friends-of-clawd",
-      );
-      expect(
-        cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow,
-      ).toBe(true);
+      expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-clawd");
+      expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
     });
   });
 });

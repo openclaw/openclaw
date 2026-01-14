@@ -61,11 +61,7 @@ export async function probeTelegram(
 
     // Try to fetch webhook info, but don't fail health if it errors.
     try {
-      const webhookRes = await fetchWithTimeout(
-        `${base}/getWebhookInfo`,
-        timeoutMs,
-        fetcher,
-      );
+      const webhookRes = await fetchWithTimeout(`${base}/getWebhookInfo`, timeoutMs, fetcher);
       const webhookJson = (await webhookRes.json()) as {
         ok?: boolean;
         result?: { url?: string; has_custom_certificate?: boolean };

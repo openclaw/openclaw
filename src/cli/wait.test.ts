@@ -6,10 +6,7 @@ describe("waitForever", () => {
   it("creates an unref'ed interval and returns a pending promise", () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     const promise = waitForever();
-    expect(setIntervalSpy).toHaveBeenCalledWith(
-      expect.any(Function),
-      1_000_000,
-    );
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000_000);
     expect(promise).toBeInstanceOf(Promise);
     setIntervalSpy.mockRestore();
   });

@@ -20,11 +20,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
-      .option(
-        "--delete-after-run",
-        "Delete one-shot job after it succeeds",
-        false,
-      )
+      .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--session <target>", "Session target (main|isolated)")
       .option("--agent <id>", "Set agent id")
@@ -40,19 +36,12 @@ export function registerCronEditCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
-      .option(
-        "--channel <channel>",
-        `Delivery channel (${CRON_CHANNEL_OPTIONS})`,
-      )
+      .option("--channel <channel>", `Delivery channel (${CRON_CHANNEL_OPTIONS})`)
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
-      .option(
-        "--best-effort-deliver",
-        "Do not fail job if delivery fails",
-        false,
-      )
+      .option("--best-effort-deliver", "Do not fail job if delivery fails", false)
       .option("--post-prefix <prefix>", "Prefix for summary system event")
       .action(async (id, opts) => {
         try {
@@ -72,21 +61,17 @@ export function registerCronEditCommand(cron: Command) {
 
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") patch.name = opts.name;
-          if (typeof opts.description === "string")
-            patch.description = opts.description;
+          if (typeof opts.description === "string") patch.description = opts.description;
           if (opts.enable && opts.disable)
             throw new Error("Choose --enable or --disable, not both");
           if (opts.enable) patch.enabled = true;
           if (opts.disable) patch.enabled = false;
           if (opts.deleteAfterRun && opts.keepAfterRun) {
-            throw new Error(
-              "Choose --delete-after-run or --keep-after-run, not both",
-            );
+            throw new Error("Choose --delete-after-run or --keep-after-run, not both");
           }
           if (opts.deleteAfterRun) patch.deleteAfterRun = true;
           if (opts.keepAfterRun) patch.deleteAfterRun = false;
-          if (typeof opts.session === "string")
-            patch.sessionTarget = opts.session;
+          if (typeof opts.session === "string") patch.sessionTarget = opts.session;
           if (typeof opts.wake === "string") patch.wakeMode = opts.wake;
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
@@ -98,11 +83,8 @@ export function registerCronEditCommand(cron: Command) {
             patch.agentId = null;
           }
 
-          const scheduleChosen = [opts.at, opts.every, opts.cron].filter(
-            Boolean,
-          ).length;
-          if (scheduleChosen > 1)
-            throw new Error("Choose at most one schedule change");
+          const scheduleChosen = [opts.at, opts.every, opts.cron].filter(Boolean).length;
+          if (scheduleChosen > 1) throw new Error("Choose at most one schedule change");
           if (opts.at) {
             const atMs = parseAtMs(String(opts.at));
             if (!atMs) throw new Error("Invalid --at");
@@ -115,18 +97,12 @@ export function registerCronEditCommand(cron: Command) {
             patch.schedule = {
               kind: "cron",
               expr: String(opts.cron),
-              tz:
-                typeof opts.tz === "string" && opts.tz.trim()
-                  ? opts.tz.trim()
-                  : undefined,
+              tz: typeof opts.tz === "string" && opts.tz.trim() ? opts.tz.trim() : undefined,
             };
           }
 
-          const payloadChosen = [opts.systemEvent, opts.message].filter(
-            Boolean,
-          ).length;
-          if (payloadChosen > 1)
-            throw new Error("Choose at most one payload change");
+          const payloadChosen = [opts.systemEvent, opts.message].filter(Boolean).length;
+          if (payloadChosen > 1) throw new Error("Choose at most one payload change");
           if (opts.systemEvent) {
             patch.payload = {
               kind: "systemEvent",
@@ -134,9 +110,7 @@ export function registerCronEditCommand(cron: Command) {
             };
           } else if (opts.message) {
             const model =
-              typeof opts.model === "string" && opts.model.trim()
-                ? opts.model.trim()
-                : undefined;
+              typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
             const thinking =
               typeof opts.thinking === "string" && opts.thinking.trim()
                 ? opts.thinking.trim()
@@ -150,12 +124,9 @@ export function registerCronEditCommand(cron: Command) {
               model,
               thinking,
               timeoutSeconds:
-                timeoutSeconds && Number.isFinite(timeoutSeconds)
-                  ? timeoutSeconds
-                  : undefined,
+                timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
               deliver: Boolean(opts.deliver),
-              channel:
-                typeof opts.channel === "string" ? opts.channel : undefined,
+              channel: typeof opts.channel === "string" ? opts.channel : undefined,
               to: typeof opts.to === "string" ? opts.to : undefined,
               bestEffortDeliver: Boolean(opts.bestEffortDeliver),
             };
@@ -163,9 +134,7 @@ export function registerCronEditCommand(cron: Command) {
 
           if (typeof opts.postPrefix === "string") {
             patch.isolation = {
-              postToMainPrefix: opts.postPrefix.trim()
-                ? opts.postPrefix
-                : "Cron",
+              postToMainPrefix: opts.postPrefix.trim() ? opts.postPrefix : "Cron",
             };
           }
 

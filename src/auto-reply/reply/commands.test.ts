@@ -6,11 +6,7 @@ import { resetBashChatCommandForTests } from "./bash-command.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 
-function buildParams(
-  commandBody: string,
-  cfg: ClawdbotConfig,
-  ctxOverrides?: Partial<MsgContext>,
-) {
+function buildParams(commandBody: string, cfg: ClawdbotConfig, ctxOverrides?: Partial<MsgContext>) {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -71,9 +67,7 @@ describe("handleCommands gating", () => {
     params.elevated = {
       enabled: true,
       allowed: false,
-      failures: [
-        { gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" },
-      ],
+      failures: [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
     };
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);

@@ -1,10 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { DiscordActionConfig } from "../../config/config.js";
-import {
-  banMemberDiscord,
-  kickMemberDiscord,
-  timeoutMemberDiscord,
-} from "../../discord/send.js";
+import { banMemberDiscord, kickMemberDiscord, timeoutMemberDiscord } from "../../discord/send.js";
 import { type ActionGate, jsonResult, readStringParam } from "./common.js";
 
 export async function handleDiscordModerationAction(
@@ -24,8 +20,7 @@ export async function handleDiscordModerationAction(
         required: true,
       });
       const durationMinutes =
-        typeof params.durationMinutes === "number" &&
-        Number.isFinite(params.durationMinutes)
+        typeof params.durationMinutes === "number" && Number.isFinite(params.durationMinutes)
           ? params.durationMinutes
           : undefined;
       const until = readStringParam(params, "until");
@@ -65,8 +60,7 @@ export async function handleDiscordModerationAction(
       });
       const reason = readStringParam(params, "reason");
       const deleteMessageDays =
-        typeof params.deleteMessageDays === "number" &&
-        Number.isFinite(params.deleteMessageDays)
+        typeof params.deleteMessageDays === "number" && Number.isFinite(params.deleteMessageDays)
           ? params.deleteMessageDays
           : undefined;
       await banMemberDiscord({

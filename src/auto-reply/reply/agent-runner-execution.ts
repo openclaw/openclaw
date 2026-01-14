@@ -17,27 +17,18 @@ import {
   saveSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import {
-  emitAgentEvent,
-  registerAgentRunContext,
-} from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import {
-  buildThreadingToolContext,
-  resolveEnforceFinalTag,
-} from "./agent-runner-utils.js";
+import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import type { FollowupRun } from "./queue.js";
 import { parseReplyDirectives } from "./reply-directives.js";
-import {
-  applyReplyTagsToPayload,
-  isRenderablePayload,
-} from "./reply-payloads.js";
+import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type AgentRunLoopResult =
@@ -94,12 +85,9 @@ export async function runAgentTurnWithFallback(params: {
   while (true) {
     try {
       const allowPartialStream = !(
-        params.followupRun.run.reasoningLevel === "stream" &&
-        params.opts?.onReasoningStream
+        params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
       );
-      const normalizeStreamingText = (
-        payload: ReplyPayload,
-      ): { text?: string; skip: boolean } => {
+      const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         if (!allowPartialStream) return { skip: true };
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -120,9 +108,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         return { text, skip: false };
       };
-      const handlePartialForTyping = async (
-        payload: ReplyPayload,
-      ): Promise<string | undefined> => {
+      const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
         const { text, skip } = normalizeStreamingText(payload);
         if (skip || !text) return undefined;
         await params.typingSignals.signalTextDelta(text);
@@ -149,10 +135,7 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionId = getCliSessionId(
-              params.getActiveSessionEntry(),
-              provider,
-            );
+            const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return runCliAgent({
               sessionId: params.followupRun.run.sessionId,
               sessionKey: params.sessionKey,
@@ -198,8 +181,7 @@ export async function runAgentTurnWithFallback(params: {
           return runEmbeddedPiAgent({
             sessionId: params.followupRun.run.sessionId,
             sessionKey: params.sessionKey,
-            messageProvider:
-              params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
             agentAccountId: params.sessionCtx.AccountId,
             // Provider threading context for tool auto-injection
             ...buildThreadingToolContext({
@@ -215,10 +197,7 @@ export async function runAgentTurnWithFallback(params: {
             prompt: params.commandBody,
             extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
             ownerNumbers: params.followupRun.run.ownerNumbers,
-            enforceFinalTag: resolveEnforceFinalTag(
-              params.followupRun.run,
-              provider,
-            ),
+            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
             provider,
             model,
             authProfileId: params.followupRun.run.authProfileId,
@@ -233,11 +212,7 @@ export async function runAgentTurnWithFallback(params: {
             onPartialReply: allowPartialStream
               ? async (payload) => {
                   const textForTyping = await handlePartialForTyping(payload);
-                  if (
-                    !params.opts?.onPartialReply ||
-                    textForTyping === undefined
-                  )
-                    return;
+                  if (!params.opts?.onPartialReply || textForTyping === undefined) return;
                   await params.opts.onPartialReply({
                     text: textForTyping,
                     mediaUrls: payload.mediaUrls,
@@ -248,8 +223,7 @@ export async function runAgentTurnWithFallback(params: {
               await params.typingSignals.signalMessageStart();
             },
             onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning ||
-              params.opts?.onReasoningStream
+              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                 ? async (payload) => {
                     await params.typingSignals.signalReasoningDelta();
                     await params.opts?.onReasoningStream?.({
@@ -261,16 +235,14 @@ export async function runAgentTurnWithFallback(params: {
             onAgentEvent: (evt) => {
               // Trigger typing when tools start executing
               if (evt.stream === "tool") {
-                const phase =
-                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "start" || phase === "update") {
                   void params.typingSignals.signalToolStart();
                 }
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {
-                const phase =
-                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 const willRetry = Boolean(evt.data.willRetry);
                 if (phase === "end" && !willRetry) {
                   autoCompactionCompleted = true;
@@ -281,8 +253,7 @@ export async function runAgentTurnWithFallback(params: {
               params.blockStreamingEnabled && params.opts?.onBlockReply
                 ? async (payload) => {
                     const { text, skip } = normalizeStreamingText(payload);
-                    const hasPayloadMedia =
-                      (payload.mediaUrls?.length ?? 0) > 0;
+                    const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
                     if (skip && !hasPayloadMedia) return;
                     const taggedPayload = applyReplyTagsToPayload(
                       {
@@ -293,22 +264,14 @@ export async function runAgentTurnWithFallback(params: {
                       params.sessionCtx.MessageSid,
                     );
                     // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                    if (
-                      !isRenderablePayload(taggedPayload) &&
-                      !payload.audioAsVoice
-                    )
-                      return;
-                    const parsed = parseReplyDirectives(
-                      taggedPayload.text ?? "",
-                      {
-                        currentMessageId: params.sessionCtx.MessageSid,
-                        silentToken: SILENT_REPLY_TOKEN,
-                      },
-                    );
+                    if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) return;
+                    const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
+                      currentMessageId: params.sessionCtx.MessageSid,
+                      silentToken: SILENT_REPLY_TOKEN,
+                    });
                     const cleaned = parsed.text || undefined;
                     const hasRenderableMedia =
-                      Boolean(taggedPayload.mediaUrl) ||
-                      (taggedPayload.mediaUrls?.length ?? 0) > 0;
+                      Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
                     // Skip empty payloads unless they have audioAsVoice flag (need to track it)
                     if (
                       !cleaned &&
@@ -322,21 +285,16 @@ export async function runAgentTurnWithFallback(params: {
                     const blockPayload: ReplyPayload = params.applyReplyToMode({
                       ...taggedPayload,
                       text: cleaned,
-                      audioAsVoice: Boolean(
-                        parsed.audioAsVoice || payload.audioAsVoice,
-                      ),
+                      audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
                       replyToId: taggedPayload.replyToId ?? parsed.replyToId,
                       replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
-                      replyToCurrent:
-                        taggedPayload.replyToCurrent || parsed.replyToCurrent,
+                      replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
                     });
 
                     void params.typingSignals
                       .signalTextDelta(cleaned ?? taggedPayload.text)
                       .catch((err) => {
-                        logVerbose(
-                          `block reply typing signal failed: ${String(err)}`,
-                        );
+                        logVerbose(`block reply typing signal failed: ${String(err)}`);
                       });
 
                     params.blockReplyPipeline?.enqueue(blockPayload);
@@ -399,8 +357,7 @@ export async function runAgentTurnWithFallback(params: {
         isContextOverflowError(message) ||
         /context.*overflow|too large|context window/i.test(message);
       const isCompactionFailure = isCompactionFailureError(message);
-      const isSessionCorruption =
-        /function call turn comes immediately after/i.test(message);
+      const isSessionCorruption = /function call turn comes immediately after/i.test(message);
 
       if (
         isCompactionFailure &&
@@ -426,8 +383,7 @@ export async function runAgentTurnWithFallback(params: {
         try {
           // Delete transcript file if it exists
           if (corruptedSessionId) {
-            const transcriptPath =
-              resolveSessionTranscriptPath(corruptedSessionId);
+            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
             try {
               fs.unlinkSync(transcriptPath);
             } catch {

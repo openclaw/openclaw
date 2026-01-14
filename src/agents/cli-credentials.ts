@@ -56,10 +56,7 @@ type ClaudeCliFileOptions = {
 type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
   platform?: NodeJS.Platform;
   writeKeychain?: (credentials: OAuthCredentials) => boolean;
-  writeFile?: (
-    credentials: OAuthCredentials,
-    options?: ClaudeCliFileOptions,
-  ) => boolean;
+  writeFile?: (credentials: OAuthCredentials, options?: ClaudeCliFileOptions) => boolean;
 };
 
 function resolveClaudeCliCredentialsPath(homeDir?: string) {
@@ -73,9 +70,7 @@ function resolveCodexCliAuthPath() {
 
 function resolveCodexHomePath() {
   const configured = process.env.CODEX_HOME;
-  const home = configured
-    ? resolveUserPath(configured)
-    : resolveUserPath("~/.codex");
+  const home = configured ? resolveUserPath(configured) : resolveUserPath("~/.codex");
   try {
     return fs.realpathSync.native(home);
   } catch {
@@ -98,10 +93,11 @@ function readCodexKeychainCredentials(options?: {
   const account = computeCodexKeychainAccount(codexHome);
 
   try {
-    const secret = execSync(
-      `security find-generic-password -s "Codex Auth" -a "${account}" -w`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    ).trim();
+    const secret = execSync(`security find-generic-password -s "Codex Auth" -a "${account}" -w`, {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
 
     const parsed = JSON.parse(secret) as Record<string, unknown>;
     const tokens = parsed.tokens as Record<string, unknown> | undefined;
@@ -253,9 +249,7 @@ export function readClaudeCliCredentialsCached(options?: {
   return value;
 }
 
-export function writeClaudeCliKeychainCredentials(
-  newCredentials: OAuthCredentials,
-): boolean {
+export function writeClaudeCliKeychainCredentials(newCredentials: OAuthCredentials): boolean {
   try {
     const existingResult = execSync(
       `security find-generic-password -s "${CLAUDE_CLI_KEYCHAIN_SERVICE}" -w 2>/dev/null`,
@@ -309,9 +303,7 @@ export function writeClaudeCliFileCredentials(
     if (!raw || typeof raw !== "object") return false;
 
     const data = raw as Record<string, unknown>;
-    const existingOauth = data.claudeAiOauth as
-      | Record<string, unknown>
-      | undefined;
+    const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
     if (!existingOauth || typeof existingOauth !== "object") return false;
 
     data.claudeAiOauth = {
@@ -339,12 +331,10 @@ export function writeClaudeCliCredentials(
   options?: ClaudeCliWriteOptions,
 ): boolean {
   const platform = options?.platform ?? process.platform;
-  const writeKeychain =
-    options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
+  const writeKeychain = options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
   const writeFile =
     options?.writeFile ??
-    ((credentials, fileOptions) =>
-      writeClaudeCliFileCredentials(credentials, fileOptions));
+    ((credentials, fileOptions) => writeClaudeCliFileCredentials(credentials, fileOptions));
 
   if (platform === "darwin") {
     const didWriteKeychain = writeKeychain(newCredentials);

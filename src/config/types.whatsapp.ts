@@ -1,8 +1,4 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-} from "./types.base.js";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
 
 export type WhatsAppActionConfig = {

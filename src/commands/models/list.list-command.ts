@@ -8,11 +8,7 @@ import { resolveConfiguredEntries } from "./list.configured.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
-import {
-  DEFAULT_PROVIDER,
-  ensureFlagCompatibility,
-  modelKey,
-} from "./shared.js";
+import { DEFAULT_PROVIDER, ensureFlagCompatibility, modelKey } from "./shared.js";
 
 export async function modelsListCommand(
   opts: {
@@ -44,9 +40,7 @@ export async function modelsListCommand(
     runtime.error(`Model registry unavailable: ${String(err)}`);
   }
 
-  const modelByKey = new Map(
-    models.map((model) => [modelKey(model.provider, model.id), model]),
-  );
+  const modelByKey = new Map(models.map((model) => [modelKey(model.provider, model.id), model]));
 
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
@@ -97,10 +91,7 @@ export async function modelsListCommand(
     }
   } else {
     for (const entry of entries) {
-      if (
-        providerFilter &&
-        entry.ref.provider.toLowerCase() !== providerFilter
-      ) {
+      if (providerFilter && entry.ref.provider.toLowerCase() !== providerFilter) {
         continue;
       }
       const model = modelByKey.get(entry.key);

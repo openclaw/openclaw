@@ -1,23 +1,14 @@
 import type express from "express";
 
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  handleRouteError,
-  readBody,
-  requirePwAi,
-  resolveProfileContext,
-} from "./agent.shared.js";
+import { handleRouteError, readBody, requirePwAi, resolveProfileContext } from "./agent.shared.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
 
-export function registerBrowserAgentStorageRoutes(
-  app: express.Express,
-  ctx: BrowserRouteContext,
-) {
+export function registerBrowserAgentStorageRoutes(app: express.Express, ctx: BrowserRouteContext) {
   app.get("/cookies", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
-    const targetId =
-      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "cookies");
@@ -38,9 +29,7 @@ export function registerBrowserAgentStorageRoutes(
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const cookie =
-      body.cookie &&
-      typeof body.cookie === "object" &&
-      !Array.isArray(body.cookie)
+      body.cookie && typeof body.cookie === "object" && !Array.isArray(body.cookie)
         ? (body.cookie as Record<string, unknown>)
         : null;
     if (!cookie) return jsonError(res, 400, "cookie is required");
@@ -61,9 +50,7 @@ export function registerBrowserAgentStorageRoutes(
           httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
           secure: toBoolean(cookie.secure) ?? undefined,
           sameSite:
-            cookie.sameSite === "Lax" ||
-            cookie.sameSite === "None" ||
-            cookie.sameSite === "Strict"
+            cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
               ? (cookie.sameSite as "Lax" | "None" | "Strict")
               : undefined,
         },
@@ -99,8 +86,7 @@ export function registerBrowserAgentStorageRoutes(
     const kind = toStringOrEmpty(req.params.kind);
     if (kind !== "local" && kind !== "session")
       return jsonError(res, 400, "kind must be local|session");
-    const targetId =
-      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const key = typeof req.query.key === "string" ? req.query.key : "";
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -175,8 +161,7 @@ export function registerBrowserAgentStorageRoutes(
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const offline = toBoolean(body.offline);
-    if (offline === undefined)
-      return jsonError(res, 400, "offline is required");
+    if (offline === undefined) return jsonError(res, 400, "offline is required");
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "offline");
@@ -198,9 +183,7 @@ export function registerBrowserAgentStorageRoutes(
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const headers =
-      body.headers &&
-      typeof body.headers === "object" &&
-      !Array.isArray(body.headers)
+      body.headers && typeof body.headers === "object" && !Array.isArray(body.headers)
         ? (body.headers as Record<string, unknown>)
         : null;
     if (!headers) return jsonError(res, 400, "headers is required");
@@ -230,8 +213,7 @@ export function registerBrowserAgentStorageRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const clear = toBoolean(body.clear) ?? false;
     const username = toStringOrEmpty(body.username) || undefined;
-    const password =
-      typeof body.password === "string" ? body.password : undefined;
+    const password = typeof body.password === "string" ? body.password : undefined;
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "http credentials");
@@ -285,19 +267,13 @@ export function registerBrowserAgentStorageRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const schemeRaw = toStringOrEmpty(body.colorScheme);
     const colorScheme =
-      schemeRaw === "dark" ||
-      schemeRaw === "light" ||
-      schemeRaw === "no-preference"
+      schemeRaw === "dark" || schemeRaw === "light" || schemeRaw === "no-preference"
         ? (schemeRaw as "dark" | "light" | "no-preference")
         : schemeRaw === "none"
           ? null
           : undefined;
     if (colorScheme === undefined)
-      return jsonError(
-        res,
-        400,
-        "colorScheme must be dark|light|no-preference|none",
-      );
+      return jsonError(res, 400, "colorScheme must be dark|light|no-preference|none");
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "media emulation");

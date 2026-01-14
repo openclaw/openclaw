@@ -8,10 +8,7 @@ import { loadConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildMessageCliJson, formatMessageCliText } from "./message-format.js";
 
 export async function messageCommand(
@@ -20,8 +17,7 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const cfg = loadConfig();
-  const rawAction =
-    typeof opts.action === "string" ? opts.action.trim().toLowerCase() : "";
+  const rawAction = typeof opts.action === "string" ? opts.action.trim().toLowerCase() : "";
   const action = (rawAction || "send") as ChannelMessageActionName;
   if (!(CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).includes(action)) {
     throw new Error(`Unknown message action: ${action}`);
@@ -52,8 +48,7 @@ export async function messageCommand(
 
   const json = opts.json === true;
   const dryRun = opts.dryRun === true;
-  const needsSpinner =
-    !json && !dryRun && (action === "send" || action === "poll");
+  const needsSpinner = !json && !dryRun && (action === "send" || action === "poll");
 
   const result = needsSpinner
     ? await withProgress(

@@ -9,8 +9,7 @@ describe("resolveSandboxContext", () => {
       throw new Error("spawn should not be called");
     });
     vi.doMock("node:child_process", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("node:child_process")>();
+      const actual = await importOriginal<typeof import("node:child_process")>();
       return { ...actual, spawn };
     });
 
@@ -44,8 +43,7 @@ describe("resolveSandboxContext", () => {
       throw new Error("spawn should not be called");
     });
     vi.doMock("node:child_process", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("node:child_process")>();
+      const actual = await importOriginal<typeof import("node:child_process")>();
       return { ...actual, spawn };
     });
 
@@ -79,8 +77,7 @@ describe("resolveSandboxContext", () => {
       throw new Error("spawn should not be called");
     });
     vi.doMock("node:child_process", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("node:child_process")>();
+      const actual = await importOriginal<typeof import("node:child_process")>();
       return { ...actual, spawn };
     });
 

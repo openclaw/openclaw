@@ -1,9 +1,6 @@
 import { intro, note, outro, spinner } from "@clack/prompts";
 
-import {
-  ensureAuthProfileStore,
-  upsertAuthProfile,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { updateConfig } from "../commands/models/shared.js";
 import { applyAuthProfileConfig } from "../commands/onboard-auth.js";
 import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
@@ -41,9 +38,7 @@ function parseJsonResponse<T>(value: unknown): T {
   return value as T;
 }
 
-async function requestDeviceCode(params: {
-  scope: string;
-}): Promise<DeviceCodeResponse> {
+async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeResponse> {
   const body = new URLSearchParams({
     client_id: CLIENT_ID,
     scope: params.scope,
@@ -148,9 +143,7 @@ export async function githubCopilotLoginCommand(
   spin.stop("Device code ready");
 
   note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join(
-      "\n",
-    ),
+    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
     stylePromptTitle("Authorize"),
   );
 

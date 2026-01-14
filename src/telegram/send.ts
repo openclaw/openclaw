@@ -17,10 +17,7 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
-import {
-  parseTelegramTarget,
-  stripTelegramInternalPrefixes,
-} from "./targets.js";
+import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramSendOpts = {
@@ -55,13 +52,9 @@ type TelegramReactionOpts = {
   retry?: RetryConfig;
 };
 
-const PARSE_ERR_RE =
-  /can't parse entities|parse entities|find end of the entity/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; token: string },
-) {
+function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
   if (explicit?.trim()) return explicit.trim();
   if (!params.token) {
     throw new Error(
@@ -156,9 +149,7 @@ export async function sendMessageTelegram(
   const client: ApiClientOptions | undefined =
     fetchImpl || timeoutSeconds
       ? {
-          ...(fetchImpl
-            ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-            : {}),
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
@@ -170,9 +161,7 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const threadParams: Record<string, number> = {};
   const messageThreadId =
-    opts.messageThreadId != null
-      ? opts.messageThreadId
-      : target.messageThreadId;
+    opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
   if (messageThreadId != null) {
     threadParams.message_thread_id = Math.trunc(messageThreadId);
   }
@@ -187,8 +176,7 @@ export async function sendMessageTelegram(
   });
 
   const wrapChatNotFound = (err: unknown) => {
-    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err)))
-      return err;
+    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) return err;
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,
@@ -205,10 +193,7 @@ export async function sendMessageTelegram(
       contentType: media.contentType,
       fileName: media.fileName,
     });
-    const fileName =
-      media.fileName ??
-      (isGif ? "animation.gif" : inferFilename(kind)) ??
-      "file";
+    const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
     const file = new InputFile(media.buffer, fileName);
     const caption = text?.trim() || undefined;
     const mediaParams = hasThreadParams
@@ -229,26 +214,23 @@ export async function sendMessageTelegram(
       | Awaited<ReturnType<typeof api.sendAnimation>>
       | Awaited<ReturnType<typeof api.sendDocument>>;
     if (isGif) {
-      result = await request(
-        () => api.sendAnimation(chatId, file, mediaParams),
-        "animation",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      result = await request(() => api.sendAnimation(chatId, file, mediaParams), "animation").catch(
+        (err) => {
+          throw wrapChatNotFound(err);
+        },
+      );
     } else if (kind === "image") {
-      result = await request(
-        () => api.sendPhoto(chatId, file, mediaParams),
-        "photo",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      result = await request(() => api.sendPhoto(chatId, file, mediaParams), "photo").catch(
+        (err) => {
+          throw wrapChatNotFound(err);
+        },
+      );
     } else if (kind === "video") {
-      result = await request(
-        () => api.sendVideo(chatId, file, mediaParams),
-        "video",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      result = await request(() => api.sendVideo(chatId, file, mediaParams), "video").catch(
+        (err) => {
+          throw wrapChatNotFound(err);
+        },
+      );
     } else if (kind === "audio") {
       const { useVoice } = resolveTelegramVoiceSend({
         wantsVoice: opts.asVoice === true, // default false (backward compatible)
@@ -257,27 +239,24 @@ export async function sendMessageTelegram(
         logFallback: logVerbose,
       });
       if (useVoice) {
-        result = await request(
-          () => api.sendVoice(chatId, file, mediaParams),
-          "voice",
-        ).catch((err) => {
-          throw wrapChatNotFound(err);
-        });
+        result = await request(() => api.sendVoice(chatId, file, mediaParams), "voice").catch(
+          (err) => {
+            throw wrapChatNotFound(err);
+          },
+        );
       } else {
-        result = await request(
-          () => api.sendAudio(chatId, file, mediaParams),
-          "audio",
-        ).catch((err) => {
-          throw wrapChatNotFound(err);
-        });
+        result = await request(() => api.sendAudio(chatId, file, mediaParams), "audio").catch(
+          (err) => {
+            throw wrapChatNotFound(err);
+          },
+        );
       }
     } else {
-      result = await request(
-        () => api.sendDocument(chatId, file, mediaParams),
-        "document",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      result = await request(() => api.sendDocument(chatId, file, mediaParams), "document").catch(
+        (err) => {
+          throw wrapChatNotFound(err);
+        },
+      );
     }
     const messageId = String(result?.message_id ?? "unknown");
     recordChannelActivity({
@@ -302,38 +281,35 @@ export async function sendMessageTelegram(
         parse_mode: "HTML" as const,
         ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
       };
-  const res = await request(
-    () => api.sendMessage(chatId, htmlText, textParams),
-    "message",
-  ).catch(async (err) => {
-    // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
-    // When that happens, fall back to plain text so the message still delivers.
-    const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText)) {
-      if (opts.verbose) {
-        console.warn(
-          `telegram HTML parse failed, retrying as plain text: ${errText}`,
-        );
+  const res = await request(() => api.sendMessage(chatId, htmlText, textParams), "message").catch(
+    async (err) => {
+      // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
+      // When that happens, fall back to plain text so the message still delivers.
+      const errText = formatErrorMessage(err);
+      if (PARSE_ERR_RE.test(errText)) {
+        if (opts.verbose) {
+          console.warn(`telegram HTML parse failed, retrying as plain text: ${errText}`);
+        }
+        const plainParams =
+          hasThreadParams || replyMarkup
+            ? {
+                ...threadParams,
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+              }
+            : undefined;
+        return await request(
+          () =>
+            plainParams
+              ? api.sendMessage(chatId, text, plainParams)
+              : api.sendMessage(chatId, text),
+          "message-plain",
+        ).catch((err2) => {
+          throw wrapChatNotFound(err2);
+        });
       }
-      const plainParams =
-        hasThreadParams || replyMarkup
-          ? {
-              ...threadParams,
-              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-            }
-          : undefined;
-      return await request(
-        () =>
-          plainParams
-            ? api.sendMessage(chatId, text, plainParams)
-            : api.sendMessage(chatId, text),
-        "message-plain",
-      ).catch((err2) => {
-        throw wrapChatNotFound(err2);
-      });
-    }
-    throw wrapChatNotFound(err);
-  });
+      throw wrapChatNotFound(err);
+    },
+  );
   const messageId = String(res?.message_id ?? "unknown");
   recordChannelActivity({
     channel: "telegram",
@@ -378,10 +354,7 @@ export async function reactMessageTelegram(
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
-  await request(
-    () => api.setMessageReaction(chatId, messageId, reactions),
-    "reaction",
-  );
+  await request(() => api.setMessageReaction(chatId, messageId, reactions), "reaction");
   return { ok: true };
 }
 

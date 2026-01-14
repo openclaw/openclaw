@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  formatOutboundPayloadLog,
-  normalizeOutboundPayloadsForJson,
-} from "./payloads.js";
+import { formatOutboundPayloadLog, normalizeOutboundPayloadsForJson } from "./payloads.js";
 
 describe("normalizeOutboundPayloadsForJson", () => {
   it("normalizes payloads with mediaUrl and mediaUrls", () => {

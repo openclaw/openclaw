@@ -1,9 +1,5 @@
 import type { ErrorObject } from "ajv";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-} from "../protocol/index.js";
+import { ErrorCodes, errorShape, formatValidationErrors } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
 
@@ -26,18 +22,11 @@ export function respondInvalidParams(params: {
   );
 }
 
-export async function respondUnavailableOnThrow(
-  respond: RespondFn,
-  fn: () => Promise<void>,
-) {
+export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {
   try {
     await fn();
   } catch (err) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-    );
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
   }
 }
 

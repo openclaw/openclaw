@@ -52,9 +52,7 @@ function resolveStorePath(agentId: string, raw?: string): string {
   const stateDir = resolveStateDir(process.env, os.homedir);
   const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
   if (!raw) return fallback;
-  const withToken = raw.includes("{agentId}")
-    ? raw.replaceAll("{agentId}", agentId)
-    : raw;
+  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
   return resolveUserPath(withToken);
 }
 
@@ -77,47 +75,29 @@ function mergeConfig(
   const model = overrides?.model ?? defaults?.model ?? DEFAULT_MODEL;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
-    modelCacheDir:
-      overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveStorePath(
-      agentId,
-      overrides?.store?.path ?? defaults?.store?.path,
-    ),
+    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
   };
   const chunking = {
-    tokens:
-      overrides?.chunking?.tokens ??
-      defaults?.chunking?.tokens ??
-      DEFAULT_CHUNK_TOKENS,
-    overlap:
-      overrides?.chunking?.overlap ??
-      defaults?.chunking?.overlap ??
-      DEFAULT_CHUNK_OVERLAP,
+    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
+    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
   };
   const sync = {
-    onSessionStart:
-      overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
+    onSessionStart: overrides?.sync?.onSessionStart ?? defaults?.sync?.onSessionStart ?? true,
     onSearch: overrides?.sync?.onSearch ?? defaults?.sync?.onSearch ?? true,
     watch: overrides?.sync?.watch ?? defaults?.sync?.watch ?? true,
     watchDebounceMs:
       overrides?.sync?.watchDebounceMs ??
       defaults?.sync?.watchDebounceMs ??
       DEFAULT_WATCH_DEBOUNCE_MS,
-    intervalMinutes:
-      overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
+    intervalMinutes: overrides?.sync?.intervalMinutes ?? defaults?.sync?.intervalMinutes ?? 0,
   };
   const query = {
-    maxResults:
-      overrides?.query?.maxResults ??
-      defaults?.query?.maxResults ??
-      DEFAULT_MAX_RESULTS,
-    minScore:
-      overrides?.query?.minScore ??
-      defaults?.query?.minScore ??
-      DEFAULT_MIN_SCORE,
+    maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
+    minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
   };
 
   const overlap = Math.max(0, Math.min(chunking.overlap, chunking.tokens - 1));

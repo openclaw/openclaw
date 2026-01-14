@@ -33,9 +33,7 @@ describe("resolvePythonExecutablePath", () => {
 
         process.env.PATH = `${shimDir}${path.delimiter}/usr/bin`;
 
-        const { resolvePythonExecutablePath } = await import(
-          "./gmail-setup-utils.js"
-        );
+        const { resolvePythonExecutablePath } = await import("./gmail-setup-utils.js");
 
         const resolved = await resolvePythonExecutablePath();
         expect(resolved).toBe(realPython);

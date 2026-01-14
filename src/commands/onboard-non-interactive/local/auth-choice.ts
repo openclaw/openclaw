@@ -9,10 +9,7 @@ import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import {
-  buildTokenProfileId,
-  validateAnthropicSetupToken,
-} from "../../auth-token.js";
+import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
@@ -73,9 +70,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
     const provider = normalizeProviderId(providerRaw);
     if (provider !== "anthropic") {
-      runtime.error(
-        "Only --token-provider anthropic is supported for --auth-choice token.",
-      );
+      runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
       runtime.exit(1);
       return null;
     }
@@ -96,8 +91,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     const expiresInRaw = opts.tokenExpiresIn?.trim();
     if (expiresInRaw) {
       try {
-        expires =
-          Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
+        expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
       } catch (err) {
         runtime.error(`Invalid --token-expires-in: ${String(err)}`);
         runtime.exit(1);
@@ -105,9 +99,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       }
     }
 
-    const profileId =
-      opts.tokenProfileId?.trim() ||
-      buildTokenProfileId({ provider, name: "" });
+    const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
     upsertAuthProfile({
       profileId,
       credential: {
@@ -258,9 +250,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     const modelId =
-      authChoice === "minimax-api-lightning"
-        ? "MiniMax-M2.1-lightning"
-        : "MiniMax-M2.1";
+      authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
     return applyMinimaxApiConfig(nextConfig, modelId);
   }
 

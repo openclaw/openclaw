@@ -93,9 +93,7 @@ export function registerBrowserCookiesAndStorageCommands(
       }
     });
 
-  const storage = browser
-    .command("storage")
-    .description("Read/write localStorage/sessionStorage");
+  const storage = browser.command("storage").description("Read/write localStorage/sessionStorage");
 
   function registerStorageKind(kind: "local" | "session") {
     const cmd = storage.command(kind).description(`${kind}Storage commands`);

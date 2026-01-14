@@ -18,9 +18,7 @@ const decodeWsData = (data: unknown): string => {
   if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
   if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
-      "utf-8",
-    );
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf-8");
   }
   return "";
 };
@@ -67,16 +65,13 @@ describe("gateway server node/bridge", () => {
       displayName: "Node",
     });
     expect(res1.ok).toBe(true);
-    const req1 = (res1.payload as { request?: { requestId?: unknown } } | null)
-      ?.request;
+    const req1 = (res1.payload as { request?: { requestId?: unknown } } | null)?.request;
     const requestId = typeof req1?.requestId === "string" ? req1.requestId : "";
     expect(requestId.length).toBeGreaterThan(0);
 
     const evt1 = await requestedP;
     expect(evt1.event).toBe("node.pair.requested");
-    expect((evt1.payload as { requestId?: unknown } | null)?.requestId).toBe(
-      requestId,
-    );
+    expect((evt1.payload as { requestId?: unknown } | null)?.requestId).toBe(requestId);
 
     const res2 = await rpcReq(ws, "node.pair.request", {
       nodeId: "n1",
@@ -84,11 +79,7 @@ describe("gateway server node/bridge", () => {
     });
     expect(res2.ok).toBe(true);
     await expect(
-      onceMessage(
-        ws,
-        (o) => o.type === "event" && o.event === "node.pair.requested",
-        200,
-      ),
+      onceMessage(ws, (o) => o.type === "event" && o.event === "node.pair.requested", 200),
     ).rejects.toThrow();
 
     const resolvedP = new Promise<{
@@ -110,19 +101,13 @@ describe("gateway server node/bridge", () => {
 
     const approveRes = await rpcReq(ws, "node.pair.approve", { requestId });
     expect(approveRes.ok).toBe(true);
-    const tokenValue = (
-      approveRes.payload as { node?: { token?: unknown } } | null
-    )?.node?.token;
+    const tokenValue = (approveRes.payload as { node?: { token?: unknown } } | null)?.node?.token;
     const token = typeof tokenValue === "string" ? tokenValue : "";
     expect(token.length).toBeGreaterThan(0);
 
     const evt2 = await resolvedP;
-    expect((evt2.payload as { requestId?: unknown } | null)?.requestId).toBe(
-      requestId,
-    );
-    expect((evt2.payload as { decision?: unknown } | null)?.decision).toBe(
-      "approved",
-    );
+    expect((evt2.payload as { requestId?: unknown } | null)?.requestId).toBe(requestId);
+    expect((evt2.payload as { decision?: unknown } | null)?.decision).toBe("approved");
 
     const verifyRes = await rpcReq(ws, "node.pair.verify", {
       nodeId: "n1",
@@ -135,9 +120,7 @@ describe("gateway server node/bridge", () => {
     expect(listRes.ok).toBe(true);
     const paired = (listRes.payload as { paired?: unknown } | null)?.paired;
     expect(Array.isArray(paired)).toBe(true);
-    expect(
-      (paired as Array<{ nodeId?: unknown }>).some((n) => n.nodeId === "n1"),
-    ).toBe(true);
+    expect((paired as Array<{ nodeId?: unknown }>).some((n) => n.nodeId === "n1")).toBe(true);
 
     ws.close();
     await server.close();
@@ -278,11 +261,9 @@ describe("gateway server node/bridge", () => {
         });
         expect(approveRes.ok).toBe(true);
 
-        const describeRes = await rpcReq<{ commands?: string[] }>(
-          ws,
-          "node.describe",
-          { nodeId: "n1" },
-        );
+        const describeRes = await rpcReq<{ commands?: string[] }>(ws, "node.describe", {
+          nodeId: "n1",
+        });
         expect(describeRes.ok).toBe(true);
         expect(describeRes.payload?.commands).toEqual([
           "camera.snap",
@@ -345,10 +326,7 @@ describe("gateway server node/bridge", () => {
           remoteIp: "10.0.0.12",
         });
         expect(describeRes.payload?.caps).toEqual(["camera", "canvas"]);
-        expect(describeRes.payload?.commands).toEqual([
-          "camera.snap",
-          "canvas.eval",
-        ]);
+        expect(describeRes.payload?.commands).toEqual(["camera.snap", "canvas.eval"]);
       } finally {
         ws.close();
         await server.close();

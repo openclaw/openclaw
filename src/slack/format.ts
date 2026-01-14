@@ -29,10 +29,7 @@ md.enable("strikethrough");
  * can intentionally include them, while escaping other uses of "<" and ">".
  */
 function escapeSlackMrkdwnSegment(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -69,9 +66,7 @@ function escapeSlackMrkdwnText(text: string): string {
     const matchIndex = match.index ?? 0;
     out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex, matchIndex)));
     const token = match[0] ?? "";
-    out.push(
-      isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token),
-    );
+    out.push(isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token));
     lastIndex = matchIndex + token.length;
   }
 
@@ -89,8 +84,7 @@ function getLinkStack(env: RenderEnv): { href: string }[] {
   return env.slackLinkStack;
 }
 
-md.renderer.rules.text = (tokens, idx) =>
-  escapeSlackMrkdwnText(tokens[idx]?.content ?? "");
+md.renderer.rules.text = (tokens, idx) => escapeSlackMrkdwnText(tokens[idx]?.content ?? "");
 
 md.renderer.rules.softbreak = () => "\n";
 md.renderer.rules.hardbreak = () => "\n";

@@ -10,9 +10,7 @@ describe("oauth paths", () => {
       CLAWDBOT_STATE_DIR: "/custom/state",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(
-      path.resolve("/custom/oauth"),
-    );
+    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
     expect(resolveOAuthPath(env, "/custom/state")).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
@@ -23,9 +21,7 @@ describe("oauth paths", () => {
       CLAWDBOT_STATE_DIR: "/custom/state",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveOAuthDir(env, "/custom/state")).toBe(
-      path.join("/custom/state", "credentials"),
-    );
+    expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
     expect(resolveOAuthPath(env, "/custom/state")).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );

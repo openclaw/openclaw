@@ -59,8 +59,7 @@ export async function startTelegramWebhook(opts: {
   });
 
   const publicUrl =
-    opts.publicUrl ??
-    `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
+    opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
 
   await bot.api.setWebhook(publicUrl, {
     secret_token: opts.secret,

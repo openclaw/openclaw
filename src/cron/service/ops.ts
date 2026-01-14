@@ -45,25 +45,17 @@ export async function status(state: CronServiceState) {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
-      nextWakeAtMs:
-        state.deps.cronEnabled === true ? (nextWakeAtMs(state) ?? null) : null,
+      nextWakeAtMs: state.deps.cronEnabled === true ? (nextWakeAtMs(state) ?? null) : null,
     };
   });
 }
 
-export async function list(
-  state: CronServiceState,
-  opts?: { includeDisabled?: boolean },
-) {
+export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
   return await locked(state, async () => {
     await ensureLoaded(state);
     const includeDisabled = opts?.includeDisabled === true;
-    const jobs = (state.store?.jobs ?? []).filter(
-      (j) => includeDisabled || j.enabled,
-    );
-    return jobs.sort(
-      (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
-    );
+    const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
+    return jobs.sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
 
@@ -84,11 +76,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   });
 }
 
-export async function update(
-  state: CronServiceState,
-  id: string,
-  patch: CronJobPatch,
-) {
+export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
   return await locked(state, async () => {
     warnIfDisabled(state, "update");
     await ensureLoaded(state);
@@ -129,11 +117,7 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
-export async function run(
-  state: CronServiceState,
-  id: string,
-  mode?: "due" | "force",
-) {
+export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state);

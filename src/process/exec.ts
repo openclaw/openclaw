@@ -56,9 +56,7 @@ export async function runCommandWithTimeout(
   optionsOrTimeout: number | CommandOptions,
 ): Promise<SpawnResult> {
   const options: CommandOptions =
-    typeof optionsOrTimeout === "number"
-      ? { timeoutMs: optionsOrTimeout }
-      : optionsOrTimeout;
+    typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, env } = options;
   const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;

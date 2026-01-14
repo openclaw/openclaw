@@ -3,10 +3,7 @@ import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
-import type {
-  GatewayClientMode,
-  GatewayClientName,
-} from "../../utils/message-channel.js";
+import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
@@ -16,9 +13,7 @@ export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 export type ChannelAgentTool = AgentTool<TSchema, unknown>;
 
-export type ChannelAgentToolFactory = (params: {
-  cfg?: ClawdbotConfig;
-}) => ChannelAgentTool[];
+export type ChannelAgentToolFactory = (params: { cfg?: ClawdbotConfig }) => ChannelAgentTool[];
 
 export type ChannelSetupInput = {
   name?: string;
@@ -239,12 +234,8 @@ export type ChannelMessageActionAdapter = {
   listActions?: (params: { cfg: ClawdbotConfig }) => ChannelMessageActionName[];
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
   supportsButtons?: (params: { cfg: ClawdbotConfig }) => boolean;
-  extractToolSend?: (params: {
-    args: Record<string, unknown>;
-  }) => ChannelToolSend | null;
-  handleAction?: (
-    ctx: ChannelMessageActionContext,
-  ) => Promise<AgentToolResult<unknown>>;
+  extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
 export type ChannelPollResult = {

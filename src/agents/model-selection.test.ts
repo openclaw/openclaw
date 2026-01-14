@@ -39,9 +39,7 @@ describe("buildAllowedModelSet", () => {
 
     expect(allowed.allowAny).toBe(false);
     expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(
-      true,
-    );
+    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(true);
   });
 
   it("includes the default model when no allowlist is set", () => {
@@ -58,9 +56,7 @@ describe("buildAllowedModelSet", () => {
 
     expect(allowed.allowAny).toBe(true);
     expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(
-      true,
-    );
+    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(true);
   });
 
   it("allows explicit custom providers from models.providers", () => {
@@ -93,9 +89,7 @@ describe("buildAllowedModelSet", () => {
     });
 
     expect(allowed.allowAny).toBe(false);
-    expect(
-      allowed.allowedKeys.has(modelKey("moonshot", "kimi-k2-0905-preview")),
-    ).toBe(true);
+    expect(allowed.allowedKeys.has(modelKey("moonshot", "kimi-k2-0905-preview"))).toBe(true);
   });
 });
 

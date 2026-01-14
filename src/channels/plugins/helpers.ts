@@ -8,13 +8,8 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
   cfg: ClawdbotConfig;
   accountIds?: string[];
 }): string {
-  const accountIds =
-    params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
-  return (
-    params.plugin.config.defaultAccountId?.(params.cfg) ??
-    accountIds[0] ??
-    DEFAULT_ACCOUNT_ID
-  );
+  const accountIds = params.accountIds ?? params.plugin.config.listAccountIds(params.cfg);
+  return params.plugin.config.defaultAccountId?.(params.cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
 export function formatPairingApproveHint(channelId: string): string {

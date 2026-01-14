@@ -79,10 +79,7 @@ describe("models-config", () => {
         const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
-          providers: Record<
-            string,
-            { apiKey?: string; models?: Array<{ id: string }> }
-          >;
+          providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
         };
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
@@ -138,12 +135,8 @@ describe("models-config", () => {
         providers: Record<string, { baseUrl?: string }>;
       };
 
-      expect(parsed.providers.existing?.baseUrl).toBe(
-        "http://localhost:1234/v1",
-      );
-      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe(
-        "http://localhost:4000/v1",
-      );
+      expect(parsed.providers.existing?.baseUrl).toBe("http://localhost:1234/v1");
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
     });
   });
 });

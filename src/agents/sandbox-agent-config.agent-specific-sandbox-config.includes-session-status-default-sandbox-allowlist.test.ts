@@ -32,8 +32,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         dockerArgs[0] === "inspect" &&
         dockerArgs[1] === "-f" &&
         dockerArgs[2] === "{{.State.Running}}";
-      const shouldSucceedImageInspect =
-        dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
+      const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
 
       const code = shouldFailContainerInspect ? 1 : 0;
       if (shouldSucceedImageInspect) {

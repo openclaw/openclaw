@@ -11,10 +11,7 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "./chat-abort.js";
-import {
-  type ChatImageContent,
-  parseMessageWithAttachments,
-} from "./chat-attachments.js";
+import { type ChatImageContent, parseMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,
   errorShape,
@@ -32,12 +29,7 @@ import {
   resolveSessionModelRef,
 } from "./session-utils.js";
 
-export const handleChatBridgeMethods: BridgeMethodHandler = async (
-  ctx,
-  nodeId,
-  method,
-  params,
-) => {
+export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, method, params) => {
   switch (method) {
     case "chat.history": {
       if (!validateChatHistoryParams(params)) {
@@ -56,16 +48,10 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (
       const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
       const sessionId = entry?.sessionId;
       const rawMessages =
-        sessionId && storePath
-          ? readSessionMessages(sessionId, storePath, entry?.sessionFile)
-          : [];
+        sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
       const max = typeof limit === "number" ? limit : 200;
-      const sliced =
-        rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-      const capped = capArrayByJsonBytes(
-        sliced,
-        MAX_CHAT_HISTORY_MESSAGES_BYTES,
-      ).items;
+      const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+      const capped = capArrayByJsonBytes(sliced, MAX_CHAT_HISTORY_MESSAGES_BYTES).items;
       let thinkingLevel = entry?.thinkingLevel;
       if (!thinkingLevel) {
         const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -214,11 +200,10 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (
       let parsedImages: ChatImageContent[] = [];
       if (normalizedAttachments.length > 0) {
         try {
-          const parsed = await parseMessageWithAttachments(
-            p.message,
-            normalizedAttachments,
-            { maxBytes: 5_000_000, log: ctx.logBridge },
-          );
+          const parsed = await parseMessageWithAttachments(p.message, normalizedAttachments, {
+            maxBytes: 5_000_000,
+            log: ctx.logBridge,
+          });
           parsedMessage = parsed.message;
           parsedImages = parsed.images;
         } catch (err) {
@@ -232,9 +217,7 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (
         }
       }
 
-      const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
-        p.sessionKey,
-      );
+      const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
       const timeoutMs = resolveAgentTimeoutMs({
         cfg,
         overrideMs: p.timeoutMs,

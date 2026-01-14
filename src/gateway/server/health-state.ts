@@ -1,11 +1,5 @@
-import {
-  getHealthSnapshot,
-  type HealthSummary,
-} from "../../commands/health.js";
-import {
-  CONFIG_PATH_CLAWDBOT,
-  STATE_DIR_CLAWDBOT,
-} from "../../config/config.js";
+import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
+import { CONFIG_PATH_CLAWDBOT, STATE_DIR_CLAWDBOT } from "../../config/config.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import type { Snapshot } from "../protocol/index.js";
 
@@ -48,9 +42,7 @@ export function getPresenceVersion(): number {
   return presenceVersion;
 }
 
-export function setBroadcastHealthUpdate(
-  fn: ((snap: HealthSummary) => void) | null,
-) {
+export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | null) {
   broadcastHealthUpdate = fn;
 }
 

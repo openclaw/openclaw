@@ -167,9 +167,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
 
 export type SyntheticCatalogEntry = (typeof SYNTHETIC_MODEL_CATALOG)[number];
 
-export function buildSyntheticModelDefinition(
-  entry: SyntheticCatalogEntry,
-): ModelDefinitionConfig {
+export function buildSyntheticModelDefinition(entry: SyntheticCatalogEntry): ModelDefinitionConfig {
   return {
     id: entry.id,
     name: entry.name,

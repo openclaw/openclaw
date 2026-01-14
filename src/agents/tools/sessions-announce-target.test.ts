@@ -43,9 +43,7 @@ describe("resolveAnnounceTarget", () => {
       accountId: "work",
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
-    const first = callGatewayMock.mock.calls[0]?.[0] as
-      | { method?: string }
-      | undefined;
+    const first = callGatewayMock.mock.calls[0]?.[0] as { method?: string } | undefined;
     expect(first).toBeDefined();
     expect(first?.method).toBe("sessions.list");
   });

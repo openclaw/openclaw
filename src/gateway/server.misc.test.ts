@@ -76,12 +76,8 @@ describe("gateway server misc", () => {
 
   test("refuses to start when port already bound", async () => {
     const { server: blocker, port } = await occupyPort();
-    await expect(startGatewayServer(port)).rejects.toBeInstanceOf(
-      GatewayLockError,
-    );
-    await expect(startGatewayServer(port)).rejects.toThrow(
-      /already listening/i,
-    );
+    await expect(startGatewayServer(port)).rejects.toBeInstanceOf(GatewayLockError);
+    await expect(startGatewayServer(port)).rejects.toThrow(/already listening/i);
     blocker.close();
   });
 

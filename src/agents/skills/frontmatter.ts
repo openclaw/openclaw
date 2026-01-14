@@ -53,11 +53,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (!input || typeof input !== "object") return undefined;
   const raw = input as Record<string, unknown>;
   const kindRaw =
-    typeof raw.kind === "string"
-      ? raw.kind
-      : typeof raw.type === "string"
-        ? raw.type
-        : "";
+    typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
   const kind = kindRaw.trim().toLowerCase();
   if (kind !== "brew" && kind !== "node" && kind !== "go" && kind !== "uv") {
     return undefined;
@@ -78,10 +74,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   return spec;
 }
 
-function getFrontmatterValue(
-  frontmatter: ParsedSkillFrontmatter,
-  key: string,
-): string | undefined {
+function getFrontmatterValue(frontmatter: ParsedSkillFrontmatter, key: string): string | undefined {
   const raw = frontmatter[key];
   return typeof raw === "string" ? raw : undefined;
 }
@@ -101,32 +94,17 @@ export function resolveClawdbotMetadata(
       typeof clawdbotObj.requires === "object" && clawdbotObj.requires !== null
         ? (clawdbotObj.requires as Record<string, unknown>)
         : undefined;
-    const installRaw = Array.isArray(clawdbotObj.install)
-      ? (clawdbotObj.install as unknown[])
-      : [];
+    const installRaw = Array.isArray(clawdbotObj.install) ? (clawdbotObj.install as unknown[]) : [];
     const install = installRaw
       .map((entry) => parseInstallSpec(entry))
       .filter((entry): entry is SkillInstallSpec => Boolean(entry));
     const osRaw = normalizeStringList(clawdbotObj.os);
     return {
-      always:
-        typeof clawdbotObj.always === "boolean"
-          ? clawdbotObj.always
-          : undefined,
-      emoji:
-        typeof clawdbotObj.emoji === "string" ? clawdbotObj.emoji : undefined,
-      homepage:
-        typeof clawdbotObj.homepage === "string"
-          ? clawdbotObj.homepage
-          : undefined,
-      skillKey:
-        typeof clawdbotObj.skillKey === "string"
-          ? clawdbotObj.skillKey
-          : undefined,
-      primaryEnv:
-        typeof clawdbotObj.primaryEnv === "string"
-          ? clawdbotObj.primaryEnv
-          : undefined,
+      always: typeof clawdbotObj.always === "boolean" ? clawdbotObj.always : undefined,
+      emoji: typeof clawdbotObj.emoji === "string" ? clawdbotObj.emoji : undefined,
+      homepage: typeof clawdbotObj.homepage === "string" ? clawdbotObj.homepage : undefined,
+      skillKey: typeof clawdbotObj.skillKey === "string" ? clawdbotObj.skillKey : undefined,
+      primaryEnv: typeof clawdbotObj.primaryEnv === "string" ? clawdbotObj.primaryEnv : undefined,
       os: osRaw.length > 0 ? osRaw : undefined,
       requires: requiresRaw
         ? {

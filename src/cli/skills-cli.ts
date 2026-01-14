@@ -1,9 +1,6 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   buildWorkspaceSkillStatus,
   type SkillStatusEntry,
@@ -46,14 +43,10 @@ function formatSkillLine(skill: SkillStatusEntry, verbose = false): string {
         ? chalk.yellow("blocked")
         : chalk.red("missing reqs");
 
-  const name = skill.eligible
-    ? chalk.white(skill.name)
-    : chalk.gray(skill.name);
+  const name = skill.eligible ? chalk.white(skill.name) : chalk.gray(skill.name);
 
   const desc = chalk.gray(
-    skill.description.length > 50
-      ? `${skill.description.slice(0, 47)}...`
-      : skill.description,
+    skill.description.length > 50 ? `${skill.description.slice(0, 47)}...` : skill.description,
   );
 
   if (verbose) {
@@ -73,8 +66,7 @@ function formatSkillLine(skill: SkillStatusEntry, verbose = false): string {
     if (skill.missing.os.length > 0) {
       missing.push(`os: ${skill.missing.os.join(", ")}`);
     }
-    const missingStr =
-      missing.length > 0 ? chalk.red(` [${missing.join("; ")}]`) : "";
+    const missingStr = missing.length > 0 ? chalk.red(` [${missing.join("; ")}]`) : "";
     return `${emoji} ${name} ${status}${missingStr}\n   ${desc}`;
   }
 
@@ -84,13 +76,8 @@ function formatSkillLine(skill: SkillStatusEntry, verbose = false): string {
 /**
  * Format the skills list output
  */
-export function formatSkillsList(
-  report: SkillStatusReport,
-  opts: SkillsListOptions,
-): string {
-  const skills = opts.eligible
-    ? report.skills.filter((s) => s.eligible)
-    : report.skills;
+export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
+  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
 
   if (opts.json) {
     const jsonReport = {
@@ -124,8 +111,7 @@ export function formatSkillsList(
 
   const lines: string[] = [];
   lines.push(
-    chalk.bold.cyan("Skills") +
-      chalk.gray(` (${eligible.length}/${skills.length} ready)`),
+    chalk.bold.cyan("Skills") + chalk.gray(` (${eligible.length}/${skills.length} ready)`),
   );
   lines.push("");
 
@@ -155,9 +141,7 @@ export function formatSkillInfo(
   skillName: string,
   opts: SkillInfoOptions,
 ): string {
-  const skill = report.skills.find(
-    (s) => s.name === skillName || s.skillKey === skillName,
-  );
+  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
 
   if (!skill) {
     if (opts.json) {
@@ -263,15 +247,10 @@ export function formatSkillInfo(
 /**
  * Format a check/summary of all skills status
  */
-export function formatSkillsCheck(
-  report: SkillStatusReport,
-  opts: SkillsCheckOptions,
-): string {
+export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
   const disabled = report.skills.filter((s) => s.disabled);
-  const blocked = report.skills.filter(
-    (s) => s.blockedByAllowlist && !s.disabled,
-  );
+  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
   const missingReqs = report.skills.filter(
     (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
@@ -339,9 +318,7 @@ export function formatSkillsCheck(
       if (skill.missing.os.length > 0) {
         missing.push(`os: ${skill.missing.os.join(", ")}`);
       }
-      lines.push(
-        `  ${emoji} ${skill.name} ${chalk.gray(`(${missing.join("; ")})`)}`,
-      );
+      lines.push(`  ${emoji} ${skill.name} ${chalk.gray(`(${missing.join("; ")})`)}`);
     }
   }
 
@@ -357,11 +334,7 @@ export function registerSkillsCli(program: Command) {
     .description("List and inspect available skills")
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/skills",
-          "docs.clawd.bot/skills",
-        )}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/skills", "docs.clawd.bot/skills")}\n`,
     );
 
   skills
@@ -369,18 +342,11 @@ export function registerSkillsCli(program: Command) {
     .description("List all available skills")
     .option("--json", "Output as JSON", false)
     .option("--eligible", "Show only eligible (ready to use) skills", false)
-    .option(
-      "-v, --verbose",
-      "Show more details including missing requirements",
-      false,
-    )
+    .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(
-          config,
-          resolveDefaultAgentId(config),
-        );
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillsList(report, opts));
       } catch (err) {
@@ -397,10 +363,7 @@ export function registerSkillsCli(program: Command) {
     .action(async (name, opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(
-          config,
-          resolveDefaultAgentId(config),
-        );
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillInfo(report, name, opts));
       } catch (err) {
@@ -416,10 +379,7 @@ export function registerSkillsCli(program: Command) {
     .action(async (opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(
-          config,
-          resolveDefaultAgentId(config),
-        );
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillsCheck(report, opts));
       } catch (err) {
@@ -432,10 +392,7 @@ export function registerSkillsCli(program: Command) {
   skills.action(async () => {
     try {
       const config = loadConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(
-        config,
-        resolveDefaultAgentId(config),
-      );
+      const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
       const report = buildWorkspaceSkillStatus(workspaceDir, { config });
       console.log(formatSkillsList(report, {}));
     } catch (err) {

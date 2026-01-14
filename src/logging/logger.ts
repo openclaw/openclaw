@@ -34,8 +34,7 @@ export type LoggerResolvedSettings = ResolvedSettings;
 
 function resolveSettings(): ResolvedSettings {
   const cfg: ClawdbotConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ??
-    loadConfig().logging;
+    (loggingState.overrideSettings as LoggerSettings | null) ?? loadConfig().logging;
   const level = normalizeLogLevel(cfg?.level, "info");
   const file = cfg?.file ?? defaultRollingPathForToday();
   return { level, file };
@@ -47,9 +46,7 @@ function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings =
-    (loggingState.cachedSettings as ResolvedSettings | null) ??
-    resolveSettings();
+  const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
   if (!loggingState.cachedSettings) loggingState.cachedSettings = settings;
   if (settings.level === "silent") return false;
   return levelToMinLevel(level) <= levelToMinLevel(settings.level);
@@ -106,10 +103,7 @@ export function getChildLogger(
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
-export function toPinoLikeLogger(
-  logger: TsLogger<LogObj>,
-  level: LogLevel,
-): PinoLikeLogger {
+export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
       logger.getSubLogger({
@@ -180,11 +174,7 @@ function pruneOldRollingLogs(dir: string): void {
     const cutoff = Date.now() - MAX_LOG_AGE_MS;
     for (const entry of entries) {
       if (!entry.isFile()) continue;
-      if (
-        !entry.name.startsWith(`${LOG_PREFIX}-`) ||
-        !entry.name.endsWith(LOG_SUFFIX)
-      )
-        continue;
+      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) continue;
       const fullPath = path.join(dir, entry.name);
       try {
         const stat = fs.statSync(fullPath);

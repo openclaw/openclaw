@@ -36,9 +36,7 @@ const mocks = vi.hoisted(() => {
         .filter(([, cred]) => cred.provider === provider)
         .map(([id]) => id);
     }),
-    resolveAuthProfileDisplayLabel: vi.fn(
-      ({ profileId }: { profileId: string }) => profileId,
-    ),
+    resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
     resolveAuthStorePathForDisplay: vi
       .fn()
       .mockReturnValue("/tmp/clawdbot-agent/auth-profiles.json"),
@@ -58,9 +56,7 @@ const mocks = vi.hoisted(() => {
       return null;
     }),
     getCustomProviderApiKey: vi.fn().mockReturnValue(undefined),
-    getShellEnvAppliedKeys: vi
-      .fn()
-      .mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
+    getShellEnvAppliedKeys: vi.fn().mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
     loadConfig: vi.fn().mockReturnValue({
       agents: {
@@ -80,8 +76,7 @@ vi.mock("../../agents/agent-paths.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../agents/auth-profiles.js")>();
+  const actual = await importOriginal<typeof import("../../agents/auth-profiles.js")>();
   return {
     ...actual,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
@@ -102,8 +97,7 @@ vi.mock("../../infra/shell-env.js", () => ({
 }));
 
 vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../config/config.js")>();
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
@@ -121,18 +115,12 @@ const runtime = {
 describe("modelsStatusCommand auth overview", () => {
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(
-      String((runtime.log as vi.Mock).mock.calls[0][0]),
-    );
+    const payload = JSON.parse(String((runtime.log as vi.Mock).mock.calls[0][0]));
 
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-5");
-    expect(payload.auth.storePath).toBe(
-      "/tmp/clawdbot-agent/auth-profiles.json",
-    );
+    expect(payload.auth.storePath).toBe("/tmp/clawdbot-agent/auth-profiles.json");
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
-    expect(payload.auth.shellEnvFallback.appliedKeys).toContain(
-      "OPENAI_API_KEY",
-    );
+    expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
     expect(payload.auth.missingProvidersInUse).toEqual([]);
     expect(payload.auth.oauth.warnAfterMs).toBeGreaterThan(0);
     expect(payload.auth.oauth.profiles.length).toBeGreaterThan(0);
@@ -152,14 +140,10 @@ describe("modelsStatusCommand auth overview", () => {
     expect(openai?.env?.value).toContain("...");
 
     expect(
-      (payload.auth.providersWithOAuth as string[]).some((e) =>
-        e.startsWith("anthropic"),
-      ),
+      (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("anthropic")),
     ).toBe(true);
     expect(
-      (payload.auth.providersWithOAuth as string[]).some((e) =>
-        e.startsWith("openai-codex"),
-      ),
+      (payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai-codex")),
     ).toBe(true);
   });
 
@@ -175,10 +159,7 @@ describe("modelsStatusCommand auth overview", () => {
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
-      await modelsStatusCommand(
-        { check: true, plain: true },
-        localRuntime as never,
-      );
+      await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;

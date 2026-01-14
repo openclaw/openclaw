@@ -1,7 +1,4 @@
-import {
-  classifyFailoverReason,
-  type FailoverReason,
-} from "./pi-embedded-helpers.js";
+import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -38,9 +35,7 @@ export function isFailoverError(err: unknown): err is FailoverError {
   return err instanceof FailoverError;
 }
 
-export function resolveFailoverStatus(
-  reason: FailoverReason,
-): number | undefined {
+export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
   switch (reason) {
     case "billing":
       return 402;
@@ -80,11 +75,7 @@ function getErrorCode(err: unknown): string | undefined {
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
-  if (
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint"
-  ) {
+  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
   if (typeof err === "symbol") return err.description ?? "";
@@ -95,9 +86,7 @@ function getErrorMessage(err: unknown): string {
   return "";
 }
 
-export function resolveFailoverReasonFromError(
-  err: unknown,
-): FailoverReason | null {
+export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
   if (isFailoverError(err)) return err.reason;
 
   const status = getStatusCode(err);
@@ -107,11 +96,7 @@ export function resolveFailoverReasonFromError(
   if (status === 408) return "timeout";
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (
-    ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(
-      code,
-    )
-  ) {
+  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
     return "timeout";
   }
 

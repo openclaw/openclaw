@@ -34,8 +34,7 @@ export type EmbeddingProviderOptions = {
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_LOCAL_MODEL =
-  "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
 
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -60,14 +59,9 @@ async function createOpenAiEmbeddingProvider(
       });
 
   const providerConfig = options.config.models?.providers?.openai;
-  const baseUrl =
-    remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
+  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
   const url = `${baseUrl.replace(/\/$/, "")}/embeddings`;
-  const headerOverrides = Object.assign(
-    {},
-    providerConfig?.headers,
-    remote?.headers,
-  );
+  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${apiKey}`,
@@ -111,9 +105,7 @@ async function createLocalEmbeddingProvider(
   const modelCacheDir = options.local?.modelCacheDir?.trim();
 
   // Lazy-load node-llama-cpp to keep startup light unless local is enabled.
-  const { getLlama, resolveModelFile, LlamaLogLevel } = await import(
-    "node-llama-cpp"
-  );
+  const { getLlama, resolveModelFile, LlamaLogLevel } = await import("node-llama-cpp");
 
   let llama: Llama | null = null;
   let embeddingModel: LlamaModel | null = null;
@@ -124,10 +116,7 @@ async function createLocalEmbeddingProvider(
       llama = await getLlama({ logLevel: LlamaLogLevel.error });
     }
     if (!embeddingModel) {
-      const resolved = await resolveModelFile(
-        modelPath,
-        modelCacheDir || undefined,
-      );
+      const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
       embeddingModel = await llama.loadModel({ modelPath: resolved });
     }
     if (!embeddingContext) {
@@ -177,9 +166,7 @@ export async function createEmbeddingProvider(
             fallbackReason: reason,
           };
         } catch (fallbackErr) {
-          throw new Error(
-            `${reason}\n\nFallback to OpenAI failed: ${formatError(fallbackErr)}`,
-          );
+          throw new Error(`${reason}\n\nFallback to OpenAI failed: ${formatError(fallbackErr)}`);
         }
       }
       throw new Error(reason);

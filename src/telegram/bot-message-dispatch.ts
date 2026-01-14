@@ -60,9 +60,7 @@ export const dispatchTelegramMessage = async ({
     draftStream && streamMode === "block"
       ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
       : undefined;
-  const draftChunker = draftChunking
-    ? new EmbeddedBlockChunker(draftChunking)
-    : undefined;
+  const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   let lastPartialText = "";
   let draftText = "";
   const updateDraftFromPartial = (text?: string) => {
@@ -114,17 +112,14 @@ export const dispatchTelegramMessage = async ({
 
   const disableBlockStreaming =
     Boolean(draftStream) ||
-    (typeof telegramCfg.blockStreaming === "boolean"
-      ? !telegramCfg.blockStreaming
-      : undefined);
+    (typeof telegramCfg.blockStreaming === "boolean" ? !telegramCfg.blockStreaming : undefined);
 
   let didSendReply = false;
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-        .responsePrefix,
+      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
@@ -143,17 +138,13 @@ export const dispatchTelegramMessage = async ({
         didSendReply = true;
       },
       onError: (err, info) => {
-        runtime.error?.(
-          danger(`telegram ${info.kind} reply failed: ${String(err)}`),
-        );
+        runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
       },
       onReplyStart: sendTyping,
     },
     replyOptions: {
       skillFilter,
-      onPartialReply: draftStream
-        ? (payload) => updateDraftFromPartial(payload.text)
-        : undefined,
+      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
       onReasoningStream: draftStream
         ? (payload) => {
             if (payload.text) draftStream.update(payload.text);
@@ -169,12 +160,7 @@ export const dispatchTelegramMessage = async ({
     }
     return;
   }
-  if (
-    removeAckAfterReply &&
-    ackReactionPromise &&
-    msg.message_id &&
-    reactionApi
-  ) {
+  if (removeAckAfterReply && ackReactionPromise && msg.message_id && reactionApi) {
     void ackReactionPromise.then((didAck) => {
       if (!didAck) return;
       reactionApi(chatId, msg.message_id, []).catch((err) => {

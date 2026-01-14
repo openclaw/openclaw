@@ -35,24 +35,17 @@ export async function checkInboundAccessControl(params: {
   });
   const dmPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
   const configuredAllowFrom = account.allowFrom;
-  const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(
-    () => [],
-  );
+  const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
   // Without user config, default to self-only DM access so the owner can talk to themselves.
   const combinedAllowFrom = Array.from(
     new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
   );
   const defaultAllowFrom =
-    combinedAllowFrom.length === 0 && params.selfE164
-      ? [params.selfE164]
-      : undefined;
-  const allowFrom =
-    combinedAllowFrom.length > 0 ? combinedAllowFrom : defaultAllowFrom;
+    combinedAllowFrom.length === 0 && params.selfE164 ? [params.selfE164] : undefined;
+  const allowFrom = combinedAllowFrom.length > 0 ? combinedAllowFrom : defaultAllowFrom;
   const groupAllowFrom =
     account.groupAllowFrom ??
-    (configuredAllowFrom && configuredAllowFrom.length > 0
-      ? configuredAllowFrom
-      : undefined);
+    (configuredAllowFrom && configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
   const isSamePhone = params.from === params.selfE164;
   const isSelfChat = isSelfChatMode(params.selfE164, configuredAllowFrom);
 
@@ -84,9 +77,7 @@ export async function checkInboundAccessControl(params: {
   }
   if (params.group && groupPolicy === "allowlist") {
     if (!groupAllowFrom || groupAllowFrom.length === 0) {
-      logVerbose(
-        "Blocked group message (groupPolicy: allowlist, no groupAllowFrom)",
-      );
+      logVerbose("Blocked group message (groupPolicy: allowlist, no groupAllowFrom)");
       return {
         allowed: false,
         shouldMarkRead: false,
@@ -96,8 +87,7 @@ export async function checkInboundAccessControl(params: {
     }
     const senderAllowed =
       groupHasWildcard ||
-      (params.senderE164 != null &&
-        normalizedGroupAllowFrom.includes(params.senderE164));
+      (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
     if (!senderAllowed) {
       logVerbose(
         `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
@@ -135,8 +125,7 @@ export async function checkInboundAccessControl(params: {
       const candidate = params.from;
       const allowed =
         dmHasWildcard ||
-        (normalizedAllowFrom.length > 0 &&
-          normalizedAllowFrom.includes(candidate));
+        (normalizedAllowFrom.length > 0 && normalizedAllowFrom.includes(candidate));
       if (!allowed) {
         if (dmPolicy === "pairing") {
           const { code, created } = await upsertChannelPairingRequest({
@@ -157,15 +146,11 @@ export async function checkInboundAccessControl(params: {
                 }),
               });
             } catch (err) {
-              logVerbose(
-                `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
-              );
+              logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
             }
           }
         } else {
-          logVerbose(
-            `Blocked unauthorized sender ${candidate} (dmPolicy=${dmPolicy})`,
-          );
+          logVerbose(`Blocked unauthorized sender ${candidate} (dmPolicy=${dmPolicy})`);
         }
         return {
           allowed: false,

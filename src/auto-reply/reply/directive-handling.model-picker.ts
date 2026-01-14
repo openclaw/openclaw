@@ -52,9 +52,7 @@ function sortProvidersForPicker(providers: string[]): string[] {
   });
 }
 
-export function buildModelPickerItems(
-  catalog: ModelPickerCatalogEntry[],
-): ModelPickerItem[] {
+export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): ModelPickerItem[] {
   const byModel = new Map<string, { providerModels: Record<string, string> }>();
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
@@ -72,9 +70,7 @@ export function buildModelPickerItems(
     const providers = sortProvidersForPicker(Object.keys(data.providerModels));
     out.push({ model, providers, providerModels: data.providerModels });
   }
-  out.sort((a, b) =>
-    a.model.toLowerCase().localeCompare(b.model.toLowerCase()),
-  );
+  out.sort((a, b) => a.model.toLowerCase().localeCompare(b.model.toLowerCase()));
   return out;
 }
 

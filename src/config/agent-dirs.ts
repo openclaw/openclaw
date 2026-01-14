@@ -33,9 +33,7 @@ function collectReferencedAgentIds(cfg: ClawdbotConfig): string[] {
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
   const defaultAgentId =
-    agents.find((agent) => agent?.default)?.id ??
-    agents[0]?.id ??
-    DEFAULT_AGENT_ID;
+    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? DEFAULT_AGENT_ID;
   ids.add(normalizeAgentId(defaultAgentId));
 
   for (const entry of agents) {
@@ -62,15 +60,11 @@ function resolveEffectiveAgentDir(
 ): string {
   const id = normalizeAgentId(agentId);
   const configured = Array.isArray(cfg.agents?.list)
-    ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)
-        ?.agentDir
+    ? cfg.agents?.list.find((agent) => normalizeAgentId(agent.id) === id)?.agentDir
     : undefined;
   const trimmed = configured?.trim();
   if (trimmed) return resolveUserPath(trimmed);
-  const root = resolveStateDir(
-    deps?.env ?? process.env,
-    deps?.homedir ?? os.homedir,
-  );
+  const root = resolveStateDir(deps?.env ?? process.env, deps?.homedir ?? os.homedir);
   return path.join(root, "agents", id, "agent");
 }
 
@@ -94,17 +88,13 @@ export function findDuplicateAgentDirs(
   return [...byDir.values()].filter((v) => v.agentIds.length > 1);
 }
 
-export function formatDuplicateAgentDirError(
-  dups: DuplicateAgentDir[],
-): string {
+export function formatDuplicateAgentDirError(dups: DuplicateAgentDir[]): string {
   const lines: string[] = [
     "Duplicate agentDir detected (multi-agent config).",
     "Each agent must have a unique agentDir; sharing it causes auth/session state collisions and token invalidation.",
     "",
     "Conflicts:",
-    ...dups.map(
-      (d) => `- ${d.agentDir}: ${d.agentIds.map((id) => `"${id}"`).join(", ")}`,
-    ),
+    ...dups.map((d) => `- ${d.agentDir}: ${d.agentIds.map((id) => `"${id}"`).join(", ")}`),
     "",
     "Fix: remove the shared agents.list[].agentDir override (or give each agent its own directory).",
     "If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.",

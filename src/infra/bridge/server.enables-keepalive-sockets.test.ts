@@ -62,8 +62,7 @@ describe("node bridge server", () => {
     const ifaces = os.networkInterfaces();
     for (const entries of Object.values(ifaces)) {
       for (const info of entries ?? []) {
-        if (info.family === "IPv4" && info.internal === false)
-          return info.address;
+        if (info.family === "IPv4" && info.internal === false) return info.address;
       }
     }
     return null;
@@ -231,8 +230,7 @@ describe("node bridge server", () => {
   });
 
   it("handles req/res RPC after authentication", async () => {
-    let lastRequest: { nodeId?: string; id?: string; method?: string } | null =
-      null;
+    let lastRequest: { nodeId?: string; id?: string; method?: string } | null = null;
 
     const server = await startNodeBridgeServer({
       host: "127.0.0.1",
@@ -386,10 +384,9 @@ describe("node bridge server", () => {
     const line3 = JSON.parse(await readLine2()) as { type: string };
     expect(line3.type).toBe("hello-ok");
 
-    await pollUntil(
-      async () => (lastAuthed?.nodeId === "n4" ? lastAuthed : null),
-      { timeoutMs: 3000 },
-    );
+    await pollUntil(async () => (lastAuthed?.nodeId === "n4" ? lastAuthed : null), {
+      timeoutMs: 3000,
+    });
 
     expect(lastAuthed?.nodeId).toBe("n4");
     // Prefer paired metadata over hello payload (token verifies the stored node record).

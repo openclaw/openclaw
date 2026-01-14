@@ -6,10 +6,7 @@ import { note } from "../terminal/note.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 
-export async function checkGatewayHealth(params: {
-  runtime: RuntimeEnv;
-  cfg: ClawdbotConfig;
-}) {
+export async function checkGatewayHealth(params: { runtime: RuntimeEnv; cfg: ClawdbotConfig }) {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
   let healthOk = false;
   try {

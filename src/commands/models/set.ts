@@ -18,9 +18,7 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
         defaults: {
           ...cfg.agents?.defaults,
           model: {
-            ...(existingModel?.fallbacks
-              ? { fallbacks: existingModel.fallbacks }
-              : undefined),
+            ...(existingModel?.fallbacks ? { fallbacks: existingModel.fallbacks } : undefined),
             primary: key,
           },
           models: nextModels,
@@ -30,7 +28,5 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  runtime.log(
-    `Default model: ${updated.agents?.defaults?.model?.primary ?? modelRaw}`,
-  );
+  runtime.log(`Default model: ${updated.agents?.defaults?.model?.primary ?? modelRaw}`);
 }

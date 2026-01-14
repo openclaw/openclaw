@@ -64,9 +64,7 @@ export type GatewayService = {
     environment?: Record<string, string>;
     sourcePath?: string;
   } | null>;
-  readRuntime: (
-    env: Record<string, string | undefined>,
-  ) => Promise<GatewayServiceRuntime>;
+  readRuntime: (env: Record<string, string | undefined>) => Promise<GatewayServiceRuntime>;
 };
 
 export function resolveGatewayService(): GatewayService {
@@ -95,8 +93,7 @@ export function resolveGatewayService(): GatewayService {
           env: args.env,
         });
       },
-      isLoaded: async (args) =>
-        isLaunchAgentLoaded({ profile: args.profile, env: args.env }),
+      isLoaded: async (args) => isLaunchAgentLoaded({ profile: args.profile, env: args.env }),
       readCommand: readLaunchAgentProgramArguments,
       readRuntime: readLaunchAgentRuntime,
     };
@@ -127,8 +124,7 @@ export function resolveGatewayService(): GatewayService {
           env: args.env,
         });
       },
-      isLoaded: async (args) =>
-        isSystemdServiceEnabled({ profile: args.profile, env: args.env }),
+      isLoaded: async (args) => isSystemdServiceEnabled({ profile: args.profile, env: args.env }),
       readCommand: readSystemdServiceExecStart,
       readRuntime: async (env) => await readSystemdServiceRuntime(env),
     };
@@ -163,7 +159,5 @@ export function resolveGatewayService(): GatewayService {
     };
   }
 
-  throw new Error(
-    `Gateway service install not supported on ${process.platform}`,
-  );
+  throw new Error(`Gateway service install not supported on ${process.platform}`);
 }

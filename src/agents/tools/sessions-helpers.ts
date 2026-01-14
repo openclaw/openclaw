@@ -15,21 +15,13 @@ export function resolveMainSessionAlias(cfg: ClawdbotConfig) {
   return { mainKey, alias, scope };
 }
 
-export function resolveDisplaySessionKey(params: {
-  key: string;
-  alias: string;
-  mainKey: string;
-}) {
+export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
   if (params.key === params.alias) return "main";
   if (params.key === params.mainKey) return "main";
   return params.key;
 }
 
-export function resolveInternalSessionKey(params: {
-  key: string;
-  alias: string;
-  mainKey: string;
-}) {
+export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
   if (params.key === "main") return params.alias;
   return params.key;
 }
@@ -46,11 +38,7 @@ export function classifySessionKind(params: {
   if (key.startsWith("hook:")) return "hook";
   if (key.startsWith("node-") || key.startsWith("node:")) return "node";
   if (params.gatewayKind === "group") return "group";
-  if (
-    key.startsWith("group:") ||
-    key.includes(":group:") ||
-    key.includes(":channel:")
-  ) {
+  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "other";
@@ -62,12 +50,7 @@ export function deriveChannel(params: {
   channel?: string | null;
   lastChannel?: string | null;
 }): string {
-  if (
-    params.kind === "cron" ||
-    params.kind === "hook" ||
-    params.kind === "node"
-  )
-    return "internal";
+  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") return "internal";
   const channel = normalizeKey(params.channel ?? undefined);
   if (channel) return channel;
   const lastChannel = normalizeKey(params.lastChannel ?? undefined);

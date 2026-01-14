@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
@@ -11,19 +8,14 @@ import {
 } from "../../../slack/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "slack" as const;
 
 function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.slack?.dm?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.slack?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -110,10 +102,7 @@ function buildSlackManifest(botName: string) {
   return JSON.stringify(manifest, null, 2);
 }
 
-async function noteSlackTokenHelp(
-  prompter: WizardPrompter,
-  botName: string,
-): Promise<void> {
+async function noteSlackTokenHelp(prompter: WizardPrompter, botName: string): Promise<void> {
   const manifest = buildSlackManifest(botName);
   await prompter.note(
     [
@@ -156,17 +145,10 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 2 : 1,
     };
   },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }) => {
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
     const slackOverride = accountOverrides.slack?.trim();
     const defaultSlackAccountId = resolveDefaultSlackAccountId(cfg);
-    let slackAccountId = slackOverride
-      ? normalizeAccountId(slackOverride)
-      : defaultSlackAccountId;
+    let slackAccountId = slackOverride ? normalizeAccountId(slackOverride) : defaultSlackAccountId;
     if (shouldPromptAccountIds && !slackOverride) {
       slackAccountId = await promptAccountId({
         cfg,
@@ -183,9 +165,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
       cfg: next,
       accountId: slackAccountId,
     });
-    const accountConfigured = Boolean(
-      resolvedAccount.botToken && resolvedAccount.appToken,
-    );
+    const accountConfigured = Boolean(resolvedAccount.botToken && resolvedAccount.appToken);
     const allowEnv = slackAccountId === DEFAULT_ACCOUNT_ID;
     const canUseEnv =
       allowEnv &&
@@ -206,10 +186,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     if (!accountConfigured) {
       await noteSlackTokenHelp(prompter, slackBotName);
     }
-    if (
-      canUseEnv &&
-      (!resolvedAccount.config.botToken || !resolvedAccount.config.appToken)
-    ) {
+    if (canUseEnv && (!resolvedAccount.config.botToken || !resolvedAccount.config.appToken)) {
       const keepEnv = await prompter.confirm({
         message: "SLACK_BOT_TOKEN + SLACK_APP_TOKEN detected. Use env vars?",
         initialValue: true,
@@ -296,9 +273,7 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.slack?.accounts,
                 [slackAccountId]: {
                   ...next.channels?.slack?.accounts?.[slackAccountId],
-                  enabled:
-                    next.channels?.slack?.accounts?.[slackAccountId]?.enabled ??
-                    true,
+                  enabled: next.channels?.slack?.accounts?.[slackAccountId]?.enabled ?? true,
                   botToken,
                   appToken,
                 },

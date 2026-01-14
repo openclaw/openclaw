@@ -27,9 +27,7 @@ vi.mock("../runtime.js", () => ({
 
 describe("update-cli", () => {
   it("exports updateCommand and registerUpdateCli", async () => {
-    const { updateCommand, registerUpdateCli } = await import(
-      "./update-cli.js"
-    );
+    const { updateCommand, registerUpdateCli } = await import("./update-cli.js");
     expect(typeof updateCommand).toBe("function");
     expect(typeof registerUpdateCli).toBe("function");
   }, 20_000);
@@ -154,12 +152,8 @@ describe("update-cli", () => {
 
     await updateCommand({ restart: true });
 
-    const logLines = vi
-      .mocked(defaultRuntime.log)
-      .mock.calls.map((call) => String(call[0]));
-    expect(
-      logLines.some((line) => line.includes("Daemon restarted successfully.")),
-    ).toBe(false);
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(false);
   });
 
   it("updateCommand validates timeout option", async () => {
@@ -171,9 +165,7 @@ describe("update-cli", () => {
 
     await updateCommand({ timeout: "invalid" });
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("timeout"),
-    );
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("timeout"));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 });

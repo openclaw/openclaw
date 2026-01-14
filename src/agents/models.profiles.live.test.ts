@@ -1,8 +1,5 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import {
-  discoverAuthStorage,
-  discoverModels,
-} from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
@@ -19,8 +16,7 @@ import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const DIRECT_ENABLED = Boolean(process.env.CLAWDBOT_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS =
-  process.env.CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS === "1";
+const REQUIRE_PROFILE_KEYS = process.env.CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS === "1";
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -62,8 +58,7 @@ function isModelNotFoundErrorMessage(raw: string): boolean {
   if (!msg) return false;
   if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) return true;
   if (/not_found_error/i.test(msg)) return true;
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg))
-    return true;
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg)) return true;
   return false;
 }
 
@@ -156,9 +151,7 @@ describeLive("live models (profile keys)", () => {
       const anthropicKeys = collectAnthropicApiKeys();
       if (anthropicKeys.length > 0) {
         process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
-        logProgress(
-          `[live-models] anthropic keys loaded: ${anthropicKeys.length}`,
-        );
+        logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
       const agentDir = resolveClawdbotAgentDir();
@@ -171,13 +164,8 @@ describeLive("live models (profile keys)", () => {
       const useExplicit = Boolean(rawModels) && !useModern;
       const filter = useExplicit ? parseModelFilter(rawModels) : null;
       const allowNotFoundSkip = useModern;
-      const providers = parseProviderFilter(
-        process.env.CLAWDBOT_LIVE_PROVIDERS,
-      );
-      const perModelTimeoutMs = toInt(
-        process.env.CLAWDBOT_LIVE_MODEL_TIMEOUT_MS,
-        30_000,
-      );
+      const providers = parseProviderFilter(process.env.CLAWDBOT_LIVE_PROVIDERS);
+      const perModelTimeoutMs = toInt(process.env.CLAWDBOT_LIVE_MODEL_TIMEOUT_MS, 30_000);
 
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
@@ -197,10 +185,7 @@ describeLive("live models (profile keys)", () => {
         }
         try {
           const apiKeyInfo = await getApiKeyForModel({ model, cfg });
-          if (
-            REQUIRE_PROFILE_KEYS &&
-            !apiKeyInfo.source.startsWith("profile:")
-          ) {
+          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
             skipped.push({
               model: id,
               reason: `non-profile credential source: ${apiKeyInfo.source}`,
@@ -218,9 +203,7 @@ describeLive("live models (profile keys)", () => {
         return;
       }
 
-      logProgress(
-        `[live-models] selection=${useExplicit ? "explicit" : "modern"}`,
-      );
+      logProgress(`[live-models] selection=${useExplicit ? "explicit" : "modern"}`);
       logProgress(`[live-models] running ${candidates.length} models`);
       const total = candidates.length;
 
@@ -229,9 +212,7 @@ describeLive("live models (profile keys)", () => {
         const id = `${model.provider}/${model.id}`;
         const progressLabel = `[live-models] ${index + 1}/${total} ${id}`;
         const attemptMax =
-          model.provider === "anthropic" && anthropicKeys.length > 0
-            ? anthropicKeys.length
-            : 1;
+          model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
         for (let attempt = 0; attempt < attemptMax; attempt += 1) {
           if (model.provider === "anthropic" && anthropicKeys.length > 0) {
             process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
@@ -254,8 +235,7 @@ describeLive("live models (profile keys)", () => {
                 parameters: Type.Object({}, { additionalProperties: false }),
               };
 
-              let firstUserContent =
-                "Call the tool `noop` with {}. Do not write any other text.";
+              let firstUserContent = "Call the tool `noop` with {}. Do not write any other text.";
               let firstUser = {
                 role: "user" as const,
                 content: firstUserContent,
@@ -282,11 +262,7 @@ describeLive("live models (profile keys)", () => {
 
               // Occasional flake: model answers in text instead of tool call (or adds text).
               // Retry a couple times with a stronger instruction so we still exercise the tool-only replay path.
-              for (
-                let i = 0;
-                i < 2 && (!toolCall || firstText.length > 0);
-                i += 1
-              ) {
+              for (let i = 0; i < 2 && (!toolCall || firstText.length > 0); i += 1) {
                 firstUserContent =
                   "Call the tool `noop` with {}. IMPORTANT: respond ONLY with the tool call; no other text.";
                 firstUser = {
@@ -405,29 +381,19 @@ describeLive("live models (profile keys)", () => {
               isAnthropicRateLimitError(message) &&
               attempt + 1 < attemptMax
             ) {
-              logProgress(
-                `${progressLabel}: rate limit, retrying with next key`,
-              );
+              logProgress(`${progressLabel}: rate limit, retrying with next key`);
               continue;
             }
-            if (
-              model.provider === "anthropic" &&
-              isAnthropicBillingError(message)
-            ) {
+            if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
               if (attempt + 1 < attemptMax) {
-                logProgress(
-                  `${progressLabel}: billing issue, retrying with next key`,
-                );
+                logProgress(`${progressLabel}: billing issue, retrying with next key`);
                 continue;
               }
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (anthropic billing)`);
               break;
             }
-            if (
-              model.provider === "google" &&
-              isGoogleModelNotFoundError(err)
-            ) {
+            if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (google model not found)`);
               break;
@@ -462,9 +428,7 @@ describeLive("live models (profile keys)", () => {
           .slice(0, 10)
           .map((f) => `- ${f.model}: ${f.error}`)
           .join("\n");
-        throw new Error(
-          `live model failures (${failures.length}):\n${preview}`,
-        );
+        throw new Error(`live model failures (${failures.length}):\n${preview}`);
       }
 
       void skipped;

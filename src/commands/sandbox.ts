@@ -45,12 +45,8 @@ export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const containers = opts.browser
-    ? []
-    : await listSandboxContainers().catch(() => []);
-  const browsers = opts.browser
-    ? await listSandboxBrowsers().catch(() => [])
-    : [];
+  const containers = opts.browser ? [] : await listSandboxContainers().catch(() => []);
+  const browsers = opts.browser ? await listSandboxBrowsers().catch(() => []) : [];
 
   if (opts.json) {
     runtime.log(JSON.stringify({ containers, browsers }, null, 2));
@@ -100,19 +96,14 @@ export async function sandboxRecreateCommand(
 
 // --- Validation ---
 
-function validateRecreateOptions(
-  opts: SandboxRecreateOptions,
-  runtime: RuntimeEnv,
-): boolean {
+function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error("Please specify --all, --session <key>, or --agent <id>");
     runtime.exit(1);
     return false;
   }
 
-  const exclusiveCount = [opts.all, opts.session, opts.agent].filter(
-    Boolean,
-  ).length;
+  const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean).length;
   if (exclusiveCount > 1) {
     runtime.error("Please specify only one of: --all, --session, --agent");
     runtime.exit(1);
@@ -124,9 +115,7 @@ function validateRecreateOptions(
 
 // --- Filtering ---
 
-async function fetchAndFilterContainers(
-  opts: SandboxRecreateOptions,
-): Promise<FilteredContainers> {
+async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
   const allContainers = await listSandboxContainers().catch(() => []);
   const allBrowsers = await listSandboxBrowsers().catch(() => []);
 
@@ -148,8 +137,7 @@ async function fetchAndFilterContainers(
 function createAgentMatcher(agentId: string) {
   const agentPrefix = `agent:${agentId}`;
   return (item: ContainerItem) =>
-    item.sessionKey === agentPrefix ||
-    item.sessionKey.startsWith(`${agentPrefix}:`);
+    item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
 }
 
 // --- Container Operations ---
@@ -173,11 +161,7 @@ async function removeContainers(
   let failCount = 0;
 
   for (const container of filtered.containers) {
-    const result = await removeContainer(
-      container.containerName,
-      removeSandboxContainer,
-      runtime,
-    );
+    const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
     if (result.success) {
       successCount++;
     } else {

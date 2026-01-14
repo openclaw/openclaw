@@ -39,8 +39,7 @@ export async function configureGatewayForOnboarding(
             await prompter.text({
               message: "Gateway port",
               initialValue: String(localPort),
-              validate: (value) =>
-                Number.isFinite(Number(value)) ? undefined : "Invalid port",
+              validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
             }),
           ),
           10,
@@ -72,14 +71,11 @@ export async function configureGatewayForOnboarding(
           if (!value) return "IP address is required for custom bind mode";
           const trimmed = value.trim();
           const parts = trimmed.split(".");
-          if (parts.length !== 4)
-            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (parts.length !== 4) return "Invalid IPv4 address (e.g., 192.168.1.100)";
           if (
             parts.every((part) => {
               const n = parseInt(part, 10);
-              return (
-                !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n)
-              );
+              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
             })
           )
             return undefined;
@@ -150,15 +146,12 @@ export async function configureGatewayForOnboarding(
     }
   }
 
-  let tailscaleResetOnExit =
-    flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
+  let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(
-      [
-        "Docs:",
-        "https://docs.clawd.bot/gateway/tailscale",
-        "https://docs.clawd.bot/web",
-      ].join("\n"),
+      ["Docs:", "https://docs.clawd.bot/gateway/tailscale", "https://docs.clawd.bot/web"].join(
+        "\n",
+      ),
       "Tailscale",
     );
     tailscaleResetOnExit = Boolean(
@@ -174,19 +167,13 @@ export async function configureGatewayForOnboarding(
   // - Auth off only allowed for bind=loopback.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    await prompter.note(
-      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
-      "Note",
-    );
+    await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
     customBindHost = undefined;
   }
 
   if (authMode === "off" && bind !== "loopback") {
-    await prompter.note(
-      "Non-loopback bind requires auth. Switching to token auth.",
-      "Note",
-    );
+    await prompter.note("Non-loopback bind requires auth. Switching to token auth.", "Note");
     authMode = "token";
   }
 

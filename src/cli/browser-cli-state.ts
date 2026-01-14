@@ -30,9 +30,7 @@ export function registerBrowserStateCommands(
 ) {
   registerBrowserCookiesAndStorageCommands(browser, parentOpts);
 
-  const set = browser
-    .command("set")
-    .description("Browser environment settings");
+  const set = browser.command("set").description("Browser environment settings");
 
   set
     .command("viewport")
@@ -118,9 +116,7 @@ export function registerBrowserStateCommands(
           throw new Error("headers json must be an object");
         }
         const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(
-          parsed as Record<string, unknown>,
-        )) {
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
           if (typeof v === "string") headers[k] = v;
         }
         const result = await browserSetHeaders(baseUrl, {
@@ -146,37 +142,28 @@ export function registerBrowserStateCommands(
     .argument("[username]", "Username")
     .argument("[password]", "Password")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(
-      async (
-        username: string | undefined,
-        password: string | undefined,
-        opts,
-        cmd,
-      ) => {
-        const parent = parentOpts(cmd);
-        const baseUrl = resolveBrowserControlUrl(parent?.url);
-        const profile = parent?.browserProfile;
-        try {
-          const result = await browserSetHttpCredentials(baseUrl, {
-            username: username?.trim() || undefined,
-            password,
-            clear: Boolean(opts.clear),
-            targetId: opts.targetId?.trim() || undefined,
-            profile,
-          });
-          if (parent?.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
-          defaultRuntime.log(
-            opts.clear ? "credentials cleared" : "credentials set",
-          );
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+    .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = await browserSetHttpCredentials(baseUrl, {
+          username: username?.trim() || undefined,
+          password,
+          clear: Boolean(opts.clear),
+          targetId: opts.targetId?.trim() || undefined,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
         }
-      },
-    );
+        defaultRuntime.log(opts.clear ? "credentials cleared" : "credentials set");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
 
   set
     .command("geo")
@@ -187,41 +174,30 @@ export function registerBrowserStateCommands(
     .option("--accuracy <m>", "Accuracy in meters", (v: string) => Number(v))
     .option("--origin <origin>", "Origin to grant permissions for")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(
-      async (
-        latitude: number | undefined,
-        longitude: number | undefined,
-        opts,
-        cmd,
-      ) => {
-        const parent = parentOpts(cmd);
-        const baseUrl = resolveBrowserControlUrl(parent?.url);
-        const profile = parent?.browserProfile;
-        try {
-          const result = await browserSetGeolocation(baseUrl, {
-            latitude: Number.isFinite(latitude) ? latitude : undefined,
-            longitude: Number.isFinite(longitude) ? longitude : undefined,
-            accuracy: Number.isFinite(opts.accuracy)
-              ? opts.accuracy
-              : undefined,
-            origin: opts.origin?.trim() || undefined,
-            clear: Boolean(opts.clear),
-            targetId: opts.targetId?.trim() || undefined,
-            profile,
-          });
-          if (parent?.json) {
-            defaultRuntime.log(JSON.stringify(result, null, 2));
-            return;
-          }
-          defaultRuntime.log(
-            opts.clear ? "geolocation cleared" : "geolocation set",
-          );
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
-          defaultRuntime.exit(1);
+    .action(async (latitude: number | undefined, longitude: number | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = await browserSetGeolocation(baseUrl, {
+          latitude: Number.isFinite(latitude) ? latitude : undefined,
+          longitude: Number.isFinite(longitude) ? longitude : undefined,
+          accuracy: Number.isFinite(opts.accuracy) ? opts.accuracy : undefined,
+          origin: opts.origin?.trim() || undefined,
+          clear: Boolean(opts.clear),
+          targetId: opts.targetId?.trim() || undefined,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
         }
-      },
-    );
+        defaultRuntime.log(opts.clear ? "geolocation cleared" : "geolocation set");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
 
   set
     .command("media")
@@ -234,13 +210,7 @@ export function registerBrowserStateCommands(
       const profile = parent?.browserProfile;
       const v = value.trim().toLowerCase();
       const colorScheme =
-        v === "dark"
-          ? "dark"
-          : v === "light"
-            ? "light"
-            : v === "none"
-              ? "none"
-              : null;
+        v === "dark" ? "dark" : v === "light" ? "light" : v === "none" ? "none" : null;
       if (!colorScheme) {
         defaultRuntime.error(danger("Expected dark|light|none"));
         defaultRuntime.exit(1);

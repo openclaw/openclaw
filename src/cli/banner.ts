@@ -30,10 +30,7 @@ const hasJsonFlag = (argv: string[]) =>
 const hasVersionFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--version" || arg === "-V" || arg === "-v");
 
-export function formatCliBannerLine(
-  version: string,
-  options: BannerOptions = {},
-): string {
+export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);

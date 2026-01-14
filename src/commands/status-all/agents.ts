@@ -28,9 +28,7 @@ export async function getAgentLocalStatuses(cfg: ClawdbotConfig) {
         }
       })();
       const bootstrapPending =
-        workspaceDir != null
-          ? await fileExists(path.join(workspaceDir, "BOOTSTRAP.md"))
-          : null;
+        workspaceDir != null ? await fileExists(path.join(workspaceDir, "BOOTSTRAP.md")) : null;
       const sessionsPath = resolveStorePath(cfg.session?.store, {
         agentId: agent.id,
       });
@@ -64,10 +62,7 @@ export async function getAgentLocalStatuses(cfg: ClawdbotConfig) {
   );
 
   const totalSessions = agents.reduce((sum, a) => sum + a.sessionsCount, 0);
-  const bootstrapPendingCount = agents.reduce(
-    (sum, a) => sum + (a.bootstrapPending ? 1 : 0),
-    0,
-  );
+  const bootstrapPendingCount = agents.reduce((sum, a) => sum + (a.bootstrapPending ? 1 : 0), 0);
   return {
     defaultId: agentList.defaultId,
     agents,

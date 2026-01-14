@@ -59,24 +59,18 @@ export function createSessionActions(context: SessionActionContext) {
         if (state.agents.some((agent) => agent.id === initialSessionAgentId)) {
           state.currentAgentId = initialSessionAgentId;
         }
-      } else if (
-        !state.agents.some((agent) => agent.id === state.currentAgentId)
-      ) {
+      } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
         state.currentAgentId =
-          state.agents[0]?.id ??
-          normalizeAgentId(result.defaultId ?? state.currentAgentId);
+          state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
       }
       const nextSessionKey = resolveSessionKey(initialSessionInput);
       if (nextSessionKey !== state.currentSessionKey) {
         state.currentSessionKey = nextSessionKey;
       }
       state.initialSessionApplied = true;
-    } else if (
-      !state.agents.some((agent) => agent.id === state.currentAgentId)
-    ) {
+    } else if (!state.agents.some((agent) => agent.id === state.currentAgentId)) {
       state.currentAgentId =
-        state.agents[0]?.id ??
-        normalizeAgentId(result.defaultId ?? state.currentAgentId);
+        state.agents[0]?.id ?? normalizeAgentId(result.defaultId ?? state.currentAgentId);
     }
     updateHeader();
     updateFooter();
@@ -103,8 +97,7 @@ export function createSessionActions(context: SessionActionContext) {
   const refreshSessionInfo = async () => {
     try {
       const listAgentId =
-        state.currentSessionKey === "global" ||
-        state.currentSessionKey === "unknown"
+        state.currentSessionKey === "global" || state.currentSessionKey === "unknown"
           ? undefined
           : state.currentAgentId;
       const result = await client.listSessions({
@@ -152,10 +145,8 @@ export function createSessionActions(context: SessionActionContext) {
         sessionId?: string;
         thinkingLevel?: string;
       };
-      state.currentSessionId =
-        typeof record.sessionId === "string" ? record.sessionId : null;
-      state.sessionInfo.thinkingLevel =
-        record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
+      state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
+      state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
       chatLog.clearAll();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {

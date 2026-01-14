@@ -11,9 +11,7 @@ export type RemovalResult = {
   skipped?: boolean;
 };
 
-export function collectWorkspaceDirs(
-  cfg: ClawdbotConfig | undefined,
-): string[] {
+export function collectWorkspaceDirs(cfg: ClawdbotConfig | undefined): string[] {
   const dirs = new Set<string>();
   const defaults = cfg?.agents?.defaults;
   if (typeof defaults?.workspace === "string" && defaults.workspace.trim()) {
@@ -34,10 +32,7 @@ export function collectWorkspaceDirs(
 
 export function isPathWithin(child: string, parent: string): boolean {
   const relative = path.relative(parent, child);
-  return (
-    relative === "" ||
-    (!relative.startsWith("..") && !path.isAbsolute(relative))
-  );
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function isUnsafeRemovalTarget(target: string): boolean {
@@ -76,9 +71,7 @@ export async function removePath(
   }
 }
 
-export async function listAgentSessionDirs(
-  stateDir: string,
-): Promise<string[]> {
+export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
   const root = path.join(stateDir, "agents");
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });

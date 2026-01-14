@@ -24,15 +24,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(
-  () => ({
-    readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-    upsertTelegramPairingRequest: vi.fn(async () => ({
-      code: "PAIRCODE",
-      created: true,
-    })),
-  }),
-);
+const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
+  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertTelegramPairingRequest: vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })),
+}));
 
 vi.mock("./pairing-store.js", () => ({
   readTelegramAllowFromStore,
@@ -148,16 +146,12 @@ describe("createTelegramBot", () => {
   it("sends replies without native reply threading", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     replySpy.mockResolvedValue({ text: "a".repeat(4500) });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
       message: {
         chat: { id: 5, type: "private" },
@@ -177,9 +171,7 @@ describe("createTelegramBot", () => {
   it("honors replyToMode=first for threaded replies", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     replySpy.mockResolvedValue({
       text: "a".repeat(4500),
@@ -187,9 +179,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok", replyToMode: "first" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
       message: {
         chat: { id: 5, type: "private" },
@@ -211,9 +201,7 @@ describe("createTelegramBot", () => {
   it("prefixes tool and final replies with responsePrefix", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     replySpy.mockImplementation(async (_ctx, opts) => {
       await opts?.onToolResult?.({ text: "tool result" });
@@ -227,9 +215,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
       message: {
         chat: { id: 5, type: "private" },
@@ -247,9 +233,7 @@ describe("createTelegramBot", () => {
   it("honors replyToMode=all for threaded replies", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     replySpy.mockResolvedValue({
       text: "a".repeat(4500),
@@ -257,9 +241,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok", replyToMode: "all" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
       message: {
         chat: { id: 5, type: "private" },
@@ -278,9 +260,7 @@ describe("createTelegramBot", () => {
   });
   it("blocks group messages when telegram.groups is set without a wildcard", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
@@ -293,9 +273,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -311,9 +289,7 @@ describe("createTelegramBot", () => {
   });
   it("skips group messages without mention when requireMention is enabled", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       channels: {
@@ -322,9 +298,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {
@@ -340,13 +314,9 @@ describe("createTelegramBot", () => {
   });
   it("honors routed group activation from session store", async () => {
     onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
-    const storeDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-telegram-"),
-    );
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-telegram-"));
     const storePath = path.join(storeDir, "sessions.json");
     fs.writeFileSync(
       storePath,
@@ -375,9 +345,7 @@ describe("createTelegramBot", () => {
     });
 
     createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler({
       message: {

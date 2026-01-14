@@ -14,10 +14,7 @@ describe("chutes-oauth", () => {
       if (url === CHUTES_TOKEN_ENDPOINT) {
         expect(init?.method).toBe("POST");
         expect(
-          String(
-            init?.headers &&
-              (init.headers as Record<string, string>)["Content-Type"],
-          ),
+          String(init?.headers && (init.headers as Record<string, string>)["Content-Type"]),
         ).toContain("application/x-www-form-urlencoded");
         return new Response(
           JSON.stringify({
@@ -30,18 +27,12 @@ describe("chutes-oauth", () => {
       }
       if (url === CHUTES_USERINFO_ENDPOINT) {
         expect(
-          String(
-            init?.headers &&
-              (init.headers as Record<string, string>).Authorization,
-          ),
+          String(init?.headers && (init.headers as Record<string, string>).Authorization),
         ).toBe("Bearer at_123");
-        return new Response(
-          JSON.stringify({ username: "fred", sub: "sub_1" }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        return new Response(JSON.stringify({ username: "fred", sub: "sub_1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response("not found", { status: 404 });
     };
@@ -62,20 +53,15 @@ describe("chutes-oauth", () => {
     expect(creds.access).toBe("at_123");
     expect(creds.refresh).toBe("rt_123");
     expect(creds.email).toBe("fred");
-    expect((creds as unknown as { accountId?: string }).accountId).toBe(
-      "sub_1",
-    );
-    expect((creds as unknown as { clientId?: string }).clientId).toBe(
-      "cid_test",
-    );
+    expect((creds as unknown as { accountId?: string }).accountId).toBe("sub_1");
+    expect((creds as unknown as { clientId?: string }).clientId).toBe("cid_test");
     expect(creds.expires).toBe(now + 3600 * 1000 - 5 * 60 * 1000);
   });
 
   it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT)
-        return new Response("not found", { status: 404 });
+      if (url !== CHUTES_TOKEN_ENDPOINT) return new Response("not found", { status: 404 });
       expect(init?.method).toBe("POST");
       const body = init?.body as URLSearchParams;
       expect(String(body.get("grant_type"))).toBe("refresh_token");

@@ -15,10 +15,7 @@ export function normalizeTokenProfileName(raw: string): string {
   return slug || DEFAULT_TOKEN_PROFILE_NAME;
 }
 
-export function buildTokenProfileId(params: {
-  provider: string;
-  name: string;
-}): string {
+export function buildTokenProfileId(params: { provider: string; name: string }): string {
   const provider = normalizeProviderId(params.provider);
   const name = normalizeTokenProfileName(params.name);
   return `${provider}:${name}`;

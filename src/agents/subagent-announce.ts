@@ -91,17 +91,13 @@ async function buildSubagentStatsLine(params: {
 
   const sessionId = entry?.sessionId;
   const transcriptPath =
-    sessionId && storePath
-      ? path.join(path.dirname(storePath), `${sessionId}.jsonl`)
-      : undefined;
+    sessionId && storePath ? path.join(path.dirname(storePath), `${sessionId}.jsonl`) : undefined;
 
   const input = entry?.inputTokens;
   const output = entry?.outputTokens;
   const total =
     entry?.totalTokens ??
-    (typeof input === "number" && typeof output === "number"
-      ? input + output
-      : undefined);
+    (typeof input === "number" && typeof output === "number" ? input + output : undefined);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)
@@ -119,10 +115,8 @@ async function buildSubagentStatsLine(params: {
   const runtime = formatDurationShort(runtimeMs);
   parts.push(`runtime ${runtime ?? "n/a"}`);
   if (typeof total === "number") {
-    const inputText =
-      typeof input === "number" ? formatTokenCount(input) : "n/a";
-    const outputText =
-      typeof output === "number" ? formatTokenCount(output) : "n/a";
+    const inputText = typeof input === "number" ? formatTokenCount(input) : "n/a";
+    const outputText = typeof output === "number" ? formatTokenCount(output) : "n/a";
     const totalText = formatTokenCount(total);
     parts.push(`tokens ${totalText} (in ${inputText} / out ${outputText})`);
   } else {
@@ -179,12 +173,8 @@ export function buildSubagentSystemPrompt(params: {
     "",
     "## Session Context",
     params.label ? `- Label: ${params.label}` : undefined,
-    params.requesterSessionKey
-      ? `- Requester session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `- Requester channel: ${params.requesterChannel}.`
-      : undefined,
+    params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
+    params.requesterChannel ? `- Requester channel: ${params.requesterChannel}.` : undefined,
     `- Your session: ${params.childSessionKey}.`,
     "",
     "Run the task. Provide a clear final answer (plain text).",
@@ -202,12 +192,8 @@ function buildSubagentAnnouncePrompt(params: {
 }) {
   const lines = [
     "Sub-agent announce step:",
-    params.requesterSessionKey
-      ? `Requester session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Requester channel: ${params.requesterChannel}.`
-      : undefined,
+    params.requesterSessionKey ? `Requester session: ${params.requesterSessionKey}.` : undefined,
+    params.requesterChannel ? `Requester channel: ${params.requesterChannel}.` : undefined,
     `Post target channel: ${params.announceChannel}.`,
     `Original task: ${params.task}`,
     params.subagentReply
@@ -285,21 +271,14 @@ export async function runSubagentAnnounceFlow(params: {
       lane: AGENT_LANE_NESTED,
     });
 
-    if (
-      !announceReply ||
-      !announceReply.trim() ||
-      isAnnounceSkip(announceReply)
-    )
-      return false;
+    if (!announceReply || !announceReply.trim() || isAnnounceSkip(announceReply)) return false;
 
     const statsLine = await buildSubagentStatsLine({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    const message = statsLine
-      ? `${announceReply.trim()}\n\n${statsLine}`
-      : announceReply.trim();
+    const message = statsLine ? `${announceReply.trim()}\n\n${statsLine}` : announceReply.trim();
 
     await callGateway({
       method: "send",

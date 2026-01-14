@@ -1,7 +1,4 @@
-import type {
-  BrowserActionOk,
-  BrowserActionTargetOk,
-} from "./client-actions-types.js";
+import type { BrowserActionOk, BrowserActionTargetOk } from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
 function buildProfileQuery(profile?: string): string {
@@ -32,15 +29,12 @@ export async function browserCookiesSet(
   },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/cookies/set${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, cookie: opts.cookie }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/cookies/set${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, cookie: opts.cookie }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserCookiesClear(
@@ -48,15 +42,12 @@ export async function browserCookiesClear(
   opts: { targetId?: string; profile?: string } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/cookies/clear${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/cookies/clear${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserStorageGet(
@@ -91,19 +82,16 @@ export async function browserStorageSet(
   },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/storage/${opts.kind}/set${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        key: opts.key,
-        value: opts.value,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/storage/${opts.kind}/set${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      key: opts.key,
+      value: opts.value,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserStorageClear(
@@ -127,15 +115,12 @@ export async function browserSetOffline(
   opts: { offline: boolean; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/offline${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, offline: opts.offline }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/offline${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, offline: opts.offline }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetHeaders(
@@ -147,15 +132,12 @@ export async function browserSetHeaders(
   },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/headers${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, headers: opts.headers }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/headers${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, headers: opts.headers }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetHttpCredentials(
@@ -169,20 +151,17 @@ export async function browserSetHttpCredentials(
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/credentials${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        username: opts.username,
-        password: opts.password,
-        clear: opts.clear,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/credentials${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      username: opts.username,
+      password: opts.password,
+      clear: opts.clear,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetGeolocation(
@@ -198,22 +177,19 @@ export async function browserSetGeolocation(
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/geolocation${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        latitude: opts.latitude,
-        longitude: opts.longitude,
-        accuracy: opts.accuracy,
-        origin: opts.origin,
-        clear: opts.clear,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/geolocation${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      latitude: opts.latitude,
+      longitude: opts.longitude,
+      accuracy: opts.accuracy,
+      origin: opts.origin,
+      clear: opts.clear,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetMedia(
@@ -225,18 +201,15 @@ export async function browserSetMedia(
   },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/media${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        colorScheme: opts.colorScheme,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/media${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      colorScheme: opts.colorScheme,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetTimezone(
@@ -244,18 +217,15 @@ export async function browserSetTimezone(
   opts: { timezoneId: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/timezone${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        timezoneId: opts.timezoneId,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/timezone${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      timezoneId: opts.timezoneId,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetLocale(
@@ -263,15 +233,12 @@ export async function browserSetLocale(
   opts: { locale: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/locale${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, locale: opts.locale }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/locale${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, locale: opts.locale }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserSetDevice(
@@ -279,15 +246,12 @@ export async function browserSetDevice(
   opts: { name: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/set/device${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, name: opts.name }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/set/device${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, name: opts.name }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserClearPermissions(
@@ -295,13 +259,10 @@ export async function browserClearPermissions(
   opts: { targetId?: string; profile?: string } = {},
 ): Promise<BrowserActionOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionOk>(
-    `${baseUrl}/set/geolocation${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, clear: true }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/set/geolocation${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, clear: true }),
+    timeoutMs: 20000,
+  });
 }

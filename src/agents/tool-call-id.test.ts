@@ -11,9 +11,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-        ],
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
       },
       {
         role: "toolResult",

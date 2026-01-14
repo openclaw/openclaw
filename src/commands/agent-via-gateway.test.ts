@@ -79,9 +79,7 @@ describe("agentCliCommand", () => {
     const store = path.join(dir, "sessions.json");
     mockConfig(store);
 
-    vi.mocked(callGateway).mockRejectedValue(
-      new Error("gateway not connected"),
-    );
+    vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
     vi.mocked(agentCommand).mockImplementationOnce(async (_opts, rt) => {
       rt.log?.("local");
       return { payloads: [{ text: "local" }], meta: { stub: true } };

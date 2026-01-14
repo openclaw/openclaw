@@ -17,9 +17,7 @@ describe("toWhatsappJid", () => {
   });
 
   it("keeps group JIDs intact", () => {
-    expect(toWhatsappJid("123456789-987654321@g.us")).toBe(
-      "123456789-987654321@g.us",
-    );
+    expect(toWhatsappJid("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
   });
 });
 

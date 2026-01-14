@@ -28,9 +28,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onBlockReply = vi.fn();
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       onBlockReply,
       blockReplyBreak: "text_end",
@@ -74,9 +72,7 @@ describe("subscribeEmbeddedPiSession", () => {
     };
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
     });
 
@@ -100,9 +96,7 @@ describe("subscribeEmbeddedPiSession", () => {
     };
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       reasoningMode: "on",
     });
@@ -132,9 +126,7 @@ describe("subscribeEmbeddedPiSession", () => {
     };
 
     const subscription = subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run",
       blockReplyChunking: { minChars: 50, maxChars: 200 }, // Chunking enabled
     });
@@ -149,8 +141,6 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(subscription.assistantTexts).toEqual([
-      "Response from non-streaming model",
-    ]);
+    expect(subscription.assistantTexts).toEqual(["Response from non-streaming model"]);
   });
 });

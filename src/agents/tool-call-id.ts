@@ -11,9 +11,7 @@ export function sanitizeToolCallId(id: string): string {
     "",
   );
 
-  return trimmedInvalidStartChars.length > 0
-    ? trimmedInvalidStartChars
-    : "sanitized_tool_id";
+  return trimmedInvalidStartChars.length > 0 ? trimmedInvalidStartChars : "sanitized_tool_id";
 }
 
 export function isValidCloudCodeAssistToolId(id: string): boolean {
@@ -31,8 +29,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string> }): string {
 
   const hash = shortHash(params.id);
   const maxBaseLen = 64 - 1 - hash.length;
-  const clippedBase =
-    base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
+  const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
   const candidate = `${clippedBase}_${hash}`;
   if (!params.used.has(candidate)) return candidate;
 
@@ -83,8 +80,7 @@ function rewriteToolResultIds(params: {
       ? params.message.toolCallId
       : undefined;
   const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
-  const toolUseIdStr =
-    typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
+  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
 
   const nextToolCallId = toolCallId ? params.resolve(toolCallId) : undefined;
   const nextToolUseId = toolUseIdStr ? params.resolve(toolUseIdStr) : undefined;
@@ -100,9 +96,7 @@ function rewriteToolResultIds(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
-export function sanitizeToolCallIdsForCloudCodeAssist(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function sanitizeToolCallIdsForCloudCodeAssist(messages: AgentMessage[]): AgentMessage[] {
   // Cloud Code Assist requires tool IDs matching ^[a-zA-Z0-9_-]+$.
   // Sanitization can introduce collisions (e.g. `a|b` and `a:b` -> `a_b`).
   // Fix by applying a stable, transcript-wide mapping and de-duping via suffix.

@@ -17,9 +17,7 @@ export function pickSummaryFromOutput(text: string | undefined) {
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
-export function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined }>,
-) {
+export function pickSummaryFromPayloads(payloads: Array<{ text?: string | undefined }>) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     const summary = pickSummaryFromOutput(payloads[i]?.text);
     if (summary) return summary;
@@ -31,15 +29,11 @@ export function pickSummaryFromPayloads(
  * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
  * Returns true if delivery should be skipped because there's no real content.
  */
-export function isHeartbeatOnlyResponse(
-  payloads: DeliveryPayload[],
-  ackMaxChars: number,
-) {
+export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
   if (payloads.length === 0) return true;
   return payloads.every((payload) => {
     // If there's media, we should deliver regardless of text content.
-    const hasMedia =
-      (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
+    const hasMedia = (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
     if (hasMedia) return false;
     // Use heartbeat mode to check if text is just HEARTBEAT_OK or short ack.
     const result = stripHeartbeatToken(payload.text, {
@@ -50,10 +44,7 @@ export function isHeartbeatOnlyResponse(
   });
 }
 
-export function resolveHeartbeatAckMaxChars(agentCfg?: {
-  heartbeat?: { ackMaxChars?: number };
-}) {
-  const raw =
-    agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
+  const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   return Math.max(0, raw);
 }

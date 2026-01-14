@@ -219,9 +219,7 @@ export async function ensureAgentWorkspace(params?: {
   heartbeatPath?: string;
   bootstrapPath?: string;
 }> {
-  const rawDir = params?.dir?.trim()
-    ? params.dir.trim()
-    : DEFAULT_AGENT_WORKSPACE_DIR;
+  const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   await fs.mkdir(dir, { recursive: true });
 
@@ -236,14 +234,7 @@ export async function ensureAgentWorkspace(params?: {
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
 
   const isBrandNewWorkspace = await (async () => {
-    const paths = [
-      agentsPath,
-      soulPath,
-      toolsPath,
-      identityPath,
-      userPath,
-      heartbeatPath,
-    ];
+    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -257,26 +248,11 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentsTemplate = await loadTemplate(
-    DEFAULT_AGENTS_FILENAME,
-    DEFAULT_AGENTS_TEMPLATE,
-  );
-  const soulTemplate = await loadTemplate(
-    DEFAULT_SOUL_FILENAME,
-    DEFAULT_SOUL_TEMPLATE,
-  );
-  const toolsTemplate = await loadTemplate(
-    DEFAULT_TOOLS_FILENAME,
-    DEFAULT_TOOLS_TEMPLATE,
-  );
-  const identityTemplate = await loadTemplate(
-    DEFAULT_IDENTITY_FILENAME,
-    DEFAULT_IDENTITY_TEMPLATE,
-  );
-  const userTemplate = await loadTemplate(
-    DEFAULT_USER_FILENAME,
-    DEFAULT_USER_TEMPLATE,
-  );
+  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME, DEFAULT_AGENTS_TEMPLATE);
+  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME, DEFAULT_SOUL_TEMPLATE);
+  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME, DEFAULT_TOOLS_TEMPLATE);
+  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME, DEFAULT_IDENTITY_TEMPLATE);
+  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME, DEFAULT_USER_TEMPLATE);
   const heartbeatTemplate = await loadTemplate(
     DEFAULT_HEARTBEAT_FILENAME,
     DEFAULT_HEARTBEAT_TEMPLATE,
@@ -308,9 +284,7 @@ export async function ensureAgentWorkspace(params?: {
   };
 }
 
-export async function loadWorkspaceBootstrapFiles(
-  dir: string,
-): Promise<WorkspaceBootstrapFile[]> {
+export async function loadWorkspaceBootstrapFiles(dir: string): Promise<WorkspaceBootstrapFile[]> {
   const resolvedDir = resolveUserPath(dir);
 
   const entries: Array<{
@@ -364,10 +338,7 @@ export async function loadWorkspaceBootstrapFiles(
   return result;
 }
 
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
-]);
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
 
 export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],

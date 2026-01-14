@@ -11,11 +11,7 @@ type FakeSession = {
   detach: ReturnType<typeof vi.fn>;
 };
 
-function createPage(opts: {
-  targetId: string;
-  snapshotFull?: string;
-  hasSnapshotForAI?: boolean;
-}) {
+function createPage(opts: { targetId: string; snapshotFull?: string; hasSnapshotForAI?: boolean }) {
   const session: FakeSession = {
     send: vi.fn().mockResolvedValue({
       targetInfo: { targetId: opts.targetId },
@@ -39,9 +35,7 @@ function createPage(opts: {
     ...(opts.hasSnapshotForAI === false
       ? {}
       : {
-          _snapshotForAI: vi
-            .fn()
-            .mockResolvedValue({ full: opts.snapshotFull ?? "SNAP" }),
+          _snapshotForAI: vi.fn().mockResolvedValue({ full: opts.snapshotFull ?? "SNAP" }),
         }),
   };
 
@@ -77,9 +71,7 @@ describe("pw-ai", () => {
     const p2 = createPage({ targetId: "T2", snapshotFull: "TWO" });
     const browser = createBrowser([p1.page, p2.page]);
 
-    (
-      chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(browser);
+    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const mod = await importModule();
     const res = await mod.snapshotAiViaPlaywright({
@@ -98,9 +90,7 @@ describe("pw-ai", () => {
     const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
     const browser = createBrowser([p1.page]);
 
-    (
-      chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(browser);
+    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const mod = await importModule();
     const res = await mod.snapshotAiViaPlaywright({
@@ -118,9 +108,7 @@ describe("pw-ai", () => {
     const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1" });
     const browser = createBrowser([p1.page]);
-    (
-      chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(browser);
+    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const mod = await importModule();
     await mod.clickViaPlaywright({
@@ -137,9 +125,7 @@ describe("pw-ai", () => {
     const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1", hasSnapshotForAI: false });
     const browser = createBrowser([p1.page]);
-    (
-      chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>
-    ).mockResolvedValue(browser);
+    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
 
     const mod = await importModule();
     await expect(

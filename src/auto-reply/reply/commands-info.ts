@@ -3,10 +3,7 @@ import { buildCommandsMessage, buildHelpMessage } from "../status.js";
 import { buildStatusReply } from "./commands-status.js";
 import type { CommandHandler } from "./commands-types.js";
 
-export const handleHelpCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/help") return null;
   if (!params.command.isAuthorizedSender) {
@@ -21,10 +18,7 @@ export const handleHelpCommand: CommandHandler = async (
   };
 };
 
-export const handleCommandsListCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/commands") return null;
   if (!params.command.isAuthorizedSender) {
@@ -39,14 +33,10 @@ export const handleCommandsListCommand: CommandHandler = async (
   };
 };
 
-export const handleStatusCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleStatusCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   const statusRequested =
-    params.directives.hasStatusDirective ||
-    params.command.commandBodyNormalized === "/status";
+    params.directives.hasStatusDirective || params.command.commandBodyNormalized === "/status";
   if (!statusRequested) return null;
   if (!params.command.isAuthorizedSender) {
     logVerbose(
@@ -74,10 +64,7 @@ export const handleStatusCommand: CommandHandler = async (
   return { shouldContinue: false, reply };
 };
 
-export const handleWhoamiCommand: CommandHandler = async (
-  params,
-  allowTextCommands,
-) => {
+export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/whoami") return null;
   if (!params.command.isAuthorizedSender) {
@@ -91,9 +78,7 @@ export const handleWhoamiCommand: CommandHandler = async (
   const lines = ["🧭 Identity", `Channel: ${params.command.channel}`];
   if (senderId) lines.push(`User id: ${senderId}`);
   if (senderUsername) {
-    const handle = senderUsername.startsWith("@")
-      ? senderUsername
-      : `@${senderUsername}`;
+    const handle = senderUsername.startsWith("@") ? senderUsername : `@${senderUsername}`;
     lines.push(`Username: ${handle}`);
   }
   if (params.ctx.ChatType === "group" && params.ctx.From) {

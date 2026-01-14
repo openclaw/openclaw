@@ -1,7 +1,4 @@
-import {
-  loadVoiceWakeConfig,
-  setVoiceWakeTriggers,
-} from "../infra/voicewake.js";
+import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../infra/voicewake.js";
 import {
   ErrorCodes,
   formatValidationErrors,

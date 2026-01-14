@@ -51,8 +51,7 @@ export function printModelTable(
     const ctxLabel = pad(formatTokenK(row.contextWindow), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
     const localLabel = pad(localText, LOCAL_PAD);
-    const authText =
-      row.available === null ? "-" : row.available ? "yes" : "no";
+    const authText = row.available === null ? "-" : row.available ? "yes" : "no";
     const authLabel = pad(authText, AUTH_PAD);
     const tagsLabel =
       row.tags.length > 0
@@ -68,20 +67,12 @@ export function printModelTable(
     );
     const coloredLocal = colorize(
       rich,
-      row.local === null
-        ? theme.muted
-        : row.local
-          ? theme.success
-          : theme.muted,
+      row.local === null ? theme.muted : row.local ? theme.success : theme.muted,
       localLabel,
     );
     const coloredAuth = colorize(
       rich,
-      row.available === null
-        ? theme.muted
-        : row.available
-          ? theme.success
-          : theme.error,
+      row.available === null ? theme.muted : row.available ? theme.success : theme.error,
       authLabel,
     );
 

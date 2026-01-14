@@ -25,9 +25,7 @@ function hasBalancedFences(chunk: string) {
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {
-    const text = Array.from({ length: 45 }, (_, i) => `line-${i + 1}`).join(
-      "\n",
-    );
+    const text = Array.from({ length: 45 }, (_, i) => `line-${i + 1}`).join("\n");
     expect(text.length).toBeLessThan(2000);
 
     const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 20 });
@@ -38,10 +36,7 @@ describe("chunkDiscordText", () => {
   });
 
   it("keeps fenced code blocks balanced across chunks", () => {
-    const body = Array.from(
-      { length: 30 },
-      (_, i) => `console.log(${i});`,
-    ).join("\n");
+    const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
     const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
 
     const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 10 });
@@ -69,9 +64,7 @@ describe("chunkDiscordText", () => {
   });
 
   it("keeps reasoning italics balanced across chunks", () => {
-    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join(
-      "\n",
-    );
+    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
@@ -90,8 +83,7 @@ describe("chunkDiscordText", () => {
   });
 
   it("keeps reasoning italics balanced when chunks split by char limit", () => {
-    const longLine =
-      "This is a very long reasoning line that forces char splits.";
+    const longLine = "This is a very long reasoning line that forces char splits.";
     const body = Array.from({ length: 5 }, () => longLine).join("\n");
     const text = `Reasoning:\n_${body}_`;
 

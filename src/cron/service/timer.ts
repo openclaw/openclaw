@@ -1,10 +1,6 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
-import {
-  computeJobNextRunAtMs,
-  nextWakeAtMs,
-  resolveJobPayloadTextForMain,
-} from "./jobs.js";
+import { computeJobNextRunAtMs, nextWakeAtMs, resolveJobPayloadTextForMain } from "./jobs.js";
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
@@ -70,11 +66,7 @@ export async function executeJob(
 
   let deleted = false;
 
-  const finish = async (
-    status: "ok" | "error" | "skipped",
-    err?: string,
-    summary?: string,
-  ) => {
+  const finish = async (status: "ok" | "error" | "skipped", err?: string, summary?: string) => {
     const endedAt = state.deps.nowMs();
     job.state.runningAtMs = undefined;
     job.state.lastRunAtMs = startedAt;
@@ -83,9 +75,7 @@ export async function executeJob(
     job.state.lastError = err;
 
     const shouldDelete =
-      job.schedule.kind === "at" &&
-      status === "ok" &&
-      job.deleteAfterRun === true;
+      job.schedule.kind === "at" && status === "ok" && job.deleteAfterRun === true;
 
     if (!shouldDelete) {
       if (job.schedule.kind === "at" && status === "ok") {
@@ -145,8 +135,7 @@ export async function executeJob(
       state.deps.enqueueSystemEvent(text, { agentId: job.agentId });
       if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
         const reason = `cron:${job.id}`;
-        const delay = (ms: number) =>
-          new Promise<void>((resolve) => setTimeout(resolve, ms));
+        const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
         const maxWaitMs = 2 * 60_000;
         const waitStartedAt = state.deps.nowMs();
 
@@ -194,8 +183,7 @@ export async function executeJob(
       message: job.payload.message,
     });
     if (res.status === "ok") await finish("ok", undefined, res.summary);
-    else if (res.status === "skipped")
-      await finish("skipped", undefined, res.summary);
+    else if (res.status === "skipped") await finish("skipped", undefined, res.summary);
     else await finish("error", res.error ?? "cron job failed", res.summary);
   } catch (err) {
     await finish("error", String(err));

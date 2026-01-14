@@ -9,11 +9,8 @@ describe("bridge subscription manager", () => {
       event: string;
       payloadJSON?: string | null;
     }> = [];
-    const sendEvent = (evt: {
-      nodeId: string;
-      event: string;
-      payloadJSON?: string | null;
-    }) => sent.push(evt);
+    const sendEvent = (evt: { nodeId: string; event: string; payloadJSON?: string | null }) =>
+      sent.push(evt);
 
     manager.subscribe("node-a", "main");
     manager.subscribe("node-b", "main");

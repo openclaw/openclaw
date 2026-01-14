@@ -25,14 +25,10 @@ function isRunAlreadyQueued(
 
   const messageId = run.messageId?.trim();
   if (messageId) {
-    return items.some(
-      (item) => item.messageId?.trim() === messageId && hasSameRouting(item),
-    );
+    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
   }
   if (!allowPromptFallback) return false;
-  return items.some(
-    (item) => item.prompt === run.prompt && hasSameRouting(item),
-  );
+  return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
 }
 
 export function enqueueFollowupRun(

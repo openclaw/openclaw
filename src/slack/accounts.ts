@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SlackAccountConfig } from "../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
 export type SlackTokenSource = "env" | "config" | "none";
@@ -56,12 +53,10 @@ function resolveAccountConfig(
   return accounts[accountId] as SlackAccountConfig | undefined;
 }
 
-function mergeSlackAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): SlackAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.slack ??
-    {}) as SlackAccountConfig & { accounts?: unknown };
+function mergeSlackAccountConfig(cfg: ClawdbotConfig, accountId: string): SlackAccountConfig {
+  const { accounts: _ignored, ...base } = (cfg.channels?.slack ?? {}) as SlackAccountConfig & {
+    accounts?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
@@ -76,26 +71,14 @@ export function resolveSlackAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envBot = allowEnv
-    ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN)
-    : undefined;
-  const envApp = allowEnv
-    ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN)
-    : undefined;
+  const envBot = allowEnv ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN) : undefined;
+  const envApp = allowEnv ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN) : undefined;
   const configBot = resolveSlackBotToken(merged.botToken);
   const configApp = resolveSlackAppToken(merged.appToken);
   const botToken = configBot ?? envBot;
   const appToken = configApp ?? envApp;
-  const botTokenSource: SlackTokenSource = configBot
-    ? "config"
-    : envBot
-      ? "env"
-      : "none";
-  const appTokenSource: SlackTokenSource = configApp
-    ? "config"
-    : envApp
-      ? "env"
-      : "none";
+  const botTokenSource: SlackTokenSource = configBot ? "config" : envBot ? "env" : "none";
+  const appTokenSource: SlackTokenSource = configApp ? "config" : envApp ? "env" : "none";
 
   return {
     accountId,
@@ -119,9 +102,7 @@ export function resolveSlackAccount(params: {
   };
 }
 
-export function listEnabledSlackAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedSlackAccount[] {
+export function listEnabledSlackAccounts(cfg: ClawdbotConfig): ResolvedSlackAccount[] {
   return listSlackAccountIds(cfg)
     .map((accountId) => resolveSlackAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

@@ -18,9 +18,7 @@ describe("msteams errors", () => {
   });
 
   it("classifies throttling errors and parses retry-after", () => {
-    expect(
-      classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" }),
-    ).toMatchObject({
+    expect(classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" })).toMatchObject({
       kind: "throttled",
       statusCode: 429,
       retryAfterMs: 1500,
@@ -43,8 +41,6 @@ describe("msteams errors", () => {
 
   it("provides actionable hints for common cases", () => {
     expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("msteams");
-    expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain(
-      "throttled",
-    );
+    expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain("throttled");
   });
 });

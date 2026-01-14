@@ -7,9 +7,7 @@ import type { DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 
-type LoadedConfig = ReturnType<
-  typeof import("../../config/config.js").loadConfig
->;
+type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type DiscordConfig = NonNullable<
   import("../../config/config.js").ClawdbotConfig["channels"]
 >["discord"];
@@ -33,8 +31,7 @@ export function createDiscordMessageHandler(params: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordMessageHandler {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
-  const ackReactionScope =
-    params.cfg.messages?.ackReactionScope ?? "group-mentions";
+  const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
 
   return async (data, client) => {
     try {

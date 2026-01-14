@@ -163,8 +163,7 @@ export async function runPreparedReply(
     isHeartbeat,
   });
   const shouldInjectGroupIntro = Boolean(
-    isGroupChat &&
-      (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
+    isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
@@ -176,17 +175,10 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
-  const extraSystemPrompt = [groupIntro, groupSystemPrompt]
-    .filter(Boolean)
-    .join("\n\n");
+  const extraSystemPrompt = [groupIntro, groupSystemPrompt].filter(Boolean).join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (
-    ctx.CommandBody ??
-    ctx.RawBody ??
-    ctx.Body ??
-    ""
-  ).trim();
+  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&
@@ -198,12 +190,8 @@ export async function runPreparedReply(
     return undefined;
   }
   const isBareSessionReset =
-    isNewSession &&
-    baseBodyTrimmedRaw.length === 0 &&
-    rawBodyTrimmed.length > 0;
-  const baseBodyFinal = isBareSessionReset
-    ? BARE_SESSION_RESET_PROMPT
-    : baseBody;
+    isNewSession && baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0;
+  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const baseBodyTrimmed = baseBodyFinal.trim();
   if (!baseBodyTrimmed) {
     await typing.onReplyStart();
@@ -223,10 +211,8 @@ export async function runPreparedReply(
     abortKey: command.abortKey,
     messageId: sessionCtx.MessageSid,
   });
-  const isGroupSession =
-    sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
-  const isMainSession =
-    !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
+  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
+  const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   prefixedBodyBase = await prependSystemEvents({
     cfg,
     sessionKey,
@@ -263,18 +249,12 @@ export async function runPreparedReply(
     ? "To send an image back, add a line like: MEDIA:https://example.com/image.jpg (no spaces). Keep caption in the text body."
     : undefined;
   let prefixedCommandBody = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""]
-        .filter(Boolean)
-        .join("\n")
-        .trim()
+    ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()
     : prefixedBody;
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (
-      maybeLevel &&
-      (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
-    ) {
+    if (maybeLevel && (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
@@ -282,12 +262,8 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (
-    resolvedThinkLevel === "xhigh" &&
-    !supportsXHighThinking(provider, model)
-  ) {
-    const explicitThink =
-      directives.hasThinkDirective && directives.thinkLevel !== undefined;
+  if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
+    const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
@@ -295,12 +271,7 @@ export async function runPreparedReply(
       };
     }
     resolvedThinkLevel = "high";
-    if (
-      sessionEntry &&
-      sessionStore &&
-      sessionKey &&
-      sessionEntry.thinkingLevel === "xhigh"
-    ) {
+    if (sessionEntry && sessionStore && sessionKey && sessionEntry.thinkingLevel === "xhigh") {
       sessionEntry.thinkingLevel = "high";
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
@@ -317,10 +288,7 @@ export async function runPreparedReply(
         .join("\n\n")
     : [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase]
-        .filter(Boolean)
-        .join("\n")
-        .trim()
+    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
@@ -329,22 +297,17 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
-  const sessionLaneKey = resolveEmbeddedSessionLane(
-    sessionKey ?? sessionIdFinal,
-  );
+  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);
-    logVerbose(
-      `Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`,
-    );
+    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
-  const shouldSteer =
-    resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
@@ -385,8 +348,7 @@ export async function runPreparedReply(
       },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
-      ownerNumbers:
-        command.ownerList.length > 0 ? command.ownerList : undefined,
+      ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },

@@ -106,9 +106,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       const entry = ensureAgentEntry(list, defaultId);
       if (entry.identity === undefined) {
         entry.identity = identity;
-        changes.push(
-          `Moved identity → agents.list (id "${defaultId}").identity.`,
-        );
+        changes.push(`Moved identity → agents.list (id "${defaultId}").identity.`);
       } else {
         changes.push("Removed identity (agents.list identity already set).");
       }
@@ -121,10 +119,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     id: "bind-tailnet->auto",
     describe: "Remap gateway/bridge bind 'tailnet' to 'auto'",
     apply: (raw, changes) => {
-      const migrateBind = (
-        obj: Record<string, unknown> | null | undefined,
-        key: string,
-      ) => {
+      const migrateBind = (obj: Record<string, unknown> | null | undefined, key: string) => {
         if (!obj) return;
         const bind = obj.bind;
         if (bind === "tailnet") {

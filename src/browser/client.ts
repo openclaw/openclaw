@@ -102,20 +102,14 @@ export async function browserStatus(
   });
 }
 
-export async function browserProfiles(
-  baseUrl: string,
-): Promise<ProfileStatus[]> {
-  const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
-    `${baseUrl}/profiles`,
-    { timeoutMs: 3000 },
-  );
+export async function browserProfiles(baseUrl: string): Promise<ProfileStatus[]> {
+  const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(`${baseUrl}/profiles`, {
+    timeoutMs: 3000,
+  });
   return res.profiles ?? [];
 }
 
-export async function browserStart(
-  baseUrl: string,
-  opts?: { profile?: string },
-): Promise<void> {
+export async function browserStart(baseUrl: string, opts?: { profile?: string }): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(`${baseUrl}/start${q}`, {
     method: "POST",
@@ -123,10 +117,7 @@ export async function browserStart(
   });
 }
 
-export async function browserStop(
-  baseUrl: string,
-  opts?: { profile?: string },
-): Promise<void> {
+export async function browserStop(baseUrl: string, opts?: { profile?: string }): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
   await fetchBrowserJson(`${baseUrl}/stop${q}`, {
     method: "POST",
@@ -139,13 +130,10 @@ export async function browserResetProfile(
   opts?: { profile?: string },
 ): Promise<BrowserResetProfileResult> {
   const q = buildProfileQuery(opts?.profile);
-  return await fetchBrowserJson<BrowserResetProfileResult>(
-    `${baseUrl}/reset-profile${q}`,
-    {
-      method: "POST",
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserResetProfileResult>(`${baseUrl}/reset-profile${q}`, {
+    method: "POST",
+    timeoutMs: 20000,
+  });
 }
 
 export type BrowserCreateProfileResult = {
@@ -161,19 +149,16 @@ export async function browserCreateProfile(
   baseUrl: string,
   opts: { name: string; color?: string; cdpUrl?: string },
 ): Promise<BrowserCreateProfileResult> {
-  return await fetchBrowserJson<BrowserCreateProfileResult>(
-    `${baseUrl}/profiles/create`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: opts.name,
-        color: opts.color,
-        cdpUrl: opts.cdpUrl,
-      }),
-      timeoutMs: 10000,
-    },
-  );
+  return await fetchBrowserJson<BrowserCreateProfileResult>(`${baseUrl}/profiles/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: opts.name,
+      color: opts.color,
+      cdpUrl: opts.cdpUrl,
+    }),
+    timeoutMs: 10000,
+  });
 }
 
 export type BrowserDeleteProfileResult = {
@@ -241,13 +226,10 @@ export async function browserCloseTab(
   opts?: { profile?: string },
 ): Promise<void> {
   const q = buildProfileQuery(opts?.profile);
-  await fetchBrowserJson(
-    `${baseUrl}/tabs/${encodeURIComponent(targetId)}${q}`,
-    {
-      method: "DELETE",
-      timeoutMs: 5000,
-    },
-  );
+  await fetchBrowserJson(`${baseUrl}/tabs/${encodeURIComponent(targetId)}${q}`, {
+    method: "DELETE",
+    timeoutMs: 5000,
+  });
 }
 
 export async function browserTabAction(
@@ -292,20 +274,16 @@ export async function browserSnapshot(
   if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
     q.set("maxChars", String(opts.maxChars));
   }
-  if (typeof opts.interactive === "boolean")
-    q.set("interactive", String(opts.interactive));
+  if (typeof opts.interactive === "boolean") q.set("interactive", String(opts.interactive));
   if (typeof opts.compact === "boolean") q.set("compact", String(opts.compact));
   if (typeof opts.depth === "number" && Number.isFinite(opts.depth))
     q.set("depth", String(opts.depth));
   if (opts.selector?.trim()) q.set("selector", opts.selector.trim());
   if (opts.frame?.trim()) q.set("frame", opts.frame.trim());
   if (opts.profile) q.set("profile", opts.profile);
-  return await fetchBrowserJson<SnapshotResult>(
-    `${baseUrl}/snapshot?${q.toString()}`,
-    {
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<SnapshotResult>(`${baseUrl}/snapshot?${q.toString()}`, {
+    timeoutMs: 20000,
+  });
 }
 
 // Actions beyond the basic read-only commands live in client-actions.ts.

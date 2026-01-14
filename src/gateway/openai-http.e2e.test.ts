@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitAgentEvent } from "../infra/agent-events.js";
-import {
-  agentCommand,
-  getFreePort,
-  installGatewayTestHooks,
-} from "./test-helpers.js";
+import { agentCommand, getFreePort, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks();
 
@@ -18,10 +14,7 @@ async function startServerWithDefaultConfig(port: number) {
   });
 }
 
-async function startServer(
-  port: number,
-  opts?: { openAiChatCompletionsEnabled?: boolean },
-) {
+async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?: boolean }) {
   const { startGatewayServer } = await import("./server.js");
   return await startGatewayServer(port, {
     host: "127.0.0.1",
@@ -31,11 +24,7 @@ async function startServer(
   });
 }
 
-async function postChatCompletions(
-  port: number,
-  body: unknown,
-  headers?: Record<string, string>,
-) {
+async function postChatCompletions(port: number, body: unknown, headers?: Record<string, string>) {
   const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -133,9 +122,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect(
-        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
-      ).toMatch(/^agent:beta:/);
+      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:beta:/,
+      );
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -157,9 +146,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect(
-        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
-      ).toMatch(/^agent:beta:/);
+      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:beta:/,
+      );
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -185,9 +174,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect(
-        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
-      ).toMatch(/^agent:alpha:/);
+      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:alpha:/,
+      );
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -236,9 +225,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(res.status).toBe(200);
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect(
-        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
-      ).toContain("openai-user:alice");
+      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
+        "openai-user:alice",
+      );
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -267,9 +256,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(res.status).toBe(200);
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      expect((opts as { message?: string } | undefined)?.message).toBe(
-        "hello\nworld",
-      );
+      expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -293,8 +280,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(json.object).toBe("chat.completion");
       expect(Array.isArray(json.choices)).toBe(true);
       const choice0 = (json.choices as Array<Record<string, unknown>>)[0] ?? {};
-      const msg =
-        (choice0.message as Record<string, unknown> | undefined) ?? {};
+      const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
       expect(msg.role).toBe("assistant");
       expect(msg.content).toBe("hello");
     } finally {
@@ -337,9 +323,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: "hi" }],
       });
       expect(res.status).toBe(200);
-      expect(res.headers.get("content-type") ?? "").toContain(
-        "text/event-stream",
-      );
+      expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
 
       const text = await res.text();
       const data = parseSseDataLines(text);
@@ -348,18 +332,10 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const jsonChunks = data
         .filter((d) => d !== "[DONE]")
         .map((d) => JSON.parse(d) as Record<string, unknown>);
-      expect(jsonChunks.some((c) => c.object === "chat.completion.chunk")).toBe(
-        true,
-      );
+      expect(jsonChunks.some((c) => c.object === "chat.completion.chunk")).toBe(true);
       const allContent = jsonChunks
-        .flatMap(
-          (c) =>
-            (c.choices as Array<Record<string, unknown>> | undefined) ?? [],
-        )
-        .map(
-          (choice) =>
-            (choice.delta as Record<string, unknown> | undefined)?.content,
-        )
+        .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+        .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
         .filter((v): v is string => typeof v === "string")
         .join("");
       expect(allContent).toBe("hello");

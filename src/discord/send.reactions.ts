@@ -20,8 +20,7 @@ export async function reactMessageDiscord(
   const { rest, request } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
   await request(
-    () =>
-      rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encoded)),
+    () => rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encoded)),
     "react",
   );
   return { ok: true };
@@ -35,9 +34,7 @@ export async function removeReactionDiscord(
 ) {
   const rest = resolveDiscordRest(opts);
   const encoded = normalizeReactionEmoji(emoji);
-  await rest.delete(
-    Routes.channelMessageOwnReaction(channelId, messageId, encoded),
-  );
+  await rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encoded));
   return { ok: true };
 }
 
@@ -47,9 +44,7 @@ export async function removeOwnReactionsDiscord(
   opts: DiscordReactOpts = {},
 ): Promise<{ ok: true; removed: string[] }> {
   const rest = resolveDiscordRest(opts);
-  const message = (await rest.get(
-    Routes.channelMessage(channelId, messageId),
-  )) as {
+  const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
   };
   const identifiers = new Set<string>();
@@ -63,11 +58,7 @@ export async function removeOwnReactionsDiscord(
     Array.from(identifiers, (identifier) => {
       removed.push(identifier);
       return rest.delete(
-        Routes.channelMessageOwnReaction(
-          channelId,
-          messageId,
-          normalizeReactionEmoji(identifier),
-        ),
+        Routes.channelMessageOwnReaction(channelId, messageId, normalizeReactionEmoji(identifier)),
       );
     }),
   );
@@ -80,9 +71,7 @@ export async function fetchReactionsDiscord(
   opts: DiscordReactOpts & { limit?: number } = {},
 ): Promise<DiscordReactionSummary[]> {
   const rest = resolveDiscordRest(opts);
-  const message = (await rest.get(
-    Routes.channelMessage(channelId, messageId),
-  )) as {
+  const message = (await rest.get(Routes.channelMessage(channelId, messageId))) as {
     reactions?: Array<{
       count: number;
       emoji: { id?: string | null; name?: string | null };
@@ -100,10 +89,9 @@ export async function fetchReactionsDiscord(
     const identifier = buildReactionIdentifier(reaction.emoji);
     if (!identifier) continue;
     const encoded = encodeURIComponent(identifier);
-    const users = (await rest.get(
-      Routes.channelMessageReaction(channelId, messageId, encoded),
-      { limit },
-    )) as Array<{ id: string; username?: string; discriminator?: string }>;
+    const users = (await rest.get(Routes.channelMessageReaction(channelId, messageId, encoded), {
+      limit,
+    })) as Array<{ id: string; username?: string; discriminator?: string }>;
     summaries.push({
       emoji: {
         id: reaction.emoji.id ?? null,

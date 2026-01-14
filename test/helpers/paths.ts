@@ -5,10 +5,7 @@ export function isPathWithinBase(base: string, target: string): boolean {
     const normalizedBase = path.win32.normalize(path.win32.resolve(base));
     const normalizedTarget = path.win32.normalize(path.win32.resolve(target));
 
-    const rel = path.win32.relative(
-      normalizedBase.toLowerCase(),
-      normalizedTarget.toLowerCase(),
-    );
+    const rel = path.win32.relative(normalizedBase.toLowerCase(), normalizedTarget.toLowerCase());
     return rel === "" || (!rel.startsWith("..") && !path.win32.isAbsolute(rel));
   }
 

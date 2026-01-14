@@ -56,9 +56,9 @@ async function main() {
 
   setVerbose(hasFlag(args, "--verbose"));
 
-  const wsLogRaw = (
-    hasFlag(args, "--compact") ? "compact" : argValue(args, "--ws-log")
-  ) as string | undefined;
+  const wsLogRaw = (hasFlag(args, "--compact") ? "compact" : argValue(args, "--ws-log")) as
+    | string
+    | undefined;
   const wsLogStyle: GatewayWsLogStyle =
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
   setGatewayWsLogStyle(wsLogStyle);
@@ -81,16 +81,11 @@ async function main() {
     cfg.gateway?.bind ??
     "loopback";
   const bind =
-    bindRaw === "loopback" ||
-    bindRaw === "lan" ||
-    bindRaw === "auto" ||
-    bindRaw === "custom"
+    bindRaw === "loopback" || bindRaw === "lan" || bindRaw === "auto" || bindRaw === "custom"
       ? bindRaw
       : null;
   if (!bind) {
-    defaultRuntime.error(
-      'Invalid --bind (use "loopback", "lan", "auto", or "custom")',
-    );
+    defaultRuntime.error('Invalid --bind (use "loopback", "lan", "auto", or "custom")');
     process.exit(1);
   }
 
@@ -110,9 +105,7 @@ async function main() {
 
   const request = (action: "stop" | "restart", signal: string) => {
     if (shuttingDown) {
-      defaultRuntime.log(
-        `gateway: received ${signal} during shutdown; ignoring`,
-      );
+      defaultRuntime.log(`gateway: received ${signal} during shutdown; ignoring`);
       return;
     }
     shuttingDown = true;
@@ -122,9 +115,7 @@ async function main() {
     );
 
     forceExitTimer = setTimeout(() => {
-      defaultRuntime.error(
-        "gateway: shutdown timed out; exiting without full cleanup",
-      );
+      defaultRuntime.error("gateway: shutdown timed out; exiting without full cleanup");
       cleanupSignals();
       process.exit(0);
     }, 5000);

@@ -2,10 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import {
-  isMessagingTool,
-  isMessagingToolSendAction,
-} from "./pi-embedded-messaging.js";
+import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   extractMessagingToolSend,
@@ -29,12 +26,10 @@ export function handleToolExecutionStart(
   const args = evt.args;
 
   if (toolName === "read") {
-    const record =
-      args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const filePath = typeof record.path === "string" ? record.path.trim() : "";
     if (!filePath) {
-      const argsPreview =
-        typeof args === "string" ? args.slice(0, 200) : undefined;
+      const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
         `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
       );
@@ -74,8 +69,7 @@ export function handleToolExecutionStart(
 
   // Track messaging tool sends (pending until confirmed in tool_execution_end).
   if (isMessagingTool(toolName)) {
-    const argsRecord =
-      args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
     if (isMessagingSend) {
       const sendTarget = extractMessagingToolSend(toolName, argsRecord);
@@ -83,13 +77,10 @@ export function handleToolExecutionStart(
         ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
       }
       // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-      const text =
-        (argsRecord.content as string) ?? (argsRecord.message as string);
+      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
       if (text && typeof text === "string") {
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
-        ctx.log.debug(
-          `Tracking pending messaging text: tool=${toolName} len=${text.length}`,
-        );
+        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
       }
     }
   }
@@ -154,12 +145,8 @@ export function handleToolExecutionEnd(
     ctx.state.pendingMessagingTexts.delete(toolCallId);
     if (!isToolError) {
       ctx.state.messagingToolSentTexts.push(pendingText);
-      ctx.state.messagingToolSentTextsNormalized.push(
-        normalizeTextForComparison(pendingText),
-      );
-      ctx.log.debug(
-        `Committed messaging text: tool=${toolName} len=${pendingText.length}`,
-      );
+      ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(pendingText));
+      ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
       ctx.trimMessagingToolSent();
     }
   }

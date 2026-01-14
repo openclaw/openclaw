@@ -22,37 +22,21 @@ type DownloadCandidate = {
   placeholder: string;
 };
 
-function resolveDownloadCandidate(
-  att: MSTeamsAttachmentLike,
-): DownloadCandidate | null {
+function resolveDownloadCandidate(att: MSTeamsAttachmentLike): DownloadCandidate | null {
   const contentType = normalizeContentType(att.contentType);
   const name = typeof att.name === "string" ? att.name.trim() : "";
 
   if (contentType === "application/vnd.microsoft.teams.file.download.info") {
     if (!isRecord(att.content)) return null;
     const downloadUrl =
-      typeof att.content.downloadUrl === "string"
-        ? att.content.downloadUrl.trim()
-        : "";
+      typeof att.content.downloadUrl === "string" ? att.content.downloadUrl.trim() : "";
     if (!downloadUrl) return null;
 
-    const fileType =
-      typeof att.content.fileType === "string"
-        ? att.content.fileType.trim()
-        : "";
-    const uniqueId =
-      typeof att.content.uniqueId === "string"
-        ? att.content.uniqueId.trim()
-        : "";
-    const fileName =
-      typeof att.content.fileName === "string"
-        ? att.content.fileName.trim()
-        : "";
+    const fileType = typeof att.content.fileType === "string" ? att.content.fileType.trim() : "";
+    const uniqueId = typeof att.content.uniqueId === "string" ? att.content.uniqueId.trim() : "";
+    const fileName = typeof att.content.fileName === "string" ? att.content.fileName.trim() : "";
 
-    const fileHint =
-      name ||
-      fileName ||
-      (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
+    const fileHint = name || fileName || (uniqueId && fileType ? `${uniqueId}.${fileType}` : "");
     return {
       url: downloadUrl,
       fileHint: fileHint || undefined,
@@ -65,8 +49,7 @@ function resolveDownloadCandidate(
     };
   }
 
-  const contentUrl =
-    typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
+  const contentUrl = typeof att.contentUrl === "string" ? att.contentUrl.trim() : "";
   if (!contentUrl) return null;
 
   return {
@@ -86,19 +69,10 @@ function scopeCandidatesForUrl(url: string): string[] {
       host.endsWith("1drv.ms") ||
       host.includes("sharepoint");
     return looksLikeGraph
-      ? [
-          "https://graph.microsoft.com/.default",
-          "https://api.botframework.com/.default",
-        ]
-      : [
-          "https://api.botframework.com/.default",
-          "https://graph.microsoft.com/.default",
-        ];
+      ? ["https://graph.microsoft.com/.default", "https://api.botframework.com/.default"]
+      : ["https://api.botframework.com/.default", "https://graph.microsoft.com/.default"];
   } catch {
-    return [
-      "https://api.botframework.com/.default",
-      "https://graph.microsoft.com/.default",
-    ];
+    return ["https://api.botframework.com/.default", "https://graph.microsoft.com/.default"];
   }
 }
 
@@ -111,8 +85,7 @@ async function fetchWithAuthFallback(params: {
   const firstAttempt = await fetchFn(params.url);
   if (firstAttempt.ok) return firstAttempt;
   if (!params.tokenProvider) return firstAttempt;
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403)
-    return firstAttempt;
+  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) return firstAttempt;
 
   const scopes = scopeCandidatesForUrl(params.url);
   for (const scope of scopes) {

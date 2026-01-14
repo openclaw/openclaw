@@ -1,8 +1,4 @@
-import type {
-  AssistantMessage,
-  Model,
-  ToolResultMessage,
-} from "@mariozechner/pi-ai";
+import type { AssistantMessage, Model, ToolResultMessage } from "@mariozechner/pi-ai";
 import { streamOpenAIResponses } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
@@ -31,8 +27,7 @@ function installFailingFetchCapture() {
     const bodyText = (() => {
       if (!rawBody) return "";
       if (typeof rawBody === "string") return rawBody;
-      if (rawBody instanceof Uint8Array)
-        return Buffer.from(rawBody).toString("utf8");
+      if (rawBody instanceof Uint8Array) return Buffer.from(rawBody).toString("utf8");
       if (rawBody instanceof ArrayBuffer)
         return Buffer.from(new Uint8Array(rawBody)).toString("utf8");
       return String(rawBody);
@@ -135,17 +130,13 @@ describe("openai-responses reasoning replay", () => {
       const input = Array.isArray(body?.input) ? body?.input : [];
       const types = input
         .map((item) =>
-          item && typeof item === "object"
-            ? (item as Record<string, unknown>).type
-            : undefined,
+          item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
         )
         .filter((t): t is string => typeof t === "string");
 
       expect(types).toContain("reasoning");
       expect(types).toContain("function_call");
-      expect(types.indexOf("reasoning")).toBeLessThan(
-        types.indexOf("function_call"),
-      );
+      expect(types.indexOf("reasoning")).toBeLessThan(types.indexOf("function_call"));
     } finally {
       cap.restore();
     }
@@ -204,9 +195,7 @@ describe("openai-responses reasoning replay", () => {
       const input = Array.isArray(body?.input) ? body?.input : [];
       const types = input
         .map((item) =>
-          item && typeof item === "object"
-            ? (item as Record<string, unknown>).type
-            : undefined,
+          item && typeof item === "object" ? (item as Record<string, unknown>).type : undefined,
         )
         .filter((t): t is string => typeof t === "string");
 

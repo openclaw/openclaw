@@ -1,15 +1,9 @@
 import { describe, expect, test } from "vitest";
-import {
-  formatForLog,
-  shortId,
-  summarizeAgentEventForWsLog,
-} from "./ws-log.js";
+import { formatForLog, shortId, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 describe("gateway ws log helpers", () => {
   test("shortId compacts uuids and long strings", () => {
-    expect(shortId("12345678-1234-1234-1234-123456789abc")).toBe(
-      "12345678…9abc",
-    );
+    expect(shortId("12345678-1234-1234-1234-123456789abc")).toBe("12345678…9abc");
     expect(shortId("a".repeat(30))).toBe("aaaaaaaaaaaa…aaaa");
     expect(shortId("short")).toBe("short");
   });

@@ -13,16 +13,9 @@ export function registerNodesNotifyCommand(nodes: Command) {
       .option("--title <text>", "Notification title")
       .option("--body <text>", "Notification body")
       .option("--sound <name>", "Notification sound")
-      .option(
-        "--priority <passive|active|timeSensitive>",
-        "Notification priority",
-      )
+      .option("--priority <passive|active|timeSensitive>", "Notification priority")
       .option("--delivery <system|overlay|auto>", "Delivery mode", "system")
-      .option(
-        "--invoke-timeout <ms>",
-        "Node invoke timeout in ms (default 15000)",
-        "15000",
-      )
+      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 15000)", "15000")
       .action(async (opts: NodesRpcOpts) => {
         try {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
@@ -44,22 +37,13 @@ export function registerNodesNotifyCommand(nodes: Command) {
               priority: opts.priority,
               delivery: opts.delivery,
             },
-            idempotencyKey: String(
-              opts.idempotencyKey ?? randomIdempotencyKey(),
-            ),
+            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
           };
-          if (
-            typeof invokeTimeout === "number" &&
-            Number.isFinite(invokeTimeout)
-          ) {
+          if (typeof invokeTimeout === "number" && Number.isFinite(invokeTimeout)) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
-          const result = await callGatewayCli(
-            "node.invoke",
-            opts,
-            invokeParams,
-          );
+          const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;

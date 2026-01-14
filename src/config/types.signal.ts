@@ -1,15 +1,7 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-} from "./types.base.js";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./types.base.js";
 import type { DmConfig } from "./types.messages.js";
 
-export type SignalReactionNotificationMode =
-  | "off"
-  | "own"
-  | "all"
-  | "allowlist";
+export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */

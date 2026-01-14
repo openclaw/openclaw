@@ -2,10 +2,7 @@ import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageEmojiCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageEmojiCommands(message: Command, helpers: MessageCliHelpers) {
   const emoji = message.command("emoji").description("Emoji actions");
 
   helpers
@@ -24,28 +21,18 @@ export function registerMessageEmojiCommands(
     )
     .requiredOption("--emoji-name <name>", "Emoji name")
     .requiredOption("--media <path-or-url>", "Emoji media (path or URL)")
-    .option(
-      "--role-ids <id>",
-      "Role id (repeat)",
-      collectOption,
-      [] as string[],
-    )
+    .option("--role-ids <id>", "Role id (repeat)", collectOption, [] as string[])
     .action(async (opts) => {
       await helpers.runMessageAction("emoji-upload", opts);
     });
 }
 
-export function registerMessageStickerCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageStickerCommands(message: Command, helpers: MessageCliHelpers) {
   const sticker = message.command("sticker").description("Sticker actions");
 
   helpers
     .withMessageBase(
-      helpers.withRequiredMessageTarget(
-        sticker.command("send").description("Send stickers"),
-      ),
+      helpers.withRequiredMessageTarget(sticker.command("send").description("Send stickers")),
     )
     .requiredOption("--sticker-id <id>", "Sticker id (repeat)", collectOption)
     .option("-m, --message <text>", "Optional message body")

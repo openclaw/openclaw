@@ -17,11 +17,7 @@ function extractToolCallsFromAssistant(
     const rec = block as { type?: unknown; id?: unknown; name?: unknown };
     if (typeof rec.id !== "string" || !rec.id) continue;
 
-    if (
-      rec.type === "toolCall" ||
-      rec.type === "toolUse" ||
-      rec.type === "functionCall"
-    ) {
+    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
@@ -31,9 +27,7 @@ function extractToolCallsFromAssistant(
   return toolCalls;
 }
 
-function extractToolResultId(
-  msg: Extract<AgentMessage, { role: "toolResult" }>,
-): string | null {
+function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) return toolCallId;
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
@@ -62,9 +56,7 @@ function makeMissingToolResult(params: {
 
 export { makeMissingToolResult };
 
-export function sanitizeToolUseResultPairing(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
 }
 
@@ -76,9 +68,7 @@ export type ToolUseRepairReport = {
   moved: boolean;
 };
 
-export function repairToolUseResultPairing(
-  messages: AgentMessage[],
-): ToolUseRepairReport {
+export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
@@ -93,9 +83,7 @@ export function repairToolUseResultPairing(
   let moved = false;
   let changed = false;
 
-  const pushToolResult = (
-    msg: Extract<AgentMessage, { role: "toolResult" }>,
-  ) => {
+  const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
     if (id && seenToolResultIds.has(id)) {
       droppedDuplicateCount += 1;
@@ -136,10 +124,7 @@ export function repairToolUseResultPairing(
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
 
-    const spanResultsById = new Map<
-      string,
-      Extract<AgentMessage, { role: "toolResult" }>
-    >();
+    const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
 
     let j = i + 1;
@@ -154,10 +139,7 @@ export function repairToolUseResultPairing(
       if (nextRole === "assistant") break;
 
       if (nextRole === "toolResult") {
-        const toolResult = next as Extract<
-          AgentMessage,
-          { role: "toolResult" }
-        >;
+        const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
         const id = extractToolResultId(toolResult);
         if (id && toolCallIds.has(id)) {
           if (seenToolResultIds.has(id)) {

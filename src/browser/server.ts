@@ -3,15 +3,9 @@ import express from "express";
 
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
-import {
-  resolveBrowserConfig,
-  shouldStartLocalBrowserServer,
-} from "./config.js";
+import { resolveBrowserConfig, shouldStartLocalBrowserServer } from "./config.js";
 import { registerBrowserRoutes } from "./routes/index.js";
-import {
-  type BrowserServerState,
-  createBrowserRouteContext,
-} from "./server-context.js";
+import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 
 let state: BrowserServerState | null = null;
 const log = createSubsystemLogger("browser");
@@ -44,9 +38,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
     s.once("error", reject);
   }).catch((err) => {
-    logServer.error(
-      `clawd browser server failed to bind 127.0.0.1:${port}: ${String(err)}`,
-    );
+    logServer.error(`clawd browser server failed to bind 127.0.0.1:${port}: ${String(err)}`);
     return null;
   });
 

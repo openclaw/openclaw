@@ -13,10 +13,7 @@ type Pending = {
   reject: (err: Error) => void;
 };
 
-export type CdpSendFn = (
-  method: string,
-  params?: Record<string, unknown>,
-) => Promise<unknown>;
+export type CdpSendFn = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 
 export function isLoopbackHost(host: string) {
   const h = host.trim().toLowerCase();
@@ -35,10 +32,7 @@ function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
 
-  const send: CdpSendFn = (
-    method: string,
-    params?: Record<string, unknown>,
-  ) => {
+  const send: CdpSendFn = (method: string, params?: Record<string, unknown>) => {
     const id = nextId++;
     const msg = { id, method, params };
     ws.send(JSON.stringify(msg));

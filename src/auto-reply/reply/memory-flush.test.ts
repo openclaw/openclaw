@@ -118,8 +118,6 @@ describe("shouldRunMemoryFlush", () => {
 
 describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
-    expect(
-      resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 }),
-    ).toBe(42_000);
+    expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
   });
 });

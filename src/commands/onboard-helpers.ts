@@ -5,10 +5,7 @@ import { inspect } from "node:util";
 
 import { cancel, isCancel } from "@clack/prompts";
 
-import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-} from "../agents/workspace.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
@@ -19,17 +16,10 @@ import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
-import type {
-  NodeManagerChoice,
-  OnboardMode,
-  ResetScope,
-} from "./onboard-types.js";
+import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -44,10 +34,7 @@ export function summarizeExistingConfig(config: ClawdbotConfig): string {
   const defaults = config.agents?.defaults;
   if (defaults?.workspace) rows.push(`workspace: ${defaults.workspace}`);
   if (defaults?.model) {
-    const model =
-      typeof defaults.model === "string"
-        ? defaults.model
-        : defaults.model.primary;
+    const model = typeof defaults.model === "string" ? defaults.model : defaults.model.primary;
     if (model) rows.push(`model: ${model}`);
   }
   if (config.gateway?.mode) rows.push(`gateway.mode: ${config.gateway.mode}`);
@@ -84,8 +71,7 @@ export function applyWizardMetadata(
   cfg: ClawdbotConfig,
   params: { command: string; mode: OnboardMode },
 ): ClawdbotConfig {
-  const commit =
-    process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
+  const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
   return {
     ...cfg,
     wizard: {
@@ -113,11 +99,7 @@ async function isWSL(): Promise<boolean> {
     wslCached = false;
     return wslCached;
   }
-  if (
-    process.env.WSL_INTEROP ||
-    process.env.WSL_DISTRO_NAME ||
-    process.env.WSLENV
-  ) {
+  if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
     wslCached = true;
     return wslCached;
   }
@@ -143,9 +125,7 @@ type BrowserOpenCommand = {
 
 export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
-  const hasDisplay = Boolean(
-    process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
-  );
+  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
   const isSsh =
     Boolean(process.env.SSH_CLIENT) ||
     Boolean(process.env.SSH_TTY) ||
@@ -165,9 +145,7 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
 
   if (platform === "darwin") {
     const hasOpen = await detectBinary("open");
-    return hasOpen
-      ? { argv: ["open"], command: "open" }
-      : { argv: null, reason: "missing-open" };
+    return hasOpen ? { argv: ["open"], command: "open" } : { argv: null, reason: "missing-open" };
   }
 
   if (platform === "linux") {
@@ -203,9 +181,7 @@ export function formatControlUiSshHint(params: {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const tokenParam = params.token
-    ? `?token=${encodeURIComponent(params.token)}`
-    : "";
+  const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
   const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
   const sshTarget = resolveSshTargetHint();
   return [
@@ -303,10 +279,7 @@ export function resolveNodeManagerOptions(): Array<{
   ];
 }
 
-export async function moveToTrash(
-  pathname: string,
-  runtime: RuntimeEnv,
-): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
   if (!pathname) return;
   try {
     await fs.access(pathname);
@@ -321,11 +294,7 @@ export async function moveToTrash(
   }
 }
 
-export async function handleReset(
-  scope: ResetScope,
-  workspaceDir: string,
-  runtime: RuntimeEnv,
-) {
+export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
   await moveToTrash(CONFIG_PATH_CLAWDBOT, runtime);
   if (scope === "config") return;
   await moveToTrash(path.join(CONFIG_DIR, "credentials"), runtime);
@@ -353,10 +322,7 @@ export async function detectBinary(name: string): Promise<boolean> {
     }
   }
 
-  const command =
-    process.platform === "win32"
-      ? ["where", name]
-      : ["/usr/bin/env", "which", name];
+  const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
     return result.code === 0 && result.stdout.trim().length > 0;

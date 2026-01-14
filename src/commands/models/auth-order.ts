@@ -1,7 +1,4 @@
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -20,9 +17,7 @@ function resolveTargetAgent(
   agentId: string;
   agentDir: string;
 } {
-  const agentId = raw?.trim()
-    ? normalizeAgentId(raw.trim())
-    : resolveDefaultAgentId(cfg);
+  const agentId = raw?.trim() ? normalizeAgentId(raw.trim()) : resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
   return { agentId, agentDir };
 }
@@ -67,14 +62,8 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(
-    `Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`,
-  );
-  runtime.log(
-    order.length > 0
-      ? `Order override: ${order.join(", ")}`
-      : "Order override: (none)",
-  );
+  runtime.log(`Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`);
+  runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
 export async function modelsAuthOrderClearCommand(
@@ -92,8 +81,7 @@ export async function modelsAuthOrderClearCommand(
     provider,
     order: null,
   });
-  if (!updated)
-    throw new Error("Failed to update auth-profiles.json (lock busy?).");
+  if (!updated) throw new Error("Failed to update auth-profiles.json (lock busy?).");
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
@@ -115,9 +103,7 @@ export async function modelsAuthOrderSetCommand(
     allowKeychainPrompt: false,
   });
   const providerKey = normalizeProviderId(provider);
-  const requested = (opts.order ?? [])
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  const requested = (opts.order ?? []).map((entry) => String(entry).trim()).filter(Boolean);
   if (requested.length === 0) {
     throw new Error("Missing profile ids. Provide one or more profile ids.");
   }
@@ -128,9 +114,7 @@ export async function modelsAuthOrderSetCommand(
       throw new Error(`Auth profile "${profileId}" not found in ${agentDir}.`);
     }
     if (normalizeProviderId(cred.provider) !== providerKey) {
-      throw new Error(
-        `Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`,
-      );
+      throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }
 
@@ -139,8 +123,7 @@ export async function modelsAuthOrderSetCommand(
     provider,
     order: requested,
   });
-  if (!updated)
-    throw new Error("Failed to update auth-profiles.json (lock busy?).");
+  if (!updated) throw new Error("Failed to update auth-profiles.json (lock busy?).");
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);

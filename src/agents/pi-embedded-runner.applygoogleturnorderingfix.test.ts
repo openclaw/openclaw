@@ -7,9 +7,7 @@ import { ensureClawdbotModelsJson } from "./models-config.js";
 import { applyGoogleTurnOrderingFix } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -105,9 +103,7 @@ describe("applyGoogleTurnOrderingFix", () => {
     [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
-        ],
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       },
     ] satisfies AgentMessage[];
 
@@ -130,8 +126,7 @@ describe("applyGoogleTurnOrderingFix", () => {
         .getEntries()
         .some(
           (entry) =>
-            entry.type === "custom" &&
-            entry.customType === "google-turn-ordering-bootstrap",
+            entry.type === "custom" && entry.customType === "google-turn-ordering-bootstrap",
         ),
     ).toBe(true);
 

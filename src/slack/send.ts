@@ -1,9 +1,6 @@
 import { type FilesUploadV2Arguments, WebClient } from "@slack/web-api";
 
-import {
-  chunkMarkdownText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
+import { chunkMarkdownText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
@@ -117,10 +114,7 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(
-    params.mediaUrl,
-    params.maxBytes,
-  );
+  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, params.maxBytes);
   const basePayload = {
     channel_id: params.channelId,
     file: buffer,

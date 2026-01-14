@@ -46,9 +46,7 @@ vi.mock("./session.js", () => {
   };
 });
 
-const { createWaSocket, waitForWaConnection, formatError } = await import(
-  "./session.js"
-);
+const { createWaSocket, waitForWaConnection, formatError } = await import("./session.js");
 const { loginWeb } = await import("./login.js");
 
 describe("loginWeb coverage", () => {
@@ -78,9 +76,7 @@ describe("loginWeb coverage", () => {
       output: { statusCode: DisconnectReason.loggedOut },
     });
 
-    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(
-      /cache cleared/i,
-    );
+    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(/cache cleared/i);
     expect(rmMock).toHaveBeenCalledWith(authDir, {
       recursive: true,
       force: true,

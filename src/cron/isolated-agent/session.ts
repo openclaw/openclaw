@@ -15,10 +15,7 @@ export function resolveCronSession(params: {
   agentId: string;
 }) {
   const sessionCfg = params.cfg.session;
-  const idleMinutes = Math.max(
-    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
-    1,
-  );
+  const idleMinutes = Math.max(sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES, 1);
   const idleMs = idleMinutes * 60_000;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: params.agentId,

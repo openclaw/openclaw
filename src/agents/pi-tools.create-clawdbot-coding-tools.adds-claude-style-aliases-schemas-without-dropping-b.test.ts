@@ -48,9 +48,7 @@ describe("createClawdbotCodingTools", () => {
         execute,
       };
 
-      const wrapped = __testing.wrapToolParamNormalization(tool, [
-        { keys: ["path", "file_path"] },
-      ]);
+      const wrapped = __testing.wrapToolParamNormalization(tool, [{ keys: ["path", "file_path"] }]);
 
       await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
       expect(execute).toHaveBeenCalledWith(
@@ -63,27 +61,17 @@ describe("createClawdbotCodingTools", () => {
       await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
         /Missing required parameter/,
       );
-      await expect(
-        wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
-      ).rejects.toThrow(/Missing required parameter/);
+      await expect(wrapped.execute("tool-3", { file_path: "   ", content: "x" })).rejects.toThrow(
+        /Missing required parameter/,
+      );
     });
   });
 
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
-    const toolNames = [
-      "browser",
-      "canvas",
-      "nodes",
-      "cron",
-      "gateway",
-      "message",
-    ];
+    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
 
-    const collectActionValues = (
-      schema: unknown,
-      values: Set<string>,
-    ): void => {
+    const collectActionValues = (schema: unknown, values: Set<string>): void => {
       if (!schema || typeof schema !== "object") return;
       const record = schema as Record<string, unknown>;
       if (typeof record.const === "string") values.add(record.const);
@@ -145,9 +133,7 @@ describe("createClawdbotCodingTools", () => {
       modelProvider: "anthropic",
       modelId: "claude-opus-4-5",
     });
-    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(
-      false,
-    );
+    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("respects apply_patch allowModels", () => {
     const config: ClawdbotConfig = {

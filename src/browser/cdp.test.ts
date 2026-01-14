@@ -3,12 +3,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
-import {
-  createTargetViaCdp,
-  evaluateJavaScript,
-  normalizeCdpWsUrl,
-  snapshotAria,
-} from "./cdp.js";
+import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;
@@ -63,9 +58,7 @@ describe("cdp", () => {
       res.end("not found");
     });
 
-    await new Promise<void>((resolve) =>
-      httpServer?.listen(0, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => httpServer?.listen(0, "127.0.0.1", resolve));
     const httpPort = (httpServer.address() as { port: number }).port;
 
     const created = await createTargetViaCdp({

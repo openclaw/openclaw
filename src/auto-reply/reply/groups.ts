@@ -1,13 +1,7 @@
 import { getChannelDock } from "../../channels/dock.js";
-import {
-  getChatChannelMeta,
-  normalizeChannelId,
-} from "../../channels/registry.js";
+import { getChatChannelMeta, normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import type {
-  GroupKeyResolution,
-  SessionEntry,
-} from "../../config/sessions.js";
+import type { GroupKeyResolution, SessionEntry } from "../../config/sessions.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
@@ -24,9 +18,7 @@ export function resolveGroupRequireMention(params: {
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
   const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
-  const requireMention = getChannelDock(
-    channel,
-  )?.groups?.resolveRequireMention?.({
+  const requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
     cfg,
     groupId,
     groupRoom,
@@ -37,9 +29,7 @@ export function resolveGroupRequireMention(params: {
   return true;
 }
 
-export function defaultGroupActivation(
-  requireMention: boolean,
-): "always" | "mention" {
+export function defaultGroupActivation(requireMention: boolean): "always" | "mention" {
   return requireMention === false ? "always" : "mention";
 }
 
@@ -51,8 +41,7 @@ export function buildGroupIntro(params: {
   silentToken: string;
 }): string {
   const activation =
-    normalizeGroupActivation(params.sessionEntry?.groupActivation) ??
-    params.defaultActivation;
+    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
   const subject = params.sessionCtx.GroupSubject?.trim();
   const members = params.sessionCtx.GroupMembers?.trim();
   const rawProvider = params.sessionCtx.Provider?.trim();

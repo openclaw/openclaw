@@ -8,18 +8,11 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 export const talkHandlers: GatewayRequestHandlers = {
   "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
-    if (
-      client &&
-      isWebchatConnect(client.connect) &&
-      !context.hasConnectedMobileNode()
-    ) {
+    if (client && isWebchatConnect(client.connect) && !context.hasConnectedMobileNode()) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "talk disabled: no connected iOS/Android nodes",
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, "talk disabled: no connected iOS/Android nodes"),
       );
       return;
     }

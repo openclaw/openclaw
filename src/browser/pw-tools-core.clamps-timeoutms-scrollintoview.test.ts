@@ -57,9 +57,7 @@ describe("pw-tools-core", () => {
   });
   it("rewrites strict mode violations for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {
-      throw new Error(
-        'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
-      );
+      throw new Error('Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements');
     });
     currentRefLocator = { scrollIntoViewIfNeeded };
     currentPage = {};
@@ -75,9 +73,7 @@ describe("pw-tools-core", () => {
   });
   it("rewrites not-visible timeouts for scrollIntoView", async () => {
     const scrollIntoViewIfNeeded = vi.fn(async () => {
-      throw new Error(
-        'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
-      );
+      throw new Error('Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible');
     });
     currentRefLocator = { scrollIntoViewIfNeeded };
     currentPage = {};
@@ -93,9 +89,7 @@ describe("pw-tools-core", () => {
   });
   it("rewrites strict mode violations into snapshot hints", async () => {
     const click = vi.fn(async () => {
-      throw new Error(
-        'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
-      );
+      throw new Error('Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements');
     });
     currentRefLocator = { click };
     currentPage = {};
@@ -111,9 +105,7 @@ describe("pw-tools-core", () => {
   });
   it("rewrites not-visible timeouts into snapshot hints", async () => {
     const click = vi.fn(async () => {
-      throw new Error(
-        'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
-      );
+      throw new Error('Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible');
     });
     currentRefLocator = { click };
     currentPage = {};

@@ -21,8 +21,7 @@ export async function promptGatewayConfig(
     await text({
       message: "Gateway port",
       initialValue: String(resolveGatewayPort(cfg)),
-      validate: (value) =>
-        Number.isFinite(Number(value)) ? undefined : "Invalid port",
+      validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
     }),
     runtime,
   );
@@ -67,14 +66,11 @@ export async function promptGatewayConfig(
           if (!value) return "IP address is required for custom bind mode";
           const trimmed = value.trim();
           const parts = trimmed.split(".");
-          if (parts.length !== 4)
-            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (parts.length !== 4) return "Invalid IPv4 address (e.g., 192.168.1.100)";
           if (
             parts.every((part) => {
               const n = parseInt(part, 10);
-              return (
-                !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n)
-              );
+              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
             })
           )
             return undefined;
@@ -143,11 +139,9 @@ export async function promptGatewayConfig(
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(
-      [
-        "Docs:",
-        "https://docs.clawd.bot/gateway/tailscale",
-        "https://docs.clawd.bot/web",
-      ].join("\n"),
+      ["Docs:", "https://docs.clawd.bot/gateway/tailscale", "https://docs.clawd.bot/web"].join(
+        "\n",
+      ),
       "Tailscale",
     );
     tailscaleResetOnExit = Boolean(
@@ -162,10 +156,7 @@ export async function promptGatewayConfig(
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    note(
-      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
-      "Note",
-    );
+    note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
   }
 

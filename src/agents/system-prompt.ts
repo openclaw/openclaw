@@ -62,8 +62,7 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders)",
     message: "Send messages and channel actions",
-    gateway:
-      "Restart, apply config, or run updates on the running Clawdbot process",
+    gateway: "Restart, apply config, or run updates on the running Clawdbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -138,9 +137,7 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
   const ownerLine =
     ownerNumbers.length > 0
       ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
@@ -170,9 +167,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
     .map((cap) => String(cap).trim())
     .filter(Boolean);
-  const runtimeCapabilitiesLower = new Set(
-    runtimeCapabilities.map((cap) => cap.toLowerCase()),
-  );
+  const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
   const skillsSection = skillsPrompt
@@ -232,9 +227,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     hasGateway ? "" : "",
     "",
-    params.modelAliasLines && params.modelAliasLines.length > 0
-      ? "## Model Aliases"
-      : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0 ? "## Model Aliases" : "",
     params.modelAliasLines && params.modelAliasLines.length > 0
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
@@ -274,26 +267,18 @@ export function buildAgentSystemPrompt(params: {
               ? "Host browser control: blocked."
               : "",
           params.sandboxInfo.allowedControlUrls?.length
-            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(
-                ", ",
-              )}`
+            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(", ")}`
             : "",
           params.sandboxInfo.allowedControlHosts?.length
-            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(
-                ", ",
-              )}`
+            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(", ")}`
             : "",
           params.sandboxInfo.allowedControlPorts?.length
-            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(
-                ", ",
-              )}`
+            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(", ")}`
             : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",
-          params.sandboxInfo.elevated?.allowed
-            ? "User can toggle with /elevated on|off."
-            : "",
+          params.sandboxInfo.elevated?.allowed ? "User can toggle with /elevated on|off." : "",
           params.sandboxInfo.elevated?.allowed
             ? "You may also send /elevated on|off when needed."
             : "",
@@ -399,11 +384,7 @@ export function buildAgentSystemPrompt(params: {
       runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
       runtimeChannel ? `channel=${runtimeChannel}` : "",
       runtimeChannel
-        ? `capabilities=${
-            runtimeCapabilities.length > 0
-              ? runtimeCapabilities.join(",")
-              : "none"
-          }`
+        ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
         : "",
       `thinking=${params.defaultThinkLevel ?? "off"}`,
     ]

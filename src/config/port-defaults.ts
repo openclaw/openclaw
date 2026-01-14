@@ -30,18 +30,10 @@ export function deriveDefaultCanvasHostPort(gatewayPort: number): number {
   return derivePort(gatewayPort, 4, DEFAULT_CANVAS_HOST_PORT);
 }
 
-export function deriveDefaultBrowserCdpPortRange(
-  browserControlPort: number,
-): PortRange {
-  const start = derivePort(
-    browserControlPort,
-    9,
-    DEFAULT_BROWSER_CDP_PORT_RANGE_START,
-  );
+export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): PortRange {
+  const start = derivePort(browserControlPort, 9, DEFAULT_BROWSER_CDP_PORT_RANGE_START);
   const end = clampPort(
-    start +
-      (DEFAULT_BROWSER_CDP_PORT_RANGE_END -
-        DEFAULT_BROWSER_CDP_PORT_RANGE_START),
+    start + (DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START),
     DEFAULT_BROWSER_CDP_PORT_RANGE_END,
   );
   if (end < start) return { start, end: start };

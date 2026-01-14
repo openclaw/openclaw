@@ -23,8 +23,7 @@ export function parseConfigCommand(raw: string): ConfigCommand | null {
     case "get":
       return { action: "show", path: args || undefined };
     case "unset": {
-      if (!args)
-        return { action: "error", message: "Usage: /config unset path" };
+      if (!args) return { action: "error", message: "Usage: /config unset path" };
       return { action: "unset", path: args };
     }
     case "set": {

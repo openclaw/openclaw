@@ -4,9 +4,7 @@ import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
 
 export function isGoogleModelApi(api?: string | null): boolean {
   return (
-    api === "google-gemini-cli" ||
-    api === "google-generative-ai" ||
-    api === "google-antigravity"
+    api === "google-gemini-cli" || api === "google-generative-ai" || api === "google-antigravity"
   );
 }
 
@@ -28,9 +26,7 @@ type GeminiToolCallBlock = {
   input?: unknown;
 };
 
-export function downgradeGeminiHistory(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[] {
   const downgradedIds = new Set<string>();
   const out: AgentMessage[] = [];
 
@@ -63,11 +59,7 @@ export function downgradeGeminiHistory(
         if (!block || typeof block !== "object") return block;
         const blockRecord = block as GeminiToolCallBlock;
         const type = blockRecord.type;
-        if (
-          type === "toolCall" ||
-          type === "functionCall" ||
-          type === "toolUse"
-        ) {
+        if (type === "toolCall" || type === "functionCall" || type === "toolUse") {
           const hasSignature = Boolean(blockRecord.thought_signature);
           if (!hasSignature) {
             const id =
@@ -83,15 +75,12 @@ export function downgradeGeminiHistory(
                   ? blockRecord.toolName
                   : undefined;
             const args =
-              blockRecord.arguments !== undefined
-                ? blockRecord.arguments
-                : blockRecord.input;
+              blockRecord.arguments !== undefined ? blockRecord.arguments : blockRecord.input;
 
             if (id) downgradedIds.add(id);
             hasDowngraded = true;
 
-            const argsText =
-              typeof args === "string" ? args : JSON.stringify(args, null, 2);
+            const argsText = typeof args === "string" ? args : JSON.stringify(args, null, 2);
 
             return {
               type: "text",
@@ -104,11 +93,7 @@ export function downgradeGeminiHistory(
         return block;
       });
 
-      out.push(
-        hasDowngraded
-          ? ({ ...assistantMsg, content: newContent } as AgentMessage)
-          : msg,
-      );
+      out.push(hasDowngraded ? ({ ...assistantMsg, content: newContent } as AgentMessage) : msg);
       continue;
     }
 

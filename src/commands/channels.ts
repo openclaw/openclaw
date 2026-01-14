@@ -7,7 +7,4 @@ export { channelsLogsCommand } from "./channels/logs.js";
 export type { ChannelsRemoveOptions } from "./channels/remove.js";
 export { channelsRemoveCommand } from "./channels/remove.js";
 export type { ChannelsStatusOptions } from "./channels/status.js";
-export {
-  channelsStatusCommand,
-  formatGatewayChannelsStatusLines,
-} from "./channels/status.js";
+export { channelsStatusCommand, formatGatewayChannelsStatusLines } from "./channels/status.js";

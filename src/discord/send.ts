@@ -37,11 +37,7 @@ export {
   searchMessagesDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
-export {
-  sendMessageDiscord,
-  sendPollDiscord,
-  sendStickerDiscord,
-} from "./send.outbound.js";
+export { sendMessageDiscord, sendPollDiscord, sendStickerDiscord } from "./send.outbound.js";
 export {
   fetchChannelPermissionsDiscord,
   fetchReactionsDiscord,

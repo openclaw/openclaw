@@ -18,10 +18,7 @@ export function registerBrowserElementCommands(
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
     .action(async (ref: string | undefined, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) return;
       const modifiers = opts.modifiers
@@ -64,10 +61,7 @@ export function registerBrowserElementCommands(
     .option("--slowly", "Type slowly (human-like)", false)
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) return;
       try {
@@ -100,10 +94,7 @@ export function registerBrowserElementCommands(
     .argument("<key>", "Key to press (e.g. Enter)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (key: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserAct(
           baseUrl,
@@ -127,10 +118,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserAct(
           baseUrl,
@@ -153,16 +141,11 @@ export function registerBrowserElementCommands(
     .description("Scroll an element into view by ref from snapshot")
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option(
-      "--timeout-ms <ms>",
-      "How long to wait for scroll (default: 20000)",
-      (v: string) => Number(v),
+    .option("--timeout-ms <ms>", "How long to wait for scroll (default: 20000)", (v: string) =>
+      Number(v),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const refValue = requireRef(ref);
       if (!refValue) return;
       try {
@@ -172,9 +155,7 @@ export function registerBrowserElementCommands(
             kind: "scrollIntoView",
             ref: refValue,
             targetId: opts.targetId?.trim() || undefined,
-            timeoutMs: Number.isFinite(opts.timeoutMs)
-              ? opts.timeoutMs
-              : undefined,
+            timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           },
           { profile },
         );
@@ -196,10 +177,7 @@ export function registerBrowserElementCommands(
     .argument("<endRef>", "End ref id")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (startRef: string, endRef: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserAct(
           baseUrl,
@@ -229,10 +207,7 @@ export function registerBrowserElementCommands(
     .argument("<values...>", "Option values to select")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, values: string[], opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserAct(
           baseUrl,

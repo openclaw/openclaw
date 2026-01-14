@@ -58,9 +58,7 @@ export function createGatewayTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
         if (opts?.config?.commands?.restart !== true) {
-          throw new Error(
-            "Gateway restart is disabled. Set commands.restart=true to enable.",
-          );
+          throw new Error("Gateway restart is disabled. Set commands.restart=true to enable.");
         }
         const sessionKey =
           typeof params.sessionKey === "string" && params.sessionKey.trim()
@@ -75,9 +73,7 @@ export function createGatewayTool(opts?: {
             ? params.reason.trim().slice(0, 200)
             : undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
@@ -114,8 +110,7 @@ export function createGatewayTool(opts?: {
           ? params.gatewayToken.trim()
           : undefined;
       const timeoutMs =
-        typeof params.timeoutMs === "number" &&
-        Number.isFinite(params.timeoutMs)
+        typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
           ? Math.max(1, Math.floor(params.timeoutMs))
           : undefined;
       const gatewayOpts = { gatewayUrl, gatewayToken, timeoutMs };
@@ -135,12 +130,9 @@ export function createGatewayTool(opts?: {
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
-          typeof params.restartDelayMs === "number" &&
-          Number.isFinite(params.restartDelayMs)
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
         const result = await callGatewayTool("config.apply", gatewayOpts, {
@@ -157,12 +149,9 @@ export function createGatewayTool(opts?: {
             ? params.sessionKey.trim()
             : opts?.agentSessionKey?.trim() || undefined;
         const note =
-          typeof params.note === "string" && params.note.trim()
-            ? params.note.trim()
-            : undefined;
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
         const restartDelayMs =
-          typeof params.restartDelayMs === "number" &&
-          Number.isFinite(params.restartDelayMs)
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)
             : undefined;
         const result = await callGatewayTool("update.run", gatewayOpts, {

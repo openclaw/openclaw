@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 
-import {
-  browserSnapshot,
-  resolveBrowserControlUrl,
-} from "../browser/client.js";
+import { browserSnapshot, resolveBrowserControlUrl } from "../browser/client.js";
 import { browserScreenshotAction } from "../browser/client-actions.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
@@ -47,14 +44,10 @@ export function registerBrowserInspectCommands(
 
   browser
     .command("snapshot")
-    .description(
-      "Capture a snapshot (default: ai; aria is the accessibility tree)",
-    )
+    .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) =>
-      Number(v),
-    )
+    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) => Number(v))
     .option("--interactive", "Role snapshot: interactive elements only", false)
     .option("--compact", "Role snapshot: compact output", false)
     .option("--depth <n>", "Role snapshot: max depth", (v: string) => Number(v))
@@ -88,9 +81,7 @@ export function registerBrowserInspectCommands(
             await fs.writeFile(opts.out, payload, "utf8");
           }
           if (parent?.json) {
-            defaultRuntime.log(
-              JSON.stringify({ ok: true, out: opts.out }, null, 2),
-            );
+            defaultRuntime.log(JSON.stringify({ ok: true, out: opts.out }, null, 2));
           } else {
             defaultRuntime.log(opts.out);
           }

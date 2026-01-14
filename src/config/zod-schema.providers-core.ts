@@ -66,18 +66,16 @@ export const TelegramAccountSchemaBase = z.object({
     .optional(),
 });
 
-export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
-    });
-  },
-);
+export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
+  });
+});
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
@@ -126,9 +124,7 @@ export const DiscordGuildSchema = z.object({
   requireMention: z.boolean().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   users: z.array(z.union([z.string(), z.number()])).optional(),
-  channels: z
-    .record(z.string(), DiscordGuildChannelSchema.optional())
-    .optional(),
+  channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
 });
 
 export const DiscordAccountSchema = z.object({
@@ -281,18 +277,15 @@ export const SignalAccountSchemaBase = z.object({
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
-export const SignalAccountSchema = SignalAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-    });
-  },
-);
+export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+  });
+});
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
@@ -302,8 +295,7 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     allowFrom: value.allowFrom,
     ctx,
     path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
   });
 });
 
@@ -313,9 +305,7 @@ export const IMessageAccountSchemaBase = z.object({
   enabled: z.boolean().optional(),
   cliPath: ExecutableTokenSchema.optional(),
   dbPath: z.string().optional(),
-  service: z
-    .union([z.literal("imessage"), z.literal("sms"), z.literal("auto")])
-    .optional(),
+  service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
   region: z.string().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -341,18 +331,16 @@ export const IMessageAccountSchemaBase = z.object({
     .optional(),
 });
 
-export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine(
-  (value, ctx) => {
-    requireOpenAllowFrom({
-      policy: value.dmPolicy,
-      allowFrom: value.allowFrom,
-      ctx,
-      path: ["allowFrom"],
-      message:
-        'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
-    });
-  },
-);
+export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
+  });
+});
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),

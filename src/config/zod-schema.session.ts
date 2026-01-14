@@ -1,10 +1,6 @@
 import { z } from "zod";
 
-import {
-  GroupChatSchema,
-  NativeCommandsSettingSchema,
-  QueueSchema,
-} from "./zod-schema.core.js";
+import { GroupChatSchema, NativeCommandsSettingSchema, QueueSchema } from "./zod-schema.core.js";
 
 export const SessionSchema = z
   .object({
@@ -34,11 +30,7 @@ export const SessionSchema = z
                 .object({
                   channel: z.string().optional(),
                   chatType: z
-                    .union([
-                      z.literal("direct"),
-                      z.literal("group"),
-                      z.literal("room"),
-                    ])
+                    .union([z.literal("direct"), z.literal("group"), z.literal("room")])
                     .optional(),
                   keyPrefix: z.string().optional(),
                 })
@@ -63,9 +55,7 @@ export const MessagesSchema = z
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     ackReaction: z.string().optional(),
-    ackReactionScope: z
-      .enum(["group-mentions", "group-all", "direct", "all"])
-      .optional(),
+    ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),
   })
   .optional();

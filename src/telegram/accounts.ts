@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveTelegramToken } from "./token.js";
 
 export type ResolvedTelegramAccount = {
@@ -42,10 +39,7 @@ function resolveAccountConfig(
   return accounts[accountId] as TelegramAccountConfig | undefined;
 }
 
-function mergeTelegramAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): TelegramAccountConfig {
+function mergeTelegramAccountConfig(cfg: ClawdbotConfig, accountId: string): TelegramAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
     {}) as TelegramAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -89,9 +83,7 @@ export function resolveTelegramAccount(params: {
   return fallback;
 }
 
-export function listEnabledTelegramAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedTelegramAccount[] {
+export function listEnabledTelegramAccounts(cfg: ClawdbotConfig): ResolvedTelegramAccount[] {
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

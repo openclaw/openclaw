@@ -27,9 +27,7 @@ export type ProcessToolDefaults = {
 
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(
-    Type.String({ description: "Session id for actions other than list" }),
-  ),
+  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
@@ -96,9 +94,7 @@ export function createProcessTool(
         const lines = [...running, ...finished]
           .sort((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
-            const label = s.name
-              ? truncateMiddle(s.name, 80)
-              : truncateMiddle(s.command, 120);
+            const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
             return `${s.sessionId.slice(0, 8)} ${pad(
               s.status,
               9,
@@ -117,9 +113,7 @@ export function createProcessTool(
 
       if (!params.sessionId) {
         return {
-          content: [
-            { type: "text", text: "sessionId is required for this action." },
-          ],
+          content: [{ type: "text", text: "sessionId is required for this action." }],
           details: { status: "failed" },
         };
       }
@@ -150,10 +144,7 @@ export function createProcessTool(
                   },
                 ],
                 details: {
-                  status:
-                    scopedFinished.status === "completed"
-                      ? "completed"
-                      : "failed",
+                  status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
@@ -187,8 +178,7 @@ export function createProcessTool(
           const exitCode = scopedSession.exitCode ?? 0;
           const exitSignal = scopedSession.exitSignal ?? undefined;
           if (exited) {
-            const status =
-              exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            const status = exitCode === 0 && exitSignal == null ? "completed" : "failed";
             markExited(
               scopedSession,
               scopedSession.exitCode ?? null,
@@ -201,10 +191,7 @@ export function createProcessTool(
               ? "completed"
               : "failed"
             : "running";
-          const output = [stdout.trimEnd(), stderr.trimEnd()]
-            .filter(Boolean)
-            .join("\n")
-            .trim();
+          const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
           return {
             content: [
               {
@@ -265,12 +252,9 @@ export function createProcessTool(
               params.offset,
               params.limit,
             );
-            const status =
-              scopedFinished.status === "completed" ? "completed" : "failed";
+            const status = scopedFinished.status === "completed" ? "completed" : "failed";
             return {
-              content: [
-                { type: "text", text: slice || "(no output recorded)" },
-              ],
+              content: [{ type: "text", text: slice || "(no output recorded)" }],
               details: {
                 status,
                 sessionId: params.sessionId,
@@ -318,10 +302,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (
-            !scopedSession.child?.stdin ||
-            scopedSession.child.stdin.destroyed
-          ) {
+          if (!scopedSession.child?.stdin || scopedSession.child.stdin.destroyed) {
             return {
               content: [
                 {
@@ -353,9 +334,7 @@ export function createProcessTool(
             details: {
               status: "running",
               sessionId: params.sessionId,
-              name: scopedSession
-                ? deriveSessionName(scopedSession.command)
-                : undefined,
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
         }
@@ -386,14 +365,10 @@ export function createProcessTool(
           killSession(scopedSession);
           markExited(scopedSession, null, "SIGKILL", "failed");
           return {
-            content: [
-              { type: "text", text: `Killed session ${params.sessionId}.` },
-            ],
+            content: [{ type: "text", text: `Killed session ${params.sessionId}.` }],
             details: {
               status: "failed",
-              name: scopedSession
-                ? deriveSessionName(scopedSession.command)
-                : undefined,
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
             },
           };
         }
@@ -402,9 +377,7 @@ export function createProcessTool(
           if (scopedFinished) {
             deleteSession(params.sessionId);
             return {
-              content: [
-                { type: "text", text: `Cleared session ${params.sessionId}.` },
-              ],
+              content: [{ type: "text", text: `Cleared session ${params.sessionId}.` }],
               details: { status: "completed" },
             };
           }
@@ -424,23 +397,17 @@ export function createProcessTool(
             killSession(scopedSession);
             markExited(scopedSession, null, "SIGKILL", "failed");
             return {
-              content: [
-                { type: "text", text: `Removed session ${params.sessionId}.` },
-              ],
+              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
               details: {
                 status: "failed",
-                name: scopedSession
-                  ? deriveSessionName(scopedSession.command)
-                  : undefined,
+                name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
               },
             };
           }
           if (scopedFinished) {
             deleteSession(params.sessionId);
             return {
-              content: [
-                { type: "text", text: `Removed session ${params.sessionId}.` },
-              ],
+              content: [{ type: "text", text: `Removed session ${params.sessionId}.` }],
               details: { status: "completed" },
             };
           }
@@ -457,9 +424,7 @@ export function createProcessTool(
       }
 
       return {
-        content: [
-          { type: "text", text: `Unknown action ${params.action as string}` },
-        ],
+        content: [{ type: "text", text: `Unknown action ${params.action as string}` }],
         details: { status: "failed" },
       };
     },

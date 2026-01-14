@@ -44,12 +44,9 @@ export type RestartSentinel = {
 
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
-export const DOCTOR_NONINTERACTIVE_HINT =
-  "Run: clawdbot doctor --non-interactive";
+export const DOCTOR_NONINTERACTIVE_HINT = "Run: clawdbot doctor --non-interactive";
 
-export function resolveRestartSentinelPath(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), SENTINEL_FILENAME);
 }
 
@@ -97,15 +94,11 @@ export async function consumeRestartSentinel(
   return parsed;
 }
 
-export function formatRestartSentinelMessage(
-  payload: RestartSentinelPayload,
-): string {
+export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   return `GatewayRestart:\n${JSON.stringify(payload, null, 2)}`;
 }
 
-export function summarizeRestartSentinel(
-  payload: RestartSentinelPayload,
-): string {
+export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   const kind = payload.kind;
   const status = payload.status;
   const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";

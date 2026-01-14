@@ -14,15 +14,10 @@ import {
   getChannelOnboardingAdapter,
   listChannelOnboardingAdapters,
 } from "./onboarding/registry.js";
-import type {
-  ChannelOnboardingDmPolicy,
-  SetupChannelsOptions,
-} from "./onboarding/types.js";
+import type { ChannelOnboardingDmPolicy, SetupChannelsOptions } from "./onboarding/types.js";
 
 async function noteChannelPrimer(prompter: WizardPrompter): Promise<void> {
-  const channelLines = listChatChannels().map((meta) =>
-    formatChannelPrimerLine(meta),
-  );
+  const channelLines = listChatChannels().map((meta) => formatChannelPrimerLine(meta));
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
@@ -119,9 +114,7 @@ export async function setupChannels(
       adapter.getStatus({ cfg, options, accountOverrides }),
     ),
   );
-  const statusByChannel = new Map(
-    statusEntries.map((entry) => [entry.channel, entry]),
-  );
+  const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
   const statusLines = statusEntries.flatMap((entry) => entry.statusLines);
   if (statusLines.length > 0) {
     await prompter.note(statusLines.join("\n"), "Channel status");
@@ -176,10 +169,7 @@ export async function setupChannels(
   options?.onSelection?.(selection);
 
   const selectionNotes = new Map(
-    listChatChannels().map((meta) => [
-      meta.id,
-      formatChannelSelectionLine(meta, formatDocsLink),
-    ]),
+    listChatChannels().map((meta) => [meta.id, formatChannelSelectionLine(meta, formatDocsLink)]),
   );
   const selectedLines = selection
     .map((channel) => selectionNotes.get(channel))

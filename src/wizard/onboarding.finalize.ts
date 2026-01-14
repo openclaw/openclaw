@@ -46,11 +46,8 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
-export async function finalizeOnboardingWizard(
-  options: FinalizeOnboardingOptions,
-) {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } =
-    options;
+export async function finalizeOnboardingWizard(options: FinalizeOnboardingOptions) {
+  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
 
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
@@ -62,9 +59,7 @@ export async function finalizeOnboardingWizard(
   }
 
   if (process.platform === "linux" && systemdAvailable) {
-    const { ensureSystemdUserLingerInteractive } = await import(
-      "../commands/systemd-linger.js"
-    );
+    const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
     await ensureSystemdUserLingerInteractive({
       runtime,
       prompter: {
@@ -150,25 +145,20 @@ export async function finalizeOnboardingWizard(
         })) === false)
     ) {
       const devMode =
-        process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-        process.argv[1]?.endsWith(".ts");
+        process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
       const nodePath = await resolvePreferredNodePath({
         env: process.env,
         runtime: daemonRuntime,
       });
-      const { programArguments, workingDirectory } =
-        await resolveGatewayProgramArguments({
-          port: settings.port,
-          dev: devMode,
-          runtime: daemonRuntime,
-          nodePath,
-        });
+      const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+        port: settings.port,
+        dev: devMode,
+        runtime: daemonRuntime,
+        nodePath,
+      });
       if (daemonRuntime === "node") {
         const systemNode = await resolveSystemNodeInfo({ env: process.env });
-        const warning = renderSystemNodeWarning(
-          systemNode,
-          programArguments[0],
-        );
+        const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
         if (warning) await prompter.note(warning, "Gateway runtime");
       }
       const environment = buildServiceEnvironment({
@@ -208,9 +198,7 @@ export async function finalizeOnboardingWizard(
   }
 
   const controlUiEnabled =
-    nextConfig.gateway?.controlUi?.enabled ??
-    baseConfig.gateway?.controlUi?.enabled ??
-    true;
+    nextConfig.gateway?.controlUi?.enabled ?? baseConfig.gateway?.controlUi?.enabled ?? true;
   if (!opts.skipUi && controlUiEnabled) {
     const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
     if (!controlUiAssets.ok && controlUiAssets.message) {
@@ -229,8 +217,7 @@ export async function finalizeOnboardingWizard(
   );
 
   const controlUiBasePath =
-    nextConfig.gateway?.controlUi?.basePath ??
-    baseConfig.gateway?.controlUi?.basePath;
+    nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
   const links = resolveControlUiLinks({
     bind: settings.bind,
     port: settings.port,
@@ -245,16 +232,11 @@ export async function finalizeOnboardingWizard(
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-    password:
-      settings.authMode === "password"
-        ? nextConfig.gateway?.auth?.password
-        : "",
+    password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
-    : `Gateway: not detected${
-        gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""
-      }`;
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
   const bootstrapPath = path.join(
     resolveUserPath(options.workspaceDir),
     DEFAULT_BOOTSTRAP_FILENAME,
@@ -295,12 +277,8 @@ export async function finalizeOnboardingWizard(
       if (wantsTui) {
         await runTui({
           url: links.wsUrl,
-          token:
-            settings.authMode === "token" ? settings.gatewayToken : undefined,
-          password:
-            settings.authMode === "password"
-              ? nextConfig.gateway?.auth?.password
-              : "",
+          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          password: settings.authMode === "password" ? nextConfig.gateway?.auth?.password : "",
           // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
           deliver: false,
           message: "Wake up, my friend!",
@@ -313,8 +291,7 @@ export async function finalizeOnboardingWizard(
           formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
-            token:
-              settings.authMode === "token" ? settings.gatewayToken : undefined,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
           }),
           "Open Control UI",
         );
@@ -330,10 +307,9 @@ export async function finalizeOnboardingWizard(
   }
 
   await prompter.note(
-    [
-      "Back up your agent workspace.",
-      "Docs: https://docs.clawd.bot/concepts/agent-workspace",
-    ].join("\n"),
+    ["Back up your agent workspace.", "Docs: https://docs.clawd.bot/concepts/agent-workspace"].join(
+      "\n",
+    ),
     "Workspace backup",
   );
 
@@ -343,9 +319,7 @@ export async function finalizeOnboardingWizard(
   );
 
   const shouldOpenControlUi =
-    !opts.skipUi &&
-    settings.authMode === "token" &&
-    Boolean(settings.gatewayToken);
+    !opts.skipUi && settings.authMode === "token" && Boolean(settings.gatewayToken);
   let controlUiOpened = false;
   let controlUiOpenHint: string | undefined;
   if (shouldOpenControlUi) {

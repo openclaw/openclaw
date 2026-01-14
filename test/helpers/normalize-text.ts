@@ -15,8 +15,7 @@ function stripAnsi(input: string): string {
       i += 1;
       const c = input[i];
       if (!c) break;
-      const isLetter =
-        (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || c === "~";
+      const isLetter = (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || c === "~";
       if (isLetter) break;
     }
   }

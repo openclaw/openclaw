@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  listSystemPresence,
-  updateSystemPresence,
-  upsertPresence,
-} from "./system-presence.js";
+import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
 
 describe("system-presence", () => {
   it("dedupes entries across sources by case-insensitive instanceId key", () => {

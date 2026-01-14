@@ -3,9 +3,7 @@ export type HeartbeatRunResult =
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string };
 
-export type HeartbeatWakeHandler = (opts: {
-  reason?: string;
-}) => Promise<HeartbeatRunResult>;
+export type HeartbeatWakeHandler = (opts: { reason?: string }) => Promise<HeartbeatRunResult>;
 
 let handler: HeartbeatWakeHandler | null = null;
 let pendingReason: string | null = null;
@@ -58,10 +56,7 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null) {
   }
 }
 
-export function requestHeartbeatNow(opts?: {
-  reason?: string;
-  coalesceMs?: number;
-}) {
+export function requestHeartbeatNow(opts?: { reason?: string; coalesceMs?: number }) {
   pendingReason = opts?.reason ?? pendingReason ?? "requested";
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS);
 }

@@ -8,15 +8,9 @@ export function registerWakeCommand(program: Command) {
   addGatewayClientOptions(
     program
       .command("wake")
-      .description(
-        "Enqueue a system event and optionally trigger an immediate heartbeat",
-      )
+      .description("Enqueue a system event and optionally trigger an immediate heartbeat")
       .requiredOption("--text <text>", "System event text")
-      .option(
-        "--mode <mode>",
-        "Wake mode (now|next-heartbeat)",
-        "next-heartbeat",
-      )
+      .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
       .option("--json", "Output JSON", false),
   ).action(async (opts: GatewayRpcOpts & { text?: string; mode?: string }) => {
     try {

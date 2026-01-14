@@ -11,10 +11,7 @@ export type GetReplyOptions = {
   isHeartbeat?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
-  onBlockReply?: (
-    payload: ReplyPayload,
-    context?: BlockReplyContext,
-  ) => Promise<void> | void;
+  onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */

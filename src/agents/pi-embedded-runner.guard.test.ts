@@ -27,11 +27,7 @@ describe("guardSessionManager integration", () => {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
-    expect(messages.map((m) => m.role)).toEqual([
-      "assistant",
-      "toolResult",
-      "assistant",
-    ]);
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "toolResult", "assistant"]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
     expect(sanitizeToolUseResultPairing(messages).map((m) => m.role)).toEqual([
       "assistant",

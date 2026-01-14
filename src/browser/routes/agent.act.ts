@@ -15,18 +15,9 @@ import {
   resolveProfileContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
 } from "./agent.shared.js";
-import {
-  jsonError,
-  toBoolean,
-  toNumber,
-  toStringArray,
-  toStringOrEmpty,
-} from "./utils.js";
+import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
-export function registerBrowserAgentActRoutes(
-  app: express.Express,
-  ctx: BrowserRouteContext,
-) {
+export function registerBrowserAgentActRoutes(app: express.Express, ctx: BrowserRouteContext) {
   app.post("/act", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
@@ -55,8 +46,7 @@ export function registerBrowserAgentActRoutes(
           const timeoutMs = toNumber(body.timeoutMs);
           const buttonRaw = toStringOrEmpty(body.button) || "";
           const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
-          if (buttonRaw && !button)
-            return jsonError(res, 400, "button must be left|right|middle");
+          if (buttonRaw && !button) return jsonError(res, 400, "button must be left|right|middle");
 
           const modifiersRaw = toStringArray(body.modifiers) ?? [];
           const parsedModifiers = parseClickModifiers(modifiersRaw);
@@ -79,8 +69,7 @@ export function registerBrowserAgentActRoutes(
         case "type": {
           const ref = toStringOrEmpty(body.ref);
           if (!ref) return jsonError(res, 400, "ref is required");
-          if (typeof body.text !== "string")
-            return jsonError(res, 400, "text is required");
+          if (typeof body.text !== "string") return jsonError(res, 400, "text is required");
           const text = body.text;
           const submit = toBoolean(body.submit) ?? false;
           const slowly = toBoolean(body.slowly) ?? false;
@@ -125,9 +114,7 @@ export function registerBrowserAgentActRoutes(
           const ref = toStringOrEmpty(body.ref);
           if (!ref) return jsonError(res, 400, "ref is required");
           const timeoutMs = toNumber(body.timeoutMs);
-          const scrollRequest: Parameters<
-            typeof pw.scrollIntoViewViaPlaywright
-          >[0] = {
+          const scrollRequest: Parameters<typeof pw.scrollIntoViewViaPlaywright>[0] = {
             cdpUrl,
             targetId: tab.targetId,
             ref,
@@ -139,8 +126,7 @@ export function registerBrowserAgentActRoutes(
         case "drag": {
           const startRef = toStringOrEmpty(body.startRef);
           const endRef = toStringOrEmpty(body.endRef);
-          if (!startRef || !endRef)
-            return jsonError(res, 400, "startRef and endRef are required");
+          if (!startRef || !endRef) return jsonError(res, 400, "startRef and endRef are required");
           const timeoutMs = toNumber(body.timeoutMs);
           await pw.dragViaPlaywright({
             cdpUrl,
@@ -154,8 +140,7 @@ export function registerBrowserAgentActRoutes(
         case "select": {
           const ref = toStringOrEmpty(body.ref);
           const values = toStringArray(body.values);
-          if (!ref || !values?.length)
-            return jsonError(res, 400, "ref and values are required");
+          if (!ref || !values?.length) return jsonError(res, 400, "ref and values are required");
           const timeoutMs = toNumber(body.timeoutMs);
           await pw.selectOptionViaPlaywright({
             cdpUrl,
@@ -199,8 +184,7 @@ export function registerBrowserAgentActRoutes(
         case "resize": {
           const width = toNumber(body.width);
           const height = toNumber(body.height);
-          if (!width || !height)
-            return jsonError(res, 400, "width and height are required");
+          if (!width || !height) return jsonError(res, 400, "width and height are required");
           await pw.resizeViewportViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -300,11 +284,7 @@ export function registerBrowserAgentActRoutes(
       if (!pw) return;
       if (inputRef || element) {
         if (ref) {
-          return jsonError(
-            res,
-            400,
-            "ref cannot be combined with inputRef/element",
-          );
+          return jsonError(res, 400, "ref cannot be combined with inputRef/element");
         }
         await pw.setInputFilesViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,

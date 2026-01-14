@@ -67,13 +67,8 @@ export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
 ): SessionEntry {
-  const sessionId =
-    patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(
-    existing?.updatedAt ?? 0,
-    patch.updatedAt ?? 0,
-    Date.now(),
-  );
+  const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
+  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) return { ...patch, sessionId, updatedAt };
   return { ...existing, ...patch, sessionId, updatedAt };
 }

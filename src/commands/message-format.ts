@@ -1,13 +1,7 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type {
-  ChannelId,
-  ChannelMessageActionName,
-} from "../channels/plugins/types.js";
+import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import {
-  formatGatewaySummary,
-  formatOutboundDeliverySummary,
-} from "../infra/outbound/format.js";
+import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -41,9 +35,7 @@ export type MessageCliJsonEnvelope = {
   payload: unknown;
 };
 
-export function buildMessageCliJson(
-  result: MessageActionRunResult,
-): MessageCliJsonEnvelope {
+export function buildMessageCliJson(result: MessageActionRunResult): MessageCliJsonEnvelope {
   return {
     action: result.action,
     channel: result.channel,
@@ -103,11 +95,7 @@ function renderObjectSummary(payload: unknown, opts: FormatOpts): string[] {
   ];
 }
 
-function renderMessageList(
-  messages: unknown[],
-  opts: FormatOpts,
-  emptyLabel: string,
-): string[] {
+function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: string): string[] {
   const rows = messages.slice(0, 25).map((m) => {
     const msg = m as Record<string, unknown>;
     const id =
@@ -155,29 +143,21 @@ function renderMessageList(
   ];
 }
 
-function renderMessagesFromPayload(
-  payload: unknown,
-  opts: FormatOpts,
-): string[] | null {
+function renderMessagesFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
   if (!payload || typeof payload !== "object") return null;
   const messages = (payload as { messages?: unknown }).messages;
   if (!Array.isArray(messages)) return null;
   return renderMessageList(messages, opts, "No messages.");
 }
 
-function renderPinsFromPayload(
-  payload: unknown,
-  opts: FormatOpts,
-): string[] | null {
+function renderPinsFromPayload(payload: unknown, opts: FormatOpts): string[] | null {
   if (!payload || typeof payload !== "object") return null;
   const pins = (payload as { pins?: unknown }).pins;
   if (!Array.isArray(pins)) return null;
   return renderMessageList(pins, opts, "No pins.");
 }
 
-function extractDiscordSearchResultsMessages(
-  results: unknown,
-): unknown[] | null {
+function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
   if (!results || typeof results !== "object") return null;
   const raw = (results as { messages?: unknown }).messages;
   if (!Array.isArray(raw)) return null;
@@ -255,9 +235,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const opts: FormatOpts = { width };
 
   if (result.handledBy === "dry-run") {
-    return [
-      muted(`[dry-run] would run ${result.action} via ${result.channel}`),
-    ];
+    return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
   if (result.kind === "send") {
@@ -303,9 +281,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
     const label = resolveChannelLabel(result.channel);
     const msgId = extractMessageId(result.payload);
-    return [
-      ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`),
-    ];
+    return [ok(`✅ Poll sent via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
   // channel actions (non-send/poll)
@@ -371,9 +347,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   }
 
   // Generic success + compact details table.
-  lines.push(
-    ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`),
-  );
+  lines.push(ok(`✅ ${result.action} via ${resolveChannelLabel(result.channel)}.`));
   const summary = renderObjectSummary(payload, opts);
   if (summary.length) {
     lines.push("");

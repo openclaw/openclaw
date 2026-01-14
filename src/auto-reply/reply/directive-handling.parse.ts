@@ -1,12 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "./directives.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   extractElevatedDirective,
   extractReasoningDirective,
@@ -89,10 +84,9 @@ export function parseInlineDirectives(
       }
     : extractElevatedDirective(reasoningCleaned);
   const allowStatusDirective = options?.allowStatusDirective !== false;
-  const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
-    allowStatusDirective
-      ? extractStatusDirective(elevatedCleaned)
-      : { cleaned: elevatedCleaned, hasDirective: false };
+  const { cleaned: statusCleaned, hasDirective: hasStatusDirective } = allowStatusDirective
+    ? extractStatusDirective(elevatedCleaned)
+    : { cleaned: elevatedCleaned, hasDirective: false };
   const {
     cleaned: modelCleaned,
     rawModel,
@@ -167,8 +161,6 @@ export function isDirectiveOnly(params: {
   )
     return false;
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
-  const noMentions = isGroup
-    ? stripMentions(stripped, ctx, cfg, agentId)
-    : stripped;
+  const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;
   return noMentions.length === 0;
 }

@@ -23,9 +23,7 @@ const mockLoadConfig = vi.fn().mockReturnValue({
 });
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi
-  .fn()
-  .mockResolvedValue({ code: "PAIRCODE", created: true });
+const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -36,10 +34,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
 });
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
 vi.mock("./session.js", () => {
@@ -68,8 +64,7 @@ vi.mock("./session.js", () => {
 });
 
 const { createWaSocket } = await import("./session.js");
-const _getSock = () =>
-  (createWaSocket as unknown as () => Promise<ReturnType<typeof mockSock>>)();
+const _getSock = () => (createWaSocket as unknown as () => Promise<ReturnType<typeof mockSock>>)();
 
 import fsSync from "node:fs";
 import os from "node:os";
@@ -456,13 +451,7 @@ describe("web monitor inbox", () => {
     });
     const sock = await createWaSocket();
 
-    await listener.sendReaction(
-      "12345@g.us",
-      "msg123",
-      "👍",
-      false,
-      "+6421000000",
-    );
+    await listener.sendReaction("12345@g.us", "msg123", "👍", false, "+6421000000");
 
     expect(sock.sendMessage).toHaveBeenCalledWith("12345@g.us", {
       react: {

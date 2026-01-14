@@ -7,10 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramBot } from "./bot.js";
 import { makeProxyFetch } from "./proxy.js";
-import {
-  readTelegramUpdateOffset,
-  writeTelegramUpdateOffset,
-} from "./update-offset-store.js";
+import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -27,9 +24,7 @@ export type MonitorTelegramOpts = {
   webhookUrl?: string;
 };
 
-export function createTelegramRunnerOptions(
-  cfg: ClawdbotConfig,
-): RunOptions<unknown> {
+export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unknown> {
   return {
     sink: {
       concurrency: cfg.agents?.defaults?.maxConcurrent ?? 1,
@@ -85,9 +80,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   const proxyFetch =
     opts.proxyFetch ??
-    (account.config.proxy
-      ? makeProxyFetch(account.config.proxy as string)
-      : undefined);
+    (account.config.proxy ? makeProxyFetch(account.config.proxy as string) : undefined);
 
   let lastUpdateId = await readTelegramUpdateOffset({
     accountId: account.accountId,
@@ -159,13 +152,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         throw err;
       }
       restartAttempts += 1;
-      const delayMs = computeBackoff(
-        TELEGRAM_POLL_RESTART_POLICY,
-        restartAttempts,
-      );
-      log(
-        `Telegram getUpdates conflict; retrying in ${formatDurationMs(delayMs)}.`,
-      );
+      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+      log(`Telegram getUpdates conflict; retrying in ${formatDurationMs(delayMs)}.`);
       try {
         await sleepWithAbort(delayMs, opts.abortSignal);
       } catch (sleepErr) {

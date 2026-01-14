@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers.js";
 import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
-const _makeFile = (
-  overrides: Partial<WorkspaceBootstrapFile>,
-): WorkspaceBootstrapFile => ({
+const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
   path: "/tmp/AGENTS.md",
   content: "",
@@ -17,9 +15,7 @@ describe("sanitizeGoogleTurnOrdering", () => {
     const input = [
       {
         role: "assistant",
-        content: [
-          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
-        ],
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
       },
     ] satisfies AgentMessage[];
 

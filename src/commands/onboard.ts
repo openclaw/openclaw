@@ -8,23 +8,16 @@ import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
-export async function onboardCommand(
-  opts: OnboardOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
+export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
-  const authChoice =
-    opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
-  const normalizedOpts =
-    authChoice === opts.authChoice ? opts : { ...opts, authChoice };
+  const authChoice = opts.authChoice === "oauth" ? ("setup-token" as const) : opts.authChoice;
+  const normalizedOpts = authChoice === opts.authChoice ? opts : { ...opts, authChoice };
 
   if (normalizedOpts.reset) {
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? snapshot.config : {};
     const workspaceDefault =
-      normalizedOpts.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+      normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
     await handleReset("full", resolveUserPath(workspaceDefault), runtime);
   }
 

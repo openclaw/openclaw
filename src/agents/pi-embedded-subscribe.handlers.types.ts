@@ -56,10 +56,7 @@ export type EmbeddedPiSubscribeContext = {
 
   shouldEmitToolResult: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
-  stripBlockTags: (
-    text: string,
-    state: { thinking: boolean; final: boolean },
-  ) => string;
+  stripBlockTags: (text: string, state: { thinking: boolean; final: boolean }) => string;
   emitBlockChunk: (text: string) => void;
   flushBlockReplyBuffer: () => void;
   emitReasoningStream: (text: string) => void;

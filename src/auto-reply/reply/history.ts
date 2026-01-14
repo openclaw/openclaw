@@ -1,7 +1,6 @@
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 
-export const HISTORY_CONTEXT_MARKER =
-  "[Chat messages since your last reply - for context]";
+export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 export type HistoryEntry = {
@@ -19,13 +18,9 @@ export function buildHistoryContext(params: {
   const { historyText, currentMessage } = params;
   const lineBreak = params.lineBreak ?? "\n";
   if (!historyText.trim()) return currentMessage;
-  return [
-    HISTORY_CONTEXT_MARKER,
-    historyText,
-    "",
-    CURRENT_MESSAGE_MARKER,
-    currentMessage,
-  ].join(lineBreak);
+  return [HISTORY_CONTEXT_MARKER, historyText, "", CURRENT_MESSAGE_MARKER, currentMessage].join(
+    lineBreak,
+  );
 }
 
 export function appendHistoryEntry(params: {
@@ -86,8 +81,7 @@ export function buildHistoryContextFromEntries(params: {
   excludeLast?: boolean;
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
-  const entries =
-    params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
+  const entries = params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
   if (entries.length === 0) return params.currentMessage;
   const historyText = entries.map(params.formatEntry).join(lineBreak);
   return buildHistoryContext({

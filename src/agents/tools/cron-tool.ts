@@ -1,8 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import {
-  normalizeCronJobCreate,
-  normalizeCronJobPatch,
-} from "../../cron/normalize.js";
+import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -12,16 +9,7 @@ import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 // contain nested unions. Tool schemas need to stay provider-friendly, so we
 // accept "any object" here and validate at runtime.
 
-const CRON_ACTIONS = [
-  "status",
-  "list",
-  "add",
-  "update",
-  "remove",
-  "run",
-  "runs",
-  "wake",
-] as const;
+const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 
@@ -53,15 +41,12 @@ export function createCronTool(): AnyAgentTool {
       const gatewayOpts: GatewayCallOptions = {
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
         gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs:
-          typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
       };
 
       switch (action) {
         case "status":
-          return jsonResult(
-            await callGatewayTool("cron.status", gatewayOpts, {}),
-          );
+          return jsonResult(await callGatewayTool("cron.status", gatewayOpts, {}));
         case "list":
           return jsonResult(
             await callGatewayTool("cron.list", gatewayOpts, {
@@ -73,17 +58,12 @@ export function createCronTool(): AnyAgentTool {
             throw new Error("job required");
           }
           const job = normalizeCronJobCreate(params.job) ?? params.job;
-          return jsonResult(
-            await callGatewayTool("cron.add", gatewayOpts, job),
-          );
+          return jsonResult(await callGatewayTool("cron.add", gatewayOpts, job));
         }
         case "update": {
-          const id =
-            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error(
-              "jobId required (id accepted for backward compatibility)",
-            );
+            throw new Error("jobId required (id accepted for backward compatibility)");
           }
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
@@ -97,40 +77,25 @@ export function createCronTool(): AnyAgentTool {
           );
         }
         case "remove": {
-          const id =
-            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error(
-              "jobId required (id accepted for backward compatibility)",
-            );
+            throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(
-            await callGatewayTool("cron.remove", gatewayOpts, { id }),
-          );
+          return jsonResult(await callGatewayTool("cron.remove", gatewayOpts, { id }));
         }
         case "run": {
-          const id =
-            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error(
-              "jobId required (id accepted for backward compatibility)",
-            );
+            throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(
-            await callGatewayTool("cron.run", gatewayOpts, { id }),
-          );
+          return jsonResult(await callGatewayTool("cron.run", gatewayOpts, { id }));
         }
         case "runs": {
-          const id =
-            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          const id = readStringParam(params, "jobId") ?? readStringParam(params, "id");
           if (!id) {
-            throw new Error(
-              "jobId required (id accepted for backward compatibility)",
-            );
+            throw new Error("jobId required (id accepted for backward compatibility)");
           }
-          return jsonResult(
-            await callGatewayTool("cron.runs", gatewayOpts, { id }),
-          );
+          return jsonResult(await callGatewayTool("cron.runs", gatewayOpts, { id }));
         }
         case "wake": {
           const text = readStringParam(params, "text", { required: true });
@@ -139,12 +104,7 @@ export function createCronTool(): AnyAgentTool {
               ? params.mode
               : "next-heartbeat";
           return jsonResult(
-            await callGatewayTool(
-              "wake",
-              gatewayOpts,
-              { mode, text },
-              { expectFinal: false },
-            ),
+            await callGatewayTool("wake", gatewayOpts, { mode, text }, { expectFinal: false }),
           );
         }
         default:

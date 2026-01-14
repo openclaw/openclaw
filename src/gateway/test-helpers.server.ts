@@ -11,10 +11,7 @@ import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
@@ -36,9 +33,7 @@ export function installGatewayTestHooks() {
   beforeEach(async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
     previousHome = process.env.HOME;
-    tempHome = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-gateway-home-"),
-    );
+    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gateway-home-"));
     process.env.HOME = tempHome;
     sessionStoreSaveDelayMs.value = 0;
     testTailnetIPv4.value = undefined;
@@ -92,12 +87,9 @@ export function installGatewayTestHooks() {
 let nextTestPortOffset = 0;
 
 export async function getFreePort(): Promise<number> {
-  const workerIdRaw =
-    process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
+  const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
   const workerId = Number.parseInt(workerIdRaw, 10);
-  const shard = Number.isFinite(workerId)
-    ? Math.max(0, workerId)
-    : Math.abs(process.pid);
+  const shard = Number.isFinite(workerId) ? Math.max(0, workerId) : Math.abs(process.pid);
 
   // Avoid flaky "get a free port then bind later" races by allocating from a
   // deterministic per-worker port range. Still probe for EADDRINUSE to avoid
@@ -173,18 +165,12 @@ export function onceMessage<T = unknown>(
   });
 }
 
-export async function startGatewayServer(
-  port: number,
-  opts?: GatewayServerOptions,
-) {
+export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
   const mod = await import("./server.js");
   return await mod.startGatewayServer(port, opts);
 }
 
-export async function startServerWithClient(
-  token?: string,
-  opts?: GatewayServerOptions,
-) {
+export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const prev = process.env.CLAWDBOT_GATEWAY_TOKEN;
   if (token === undefined) {
@@ -275,23 +261,14 @@ export async function connectReq(
   return await onceMessage<ConnectResponse>(ws, isResponseForId);
 }
 
-export async function connectOk(
-  ws: WebSocket,
-  opts?: Parameters<typeof connectReq>[1],
-) {
+export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
   const res = await connectReq(ws, opts);
   expect(res.ok).toBe(true);
-  expect((res.payload as { type?: unknown } | undefined)?.type).toBe(
-    "hello-ok",
-  );
+  expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(
-  ws: WebSocket,
-  method: string,
-  params?: unknown,
-) {
+export async function rpcReq<T = unknown>(ws: WebSocket, method: string, params?: unknown) {
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   ws.send(JSON.stringify({ type: "req", id, method, params }));

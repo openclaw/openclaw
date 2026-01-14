@@ -11,11 +11,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
         try {
-          const result = (await callGatewayCli(
-            "node.pair.list",
-            opts,
-            {},
-          )) as unknown;
+          const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(pending, null, 2));
@@ -29,10 +25,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             const name = r.displayName || r.nodeId;
             const repair = r.isRepair ? " (repair)" : "";
             const ip = r.remoteIp ? ` · ${r.remoteIp}` : "";
-            const age =
-              typeof r.ts === "number"
-                ? ` · ${formatAge(Date.now() - r.ts)} ago`
-                : "";
+            const age = typeof r.ts === "number" ? ` · ${formatAge(Date.now() - r.ts)} ago` : "";
             defaultRuntime.log(`- ${r.requestId}: ${name}${repair}${ip}${age}`);
           }
         } catch (err) {

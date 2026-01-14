@@ -4,12 +4,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
 import { logInfo } from "../logger.js";
-import {
-  addSession,
-  appendOutput,
-  markBackgrounded,
-  markExited,
-} from "./bash-process-registry.js";
+import { addSession, appendOutput, markBackgrounded, markExited } from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildDockerExecArgs,
@@ -32,8 +27,7 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
   150_000,
 );
 const DEFAULT_PATH =
-  process.env.PATH ??
-  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+  process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 export type ExecToolDefaults = {
   backgroundMs?: number;
@@ -55,18 +49,14 @@ export type ExecElevatedDefaults = {
 
 const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(
-    Type.String({ description: "Working directory (defaults to cwd)" }),
-  ),
+  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
     Type.Number({
       description: "Milliseconds to wait before backgrounding (default 10000)",
     }),
   ),
-  background: Type.Optional(
-    Type.Boolean({ description: "Run in background immediately" }),
-  ),
+  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
   timeout: Type.Optional(
     Type.Number({
       description: "Timeout in seconds (optional, kills process on expiry)",
@@ -140,19 +130,12 @@ export function createExecTool(
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
-        warnings.push(
-          "Warning: background execution is disabled; running synchronously.",
-        );
+        warnings.push("Warning: background execution is disabled; running synchronously.");
       }
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
-          : clampNumber(
-              params.yieldMs ?? defaultBackgroundMs,
-              defaultBackgroundMs,
-              10,
-              120_000,
-            )
+          : clampNumber(params.yieldMs ?? defaultBackgroundMs, defaultBackgroundMs, 10, 120_000)
         : null;
       const elevatedDefaults = defaults?.elevated;
       const elevatedDefaultOn =
@@ -160,17 +143,13 @@ export function createExecTool(
         elevatedDefaults.enabled &&
         elevatedDefaults.allowed;
       const elevatedRequested =
-        typeof params.elevated === "boolean"
-          ? params.elevated
-          : elevatedDefaultOn;
+        typeof params.elevated === "boolean" ? params.elevated : elevatedDefaultOn;
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
           if (!elevatedDefaults?.enabled) {
-            gates.push(
-              "enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)",
-            );
+            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
           } else {
             gates.push(
               "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
@@ -197,8 +176,7 @@ export function createExecTool(
       }
 
       const sandbox = elevatedRequested ? undefined : defaults?.sandbox;
-      const rawWorkdir =
-        params.workdir?.trim() || defaults?.cwd || process.cwd();
+      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
@@ -335,121 +313,111 @@ export function createExecTool(
         }
       });
 
-      return new Promise<AgentToolResult<ExecToolDetails>>(
-        (resolve, reject) => {
-          const resolveRunning = () => {
-            settle(() =>
-              resolve({
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      `${warnings.length ? `${warnings.join("\n")}\n\n` : ""}` +
-                      `Command still running (session ${sessionId}, pid ${session.pid ?? "n/a"}). ` +
-                      "Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
-                  },
-                ],
-                details: {
-                  status: "running",
-                  sessionId,
-                  pid: session.pid ?? undefined,
-                  startedAt,
-                  cwd: session.cwd,
-                  tail: session.tail,
+      return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        const resolveRunning = () => {
+          settle(() =>
+            resolve({
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `${warnings.length ? `${warnings.join("\n")}\n\n` : ""}` +
+                    `Command still running (session ${sessionId}, pid ${session.pid ?? "n/a"}). ` +
+                    "Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
                 },
-              }),
-            );
-          };
+              ],
+              details: {
+                status: "running",
+                sessionId,
+                pid: session.pid ?? undefined,
+                startedAt,
+                cwd: session.cwd,
+                tail: session.tail,
+              },
+            }),
+          );
+        };
 
-          const onYieldNow = () => {
-            if (yieldTimer) clearTimeout(yieldTimer);
-            if (settled) return;
-            yielded = true;
-            markBackgrounded(session);
-            resolveRunning();
-          };
+        const onYieldNow = () => {
+          if (yieldTimer) clearTimeout(yieldTimer);
+          if (settled) return;
+          yielded = true;
+          markBackgrounded(session);
+          resolveRunning();
+        };
 
-          if (allowBackground && yieldWindow !== null) {
-            if (yieldWindow === 0) {
-              onYieldNow();
-            } else {
-              yieldTimer = setTimeout(() => {
-                if (settled) return;
-                yielded = true;
-                markBackgrounded(session);
-                resolveRunning();
-              }, yieldWindow);
-            }
+        if (allowBackground && yieldWindow !== null) {
+          if (yieldWindow === 0) {
+            onYieldNow();
+          } else {
+            yieldTimer = setTimeout(() => {
+              if (settled) return;
+              yielded = true;
+              markBackgrounded(session);
+              resolveRunning();
+            }, yieldWindow);
+          }
+        }
+
+        const handleExit = (code: number | null, exitSignal: NodeJS.Signals | number | null) => {
+          if (yieldTimer) clearTimeout(yieldTimer);
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          const durationMs = Date.now() - startedAt;
+          const wasSignal = exitSignal != null;
+          const isSuccess = code === 0 && !wasSignal && !signal?.aborted && !timedOut;
+          const status: "completed" | "failed" = isSuccess ? "completed" : "failed";
+          markExited(session, code, exitSignal, status);
+
+          if (yielded || session.backgrounded) return;
+
+          const aggregated = session.aggregated.trim();
+          if (!isSuccess) {
+            const reason = timedOut
+              ? `Command timed out after ${effectiveTimeout} seconds`
+              : wasSignal && exitSignal
+                ? `Command aborted by signal ${exitSignal}`
+                : code === null
+                  ? "Command aborted before exit code was captured"
+                  : `Command exited with code ${code}`;
+            const message = aggregated ? `${aggregated}\n\n${reason}` : reason;
+            settle(() => reject(new Error(message)));
+            return;
           }
 
-          const handleExit = (
-            code: number | null,
-            exitSignal: NodeJS.Signals | number | null,
-          ) => {
-            if (yieldTimer) clearTimeout(yieldTimer);
-            if (timeoutTimer) clearTimeout(timeoutTimer);
-            const durationMs = Date.now() - startedAt;
-            const wasSignal = exitSignal != null;
-            const isSuccess =
-              code === 0 && !wasSignal && !signal?.aborted && !timedOut;
-            const status: "completed" | "failed" = isSuccess
-              ? "completed"
-              : "failed";
-            markExited(session, code, exitSignal, status);
-
-            if (yielded || session.backgrounded) return;
-
-            const aggregated = session.aggregated.trim();
-            if (!isSuccess) {
-              const reason = timedOut
-                ? `Command timed out after ${effectiveTimeout} seconds`
-                : wasSignal && exitSignal
-                  ? `Command aborted by signal ${exitSignal}`
-                  : code === null
-                    ? "Command aborted before exit code was captured"
-                    : `Command exited with code ${code}`;
-              const message = aggregated
-                ? `${aggregated}\n\n${reason}`
-                : reason;
-              settle(() => reject(new Error(message)));
-              return;
-            }
-
-            settle(() =>
-              resolve({
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      `${warnings.length ? `${warnings.join("\n")}\n\n` : ""}` +
-                      (aggregated || "(no output)"),
-                  },
-                ],
-                details: {
-                  status: "completed",
-                  exitCode: code ?? 0,
-                  durationMs,
-                  aggregated,
-                  cwd: session.cwd,
+          settle(() =>
+            resolve({
+              content: [
+                {
+                  type: "text",
+                  text:
+                    `${warnings.length ? `${warnings.join("\n")}\n\n` : ""}` +
+                    (aggregated || "(no output)"),
                 },
-              }),
-            );
-          };
+              ],
+              details: {
+                status: "completed",
+                exitCode: code ?? 0,
+                durationMs,
+                aggregated,
+                cwd: session.cwd,
+              },
+            }),
+          );
+        };
 
-          // `exit` can fire before stdio fully flushes (notably on Windows).
-          // `close` waits for streams to close, so aggregated output is complete.
-          child.once("close", (code, exitSignal) => {
-            handleExit(code, exitSignal);
-          });
+        // `exit` can fire before stdio fully flushes (notably on Windows).
+        // `close` waits for streams to close, so aggregated output is complete.
+        child.once("close", (code, exitSignal) => {
+          handleExit(code, exitSignal);
+        });
 
-          child.once("error", (err) => {
-            if (yieldTimer) clearTimeout(yieldTimer);
-            if (timeoutTimer) clearTimeout(timeoutTimer);
-            markExited(session, null, null, "failed");
-            settle(() => reject(err));
-          });
-        },
-      );
+        child.once("error", (err) => {
+          if (yieldTimer) clearTimeout(yieldTimer);
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          markExited(session, null, null, "failed");
+          settle(() => reject(err));
+        });
+      });
     },
   };
 }

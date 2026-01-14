@@ -7,9 +7,7 @@ export function registerMessageReadEditDeleteCommands(
 ) {
   helpers
     .withMessageBase(
-      helpers.withMessageTarget(
-        message.command("read").description("Read recent messages"),
-      ),
+      helpers.withMessageTarget(message.command("read").description("Read recent messages")),
     )
     .option("--limit <n>", "Result limit")
     .option("--before <id>", "Read/search before id")

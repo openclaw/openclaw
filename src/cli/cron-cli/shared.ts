@@ -108,11 +108,8 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
 
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") return `at ${formatIsoMinute(schedule.atMs)}`;
-  if (schedule.kind === "every")
-    return `every ${formatDuration(schedule.everyMs)}`;
-  return schedule.tz
-    ? `cron ${schedule.expr} @ ${schedule.tz}`
-    : `cron ${schedule.expr}`;
+  if (schedule.kind === "every") return `every ${formatDuration(schedule.everyMs)}`;
+  return schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
 };
 
 const formatStatus = (job: CronJob) => {
@@ -153,26 +150,17 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(
-      formatRelative(job.state.lastRunAtMs, now),
-      CRON_LAST_PAD,
-    );
+    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
-    const agentLabel = pad(
-      truncate(job.agentId ?? "default", CRON_AGENT_PAD),
-      CRON_AGENT_PAD,
-    );
+    const agentLabel = pad(truncate(job.agentId ?? "default", CRON_AGENT_PAD), CRON_AGENT_PAD);
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") return colorize(rich, theme.success, statusLabel);
-      if (statusRaw === "error")
-        return colorize(rich, theme.error, statusLabel);
-      if (statusRaw === "running")
-        return colorize(rich, theme.warn, statusLabel);
-      if (statusRaw === "skipped")
-        return colorize(rich, theme.muted, statusLabel);
+      if (statusRaw === "error") return colorize(rich, theme.error, statusLabel);
+      if (statusRaw === "running") return colorize(rich, theme.warn, statusLabel);
+      if (statusRaw === "skipped") return colorize(rich, theme.muted, statusLabel);
       return colorize(rich, theme.muted, statusLabel);
     })();
 

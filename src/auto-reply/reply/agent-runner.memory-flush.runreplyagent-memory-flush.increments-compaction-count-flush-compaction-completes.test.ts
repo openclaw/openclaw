@@ -13,10 +13,7 @@ const runCliAgentMock = vi.fn();
 type EmbeddedRunParams = {
   prompt?: string;
   extraSystemPrompt?: string;
-  onAgentEvent?: (evt: {
-    stream?: string;
-    data?: { phase?: string; willRetry?: boolean };
-  }) => void;
+  onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
 };
 
 vi.mock("../../agents/model-fallback.js", () => ({
@@ -45,8 +42,7 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 }));
 
 vi.mock("./queue.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./queue.js")>("./queue.js");
+  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
     enqueueFollowupRun: vi.fn(),
@@ -140,21 +136,19 @@ describe("runReplyAgent memory flush", () => {
 
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
-    runEmbeddedPiAgentMock.mockImplementation(
-      async (params: EmbeddedRunParams) => {
-        if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
-          params.onAgentEvent?.({
-            stream: "compaction",
-            data: { phase: "end", willRetry: false },
-          });
-          return { payloads: [], meta: {} };
-        }
-        return {
-          payloads: [{ text: "ok" }],
-          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-        };
-      },
-    );
+    runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+      if (params.prompt === DEFAULT_MEMORY_FLUSH_PROMPT) {
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry: false },
+        });
+        return { payloads: [], meta: {} };
+      }
+      return {
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      };
+    });
 
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,

@@ -40,11 +40,7 @@ function createMockResolver(files: Record<string, unknown>): IncludeResolver {
   };
 }
 
-function resolve(
-  obj: unknown,
-  files: Record<string, unknown> = {},
-  basePath = DEFAULT_BASE_PATH,
-) {
+function resolve(obj: unknown, files: Record<string, unknown> = {}, basePath = DEFAULT_BASE_PATH) {
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
 
@@ -163,12 +159,12 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./bad.json" };
-    expect(() =>
-      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
-    ).toThrow(ConfigIncludeError);
-    expect(() =>
-      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
-    ).toThrow(/Failed to parse include file/);
+    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
+      ConfigIncludeError,
+    );
+    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
+      /Failed to parse include file/,
+    );
   });
 
   it("throws CircularIncludeError for circular includes", () => {
@@ -193,9 +189,7 @@ describe("resolveConfigIncludes", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CircularIncludeError);
       const circular = err as CircularIncludeError;
-      expect(circular.chain).toEqual(
-        expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]),
-      );
+      expect(circular.chain).toEqual(expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]));
       expect(circular.message).toMatch(/Circular include detected/);
       expect(circular.message).toContain("a.json");
       expect(circular.message).toContain("b.json");
@@ -261,12 +255,8 @@ describe("resolveConfigIncludes", () => {
       };
     }
     failFiles[configPath("fail10.json")] = { done: true };
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(
-      ConfigIncludeError,
-    );
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(
-      /Maximum include depth/,
-    );
+    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(ConfigIncludeError);
+    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(/Maximum include depth/);
   });
 
   it("handles relative paths correctly", () => {
@@ -361,11 +351,7 @@ describe("real-world config patterns", () => {
     };
 
     const obj = {
-      $include: [
-        "./gateway.json",
-        "./channels/whatsapp.json",
-        "./agents/defaults.json",
-      ],
+      $include: ["./gateway.json", "./channels/whatsapp.json", "./agents/defaults.json"],
     };
 
     expect(resolve(obj, files)).toEqual({

@@ -12,10 +12,7 @@ const logInfo = vi.fn();
 vi.mock("./store.js", () => ({ saveMediaSource }));
 vi.mock("../infra/tailscale.js", () => ({ getTailnetHostname }));
 vi.mock("../infra/ports.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/ports.js")>(
-      "../infra/ports.js",
-    );
+  const actual = await vi.importActual<typeof import("../infra/ports.js")>("../infra/ports.js");
   return { ensurePortAvailable, PortInUseError: actual.PortInUseError };
 });
 vi.mock("./server.js", () => ({ startMediaServer }));
@@ -39,9 +36,9 @@ describe("ensureMediaHosted", () => {
     ensurePortAvailable.mockResolvedValue(undefined);
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
 
-    await expect(
-      ensureMediaHosted("/tmp/file1", { startServer: false }),
-    ).rejects.toThrow("requires the webhook/Funnel server");
+    await expect(ensureMediaHosted("/tmp/file1", { startServer: false })).rejects.toThrow(
+      "requires the webhook/Funnel server",
+    );
     expect(rmSpy).toHaveBeenCalledWith("/tmp/file1");
     rmSpy.mockRestore();
   });
@@ -61,11 +58,7 @@ describe("ensureMediaHosted", () => {
       startServer: true,
       port: 1234,
     });
-    expect(startMediaServer).toHaveBeenCalledWith(
-      1234,
-      expect.any(Number),
-      expect.anything(),
-    );
+    expect(startMediaServer).toHaveBeenCalledWith(1234, expect.any(Number), expect.anything());
     expect(logInfo).toHaveBeenCalled();
     expect(result).toEqual({
       url: "https://tail.net/media/id2",

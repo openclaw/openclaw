@@ -9,9 +9,7 @@ export type ProbeMSTeamsResult = {
   appId?: string;
 };
 
-export async function probeMSTeams(
-  cfg?: MSTeamsConfig,
-): Promise<ProbeMSTeamsResult> {
+export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsResult> {
   const creds = resolveMSTeamsCredentials(cfg);
   if (!creds) {
     return {

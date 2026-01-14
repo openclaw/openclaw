@@ -1,17 +1,11 @@
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileOrder,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
   formatApiKeyPreview,
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyGoogleGeminiModelDefault,
@@ -63,12 +57,8 @@ export async function applyAuthChoiceApiProviders(
       store,
       provider: "openrouter",
     });
-    const existingProfileId = profileOrder.find((profileId) =>
-      Boolean(store.profiles[profileId]),
-    );
-    const existingCred = existingProfileId
-      ? store.profiles[existingProfileId]
-      : undefined;
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
     let profileId = "openrouter:default";
     let mode: "api_key" | "oauth" | "token" = "api_key";
     let hasCredential = false;
@@ -103,10 +93,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter OpenRouter API key",
         validate: validateApiKeyInput,
       });
-      await setOpenrouterApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
+      await setOpenrouterApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
       hasCredential = true;
     }
 
@@ -152,10 +139,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter Moonshot API key",
         validate: validateApiKeyInput,
       });
-      await setMoonshotApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "moonshot:default",
@@ -260,9 +244,7 @@ export async function applyAuthChoiceApiProviders(
                 ...config.agents?.defaults?.models,
                 [ZAI_DEFAULT_MODEL_REF]: {
                   ...config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
-                  alias:
-                    config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]
-                      ?.alias ?? "GLM",
+                  alias: config.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]?.alias ?? "GLM",
                 },
               },
             },
@@ -332,10 +314,7 @@ export async function applyAuthChoiceApiProviders(
         message: "Enter OpenCode Zen API key",
         validate: validateApiKeyInput,
       });
-      await setOpencodeZenApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
+      await setOpencodeZenApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "opencode:default",

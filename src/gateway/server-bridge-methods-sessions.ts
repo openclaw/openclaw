@@ -128,9 +128,7 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
       const storePath = target.storePath;
       const store = loadSessionStore(storePath);
       const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find(
-        (candidate) => store[candidate],
-      );
+      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
       if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
         store[primaryKey] = store[existingKey];
         delete store[existingKey];
@@ -249,8 +247,7 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
         };
       }
 
-      const deleteTranscript =
-        typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+      const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
       const { storePath, store, entry } = loadSessionEntry(key);
       const sessionId = entry?.sessionId;

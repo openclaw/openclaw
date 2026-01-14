@@ -29,19 +29,13 @@ const EXTRA_MARKERS = ["clawdbot", "clawdis"];
 const execFileAsync = promisify(execFile);
 
 export function renderGatewayServiceCleanupHints(
-  env: Record<string, string | undefined> = process.env as Record<
-    string,
-    string | undefined
-  >,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string[] {
   const profile = env.CLAWDBOT_PROFILE;
   switch (process.platform) {
     case "darwin": {
       const label = resolveGatewayLaunchAgentLabel(profile);
-      return [
-        `launchctl bootout gui/$UID/${label}`,
-        `rm ~/Library/LaunchAgents/${label}.plist`,
-      ];
+      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
@@ -80,20 +74,14 @@ function hasGatewayServiceMarker(content: string): boolean {
   );
 }
 
-function isClawdbotGatewayLaunchdService(
-  label: string,
-  contents: string,
-): boolean {
+function isClawdbotGatewayLaunchdService(label: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) return true;
   const lowerContents = contents.toLowerCase();
   if (!lowerContents.includes("gateway")) return false;
   return label.startsWith("com.clawdbot.");
 }
 
-function isClawdbotGatewaySystemdService(
-  name: string,
-  contents: string,
-): boolean {
+function isClawdbotGatewaySystemdService(name: string, contents: string): boolean {
   if (hasGatewayServiceMarker(contents)) return true;
   if (!name.startsWith("clawdbot-gateway")) return false;
   return contents.toLowerCase().includes("gateway");
@@ -103,23 +91,18 @@ function isClawdbotGatewayTaskName(name: string): boolean {
   const normalized = name.trim().toLowerCase();
   if (!normalized) return false;
   const defaultName = resolveGatewayWindowsTaskName().toLowerCase();
-  return (
-    normalized === defaultName || normalized.startsWith("clawdbot gateway")
-  );
+  return normalized === defaultName || normalized.startsWith("clawdbot gateway");
 }
 
 function tryExtractPlistLabel(contents: string): string | null {
-  const match = contents.match(
-    /<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i,
-  );
+  const match = contents.match(/<key>Label<\/key>\s*<string>([\s\S]*?)<\/string>/i);
   if (!match) return null;
   return match[1]?.trim() || null;
 }
 
 function isIgnoredLaunchdLabel(label: string): boolean {
   return (
-    label === resolveGatewayLaunchAgentLabel() ||
-    LEGACY_GATEWAY_LAUNCH_AGENT_LABELS.includes(label)
+    label === resolveGatewayLaunchAgentLabel() || LEGACY_GATEWAY_LAUNCH_AGENT_LABELS.includes(label)
   );
 }
 
@@ -265,11 +248,7 @@ async function execSchtasks(
     return {
       stdout: typeof e.stdout === "string" ? e.stdout : "",
       stderr:
-        typeof e.stderr === "string"
-          ? e.stderr
-          : typeof e.message === "string"
-            ? e.message
-            : "",
+        typeof e.stderr === "string" ? e.stderr : typeof e.message === "string" ? e.message : "",
       code: typeof e.code === "number" ? e.code : 1,
     };
   }

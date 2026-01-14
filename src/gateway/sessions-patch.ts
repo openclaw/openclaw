@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import {
-  resolveAllowedModelRef,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection.js";
+import { resolveAllowedModelRef, resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -19,10 +16,7 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
-import {
-  applyVerboseOverride,
-  parseVerboseOverride,
-} from "../sessions/level-overrides.js";
+import { applyVerboseOverride, parseVerboseOverride } from "../sessions/level-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
@@ -42,9 +36,7 @@ export async function applySessionsPatchToStore(params: {
   storeKey: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
-}): Promise<
-  { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }
-> {
+}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
 
@@ -59,8 +51,7 @@ export async function applySessionsPatchToStore(params: {
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;
     if (raw === null) {
-      if (existing?.spawnedBy)
-        return invalid("spawnedBy cannot be cleared once set");
+      if (existing?.spawnedBy) return invalid("spawnedBy cannot be cleared once set");
     } else if (raw !== undefined) {
       const trimmed = String(raw).trim();
       if (!trimmed) return invalid("invalid spawnedBy: empty");
@@ -103,10 +94,8 @@ export async function applySessionsPatchToStore(params: {
           defaultProvider: DEFAULT_PROVIDER,
           defaultModel: DEFAULT_MODEL,
         });
-        const hintProvider =
-          existing?.providerOverride?.trim() || resolvedDefault.provider;
-        const hintModel =
-          existing?.modelOverride?.trim() || resolvedDefault.model;
+        const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
+        const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|")})`,
         );
@@ -178,10 +167,7 @@ export async function applySessionsPatchToStore(params: {
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "model catalog unavailable",
-          ),
+          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
@@ -218,9 +204,7 @@ export async function applySessionsPatchToStore(params: {
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
       if ("thinkingLevel" in patch) {
-        return invalid(
-          `thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`,
-        );
+        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
       }
       next.thinkingLevel = "high";
     }
@@ -232,8 +216,7 @@ export async function applySessionsPatchToStore(params: {
       delete next.sendPolicy;
     } else if (raw !== undefined) {
       const normalized = normalizeSendPolicy(String(raw));
-      if (!normalized)
-        return invalid('invalid sendPolicy (use "allow"|"deny")');
+      if (!normalized) return invalid('invalid sendPolicy (use "allow"|"deny")');
       next.sendPolicy = normalized;
     }
   }

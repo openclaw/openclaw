@@ -6,15 +6,9 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
 
-  const buildAssistantMessage = (model: {
-    api: string;
-    provider: string;
-    id: string;
-  }) => ({
+  const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
     content: [{ type: "text" as const, text: "ok" }],
     stopReason: "stop" as const,
@@ -38,11 +32,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     timestamp: Date.now(),
   });
 
-  const buildAssistantErrorMessage = (model: {
-    api: string;
-    provider: string;
-    id: string;
-  }) => ({
+  const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
     content: [] as const,
     stopReason: "error" as const,
@@ -73,11 +63,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       if (model.id === "mock-error") return buildAssistantErrorMessage(model);
       return buildAssistantMessage(model);
     },
-    completeSimple: async (model: {
-      api: string;
-      provider: string;
-      id: string;
-    }) => {
+    completeSimple: async (model: { api: string; provider: string; id: string }) => {
       if (model.id === "mock-error") return buildAssistantErrorMessage(model);
       return buildAssistantMessage(model);
     },
@@ -155,12 +141,8 @@ describe("runEmbeddedPiAgent", () => {
   it("appends new user + assistant after existing transcript entries", async () => {
     const { SessionManager } = await import("@mariozechner/pi-coding-agent");
 
-    const agentDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-agent-"),
-    );
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
 
     const sessionManager = SessionManager.open(sessionFile);
@@ -210,19 +192,14 @@ describe("runEmbeddedPiAgent", () => {
 
     const messages = await readSessionMessages(sessionFile);
     const seedUserIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" &&
-        textFromContent(message.content) === "seed user",
+      (message) => message?.role === "user" && textFromContent(message.content) === "seed user",
     );
     const seedAssistantIndex = messages.findIndex(
       (message) =>
-        message?.role === "assistant" &&
-        textFromContent(message.content) === "seed assistant",
+        message?.role === "assistant" && textFromContent(message.content) === "seed assistant",
     );
     const newUserIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" &&
-        textFromContent(message.content) === "hello",
+      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
     );
     const newAssistantIndex = messages.findIndex(
       (message, index) => index > newUserIndex && message?.role === "assistant",
@@ -233,12 +210,8 @@ describe("runEmbeddedPiAgent", () => {
     expect(newAssistantIndex).toBeGreaterThan(newUserIndex);
   }, 20_000);
   it("persists multi-turn user/assistant ordering across runs", async () => {
-    const agentDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-agent-"),
-    );
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
 
     const cfg = makeOpenAiConfig(["mock-1"]);
@@ -272,22 +245,16 @@ describe("runEmbeddedPiAgent", () => {
 
     const messages = await readSessionMessages(sessionFile);
     const firstUserIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" &&
-        textFromContent(message.content) === "first",
+      (message) => message?.role === "user" && textFromContent(message.content) === "first",
     );
     const firstAssistantIndex = messages.findIndex(
-      (message, index) =>
-        index > firstUserIndex && message?.role === "assistant",
+      (message, index) => index > firstUserIndex && message?.role === "assistant",
     );
     const secondUserIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" &&
-        textFromContent(message.content) === "second",
+      (message) => message?.role === "user" && textFromContent(message.content) === "second",
     );
     const secondAssistantIndex = messages.findIndex(
-      (message, index) =>
-        index > secondUserIndex && message?.role === "assistant",
+      (message, index) => index > secondUserIndex && message?.role === "assistant",
     );
     expect(firstUserIndex).toBeGreaterThanOrEqual(0);
     expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);

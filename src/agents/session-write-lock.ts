@@ -23,9 +23,7 @@ function isAlive(pid: number): boolean {
   }
 }
 
-async function readLockPayload(
-  lockPath: string,
-): Promise<LockFilePayload | null> {
+async function readLockPayload(lockPath: string): Promise<LockFilePayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockFilePayload>;
@@ -72,11 +70,7 @@ export async function acquireSessionWriteLock(params: {
     try {
       const handle = await fs.open(lockPath, "wx");
       await handle.writeFile(
-        JSON.stringify(
-          { pid: process.pid, createdAt: new Date().toISOString() },
-          null,
-          2,
-        ),
+        JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
         "utf8",
       );
       HELD_LOCKS.set(sessionFile, { count: 1, handle, lockPath });
@@ -95,11 +89,8 @@ export async function acquireSessionWriteLock(params: {
       const code = (err as { code?: unknown }).code;
       if (code !== "EEXIST") throw err;
       const payload = await readLockPayload(lockPath);
-      const createdAt = payload?.createdAt
-        ? Date.parse(payload.createdAt)
-        : NaN;
-      const stale =
-        !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;
+      const createdAt = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
+      const stale = !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;
       const alive = payload?.pid ? isAlive(payload.pid) : false;
       if (stale || !alive) {
         await fs.rm(lockPath, { force: true });
@@ -113,7 +104,5 @@ export async function acquireSessionWriteLock(params: {
 
   const payload = await readLockPayload(lockPath);
   const owner = payload?.pid ? `pid=${payload.pid}` : "unknown";
-  throw new Error(
-    `session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`,
-  );
+  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }

@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SignalAccountConfig } from "../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type ResolvedSignalAccount = {
   accountId: string;
@@ -41,12 +38,10 @@ function resolveAccountConfig(
   return accounts[accountId] as SignalAccountConfig | undefined;
 }
 
-function mergeSignalAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): SignalAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.signal ??
-    {}) as SignalAccountConfig & { accounts?: unknown };
+function mergeSignalAccountConfig(cfg: ClawdbotConfig, accountId: string): SignalAccountConfig {
+  const { accounts: _ignored, ...base } = (cfg.channels?.signal ?? {}) as SignalAccountConfig & {
+    accounts?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
@@ -65,11 +60,11 @@ export function resolveSignalAccount(params: {
   const baseUrl = merged.httpUrl?.trim() || `http://${host}:${port}`;
   const configured = Boolean(
     merged.account?.trim() ||
-      merged.httpUrl?.trim() ||
-      merged.cliPath?.trim() ||
-      merged.httpHost?.trim() ||
-      typeof merged.httpPort === "number" ||
-      typeof merged.autoStart === "boolean",
+    merged.httpUrl?.trim() ||
+    merged.cliPath?.trim() ||
+    merged.httpHost?.trim() ||
+    typeof merged.httpPort === "number" ||
+    typeof merged.autoStart === "boolean",
   );
   return {
     accountId,
@@ -81,9 +76,7 @@ export function resolveSignalAccount(params: {
   };
 }
 
-export function listEnabledSignalAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedSignalAccount[] {
+export function listEnabledSignalAccounts(cfg: ClawdbotConfig): ResolvedSignalAccount[] {
   return listSignalAccountIds(cfg)
     .map((accountId) => resolveSignalAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

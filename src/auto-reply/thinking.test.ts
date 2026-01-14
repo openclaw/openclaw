@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  listThinkingLevels,
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-} from "./thinking.js";
+import { listThinkingLevels, normalizeReasoningLevel, normalizeThinkLevel } from "./thinking.js";
 
 describe("normalizeThinkLevel", () => {
   it("accepts mid as medium", () => {
@@ -25,9 +21,7 @@ describe("listThinkingLevels", () => {
   });
 
   it("excludes xhigh for non-codex models", () => {
-    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain(
-      "xhigh",
-    );
+    expect(listThinkingLevels(undefined, "gpt-4.1-mini")).not.toContain("xhigh");
   });
 });
 

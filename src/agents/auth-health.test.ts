@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  buildAuthHealthSummary,
-  DEFAULT_OAUTH_WARN_MS,
-} from "./auth-health.js";
+import { buildAuthHealthSummary, DEFAULT_OAUTH_WARN_MS } from "./auth-health.js";
 
 describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
@@ -59,9 +56,7 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["anthropic:expired"]).toBe("expired");
     expect(statuses["anthropic:api"]).toBe("static");
 
-    const provider = summary.providers.find(
-      (entry) => entry.provider === "anthropic",
-    );
+    const provider = summary.providers.find((entry) => entry.provider === "anthropic");
     expect(provider?.status).toBe("expired");
   });
 });

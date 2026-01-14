@@ -33,23 +33,11 @@ export function registerModelsCli(program: Command) {
   const models = program
     .command("models")
     .description("Model discovery, scanning, and configuration")
-    .option(
-      "--status-json",
-      "Output JSON (alias for `models status --json`)",
-      false,
-    )
-    .option(
-      "--status-plain",
-      "Plain output (alias for `models status --plain`)",
-      false,
-    )
+    .option("--status-json", "Output JSON (alias for `models status --json`)", false)
+    .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
     .addHelpText(
       "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/models",
-          "docs.clawd.bot/models",
-        )}\n`,
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/models", "docs.clawd.bot/models")}\n`,
     );
 
   models
@@ -157,9 +145,7 @@ export function registerModelsCli(program: Command) {
       }
     });
 
-  const fallbacks = models
-    .command("fallbacks")
-    .description("Manage model fallback list");
+  const fallbacks = models.command("fallbacks").description("Manage model fallback list");
 
   fallbacks
     .command("list")
@@ -281,16 +267,8 @@ export function registerModelsCli(program: Command) {
     .option("--no-probe", "Skip live probes; list free candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
-    .option(
-      "--set-default",
-      "Set agents.defaults.model to the first selection",
-      false,
-    )
-    .option(
-      "--set-image",
-      "Set agents.defaults.imageModel to the first image selection",
-      false,
-    )
+    .option("--set-default", "Set agents.defaults.model to the first selection", false)
+    .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       try {
@@ -377,13 +355,8 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("login-github-copilot")
-    .description(
-      "Login to GitHub Copilot via GitHub device flow (TTY required)",
-    )
-    .option(
-      "--profile-id <id>",
-      "Auth profile id (default: github-copilot:github)",
-    )
+    .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
+    .option("--profile-id <id>", "Auth profile id (default: github-copilot:github)")
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts) => {
       try {
@@ -400,9 +373,7 @@ export function registerModelsCli(program: Command) {
       }
     });
 
-  const order = auth
-    .command("order")
-    .description("Manage per-agent auth profile order overrides");
+  const order = auth.command("order").description("Manage per-agent auth profile order overrides");
 
   order
     .command("get")
@@ -428,9 +399,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("set")
-    .description(
-      "Set per-agent auth order override (locks rotation to this list)",
-    )
+    .description("Set per-agent auth order override (locks rotation to this list)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:claude-cli)")
@@ -452,9 +421,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("clear")
-    .description(
-      "Clear per-agent auth order override (fall back to config/round-robin)",
-    )
+    .description("Clear per-agent auth order override (fall back to config/round-robin)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts) => {

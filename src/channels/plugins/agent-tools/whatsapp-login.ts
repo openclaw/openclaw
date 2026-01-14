@@ -5,8 +5,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
   return {
     label: "WhatsApp Login",
     name: "whatsapp_login",
-    description:
-      "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
+    description: "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
     // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)]
     // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
     parameters: Type.Object({
@@ -18,9 +17,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
       force: Type.Optional(Type.Boolean()),
     }),
     execute: async (_toolCallId, args) => {
-      const { startWebLoginWithQr, waitForWebLogin } = await import(
-        "../../../web/login-qr.js"
-      );
+      const { startWebLoginWithQr, waitForWebLogin } = await import("../../../web/login-qr.js");
       const action = (args as { action?: string })?.action ?? "start";
       if (action === "wait") {
         const result = await waitForWebLogin({

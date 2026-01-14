@@ -12,9 +12,7 @@ export async function runNonInteractiveOnboarding(
 ) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
-    runtime.error(
-      "Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.",
-    );
+    runtime.error("Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.");
     runtime.exit(1);
     return;
   }

@@ -1,8 +1,4 @@
-import type {
-  QueueDropPolicy,
-  QueueMode,
-  QueueModeByProvider,
-} from "./types.queue.js";
+import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];

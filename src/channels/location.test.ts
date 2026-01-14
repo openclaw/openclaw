@@ -35,9 +35,7 @@ describe("provider location helpers", () => {
       isLive: true,
       source: "live",
     });
-    expect(text).toBe(
-      "🛰 Live location: 37.819929, -122.478255 ±20m\nOn the move",
-    );
+    expect(text).toBe("🛰 Live location: 37.819929, -122.478255 ±20m\nOn the move");
   });
 
   it("builds ctx fields with normalized source", () => {

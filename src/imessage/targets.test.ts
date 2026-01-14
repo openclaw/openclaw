@@ -24,9 +24,7 @@ describe("imessage targets", () => {
   });
 
   it("normalizes handles", () => {
-    expect(normalizeIMessageHandle("Name@Example.com")).toBe(
-      "name@example.com",
-    );
+    expect(normalizeIMessageHandle("Name@Example.com")).toBe("name@example.com");
     expect(normalizeIMessageHandle(" +1 (555) 222-3333 ")).toBe("+15552223333");
   });
 

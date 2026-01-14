@@ -1,10 +1,7 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageThreadCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageThreadCommands(message: Command, helpers: MessageCliHelpers) {
   const thread = message.command("thread").description("Thread actions");
 
   helpers

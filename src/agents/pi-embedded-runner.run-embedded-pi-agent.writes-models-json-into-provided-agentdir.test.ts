@@ -6,15 +6,9 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
 
-  const buildAssistantMessage = (model: {
-    api: string;
-    provider: string;
-    id: string;
-  }) => ({
+  const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
     content: [{ type: "text" as const, text: "ok" }],
     stopReason: "stop" as const,
@@ -38,11 +32,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     timestamp: Date.now(),
   });
 
-  const buildAssistantErrorMessage = (model: {
-    api: string;
-    provider: string;
-    id: string;
-  }) => ({
+  const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
     content: [] as const,
     stopReason: "error" as const,
@@ -73,11 +63,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       if (model.id === "mock-error") return buildAssistantErrorMessage(model);
       return buildAssistantMessage(model);
     },
-    completeSimple: async (model: {
-      api: string;
-      provider: string;
-      id: string;
-    }) => {
+    completeSimple: async (model: { api: string; provider: string; id: string }) => {
       if (model.id === "mock-error") return buildAssistantErrorMessage(model);
       return buildAssistantMessage(model);
     },
@@ -153,12 +139,8 @@ const readSessionMessages = async (sessionFile: string) => {
 
 describe("runEmbeddedPiAgent", () => {
   it("writes models.json into the provided agentDir", async () => {
-    const agentDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-agent-"),
-    );
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
 
     const cfg = {
@@ -199,60 +181,42 @@ describe("runEmbeddedPiAgent", () => {
       }),
     ).rejects.toThrow(/Unknown model:/);
 
-    await expect(
-      fs.stat(path.join(agentDir, "models.json")),
-    ).resolves.toBeTruthy();
+    await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
-  it(
-    "persists the first user message before assistant output",
-    { timeout: 15_000 },
-    async () => {
-      const agentDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), "clawdbot-agent-"),
-      );
-      const workspaceDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), "clawdbot-workspace-"),
-      );
-      const sessionFile = path.join(workspaceDir, "session.jsonl");
+  it("persists the first user message before assistant output", { timeout: 15_000 }, async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
 
-      const cfg = makeOpenAiConfig(["mock-1"]);
-      await ensureModels(cfg, agentDir);
+    const cfg = makeOpenAiConfig(["mock-1"]);
+    await ensureModels(cfg, agentDir);
 
-      await runEmbeddedPiAgent({
-        sessionId: "session:test",
-        sessionKey: "agent:main:main",
-        sessionFile,
-        workspaceDir,
-        config: cfg,
-        prompt: "hello",
-        provider: "openai",
-        model: "mock-1",
-        timeoutMs: 5_000,
-        agentDir,
-      });
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+    });
 
-      const messages = await readSessionMessages(sessionFile);
-      const firstUserIndex = messages.findIndex(
-        (message) =>
-          message?.role === "user" &&
-          textFromContent(message.content) === "hello",
-      );
-      const firstAssistantIndex = messages.findIndex(
-        (message) => message?.role === "assistant",
-      );
-      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-      if (firstAssistantIndex !== -1) {
-        expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
-      }
-    },
-  );
+    const messages = await readSessionMessages(sessionFile);
+    const firstUserIndex = messages.findIndex(
+      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
+    );
+    const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
+    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+    if (firstAssistantIndex !== -1) {
+      expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
+    }
+  });
   it("persists the user message when prompt fails before assistant output", async () => {
-    const agentDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-agent-"),
-    );
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
 
     const cfg = makeOpenAiConfig(["mock-error"]);
@@ -274,8 +238,7 @@ describe("runEmbeddedPiAgent", () => {
 
     const messages = await readSessionMessages(sessionFile);
     const userIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" && textFromContent(message.content) === "boom",
+      (message) => message?.role === "user" && textFromContent(message.content) === "boom",
     );
     expect(userIndex).toBeGreaterThanOrEqual(0);
   });

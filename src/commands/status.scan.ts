@@ -9,10 +9,7 @@ import { getTailnetHostname } from "../infra/tailscale.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
-import {
-  pickGatewaySelfPresence,
-  resolveGatewayProbeAuth,
-} from "./status.gateway-probe.js";
+import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
 import { getStatusSummary } from "./status.summary.js";
 import { getUpdateCheckResult } from "./status.update.js";
 import { buildChannelsTable } from "./status-all/channels.js";
@@ -87,9 +84,7 @@ export async function scanStatus(
       const gatewayConnection = buildGatewayConnectionDetails();
       const isRemoteMode = cfg.gateway?.mode === "remote";
       const remoteUrlRaw =
-        typeof cfg.gateway?.remote?.url === "string"
-          ? cfg.gateway.remote.url
-          : "";
+        typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url : "";
       const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
       const gatewayMode = isRemoteMode ? "remote" : "local";
       const gatewayProbe = remoteUrlMissing
@@ -97,10 +92,7 @@ export async function scanStatus(
         : await probeGateway({
             url: gatewayConnection.url,
             auth: resolveGatewayProbeAuth(cfg),
-            timeoutMs: Math.min(
-              opts.all ? 5000 : 2500,
-              opts.timeoutMs ?? 10_000,
-            ),
+            timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
           }).catch(() => null);
       const gatewayReachable = gatewayProbe?.ok === true;
       const gatewaySelf = gatewayProbe?.presence
@@ -116,15 +108,10 @@ export async function scanStatus(
               probe: false,
               timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
             },
-            timeoutMs: Math.min(
-              opts.all ? 5000 : 2500,
-              opts.timeoutMs ?? 10_000,
-            ),
+            timeoutMs: Math.min(opts.all ? 5000 : 2500, opts.timeoutMs ?? 10_000),
           }).catch(() => null)
         : null;
-      const channelIssues = channelsStatus
-        ? collectChannelStatusIssues(channelsStatus)
-        : [];
+      const channelIssues = channelsStatus ? collectChannelStatusIssues(channelsStatus) : [];
       progress.tick();
 
       progress.setLabel("Summarizing channels…");

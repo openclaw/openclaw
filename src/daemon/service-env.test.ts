@@ -1,9 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  buildMinimalServicePath,
-  buildServiceEnvironment,
-} from "./service-env.js";
+import { buildMinimalServicePath, buildServiceEnvironment } from "./service-env.js";
 
 describe("buildMinimalServicePath", () => {
   it("includes Homebrew + system dirs on macOS", () => {

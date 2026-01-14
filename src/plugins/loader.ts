@@ -5,11 +5,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverClawdbotPlugins } from "./discovery.js";
-import {
-  createPluginRegistry,
-  type PluginRecord,
-  type PluginRegistry,
-} from "./registry.js";
+import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import type {
   ClawdbotPluginConfigSchema,
   ClawdbotPluginDefinition,
@@ -34,10 +30,7 @@ type NormalizedPluginsConfig = {
   allow: string[];
   deny: string[];
   loadPaths: string[];
-  entries: Record<
-    string,
-    { enabled?: boolean; config?: Record<string, unknown> }
-  >;
+  entries: Record<string, { enabled?: boolean; config?: Record<string, unknown> }>;
 };
 
 const registryCache = new Map<string, PluginRegistry>();
@@ -46,14 +39,10 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter(Boolean);
+  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 };
 
-const normalizePluginEntries = (
-  entries: unknown,
-): NormalizedPluginsConfig["entries"] => {
+const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entries"] => {
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
     return {};
   }
@@ -68,9 +57,7 @@ const normalizePluginEntries = (
     normalized[key] = {
       enabled: typeof entry.enabled === "boolean" ? entry.enabled : undefined,
       config:
-        entry.config &&
-        typeof entry.config === "object" &&
-        !Array.isArray(entry.config)
+        entry.config && typeof entry.config === "object" && !Array.isArray(entry.config)
           ? (entry.config as Record<string, unknown>)
           : undefined,
     };
@@ -78,9 +65,7 @@ const normalizePluginEntries = (
   return normalized;
 };
 
-const normalizePluginsConfig = (
-  config?: ClawdbotConfig["plugins"],
-): NormalizedPluginsConfig => {
+const normalizePluginsConfig = (config?: ClawdbotConfig["plugins"]): NormalizedPluginsConfig => {
   return {
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow),
@@ -94,9 +79,7 @@ function buildCacheKey(params: {
   workspaceDir?: string;
   plugins: NormalizedPluginsConfig;
 }): string {
-  const workspaceKey = params.workspaceDir
-    ? resolveUserPath(params.workspaceDir)
-    : "";
+  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir) : "";
   return `${workspaceKey}::${JSON.stringify(params.plugins)}`;
 }
 
@@ -213,16 +196,11 @@ function createPluginRecord(params: {
   };
 }
 
-function pushDiagnostics(
-  diagnostics: PluginDiagnostic[],
-  append: PluginDiagnostic[],
-) {
+function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
   diagnostics.push(...append);
 }
 
-export function loadClawdbotPlugins(
-  options: PluginLoadOptions = {},
-): PluginRegistry {
+export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const cfg = options.config ?? {};
   const logger = options.logger ?? defaultLogger();
   const normalized = normalizePluginsConfig(cfg.plugins);
@@ -238,10 +216,7 @@ export function loadClawdbotPlugins(
 
   const { registry, createApi } = createPluginRegistry({
     logger,
-    coreGatewayHandlers: options.coreGatewayHandlers as Record<
-      string,
-      GatewayRequestHandler
-    >,
+    coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
 
   const discovery = discoverClawdbotPlugins({
@@ -313,8 +288,7 @@ export function loadClawdbotPlugins(
       definition?.configSchema &&
       typeof definition.configSchema === "object" &&
       (definition.configSchema as { uiHints?: unknown }).uiHints &&
-      typeof (definition.configSchema as { uiHints?: unknown }).uiHints ===
-        "object" &&
+      typeof (definition.configSchema as { uiHints?: unknown }).uiHints === "object" &&
       !Array.isArray((definition.configSchema as { uiHints?: unknown }).uiHints)
         ? ((definition.configSchema as { uiHints?: unknown }).uiHints as Record<
             string,
@@ -365,8 +339,7 @@ export function loadClawdbotPlugins(
           level: "warn",
           pluginId: record.id,
           source: record.source,
-          message:
-            "plugin register returned a promise; async registration is ignored",
+          message: "plugin register returned a promise; async registration is ignored",
         });
       }
       registry.plugins.push(record);

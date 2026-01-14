@@ -69,11 +69,7 @@ function buildDistCandidates(...inputs: string[]): string[] {
   return candidates;
 }
 
-function appendDistCandidates(
-  candidates: string[],
-  seen: Set<string>,
-  baseDir: string,
-): void {
+function appendDistCandidates(candidates: string[], seen: Set<string>, baseDir: string): void {
   const distDir = path.resolve(baseDir, "dist");
   const distEntries = [
     path.join(distDir, "index.js"),
@@ -154,8 +150,7 @@ export async function resolveGatewayProgramArguments(params: {
 
   if (runtime === "node") {
     const nodePath =
-      params.nodePath ??
-      (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
+      params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...gatewayArgs],
@@ -167,9 +162,7 @@ export async function resolveGatewayProgramArguments(params: {
       const repoRoot = resolveRepoRootForDev();
       const devCliPath = path.join(repoRoot, "src", "index.ts");
       await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath)
-        ? execPath
-        : await resolveBunPath();
+      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
       return {
         programArguments: [bunPath, devCliPath, ...gatewayArgs],
         workingDirectory: repoRoot,

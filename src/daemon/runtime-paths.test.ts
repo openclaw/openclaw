@@ -28,9 +28,7 @@ describe("resolvePreferredNodePath", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi
-      .fn()
-      .mockResolvedValue({ stdout: "22.1.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.1.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -49,9 +47,7 @@ describe("resolvePreferredNodePath", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi
-      .fn()
-      .mockResolvedValue({ stdout: "18.19.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "18.19.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -90,9 +86,7 @@ describe("resolveSystemNodeInfo", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi
-      .fn()
-      .mockResolvedValue({ stdout: "22.0.0\n", stderr: "" });
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.0.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},

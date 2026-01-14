@@ -32,9 +32,7 @@ export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   return `channel:${trimmed}`.toLowerCase();
 }
 
-export function normalizeDiscordMessagingTarget(
-  raw: string,
-): string | undefined {
+export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
@@ -62,9 +60,7 @@ export function normalizeDiscordMessagingTarget(
   return `channel:${trimmed}`.toLowerCase();
 }
 
-export function normalizeTelegramMessagingTarget(
-  raw: string,
-): string | undefined {
+export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   let normalized = trimmed;
@@ -84,9 +80,7 @@ export function normalizeTelegramMessagingTarget(
   return `telegram:${normalized}`.toLowerCase();
 }
 
-export function normalizeSignalMessagingTarget(
-  raw: string,
-): string | undefined {
+export function normalizeSignalMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   let normalized = trimmed;
@@ -110,9 +104,7 @@ export function normalizeSignalMessagingTarget(
   return normalized.toLowerCase();
 }
 
-export function normalizeWhatsAppMessagingTarget(
-  raw: string,
-): string | undefined {
+export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   return normalizeWhatsAppTarget(trimmed) ?? undefined;

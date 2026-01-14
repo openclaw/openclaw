@@ -2,27 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
-import {
-  listSystemPresence,
-  upsertPresence,
-} from "../../infra/system-presence.js";
+import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
 import type { createSubsystemLogger } from "../../logging.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { isLoopbackAddress } from "../net.js";
 import { HANDSHAKE_TIMEOUT_MS } from "../server-constants.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-} from "../server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
-import {
-  getHealthVersion,
-  getPresenceVersion,
-  incrementPresenceVersion,
-} from "./health-state.js";
+import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
 import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
@@ -75,9 +65,8 @@ export function attachGatewayWsConnectionHandler(params: {
     let closed = false;
     const openedAt = Date.now();
     const connId = randomUUID();
-    const remoteAddr = (
-      socket as WebSocket & { _socket?: { remoteAddress?: string } }
-    )._socket?.remoteAddress;
+    const remoteAddr = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket
+      ?.remoteAddress;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
@@ -85,12 +74,9 @@ export function attachGatewayWsConnectionHandler(params: {
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
 
-    const canvasHostPortForWs =
-      canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
+    const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
     const canvasHostOverride =
-      bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::"
-        ? bridgeHost
-        : undefined;
+      bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::" ? bridgeHost : undefined;
     const canvasHostUrl = resolveCanvasHostUrl({
       canvasPort: canvasHostPortForWs,
       hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
@@ -114,11 +100,7 @@ export function attachGatewayWsConnectionHandler(params: {
       }
     };
 
-    const setLastFrameMeta = (meta: {
-      type?: string;
-      method?: string;
-      id?: string;
-    }) => {
+    const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
       if (meta.type || meta.method || meta.id) {
         lastFrameType = meta.type ?? lastFrameType;
         lastFrameMethod = meta.method ?? lastFrameMethod;
@@ -147,19 +129,13 @@ export function attachGatewayWsConnectionHandler(params: {
     };
 
     socket.once("error", (err) => {
-      logWsControl.warn(
-        `error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`,
-      );
+      logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
     });
 
-    const isNoisySwiftPmHelperClose = (
-      userAgent: string | undefined,
-      remote: string | undefined,
-    ) =>
+    const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       Boolean(
-        userAgent?.toLowerCase().includes("swiftpm-testing-helper") &&
-          isLoopbackAddress(remote),
+        userAgent?.toLowerCase().includes("swiftpm-testing-helper") && isLoopbackAddress(remote),
       );
 
     socket.once("close", (code, reason) => {
@@ -226,9 +202,7 @@ export function attachGatewayWsConnectionHandler(params: {
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
         });
-        logWsControl.warn(
-          `handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`,
-        );
+        logWsControl.warn(`handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`);
         close();
       }
     }, HANDSHAKE_TIMEOUT_MS);

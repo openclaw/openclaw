@@ -24,17 +24,12 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenCalledWith(
-      "123@s.whatsapp.net",
-      "msg1",
-      "✅",
-      {
-        verbose: false,
-        fromMe: undefined,
-        participant: undefined,
-        accountId: undefined,
-      },
-    );
+    expect(sendReactionWhatsApp).toHaveBeenCalledWith("123@s.whatsapp.net", "msg1", "✅", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: undefined,
+    });
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -47,17 +42,12 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenCalledWith(
-      "123@s.whatsapp.net",
-      "msg1",
-      "",
-      {
-        verbose: false,
-        fromMe: undefined,
-        participant: undefined,
-        accountId: undefined,
-      },
-    );
+    expect(sendReactionWhatsApp).toHaveBeenCalledWith("123@s.whatsapp.net", "msg1", "", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: undefined,
+    });
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -71,17 +61,12 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenCalledWith(
-      "123@s.whatsapp.net",
-      "msg1",
-      "",
-      {
-        verbose: false,
-        fromMe: undefined,
-        participant: undefined,
-        accountId: undefined,
-      },
-    );
+    expect(sendReactionWhatsApp).toHaveBeenCalledWith("123@s.whatsapp.net", "msg1", "", {
+      verbose: false,
+      fromMe: undefined,
+      participant: undefined,
+      accountId: undefined,
+    });
   });
 
   it("passes account scope and sender flags", async () => {
@@ -97,17 +82,12 @@ describe("handleWhatsAppAction", () => {
       },
       enabledConfig,
     );
-    expect(sendReactionWhatsApp).toHaveBeenCalledWith(
-      "123@s.whatsapp.net",
-      "msg1",
-      "🎉",
-      {
-        verbose: false,
-        fromMe: true,
-        participant: "999@s.whatsapp.net",
-        accountId: "work",
-      },
-    );
+    expect(sendReactionWhatsApp).toHaveBeenCalledWith("123@s.whatsapp.net", "msg1", "🎉", {
+      verbose: false,
+      fromMe: true,
+      participant: "999@s.whatsapp.net",
+      accountId: "work",
+    });
   });
 
   it("respects reaction gating", async () => {

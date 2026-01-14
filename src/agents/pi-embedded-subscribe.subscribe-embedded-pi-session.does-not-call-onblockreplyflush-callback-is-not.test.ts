@@ -28,9 +28,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     // No onBlockReplyFlush provided
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-no-flush",
       onBlockReply,
       blockReplyBreak: "text_end",

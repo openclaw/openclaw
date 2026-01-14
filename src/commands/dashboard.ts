@@ -1,7 +1,4 @@
-import {
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-} from "../config/config.js";
+import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -26,8 +23,7 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const token =
-    cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? "";
+  const token = cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? "";
 
   const links = resolveControlUiLinks({
     port,
@@ -35,16 +31,12 @@ export async function dashboardCommand(
     customBindHost,
     basePath,
   });
-  const authedUrl = token
-    ? `${links.httpUrl}?token=${encodeURIComponent(token)}`
-    : links.httpUrl;
+  const authedUrl = token ? `${links.httpUrl}?token=${encodeURIComponent(token)}` : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${authedUrl}`);
 
   const copied = await copyToClipboard(authedUrl).catch(() => false);
-  runtime.log(
-    copied ? "Copied to clipboard." : "Copy to clipboard unavailable.",
-  );
+  runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
   let opened = false;
   let hint: string | undefined;

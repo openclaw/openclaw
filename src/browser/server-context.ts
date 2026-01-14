@@ -33,10 +33,7 @@ export type {
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
  */
-function normalizeWsUrl(
-  raw: string | undefined,
-  cdpBaseUrl: string,
-): string | undefined {
+function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) return undefined;
   try {
     return normalizeCdpWsUrl(raw, cdpBaseUrl);
@@ -45,11 +42,7 @@ function normalizeWsUrl(
   }
 }
 
-async function fetchJson<T>(
-  url: string,
-  timeoutMs = 1500,
-  init?: RequestInit,
-): Promise<T> {
+async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -61,11 +54,7 @@ async function fetchJson<T>(
   }
 }
 
-async function fetchOk(
-  url: string,
-  timeoutMs = 1500,
-  init?: RequestInit,
-): Promise<void> {
+async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -183,9 +172,7 @@ function createProfileContext(
     return await isChromeReachable(profile.cdpUrl, timeoutMs);
   };
 
-  const attachRunning = (
-    running: NonNullable<ProfileRuntimeState["running"]>,
-  ) => {
+  const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
     setProfileRunning(running);
     running.proc.on("exit", () => {
       // Guard against server teardown (e.g., SIGUSR1 restart)
@@ -204,10 +191,7 @@ function createProfileContext(
     const httpReachable = await isHttpReachable();
 
     if (!httpReachable) {
-      if (
-        (current.resolved.attachOnly || remoteCdp) &&
-        opts.onEnsureAttachTarget
-      ) {
+      if ((current.resolved.attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
         await opts.onEnsureAttachTarget(profile);
         if (await isHttpReachable(1200)) return;
       }
@@ -374,9 +358,7 @@ function createProfileContext(
   };
 }
 
-export function createBrowserRouteContext(
-  opts: ContextOptions,
-): BrowserRouteContext {
+export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
   const state = () => {
     const current = opts.getState();
     if (!current) throw new Error("Browser server not started");
@@ -389,9 +371,7 @@ export function createBrowserRouteContext(
     const profile = resolveProfile(current.resolved, name);
     if (!profile) {
       const available = Object.keys(current.resolved.profiles).join(", ");
-      throw new Error(
-        `Profile "${name}" not found. Available profiles: ${available || "(none)"}`,
-      );
+      throw new Error(`Profile "${name}" not found. Available profiles: ${available || "(none)"}`);
     }
     return createProfileContext(opts, profile);
   };
@@ -470,10 +450,8 @@ export function createBrowserRouteContext(
     listProfiles,
     // Legacy methods delegate to default profile
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
-    ensureTabAvailable: (targetId) =>
-      getDefaultContext().ensureTabAvailable(targetId),
-    isHttpReachable: (timeoutMs) =>
-      getDefaultContext().isHttpReachable(timeoutMs),
+    ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
+    isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
     openTab: (url) => getDefaultContext().openTab(url),

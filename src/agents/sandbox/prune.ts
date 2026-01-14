@@ -61,9 +61,7 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
         await removeBrowserRegistryEntry(entry.containerName);
         const bridge = BROWSER_BRIDGES.get(entry.sessionKey);
         if (bridge?.containerName === entry.containerName) {
-          await stopBrowserBridgeServer(bridge.bridge.server).catch(
-            () => undefined,
-          );
+          await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
           BROWSER_BRIDGES.delete(entry.sessionKey);
         }
       }
@@ -85,9 +83,7 @@ export async function maybePruneSandboxes(cfg: SandboxConfig) {
         : typeof error === "string"
           ? error
           : JSON.stringify(error);
-    defaultRuntime.error?.(
-      `Sandbox prune failed: ${message ?? "unknown error"}`,
-    );
+    defaultRuntime.error?.(`Sandbox prune failed: ${message ?? "unknown error"}`);
   }
 }
 

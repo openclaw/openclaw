@@ -25,9 +25,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onToolResult = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-canvas-tool",
       verboseLevel: "on",
       onToolResult,
@@ -59,9 +57,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onToolResult = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-tool-off",
       shouldEmitToolResult: () => false,
       onToolResult,
@@ -88,9 +84,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const onToolResult = vi.fn();
 
     subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
       runId: "run-tool-override",
       verboseLevel: "off",
       shouldEmitToolResult: () => true,

@@ -17,11 +17,7 @@ const shouldPromoteGatewayDebug = (message: string) =>
 const formatGatewayMetrics = (metrics: unknown) => {
   if (metrics === null || metrics === undefined) return String(metrics);
   if (typeof metrics === "string") return metrics;
-  if (
-    typeof metrics === "number" ||
-    typeof metrics === "boolean" ||
-    typeof metrics === "bigint"
-  ) {
+  if (typeof metrics === "number" || typeof metrics === "boolean" || typeof metrics === "bigint") {
     return String(metrics);
   }
   try {

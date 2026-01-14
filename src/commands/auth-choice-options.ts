@@ -1,8 +1,5 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-} from "../agents/auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { AuthChoice } from "./onboard-types.js";
 
@@ -92,10 +89,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
 ];
 
-function formatOAuthHint(
-  expires?: number,
-  opts?: { allowStale?: boolean },
-): string {
+function formatOAuthHint(expires?: number, opts?: { allowStale?: boolean }): string {
   const rich = isRich();
   if (!expires) {
     return colorize(rich, theme.muted, "token unavailable");

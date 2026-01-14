@@ -1,14 +1,8 @@
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
-import {
-  enqueueSystemEvent,
-  isSystemEventContextChanged,
-} from "../../infra/system-events.js";
-import {
-  listSystemPresence,
-  updateSystemPresence,
-} from "../../infra/system-presence.js";
+import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
+import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -39,39 +33,26 @@ export const systemHandlers: GatewayRequestHandlers = {
   "system-event": ({ params, respond, context }) => {
     const text = typeof params.text === "string" ? params.text.trim() : "";
     if (!text) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "text required"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
     const sessionKey = resolveMainSessionKeyFromConfig();
-    const instanceId =
-      typeof params.instanceId === "string" ? params.instanceId : undefined;
+    const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;
     const ip = typeof params.ip === "string" ? params.ip : undefined;
     const mode = typeof params.mode === "string" ? params.mode : undefined;
-    const version =
-      typeof params.version === "string" ? params.version : undefined;
-    const platform =
-      typeof params.platform === "string" ? params.platform : undefined;
-    const deviceFamily =
-      typeof params.deviceFamily === "string" ? params.deviceFamily : undefined;
+    const version = typeof params.version === "string" ? params.version : undefined;
+    const platform = typeof params.platform === "string" ? params.platform : undefined;
+    const deviceFamily = typeof params.deviceFamily === "string" ? params.deviceFamily : undefined;
     const modelIdentifier =
-      typeof params.modelIdentifier === "string"
-        ? params.modelIdentifier
-        : undefined;
+      typeof params.modelIdentifier === "string" ? params.modelIdentifier : undefined;
     const lastInputSeconds =
-      typeof params.lastInputSeconds === "number" &&
-      Number.isFinite(params.lastInputSeconds)
+      typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
         ? params.lastInputSeconds
         : undefined;
-    const reason =
-      typeof params.reason === "string" ? params.reason : undefined;
+    const reason = typeof params.reason === "string" ? params.reason : undefined;
     const tags =
-      Array.isArray(params.tags) &&
-      params.tags.every((t) => typeof t === "string")
+      Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
         ? (params.tags as string[])
         : undefined;
     const presenceUpdate = updateSystemPresence({
@@ -95,24 +76,15 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonValue = next.reason ?? reason;
       const normalizedReason = (reasonValue ?? "").toLowerCase();
       const ignoreReason =
-        normalizedReason.startsWith("periodic") ||
-        normalizedReason === "heartbeat";
+        normalizedReason.startsWith("periodic") || normalizedReason === "heartbeat";
       const hostChanged = changed.has("host");
       const ipChanged = changed.has("ip");
       const versionChanged = changed.has("version");
       const modeChanged = changed.has("mode");
       const reasonChanged = changed.has("reason") && !ignoreReason;
-      const hasChanges =
-        hostChanged ||
-        ipChanged ||
-        versionChanged ||
-        modeChanged ||
-        reasonChanged;
+      const hasChanges = hostChanged || ipChanged || versionChanged || modeChanged || reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(
-          sessionKey,
-          presenceUpdate.key,
-        );
+        const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
         const parts: string[] = [];
         if (contextChanged || hostChanged || ipChanged) {
           const hostLabel = next.host?.trim() || "Unknown";

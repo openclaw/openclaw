@@ -14,8 +14,7 @@ export function buildCommandContext(params: {
   triggerBodyNormalized: string;
   commandAuthorized: boolean;
 }): CommandContext {
-  const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized } =
-    params;
+  const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized } = params;
   const auth = resolveCommandAuthorization({
     ctx,
     cfg,
@@ -23,13 +22,10 @@ export function buildCommandContext(params: {
   });
   const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
   const channel = (ctx.Provider ?? surface).trim().toLowerCase();
-  const abortKey =
-    sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
+  const abortKey = sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
-    isGroup
-      ? stripMentions(rawBodyNormalized, ctx, cfg, agentId)
-      : rawBodyNormalized,
+    isGroup ? stripMentions(rawBodyNormalized, ctx, cfg, agentId) : rawBodyNormalized,
   );
 
   return {

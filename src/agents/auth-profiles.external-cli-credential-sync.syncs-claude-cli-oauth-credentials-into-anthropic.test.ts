@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-} from "./auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID, ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
   it("syncs Claude CLI OAuth credentials into anthropic:claude-cli", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-sync-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-sync-"));
     try {
       // Create a temp home with Claude CLI credentials
       await withTempHome(
@@ -27,10 +22,7 @@ describe("external CLI credential sync", () => {
               expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour from now
             },
           };
-          fs.writeFileSync(
-            path.join(claudeDir, ".credentials.json"),
-            JSON.stringify(claudeCreds),
-          );
+          fs.writeFileSync(path.join(claudeDir, ".credentials.json"), JSON.stringify(claudeCreds));
 
           // Create empty auth-profiles.json
           const authPath = path.join(agentDir, "auth-profiles.json");
@@ -52,22 +44,14 @@ describe("external CLI credential sync", () => {
           const store = ensureAuthProfileStore(agentDir);
 
           expect(store.profiles["anthropic:default"]).toBeDefined();
-          expect(
-            (store.profiles["anthropic:default"] as { key: string }).key,
-          ).toBe("sk-default");
+          expect((store.profiles["anthropic:default"] as { key: string }).key).toBe("sk-default");
           expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
           // Should be stored as OAuth credential (type: "oauth") for auto-refresh
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("oauth");
-          expect((cliProfile as { access: string }).access).toBe(
-            "fresh-access-token",
-          );
-          expect((cliProfile as { refresh: string }).refresh).toBe(
-            "fresh-refresh-token",
-          );
-          expect((cliProfile as { expires: number }).expires).toBeGreaterThan(
-            Date.now(),
-          );
+          expect((cliProfile as { access: string }).access).toBe("fresh-access-token");
+          expect((cliProfile as { refresh: string }).refresh).toBe("fresh-refresh-token");
+          expect((cliProfile as { expires: number }).expires).toBeGreaterThan(Date.now());
         },
         { prefix: "clawdbot-home-" },
       );
@@ -76,9 +60,7 @@ describe("external CLI credential sync", () => {
     }
   });
   it("syncs Claude CLI credentials without refreshToken as token type", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-token-sync-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-token-sync-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -92,16 +74,10 @@ describe("external CLI credential sync", () => {
               expiresAt: Date.now() + 60 * 60 * 1000,
             },
           };
-          fs.writeFileSync(
-            path.join(claudeDir, ".credentials.json"),
-            JSON.stringify(claudeCreds),
-          );
+          fs.writeFileSync(path.join(claudeDir, ".credentials.json"), JSON.stringify(claudeCreds));
 
           const authPath = path.join(agentDir, "auth-profiles.json");
-          fs.writeFileSync(
-            authPath,
-            JSON.stringify({ version: 1, profiles: {} }),
-          );
+          fs.writeFileSync(authPath, JSON.stringify({ version: 1, profiles: {} }));
 
           const store = ensureAuthProfileStore(agentDir);
 
@@ -109,9 +85,7 @@ describe("external CLI credential sync", () => {
           // Should be stored as token type (no refresh capability)
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("token");
-          expect((cliProfile as { token: string }).token).toBe(
-            "access-only-token",
-          );
+          expect((cliProfile as { token: string }).token).toBe("access-only-token");
         },
         { prefix: "clawdbot-home-" },
       );

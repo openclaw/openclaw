@@ -1,12 +1,6 @@
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -48,10 +42,7 @@ function hasAuthForProvider(
 }
 
 function resolveConfiguredModelRaw(cfg: ClawdbotConfig): string {
-  const raw = cfg.agents?.defaults?.model as
-    | { primary?: string }
-    | string
-    | undefined;
+  const raw = cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
   if (typeof raw === "string") return raw.trim();
   return raw?.primary?.trim() ?? "";
 }
@@ -62,14 +53,10 @@ async function promptManualModel(params: {
   initialValue?: string;
 }): Promise<PromptDefaultModelResult> {
   const modelInput = await params.prompter.text({
-    message: params.allowBlank
-      ? "Default model (blank to keep)"
-      : "Default model",
+    message: params.allowBlank ? "Default model (blank to keep)" : "Default model",
     initialValue: params.initialValue,
     placeholder: "provider/model",
-    validate: params.allowBlank
-      ? undefined
-      : (value) => (value?.trim() ? undefined : "Required"),
+    validate: params.allowBlank ? undefined : (value) => (value?.trim() ? undefined : "Required"),
   });
   const model = String(modelInput ?? "").trim();
   if (!model) return {};
@@ -128,26 +115,20 @@ export async function promptDefaultModel(
     });
   }
 
-  const providers = Array.from(
-    new Set(models.map((entry) => entry.provider)),
-  ).sort((a, b) => a.localeCompare(b));
+  const providers = Array.from(new Set(models.map((entry) => entry.provider))).sort((a, b) =>
+    a.localeCompare(b),
+  );
 
-  const hasPreferredProvider = preferredProvider
-    ? providers.includes(preferredProvider)
-    : false;
+  const hasPreferredProvider = preferredProvider ? providers.includes(preferredProvider) : false;
   const shouldPromptProvider =
-    !hasPreferredProvider &&
-    providers.length > 1 &&
-    models.length > PROVIDER_FILTER_THRESHOLD;
+    !hasPreferredProvider && providers.length > 1 && models.length > PROVIDER_FILTER_THRESHOLD;
   if (shouldPromptProvider) {
     const selection = await params.prompter.select({
       message: "Filter models by provider",
       options: [
         { value: "*", label: "All providers" },
         ...providers.map((provider) => {
-          const count = models.filter(
-            (entry) => entry.provider === provider,
-          ).length;
+          const count = models.filter((entry) => entry.provider === provider).length;
           return {
             value: provider,
             label: provider,
@@ -185,9 +166,7 @@ export async function promptDefaultModel(
         ? `Keep current (${configuredRaw})`
         : `Keep current (default: ${resolvedKey})`,
       hint:
-        configuredRaw && configuredRaw !== resolvedKey
-          ? `resolves to ${resolvedKey}`
-          : undefined,
+        configuredRaw && configuredRaw !== resolvedKey ? `resolves to ${resolvedKey}` : undefined,
     });
   }
   if (includeManual) {
@@ -206,8 +185,7 @@ export async function promptDefaultModel(
     if (seen.has(key)) return;
     const hints: string[] = [];
     if (entry.name && entry.name !== entry.id) hints.push(entry.name);
-    if (entry.contextWindow)
-      hints.push(`ctx ${formatTokenK(entry.contextWindow)}`);
+    if (entry.contextWindow) hints.push(`ctx ${formatTokenK(entry.contextWindow)}`);
     if (entry.reasoning) hints.push("reasoning");
     const aliases = aliasIndex.byKey.get(key);
     if (aliases?.length) hints.push(`alias: ${aliases.join(", ")}`);
@@ -230,9 +208,7 @@ export async function promptDefaultModel(
     });
   }
 
-  let initialValue: string | undefined = allowKeep
-    ? KEEP_VALUE
-    : configuredKey || undefined;
+  let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
   if (
     allowKeep &&
     hasPreferredProvider &&
@@ -262,17 +238,12 @@ export async function promptDefaultModel(
   return { model: String(selection) };
 }
 
-export function applyPrimaryModel(
-  cfg: ClawdbotConfig,
-  model: string,
-): ClawdbotConfig {
+export function applyPrimaryModel(cfg: ClawdbotConfig, model: string): ClawdbotConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
   const fallbacks =
-    typeof existingModel === "object" &&
-    existingModel !== null &&
-    "fallbacks" in existingModel
+    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
       : undefined;
   return {

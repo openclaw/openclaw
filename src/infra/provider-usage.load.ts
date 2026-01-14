@@ -1,7 +1,4 @@
-import {
-  type ProviderAuth,
-  resolveProviderAuths,
-} from "./provider-usage.auth.js";
+import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchClaudeUsage,
   fetchCodexUsage,
@@ -58,19 +55,9 @@ export async function loadProviderUsageSummary(
             return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
           case "google-gemini-cli":
           case "google-antigravity":
-            return await fetchGeminiUsage(
-              auth.token,
-              timeoutMs,
-              fetchFn,
-              auth.provider,
-            );
+            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
           case "openai-codex":
-            return await fetchCodexUsage(
-              auth.token,
-              auth.accountId,
-              timeoutMs,
-              fetchFn,
-            );
+            return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
           case "minimax":
             return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
           case "zai":

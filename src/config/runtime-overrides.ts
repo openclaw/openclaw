@@ -1,8 +1,4 @@
-import {
-  parseConfigPath,
-  setConfigValueAtPath,
-  unsetConfigValueAtPath,
-} from "./config-paths.js";
+import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import type { ClawdbotConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;

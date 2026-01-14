@@ -1,7 +1,4 @@
-import type {
-  AgentMessage,
-  AgentToolResult,
-} from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
 
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
@@ -93,11 +90,7 @@ export async function sanitizeSessionMessagesImages(
                 const block = filteredContent[i];
                 if (!block || typeof block !== "object") continue;
                 const type = (block as { type?: unknown }).type;
-                if (
-                  type === "functionCall" ||
-                  type === "toolUse" ||
-                  type === "toolCall"
-                ) {
+                if (type === "functionCall" || type === "toolUse" || type === "toolCall") {
                   lastToolIndex = i;
                   break;
                 }

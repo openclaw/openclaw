@@ -9,11 +9,7 @@ import {
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../terminal/prompt-style.js";
+import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   collectWorkspaceDirs,
   isPathWithin,
@@ -35,9 +31,7 @@ const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined
-        ? opt
-        : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 
@@ -105,9 +99,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (!["config", "config+creds+sessions", "full"].includes(scope)) {
-    runtime.error(
-      'Invalid --scope. Expected "config", "config+creds+sessions", or "full".',
-    );
+    runtime.error('Invalid --scope. Expected "config", "config+creds+sessions", or "full".');
     runtime.exit(1);
     return;
   }

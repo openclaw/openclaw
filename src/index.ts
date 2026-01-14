@@ -82,10 +82,7 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error(
-      "[clawdbot] Uncaught exception:",
-      error.stack ?? error.message,
-    );
+    console.error("[clawdbot] Uncaught exception:", error.stack ?? error.message);
     process.exit(1);
   });
 

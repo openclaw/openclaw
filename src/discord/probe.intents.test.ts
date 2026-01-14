@@ -30,8 +30,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   });
 
   it("prefers enabled over limited when both set", () => {
-    const flags =
-      (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 18) | (1 << 19);
+    const flags = (1 << 12) | (1 << 13) | (1 << 14) | (1 << 15) | (1 << 18) | (1 << 19);
     expect(resolveDiscordPrivilegedIntentsFromFlags(flags)).toEqual({
       presence: "enabled",
       guildMembers: "enabled",

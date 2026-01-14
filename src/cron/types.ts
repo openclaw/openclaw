@@ -60,10 +60,7 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
-export type CronJobCreate = Omit<
-  CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state"
-> & {
+export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
   state?: Partial<CronJobState>;
 };
 

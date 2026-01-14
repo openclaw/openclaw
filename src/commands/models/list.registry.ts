@@ -1,16 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import {
-  discoverAuthStorage,
-  discoverModels,
-} from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
@@ -32,11 +26,7 @@ const isLocalBaseUrl = (baseUrl: string) => {
   }
 };
 
-const hasAuthForProvider = (
-  provider: string,
-  cfg: ClawdbotConfig,
-  authStore: AuthProfileStore,
-) => {
+const hasAuthForProvider = (provider: string, cfg: ClawdbotConfig, authStore: AuthProfileStore) => {
   if (listProfilesForProvider(authStore, provider).length > 0) return true;
   if (resolveEnvApiKey(provider)) return true;
   if (getCustomProviderApiKey(cfg, provider)) return true;
@@ -50,9 +40,7 @@ export async function loadModelRegistry(cfg: ClawdbotConfig) {
   const registry = discoverModels(authStorage, agentDir);
   const models = registry.getAll() as Model<Api>[];
   const availableModels = registry.getAvailable() as Model<Api>[];
-  const availableKeys = new Set(
-    availableModels.map((model) => modelKey(model.provider, model.id)),
-  );
+  const availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   return { registry, models, availableKeys };
 }
 
@@ -65,15 +53,7 @@ export function toModelRow(params: {
   cfg?: ClawdbotConfig;
   authStore?: AuthProfileStore;
 }): ModelRow {
-  const {
-    model,
-    key,
-    tags,
-    aliases = [],
-    availableKeys,
-    cfg,
-    authStore,
-  } = params;
+  const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;
   if (!model) {
     return {
       key,

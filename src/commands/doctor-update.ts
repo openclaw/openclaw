@@ -4,13 +4,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 
-async function detectClawdbotGitCheckout(
-  root: string,
-): Promise<"git" | "not-git" | "unknown"> {
-  const res = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--show-toplevel"],
-    { timeoutMs: 5000 },
-  ).catch(() => null);
+async function detectClawdbotGitCheckout(root: string): Promise<"git" | "not-git" | "unknown"> {
+  const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+    timeoutMs: 5000,
+  }).catch(() => null);
   if (!res) return "unknown";
   if (res.code !== 0) {
     // Avoid noisy "Update via package manager" notes when git is missing/broken,
@@ -63,9 +60,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       "Update result",
     );
     if (result.status === "ok") {
-      params.outro(
-        "Update completed (doctor already ran as part of the update).",
-      );
+      params.outro("Update completed (doctor already ran as part of the update).");
       return { updated: true, handled: true };
     }
     return { updated: true, handled: false };

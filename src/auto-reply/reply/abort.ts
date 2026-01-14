@@ -9,10 +9,7 @@ import {
 } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import {
-  normalizeCommandBody,
-  shouldHandleTextCommands,
-} from "../commands-registry.js";
+import { normalizeCommandBody, shouldHandleTextCommands } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -82,9 +79,7 @@ export async function tryFastAbortFromMessage(params: {
     config: cfg,
   });
   // Use RawBody/CommandBody for abort detection (clean message without structural context).
-  const raw = stripStructuralPrefixes(
-    ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "",
-  );
+  const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
   const normalized = normalizeCommandBody(stripped);

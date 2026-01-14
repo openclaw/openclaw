@@ -40,9 +40,7 @@ export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;
 }): Promise<BrowserFormField[]> {
-  const payload = opts.fieldsFile
-    ? await readFile(opts.fieldsFile)
-    : (opts.fields ?? "");
+  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
   if (!payload.trim()) throw new Error("fields are required");
   const parsed = JSON.parse(payload) as unknown;
   if (!Array.isArray(parsed)) throw new Error("fields must be an array");
@@ -66,8 +64,6 @@ export async function readFields(opts: {
     if (rec.value === undefined || rec.value === null) {
       return { ref, type };
     }
-    throw new Error(
-      `fields[${index}].value must be string, number, boolean, or null`,
-    );
+    throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
   });
 }

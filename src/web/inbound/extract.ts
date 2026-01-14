@@ -4,31 +4,20 @@ import {
   getContentType,
   normalizeMessageContent,
 } from "@whiskeysockets/baileys";
-import {
-  formatLocationText,
-  type NormalizedLocation,
-} from "../../channels/location.js";
+import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 import { logVerbose } from "../../globals.js";
 import { jidToE164 } from "../../utils.js";
 import { parseVcard } from "../vcard.js";
 
-function unwrapMessage(
-  message: proto.IMessage | undefined,
-): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(
-    message as proto.IMessage | undefined,
-  );
+function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  const normalized = normalizeMessageContent(message as proto.IMessage | undefined);
   return normalized as proto.IMessage | undefined;
 }
 
-function extractContextInfo(
-  message: proto.IMessage | undefined,
-): proto.IContextInfo | undefined {
+function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
   if (!message) return undefined;
   const contentType = getContentType(message);
-  const candidate = contentType
-    ? (message as Record<string, unknown>)[contentType]
-    : undefined;
+  const candidate = contentType ? (message as Record<string, unknown>)[contentType] : undefined;
   const contextInfo =
     candidate && typeof candidate === "object" && "contextInfo" in candidate
       ? (candidate as { contextInfo?: proto.IContextInfo }).contextInfo
@@ -51,23 +40,20 @@ function extractContextInfo(
   for (const value of Object.values(message)) {
     if (!value || typeof value !== "object") continue;
     if (!("contextInfo" in value)) continue;
-    const candidateContext = (value as { contextInfo?: proto.IContextInfo })
-      .contextInfo;
+    const candidateContext = (value as { contextInfo?: proto.IContextInfo }).contextInfo;
     if (candidateContext) return candidateContext;
   }
   return undefined;
 }
 
-export function extractMentionedJids(
-  rawMessage: proto.IMessage | undefined,
-): string[] | undefined {
+export function extractMentionedJids(rawMessage: proto.IMessage | undefined): string[] | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
 
   const candidates: Array<string[] | null | undefined> = [
     message.extendedTextMessage?.contextInfo?.mentionedJid,
-    message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage
-      ?.contextInfo?.mentionedJid,
+    message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.contextInfo
+      ?.mentionedJid,
     message.imageMessage?.contextInfo?.mentionedJid,
     message.videoMessage?.contextInfo?.mentionedJid,
     message.documentMessage?.contextInfo?.mentionedJid,
@@ -82,22 +68,14 @@ export function extractMentionedJids(
   return Array.from(new Set(flattened));
 }
 
-export function extractText(
-  rawMessage: proto.IMessage | undefined,
-): string | undefined {
+export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
   const extracted = extractMessageContent(message);
-  const candidates = [
-    message,
-    extracted && extracted !== message ? extracted : undefined,
-  ];
+  const candidates = [message, extracted && extracted !== message ? extracted : undefined];
   for (const candidate of candidates) {
     if (!candidate) continue;
-    if (
-      typeof candidate.conversation === "string" &&
-      candidate.conversation.trim()
-    ) {
+    if (typeof candidate.conversation === "string" && candidate.conversation.trim()) {
       return candidate.conversation.trim();
     }
     const extended = candidate.extendedTextMessage?.text;
@@ -130,9 +108,7 @@ export function extractMediaPlaceholder(
   return undefined;
 }
 
-function extractContactPlaceholder(
-  rawMessage: proto.IMessage | undefined,
-): string | undefined {
+function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
   const contact = message.contactMessage ?? undefined;
@@ -146,18 +122,16 @@ function extractContactPlaceholder(
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
   if (!contactsArray || contactsArray.length === 0) return undefined;
   const labels = contactsArray
-    .map((entry) =>
-      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
-    )
+    .map((entry) => describeContact({ displayName: entry.displayName, vcard: entry.vcard }))
     .map((entry) => formatContactLabel(entry.name, entry.phones))
     .filter((value): value is string => Boolean(value));
   return formatContactsPlaceholder(labels, contactsArray.length);
 }
 
-function describeContact(input: {
-  displayName?: string | null;
-  vcard?: string | null;
-}): { name?: string; phones: string[] } {
+function describeContact(input: { displayName?: string | null; vcard?: string | null }): {
+  name?: string;
+  phones: string[];
+} {
   const displayName = (input.displayName ?? "").trim();
   const parsed = parseVcard(input.vcard ?? undefined);
   const name = displayName || parsed.name;
@@ -181,14 +155,9 @@ function formatContactsPlaceholder(labels: string[], total: number): string {
   return `<contacts: ${cleaned.join(", ")}${suffix}>`;
 }
 
-function formatContactLabel(
-  name?: string,
-  phones?: string[],
-): string | undefined {
+function formatContactLabel(name?: string, phones?: string[]): string | undefined {
   const phoneLabel = formatPhoneList(phones);
-  const parts = [name, phoneLabel].filter((value): value is string =>
-    Boolean(value),
-  );
+  const parts = [name, phoneLabel].filter((value): value is string => Boolean(value));
   if (parts.length === 0) return undefined;
   return parts.join(", ");
 }
@@ -255,11 +224,7 @@ export function extractLocationData(
           name: location.name ?? undefined,
           address: location.address ?? undefined,
           caption: location.comment ?? undefined,
-          source: isLive
-            ? "live"
-            : location.name || location.address
-              ? "place"
-              : "pin",
+          source: isLive ? "live" : location.name || location.address ? "place" : "pin",
           isLive,
         };
       }
@@ -284,24 +249,17 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
   const text = extractText(quoted);
-  let body: string | undefined = [text, locationText]
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+  let body: string | undefined = [text, locationText].filter(Boolean).join("\n").trim();
   if (!body) body = extractMediaPlaceholder(quoted);
   if (!body) {
     const quotedType = quoted ? getContentType(quoted) : undefined;
     logVerbose(
-      `Quoted message missing extractable body${
-        quotedType ? ` (type ${quotedType})` : ""
-      }`,
+      `Quoted message missing extractable body${quotedType ? ` (type ${quotedType})` : ""}`,
     );
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
-  const senderE164 = senderJid
-    ? (jidToE164(senderJid) ?? senderJid)
-    : undefined;
+  const senderE164 = senderJid ? (jidToE164(senderJid) ?? senderJid) : undefined;
   const sender = senderE164 ?? "unknown sender";
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,

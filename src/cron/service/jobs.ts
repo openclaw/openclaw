@@ -12,9 +12,7 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 
-export function assertSupportedJobSpec(
-  job: Pick<CronJob, "sessionTarget" | "payload">,
-) {
+export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "payload">) {
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
@@ -29,15 +27,11 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
-export function computeJobNextRunAtMs(
-  job: CronJob,
-  nowMs: number,
-): number | undefined {
+export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) return undefined;
   if (job.schedule.kind === "at") {
     // One-shot jobs stay due until they successfully finish.
-    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs)
-      return undefined;
+    if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) return undefined;
     return job.schedule.atMs;
   }
   return computeNextRunAtMs(job.schedule, nowMs);
@@ -67,9 +61,7 @@ export function recomputeNextRuns(state: CronServiceState) {
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter(
-    (j) => j.enabled && typeof j.state.nextRunAtMs === "number",
-  );
+  const enabled = jobs.filter((j) => j.enabled && typeof j.state.nextRunAtMs === "number");
   if (enabled.length === 0) return undefined;
   return enabled.reduce(
     (min, j) => Math.min(min, j.state.nextRunAtMs as number),
@@ -77,10 +69,7 @@ export function nextWakeAtMs(state: CronServiceState) {
   );
 }
 
-export function createJob(
-  state: CronServiceState,
-  input: CronJobCreate,
-): CronJob {
+export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
   const job: CronJob = {
@@ -108,11 +97,9 @@ export function createJob(
 
 export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if ("name" in patch) job.name = normalizeRequiredName(patch.name);
-  if ("description" in patch)
-    job.description = normalizeOptionalText(patch.description);
+  if ("description" in patch) job.description = normalizeOptionalText(patch.description);
   if (typeof patch.enabled === "boolean") job.enabled = patch.enabled;
-  if (typeof patch.deleteAfterRun === "boolean")
-    job.deleteAfterRun = patch.deleteAfterRun;
+  if (typeof patch.deleteAfterRun === "boolean") job.deleteAfterRun = patch.deleteAfterRun;
   if (patch.schedule) job.schedule = patch.schedule;
   if (patch.sessionTarget) job.sessionTarget = patch.sessionTarget;
   if (patch.wakeMode) job.wakeMode = patch.wakeMode;
@@ -120,24 +107,14 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.isolation) job.isolation = patch.isolation;
   if (patch.state) job.state = { ...job.state, ...patch.state };
   if ("agentId" in patch) {
-    job.agentId = normalizeOptionalAgentId(
-      (patch as { agentId?: unknown }).agentId,
-    );
+    job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   assertSupportedJobSpec(job);
 }
 
-export function isJobDue(
-  job: CronJob,
-  nowMs: number,
-  opts: { forced: boolean },
-) {
+export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
   if (opts.forced) return true;
-  return (
-    job.enabled &&
-    typeof job.state.nextRunAtMs === "number" &&
-    nowMs >= job.state.nextRunAtMs
-  );
+  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {

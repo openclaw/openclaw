@@ -34,8 +34,7 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
   const bridgeNodeSubscriptions = new Map<string, Set<string>>();
   const bridgeSessionSubscribers = new Map<string, Set<string>>();
 
-  const toPayloadJSON = (payload: unknown) =>
-    payload ? JSON.stringify(payload) : null;
+  const toPayloadJSON = (payload: unknown) => (payload ? JSON.stringify(payload) : null);
 
   const subscribe = (nodeId: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();
@@ -69,8 +68,7 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
 
     const sessionSet = bridgeSessionSubscribers.get(normalizedSessionKey);
     sessionSet?.delete(normalizedNodeId);
-    if (sessionSet?.size === 0)
-      bridgeSessionSubscribers.delete(normalizedSessionKey);
+    if (sessionSet?.size === 0) bridgeSessionSubscribers.delete(normalizedSessionKey);
   };
 
   const unsubscribeAll = (nodeId: string) => {

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  ensureGoInstalled,
-  ensureTailscaledInstalled,
-  getTailnetHostname,
-} from "./tailscale.js";
+import { ensureGoInstalled, ensureTailscaledInstalled, getTailnetHostname } from "./tailscale.js";
 
 describe("tailscale helpers", () => {
   it("parses DNS name from tailscale status", async () => {
@@ -26,10 +22,7 @@ describe("tailscale helpers", () => {
   });
 
   it("ensureGoInstalled installs when missing and user agrees", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("no go"))
-      .mockResolvedValue({}); // brew install go
+    const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
     const prompt = vi.fn().mockResolvedValue(true);
     const runtime = {
       error: vi.fn(),
@@ -43,10 +36,7 @@ describe("tailscale helpers", () => {
   });
 
   it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
-    const exec = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("missing"))
-      .mockResolvedValue({});
+    const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
     const prompt = vi.fn().mockResolvedValue(true);
     const runtime = {
       error: vi.fn(),

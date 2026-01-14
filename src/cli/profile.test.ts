@@ -13,13 +13,7 @@ describe("parseCliProfileArgs", () => {
     ]);
     if (!res.ok) throw new Error(res.error);
     expect(res.profile).toBeNull();
-    expect(res.argv).toEqual([
-      "node",
-      "clawdbot",
-      "gateway",
-      "--dev",
-      "--allow-unconfigured",
-    ]);
+    expect(res.argv).toEqual(["node", "clawdbot", "gateway", "--dev", "--allow-unconfigured"]);
   });
 
   it("still accepts global --dev before subcommand", () => {
@@ -30,13 +24,7 @@ describe("parseCliProfileArgs", () => {
   });
 
   it("parses --profile value and strips it", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "clawdbot",
-      "--profile",
-      "work",
-      "status",
-    ]);
+    const res = parseCliProfileArgs(["node", "clawdbot", "--profile", "work", "status"]);
     if (!res.ok) throw new Error(res.error);
     expect(res.profile).toBe("work");
     expect(res.argv).toEqual(["node", "clawdbot", "status"]);
@@ -48,26 +36,12 @@ describe("parseCliProfileArgs", () => {
   });
 
   it("rejects combining --dev with --profile (dev first)", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "clawdbot",
-      "--dev",
-      "--profile",
-      "work",
-      "status",
-    ]);
+    const res = parseCliProfileArgs(["node", "clawdbot", "--dev", "--profile", "work", "status"]);
     expect(res.ok).toBe(false);
   });
 
   it("rejects combining --dev with --profile (profile first)", () => {
-    const res = parseCliProfileArgs([
-      "node",
-      "clawdbot",
-      "--profile",
-      "work",
-      "--dev",
-      "status",
-    ]);
+    const res = parseCliProfileArgs(["node", "clawdbot", "--profile", "work", "--dev", "status"]);
     expect(res.ok).toBe(false);
   });
 });
@@ -83,9 +57,7 @@ describe("applyCliProfileEnv", () => {
     const expectedStateDir = path.join("/home/peter", ".clawdbot-dev");
     expect(env.CLAWDBOT_PROFILE).toBe("dev");
     expect(env.CLAWDBOT_STATE_DIR).toBe(expectedStateDir);
-    expect(env.CLAWDBOT_CONFIG_PATH).toBe(
-      path.join(expectedStateDir, "clawdbot.json"),
-    );
+    expect(env.CLAWDBOT_CONFIG_PATH).toBe(path.join(expectedStateDir, "clawdbot.json"));
     expect(env.CLAWDBOT_GATEWAY_PORT).toBe("19001");
   });
 
@@ -101,8 +73,6 @@ describe("applyCliProfileEnv", () => {
     });
     expect(env.CLAWDBOT_STATE_DIR).toBe("/custom");
     expect(env.CLAWDBOT_GATEWAY_PORT).toBe("19099");
-    expect(env.CLAWDBOT_CONFIG_PATH).toBe(
-      path.join("/custom", "clawdbot.json"),
-    );
+    expect(env.CLAWDBOT_CONFIG_PATH).toBe(path.join("/custom", "clawdbot.json"));
   });
 });

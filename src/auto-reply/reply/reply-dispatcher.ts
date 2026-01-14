@@ -5,10 +5,7 @@ import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
-type ReplyDispatchErrorHandler = (
-  err: unknown,
-  info: { kind: ReplyDispatchKind },
-) => void;
+type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
@@ -23,13 +20,9 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   const mode = config?.mode ?? "off";
   if (mode === "off") return 0;
   const min =
-    mode === "custom"
-      ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS)
-      : DEFAULT_HUMAN_DELAY_MIN_MS;
+    mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
   const max =
-    mode === "custom"
-      ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS)
-      : DEFAULT_HUMAN_DELAY_MAX_MS;
+    mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
   if (max <= min) return min;
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -47,10 +40,7 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
 };
 
-export type ReplyDispatcherWithTypingOptions = Omit<
-  ReplyDispatcherOptions,
-  "onIdle"
-> & {
+export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
 };
@@ -79,9 +69,7 @@ function normalizeReplyPayloadInternal(
   });
 }
 
-export function createReplyDispatcher(
-  options: ReplyDispatcherOptions,
-): ReplyDispatcher {
+export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   let pending = 0;

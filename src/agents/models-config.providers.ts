@@ -3,10 +3,7 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "./auth-profiles.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -104,8 +101,7 @@ export function normalizeProviders(params: {
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
       normalizedProvider.apiKey &&
-      normalizeApiKeyConfig(normalizedProvider.apiKey) !==
-        normalizedProvider.apiKey
+      normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
     ) {
       mutated = true;
       normalizedProvider = {
@@ -117,8 +113,7 @@ export function normalizeProviders(params: {
     // If a provider defines models, pi's ModelRegistry requires apiKey to be set.
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
-      Array.isArray(normalizedProvider.models) &&
-      normalizedProvider.models.length > 0;
+      Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
     if (hasModels && !normalizedProvider.apiKey?.trim()) {
       const fromEnv = resolveEnvApiKeyVarName(normalizedKey);
       const fromProfiles = resolveApiKeyFromProfiles({
@@ -197,9 +192,7 @@ function buildSyntheticProvider(): ProviderConfig {
   };
 }
 
-export function resolveImplicitProviders(params: {
-  agentDir: string;
-}): ModelsConfig["providers"] {
+export function resolveImplicitProviders(params: { agentDir: string }): ModelsConfig["providers"] {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
@@ -235,8 +228,7 @@ export async function resolveImplicitCopilotProvider(params: {
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir);
-  const hasProfile =
-    listProfilesForProvider(authStore, "github-copilot").length > 0;
+  const hasProfile = listProfilesForProvider(authStore, "github-copilot").length > 0;
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 

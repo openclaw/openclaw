@@ -58,9 +58,7 @@ describe("cli program (nodes basics)", () => {
     const program = buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(["nodes", "list"], { from: "user" });
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "node.pair.list" }),
-    );
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
     expect(runtime.log).toHaveBeenCalledWith("Pending: 0 · Paired: 0");
   });
 
@@ -88,9 +86,7 @@ describe("cli program (nodes basics)", () => {
       expect.objectContaining({ method: "node.list", params: {} }),
     );
 
-    const output = runtime.log.mock.calls
-      .map((c) => String(c[0] ?? ""))
-      .join("\n");
+    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(output).toContain("Known: 1 · Paired: 1 · Connected: 1");
     expect(output).toContain("iOS Node");
     expect(output).toContain("device: iPad");
@@ -119,9 +115,7 @@ describe("cli program (nodes basics)", () => {
     runtime.log.mockClear();
     await program.parseAsync(["nodes", "status"], { from: "user" });
 
-    const output = runtime.log.mock.calls
-      .map((c) => String(c[0] ?? ""))
-      .join("\n");
+    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(output).toContain("Known: 1 · Paired: 0 · Connected: 1");
     expect(output).toContain("Peter's Tab S10 Ultra");
     expect(output).toContain("device: Android");
@@ -171,9 +165,7 @@ describe("cli program (nodes basics)", () => {
       }),
     );
 
-    const out = runtime.log.mock.calls
-      .map((c) => String(c[0] ?? ""))
-      .join("\n");
+    const out = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
     expect(out).toContain("Commands:");
     expect(out).toContain("canvas.eval");
   });

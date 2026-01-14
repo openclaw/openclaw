@@ -1,13 +1,7 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import {
-  getChannelPlugin,
-  listChannelPlugins,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChatChannelId } from "../channels/registry.js";
-import {
-  getChatChannelMeta,
-  normalizeChatChannelId,
-} from "../channels/registry.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -16,13 +10,7 @@ type ProviderAccountStatus = {
   provider: ChatChannelId;
   accountId: string;
   name?: string;
-  state:
-    | "linked"
-    | "not linked"
-    | "configured"
-    | "not configured"
-    | "enabled"
-    | "disabled";
+  state: "linked" | "not linked" | "configured" | "not configured" | "enabled" | "disabled";
   enabled?: boolean;
   configured?: boolean;
 };
@@ -70,8 +58,7 @@ export async function buildProviderStatusIndex(
         ? await plugin.config.isConfigured(account, cfg)
         : snapshot?.configured;
       const resolvedEnabled = typeof enabled === "boolean" ? enabled : true;
-      const resolvedConfigured =
-        typeof configured === "boolean" ? configured : true;
+      const resolvedConfigured = typeof configured === "boolean" ? configured : true;
       const state =
         plugin.status?.resolveAccountState?.({
           account,
@@ -101,19 +88,13 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(
-  cfg: ClawdbotConfig,
-  provider: ChatChannelId,
-): string {
+function resolveDefaultAccountId(cfg: ClawdbotConfig, provider: ChatChannelId): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) return DEFAULT_ACCOUNT_ID;
   return resolveChannelDefaultAccountId({ plugin, cfg });
 }
 
-function shouldShowProviderEntry(
-  entry: ProviderAccountStatus,
-  cfg: ClawdbotConfig,
-): boolean {
+function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: ClawdbotConfig): boolean {
   const plugin = getChannelPlugin(entry.provider);
   if (!plugin) return Boolean(entry.configured);
   if (plugin.meta.showConfigured === false) {
@@ -132,17 +113,13 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
-export function summarizeBindings(
-  cfg: ClawdbotConfig,
-  bindings: AgentBinding[],
-): string[] {
+export function summarizeBindings(cfg: ClawdbotConfig, bindings: AgentBinding[]): string[] {
   if (bindings.length === 0) return [];
   const seen = new Map<string, string>();
   for (const binding of bindings) {
     const channel = normalizeChatChannelId(binding.match.channel);
     if (!channel) continue;
-    const accountId =
-      binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
+    const accountId = binding.match.accountId ?? resolveDefaultAccountId(cfg, channel);
     const key = providerAccountKey(channel, accountId);
     if (!seen.has(key)) {
       const label = formatChannelAccountLabel({
@@ -168,8 +145,7 @@ export function listProvidersForAgent(params: {
     for (const binding of params.bindings) {
       const channel = normalizeChatChannelId(binding.match.channel);
       if (!channel) continue;
-      const accountId =
-        binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
+      const accountId = binding.match.accountId ?? resolveDefaultAccountId(params.cfg, channel);
       const key = providerAccountKey(channel, accountId);
       if (seen.has(key)) continue;
       seen.add(key);

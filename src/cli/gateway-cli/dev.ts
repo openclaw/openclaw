@@ -18,15 +18,9 @@ const DEV_TEMPLATE_DIR = path.resolve(
   "../../../docs/reference/templates",
 );
 
-async function loadDevTemplate(
-  name: string,
-  fallback: string,
-): Promise<string> {
+async function loadDevTemplate(name: string, fallback: string): Promise<string> {
   try {
-    const raw = await fs.promises.readFile(
-      path.join(DEV_TEMPLATE_DIR, name),
-      "utf-8",
-    );
+    const raw = await fs.promises.readFile(path.join(DEV_TEMPLATE_DIR, name), "utf-8");
     if (!raw.startsWith("---")) return raw;
     const endIndex = raw.indexOf("\n---", 3);
     if (endIndex === -1) return raw;
@@ -36,9 +30,7 @@ async function loadDevTemplate(
   }
 }
 
-const resolveDevWorkspaceDir = (
-  env: NodeJS.ProcessEnv = process.env,
-): string => {
+const resolveDevWorkspaceDir = (env: NodeJS.ProcessEnv = process.env): string => {
   const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
   const profile = env.CLAWDBOT_PROFILE?.trim().toLowerCase();
   if (profile === "dev") return baseDir;

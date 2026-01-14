@@ -29,9 +29,7 @@ describe("legacy config detection", () => {
     const res = migrateLegacyConfig({
       routing: { allowFrom: ["+15555550123"] },
     });
-    expect(res.changes).toContain(
-      "Moved routing.allowFrom → channels.whatsapp.allowFrom.",
-    );
+    expect(res.changes).toContain("Moved routing.allowFrom → channels.whatsapp.allowFrom.");
     expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(res.config?.routing?.allowFrom).toBeUndefined();
   });
@@ -50,15 +48,9 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain(
       'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
     );
-    expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention).toBe(
-      false,
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
-      false,
-    );
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(
-      false,
-    );
+    expect(res.config?.channels?.whatsapp?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
   });
   it("migrates routing.groupChat.mentionPatterns to messages.groupChat.mentionPatterns", async () => {
@@ -70,9 +62,7 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain(
       "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
     );
-    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual([
-      "@clawd",
-    ]);
+    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@clawd"]);
     expect(res.config?.routing?.groupChat?.mentionPatterns).toBeUndefined();
   });
   it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/audio", async () => {
@@ -88,13 +78,9 @@ describe("legacy config detection", () => {
         },
       },
     });
-    expect(res.changes).toContain(
-      "Moved routing.agentToAgent → tools.agentToAgent.",
-    );
+    expect(res.changes).toContain("Moved routing.agentToAgent → tools.agentToAgent.");
     expect(res.changes).toContain("Moved routing.queue → messages.queue.");
-    expect(res.changes).toContain(
-      "Moved routing.transcribeAudio → tools.audio.transcription.",
-    );
+    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.audio.transcription.");
     expect(res.config?.tools?.agentToAgent).toEqual({
       enabled: true,
       allow: ["main"],
@@ -126,12 +112,8 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain("Moved agent.tools.deny → tools.deny.");
     expect(res.changes).toContain("Moved agent.elevated → tools.elevated.");
     expect(res.changes).toContain("Moved agent.bash → tools.exec.");
-    expect(res.changes).toContain(
-      "Moved agent.sandbox.tools → tools.sandbox.tools.",
-    );
-    expect(res.changes).toContain(
-      "Moved agent.subagents.tools → tools.subagents.tools.",
-    );
+    expect(res.changes).toContain("Moved agent.sandbox.tools → tools.sandbox.tools.");
+    expect(res.changes).toContain("Moved agent.subagents.tools → tools.subagents.tools.");
     expect(res.changes).toContain("Moved agent → agents.defaults.");
     expect(res.config?.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.2",
@@ -192,9 +174,7 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.path === "telegram.requireMention"),
-      ).toBe(true);
+      expect(res.issues.some((issue) => issue.path === "telegram.requireMention")).toBe(true);
     }
   });
   it("rejects gateway.token", async () => {
@@ -226,12 +206,8 @@ describe("legacy config detection", () => {
       gateway: { bind: "tailnet" as const },
       bridge: { bind: "tailnet" as const },
     });
-    expect(res.changes).toContain(
-      "Migrated gateway.bind from 'tailnet' to 'auto'.",
-    );
-    expect(res.changes).toContain(
-      "Migrated bridge.bind from 'tailnet' to 'auto'.",
-    );
+    expect(res.changes).toContain("Migrated gateway.bind from 'tailnet' to 'auto'.");
+    expect(res.changes).toContain("Migrated bridge.bind from 'tailnet' to 'auto'.");
     expect(res.config?.gateway?.bind).toBe("auto");
     expect(res.config?.bridge?.bind).toBe("auto");
   });
@@ -384,13 +360,9 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.channels?.whatsapp?.historyLimit).toBe(9);
-      expect(res.config.channels?.whatsapp?.accounts?.work?.historyLimit).toBe(
-        4,
-      );
+      expect(res.config.channels?.whatsapp?.accounts?.work?.historyLimit).toBe(4);
       expect(res.config.channels?.telegram?.historyLimit).toBe(8);
-      expect(res.config.channels?.telegram?.accounts?.ops?.historyLimit).toBe(
-        3,
-      );
+      expect(res.config.channels?.telegram?.accounts?.ops?.historyLimit).toBe(3);
       expect(res.config.channels?.slack?.historyLimit).toBe(7);
       expect(res.config.channels?.slack?.accounts?.ops?.historyLimit).toBe(2);
       expect(res.config.channels?.signal?.historyLimit).toBe(6);

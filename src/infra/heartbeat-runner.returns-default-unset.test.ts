@@ -217,10 +217,7 @@ describe("runHeartbeatOnce", () => {
         session: { store: storePath },
       };
 
-      replySpy.mockResolvedValue([
-        { text: "Let me check..." },
-        { text: "Final alert" },
-      ]);
+      replySpy.mockResolvedValue([{ text: "Let me check..." }, { text: "Final alert" }]);
       const sendWhatsApp = vi.fn().mockResolvedValue({
         messageId: "m1",
         toJid: "jid",
@@ -238,11 +235,7 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith(
-        "+1555",
-        "Final alert",
-        expect.any(Object),
-      );
+      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Final alert", expect.any(Object));
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -312,12 +305,7 @@ describe("runHeartbeatOnce", () => {
         "Reasoning:\n_Because it helps_",
         expect.any(Object),
       );
-      expect(sendWhatsApp).toHaveBeenNthCalledWith(
-        2,
-        "+1555",
-        "Final alert",
-        expect.any(Object),
-      );
+      expect(sendWhatsApp).toHaveBeenNthCalledWith(2, "+1555", "Final alert", expect.any(Object));
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -395,12 +383,7 @@ describe("runHeartbeatOnce", () => {
 
   it("loads the default agent session from templated stores", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
-    const storeTemplate = path.join(
-      tmpDir,
-      "agents",
-      "{agentId}",
-      "sessions.json",
-    );
+    const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {

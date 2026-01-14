@@ -1,10 +1,6 @@
 import type { TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
-import {
-  asString,
-  extractTextFromMessage,
-  resolveFinalAssistantText,
-} from "./tui-formatters.js";
+import { asString, extractTextFromMessage, resolveFinalAssistantText } from "./tui-formatters.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerContext = {

@@ -18,10 +18,7 @@ function createDeferred<T>() {
   };
 }
 
-async function waitForCalls(
-  mockFn: { mock: { calls: unknown[][] } },
-  count: number,
-) {
+async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: number) {
   for (let i = 0; i < 50; i += 1) {
     if (mockFn.mock.calls.length >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -30,8 +27,7 @@ async function waitForCalls(
 }
 
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) =>
-    runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
 describe("runClaudeCliAgent", () => {

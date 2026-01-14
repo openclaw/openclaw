@@ -42,11 +42,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   const stream = options.stream ?? process.stderr;
   if (!stream.isTTY) return noopReporter;
 
-  const delayMs =
-    typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
+  const delayMs = typeof options.delayMs === "number" ? options.delayMs : DEFAULT_DELAY_MS;
   const canOsc = supportsOscProgress(process.env, stream.isTTY);
-  const allowSpinner =
-    options.fallback === undefined || options.fallback === "spinner";
+  const allowSpinner = options.fallback === undefined || options.fallback === "spinner";
 
   let started = false;
   let label = options.label;
@@ -54,8 +52,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   let completed = 0;
   let percent = 0;
   let indeterminate =
-    options.indeterminate ??
-    (options.total === undefined || options.total === null);
+    options.indeterminate ?? (options.total === undefined || options.total === null);
 
   activeProgress += 1;
 
@@ -145,10 +142,7 @@ export async function withProgress<T>(
 
 export async function withProgressTotals<T>(
   options: ProgressOptions,
-  work: (
-    update: (update: ProgressTotalsUpdate) => void,
-    progress: ProgressReporter,
-  ) => Promise<T>,
+  work: (update: (update: ProgressTotalsUpdate) => void, progress: ProgressReporter) => Promise<T>,
 ): Promise<T> {
   return await withProgress(options, async (progress) => {
     const update = ({ completed, total, label }: ProgressTotalsUpdate) => {

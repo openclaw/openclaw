@@ -92,10 +92,7 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-function resolveDetailFromKeys(
-  args: unknown,
-  keys: string[],
-): string | undefined {
+function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
     const display = coerceDisplayValue(value);
@@ -157,8 +154,7 @@ export function resolveToolDisplay(params: {
     detail = resolveWriteDetail(params.args);
   }
 
-  const detailKeys =
-    actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
+  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
     detail = resolveDetailFromKeys(params.args, detailKeys);
   }

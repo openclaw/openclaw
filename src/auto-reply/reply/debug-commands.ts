@@ -24,8 +24,7 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
     case "reset":
       return { action: "reset" };
     case "unset": {
-      if (!args)
-        return { action: "error", message: "Usage: /debug unset path" };
+      if (!args) return { action: "error", message: "Usage: /debug unset path" };
       return { action: "unset", path: args };
     }
     case "set": {

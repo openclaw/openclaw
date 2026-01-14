@@ -35,9 +35,7 @@ describe("nodes camera_snap", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find(
-      (candidate) => candidate.name === "nodes",
-    );
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     const result = await tool.execute("call1", {
@@ -46,9 +44,7 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    const images = (result.content ?? []).filter(
-      (block) => block.type === "image",
-    );
+    const images = (result.content ?? []).filter((block) => block.type === "image");
     expect(images).toHaveLength(1);
     expect(images[0]?.mimeType).toBe("image/jpeg");
   });
@@ -75,9 +71,7 @@ describe("nodes camera_snap", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find(
-      (candidate) => candidate.name === "nodes",
-    );
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     await tool.execute("call1", {
@@ -118,9 +112,7 @@ describe("nodes run", () => {
       throw new Error(`unexpected method: ${String(method)}`);
     });
 
-    const tool = createClawdbotTools().find(
-      (candidate) => candidate.name === "nodes",
-    );
+    const tool = createClawdbotTools().find((candidate) => candidate.name === "nodes");
     if (!tool) throw new Error("missing nodes tool");
 
     await tool.execute("call1", {

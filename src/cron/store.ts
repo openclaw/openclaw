@@ -12,8 +12,7 @@ export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
-    if (raw.startsWith("~"))
-      return path.resolve(raw.replace("~", os.homedir()));
+    if (raw.startsWith("~")) return path.resolve(raw.replace("~", os.homedir()));
     return path.resolve(raw);
   }
   return DEFAULT_CRON_STORE_PATH;

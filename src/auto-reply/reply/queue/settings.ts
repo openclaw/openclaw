@@ -1,22 +1,12 @@
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import {
-  DEFAULT_QUEUE_CAP,
-  DEFAULT_QUEUE_DEBOUNCE_MS,
-  DEFAULT_QUEUE_DROP,
-} from "./state.js";
-import type {
-  QueueMode,
-  QueueSettings,
-  ResolveQueueSettingsParams,
-} from "./types.js";
+import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
+import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
 function defaultQueueModeForChannel(_channel?: string): QueueMode {
   return "collect";
 }
 
-export function resolveQueueSettings(
-  params: ResolveQueueSettingsParams,
-): QueueSettings {
+export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = params.channel?.trim().toLowerCase();
   const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =
@@ -46,10 +36,8 @@ export function resolveQueueSettings(
     DEFAULT_QUEUE_DROP;
   return {
     mode: resolvedMode,
-    debounceMs:
-      typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
-    cap:
-      typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
+    debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
+    cap: typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
     dropPolicy: dropRaw,
   };
 }

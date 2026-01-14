@@ -4,9 +4,7 @@ import { resolveFinalAssistantText } from "./tui.js";
 
 describe("resolveFinalAssistantText", () => {
   it("falls back to streamed text when final text is empty", () => {
-    expect(
-      resolveFinalAssistantText({ finalText: "", streamedText: "Hello" }),
-    ).toBe("Hello");
+    expect(resolveFinalAssistantText({ finalText: "", streamedText: "Hello" })).toBe("Hello");
   });
 
   it("prefers the final text when present", () => {

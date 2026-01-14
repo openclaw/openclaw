@@ -58,8 +58,7 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
-        const reasoning =
-          typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         models.push({ id, name, provider, contextWindow, reasoning });
       }
 

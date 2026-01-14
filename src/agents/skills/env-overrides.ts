@@ -3,10 +3,7 @@ import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
 
-export function applySkillEnvOverrides(params: {
-  skills: SkillEntry[];
-  config?: ClawdbotConfig;
-}) {
+export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: ClawdbotConfig }) {
   const { skills, config } = params;
   const updates: Array<{ key: string; prev: string | undefined }> = [];
 
@@ -58,11 +55,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       }
     }
 
-    if (
-      skill.primaryEnv &&
-      skillConfig.apiKey &&
-      !process.env[skill.primaryEnv]
-    ) {
+    if (skill.primaryEnv && skillConfig.apiKey && !process.env[skill.primaryEnv]) {
       updates.push({
         key: skill.primaryEnv,
         prev: process.env[skill.primaryEnv],

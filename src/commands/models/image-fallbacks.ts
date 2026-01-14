@@ -1,7 +1,4 @@
-import {
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -37,10 +34,7 @@ export async function modelsImageFallbacksListCommand(
   for (const entry of fallbacks) runtime.log(`- ${entry}`);
 }
 
-export async function modelsImageFallbacksAddCommand(
-  modelRaw: string,
-  runtime: RuntimeEnv,
-) {
+export async function modelsImageFallbacksAddCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
@@ -75,9 +69,7 @@ export async function modelsImageFallbacksAddCommand(
         defaults: {
           ...cfg.agents?.defaults,
           imageModel: {
-            ...(existingModel?.primary
-              ? { primary: existingModel.primary }
-              : undefined),
+            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
             fallbacks: [...existing, targetKey],
           },
           models: nextModels,
@@ -92,10 +84,7 @@ export async function modelsImageFallbacksAddCommand(
   );
 }
 
-export async function modelsImageFallbacksRemoveCommand(
-  modelRaw: string,
-  runtime: RuntimeEnv,
-) {
+export async function modelsImageFallbacksRemoveCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
@@ -111,10 +100,7 @@ export async function modelsImageFallbacksRemoveCommand(
         aliasIndex,
       });
       if (!resolvedEntry) return true;
-      return (
-        modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !==
-        targetKey
-      );
+      return modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !== targetKey;
     });
 
     if (filtered.length === existing.length) {
@@ -132,9 +118,7 @@ export async function modelsImageFallbacksRemoveCommand(
         defaults: {
           ...cfg.agents?.defaults,
           imageModel: {
-            ...(existingModel?.primary
-              ? { primary: existingModel.primary }
-              : undefined),
+            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
             fallbacks: filtered,
           },
         },
@@ -160,9 +144,7 @@ export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
         defaults: {
           ...cfg.agents?.defaults,
           imageModel: {
-            ...(existingModel?.primary
-              ? { primary: existingModel.primary }
-              : undefined),
+            ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
             fallbacks: [],
           },
         },

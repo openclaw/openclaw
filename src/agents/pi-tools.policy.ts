@@ -1,8 +1,5 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  resolveAgentConfig,
-  resolveAgentIdFromSessionKey,
-} from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
@@ -14,9 +11,7 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "sessions_spawn",
 ];
 
-export function resolveSubagentToolPolicy(
-  cfg?: ClawdbotConfig,
-): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const deny = [
     ...DEFAULT_SUBAGENT_TOOL_DENY,
@@ -26,10 +21,7 @@ export function resolveSubagentToolPolicy(
   return { allow, deny };
 }
 
-export function isToolAllowedByPolicyName(
-  name: string,
-  policy?: SandboxToolPolicy,
-): boolean {
+export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
   if (!policy) return true;
   const deny = new Set(expandToolGroups(policy.deny));
   const allowRaw = expandToolGroups(policy.allow);
@@ -44,10 +36,7 @@ export function isToolAllowedByPolicyName(
   return true;
 }
 
-export function filterToolsByPolicy(
-  tools: AnyAgentTool[],
-  policy?: SandboxToolPolicy,
-) {
+export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
   if (!policy) return tools;
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
@@ -56,13 +45,9 @@ export function resolveEffectiveToolPolicy(params: {
   config?: ClawdbotConfig;
   sessionKey?: string;
 }) {
-  const agentId = params.sessionKey
-    ? resolveAgentIdFromSessionKey(params.sessionKey)
-    : undefined;
+  const agentId = params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined;
   const agentConfig =
-    params.config && agentId
-      ? resolveAgentConfig(params.config, agentId)
-      : undefined;
+    params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
   const agentTools = agentConfig?.tools;
   const hasAgentToolPolicy =
     Array.isArray(agentTools?.allow) ||

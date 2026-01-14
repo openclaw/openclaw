@@ -44,9 +44,7 @@ describe("buildGatewayReloadPlan", () => {
       listChannelPlugins()
         .filter((plugin) =>
           (plugin.reload?.configPrefixes ?? []).some((prefix) =>
-            changedPaths.some(
-              (path) => path === prefix || path.startsWith(`${prefix}.`),
-            ),
+            changedPaths.some((path) => path === prefix || path.startsWith(`${prefix}.`)),
           ),
         )
         .map((plugin) => plugin.id),

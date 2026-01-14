@@ -62,9 +62,7 @@ export function parseHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(
-      `${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`,
-    );
+    throw new Error(`${label} must be http(s), got: ${parsed.protocol.replace(":", "")}`);
   }
 
   const port =
@@ -104,9 +102,7 @@ function ensureDefaultProfile(
   }
   return result;
 }
-export function resolveBrowserConfig(
-  cfg: BrowserConfig | undefined,
-): ResolvedBrowserConfig {
+export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_CLAWD_BROWSER_ENABLED;
   const envControlUrl = process.env.CLAWDBOT_BROWSER_CONTROL_URL?.trim();
   const derivedControlPort = (() => {
@@ -116,15 +112,10 @@ export function resolveBrowserConfig(
     if (!Number.isFinite(gatewayPort) || gatewayPort <= 0) return null;
     return deriveDefaultBrowserControlPort(gatewayPort);
   })();
-  const derivedControlUrl = derivedControlPort
-    ? `http://127.0.0.1:${derivedControlPort}`
-    : null;
+  const derivedControlUrl = derivedControlPort ? `http://127.0.0.1:${derivedControlPort}` : null;
 
   const controlInfo = parseHttpUrl(
-    cfg?.controlUrl ??
-      envControlUrl ??
-      derivedControlUrl ??
-      DEFAULT_CLAWD_BROWSER_CONTROL_URL,
+    cfg?.controlUrl ?? envControlUrl ?? derivedControlUrl ?? DEFAULT_CLAWD_BROWSER_CONTROL_URL,
     "browser.controlUrl",
   );
   const controlPort = controlInfo.port;
@@ -163,8 +154,7 @@ export function resolveBrowserConfig(
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
-  const defaultProfile =
-    cfg?.defaultProfile ?? DEFAULT_CLAWD_BROWSER_PROFILE_NAME;
+  const defaultProfile = cfg?.defaultProfile ?? DEFAULT_CLAWD_BROWSER_PROFILE_NAME;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const profiles = ensureDefaultProfile(
@@ -210,10 +200,7 @@ export function resolveProfile(
   let cdpUrl = "";
 
   if (rawProfileUrl) {
-    const parsed = parseHttpUrl(
-      rawProfileUrl,
-      `browser.profiles.${profileName}.cdpUrl`,
-    );
+    const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;
     cdpUrl = parsed.normalized;

@@ -57,12 +57,10 @@ export async function monitorMSTeamsProvider(
   const MB = 1024 * 1024;
   const agentDefaults = cfg.agents?.defaults;
   const mediaMaxBytes =
-    typeof agentDefaults?.mediaMaxMb === "number" &&
-    agentDefaults.mediaMaxMb > 0
+    typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
       ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
-  const conversationStore =
-    opts.conversationStore ?? createMSTeamsConversationStoreFs();
+  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreFs();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
 
   log.info(`starting provider (port ${port})`);
@@ -100,9 +98,7 @@ export async function monitorMSTeamsProvider(
   const messageHandler = (req: Request, res: Response) => {
     type HandlerContext = Parameters<(typeof handler)["run"]>[0];
     void adapter
-      .process(req, res, (context: unknown) =>
-        handler.run(context as HandlerContext),
-      )
+      .process(req, res, (context: unknown) => handler.run(context as HandlerContext))
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });

@@ -51,8 +51,7 @@ export function collectTelegramUnmentionedGroupIds(
     };
   }
   const hasWildcardUnmentionedGroups =
-    Boolean(groups["*"]?.requireMention === false) &&
-    groups["*"]?.enabled !== false;
+    Boolean(groups["*"]?.requireMention === false) && groups["*"]?.enabled !== false;
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
@@ -100,14 +99,10 @@ export async function auditTelegramGroupMembership(params: {
     try {
       const url = `${base}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(String(params.botId))}`;
       const res = await fetchWithTimeout(url, params.timeoutMs, fetcher);
-      const json = (await res.json()) as
-        | TelegramApiOk<{ status?: string }>
-        | TelegramApiErr;
+      const json = (await res.json()) as TelegramApiOk<{ status?: string }> | TelegramApiErr;
       if (!res.ok || !isRecord(json) || json.ok !== true) {
         const desc =
-          isRecord(json) &&
-          json.ok === false &&
-          typeof json.description === "string"
+          isRecord(json) && json.ok === false && typeof json.description === "string"
             ? json.description
             : `getChatMember failed (${res.status})`;
         groups.push({ chatId, ok: false, status: null, error: desc });
@@ -116,10 +111,7 @@ export async function auditTelegramGroupMembership(params: {
       const status = isRecord((json as TelegramApiOk<unknown>).result)
         ? ((json as TelegramApiOk<{ status?: string }>).result.status ?? null)
         : null;
-      const ok =
-        status === "creator" ||
-        status === "administrator" ||
-        status === "member";
+      const ok = status === "creator" || status === "administrator" || status === "member";
       groups.push({
         chatId,
         ok,

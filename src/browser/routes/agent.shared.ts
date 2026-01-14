@@ -19,11 +19,7 @@ export function readBody(req: express.Request): Record<string, unknown> {
   return body;
 }
 
-export function handleRouteError(
-  ctx: BrowserRouteContext,
-  res: express.Response,
-  err: unknown,
-) {
+export function handleRouteError(ctx: BrowserRouteContext, res: express.Response, err: unknown) {
   const mapped = ctx.mapTabError(err);
   if (mapped) return jsonError(res, mapped.status, mapped.message);
   jsonError(res, 500, String(err));

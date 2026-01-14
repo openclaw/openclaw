@@ -11,10 +11,7 @@ import {
 } from "./auth-profiles.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-export {
-  ensureAuthProfileStore,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
+export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
 export function getCustomProviderApiKey(
   cfg: ClawdbotConfig | undefined,
@@ -109,16 +106,12 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = process.env[envVar]?.trim();
     if (!value) return null;
-    const source = applied.has(envVar)
-      ? `shell env: ${envVar}`
-      : `env: ${envVar}`;
+    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
     return { apiKey: value, source };
   };
 
   if (normalized === "github-copilot") {
-    return (
-      pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN")
-    );
+    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
   }
 
   if (normalized === "anthropic") {

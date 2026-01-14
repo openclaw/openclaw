@@ -4,10 +4,7 @@ import { resolveTargetIdFromTabs } from "./target-id.js";
 
 describe("browser target id resolution", () => {
   it("resolves exact ids", () => {
-    const res = resolveTargetIdFromTabs("FULL", [
-      { targetId: "AAA" },
-      { targetId: "FULL" },
-    ]);
+    const res = resolveTargetIdFromTabs("FULL", [{ targetId: "AAA" }, { targetId: "FULL" }]);
     expect(res).toEqual({ ok: true, targetId: "FULL" });
   });
 

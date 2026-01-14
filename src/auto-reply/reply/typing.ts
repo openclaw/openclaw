@@ -70,9 +70,7 @@ export function createTypingController(params: {
     }
     typingTtlTimer = setTimeout(() => {
       if (!typingTimer) return;
-      log?.(
-        `typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`,
-      );
+      log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
       cleanup();
     }, typingTtlMs);
   };

@@ -11,9 +11,7 @@ const readAllowFromStoreMock = vi.fn();
 const upsertPairingRequestMock = vi.fn();
 
 let config: Record<string, unknown> = {};
-let notificationHandler:
-  | ((msg: { method: string; params?: unknown }) => void)
-  | undefined;
+let notificationHandler: ((msg: { method: string; params?: unknown }) => void) | undefined;
 let closeResolve: (() => void) | undefined;
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -33,10 +31,8 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -45,27 +41,24 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("./client.js", () => ({
-  createIMessageRpcClient: vi.fn(
-    async (opts: { onNotification?: typeof notificationHandler }) => {
-      notificationHandler = opts.onNotification;
-      return {
-        request: (...args: unknown[]) => requestMock(...args),
-        waitForClose: () =>
-          new Promise<void>((resolve) => {
-            closeResolve = resolve;
-          }),
-        stop: (...args: unknown[]) => stopMock(...args),
-      };
-    },
-  ),
+  createIMessageRpcClient: vi.fn(async (opts: { onNotification?: typeof notificationHandler }) => {
+    notificationHandler = opts.onNotification;
+    return {
+      request: (...args: unknown[]) => requestMock(...args),
+      waitForClose: () =>
+        new Promise<void>((resolve) => {
+          closeResolve = resolve;
+        }),
+      stop: (...args: unknown[]) => stopMock(...args),
+    };
+  }),
 }));
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForSubscribe() {
   for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe"))
-      return;
+    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) return;
     await flush();
   }
 }
@@ -85,8 +78,7 @@ beforeEach(() => {
     },
   };
   requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe")
-      return Promise.resolve({ subscription: 1 });
+    if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });
     return Promise.resolve({});
   });
   stopMock.mockReset().mockResolvedValue(undefined);
@@ -94,9 +86,7 @@ beforeEach(() => {
   replyMock.mockReset().mockResolvedValue({ text: "ok" });
   updateLastRouteMock.mockReset();
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock
-    .mockReset()
-    .mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
   notificationHandler = undefined;
   closeResolve = undefined;
 });
@@ -356,9 +346,7 @@ describe("monitorIMessageProvider", () => {
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
       "Your iMessage sender id: +15550001111",
     );
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
-      "Pairing code: PAIRCODE",
-    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   });
 
   it("delivers group replies when mentioned", async () => {

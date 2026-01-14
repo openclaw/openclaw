@@ -1,18 +1,9 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import {
-  isRemoteEnvironment,
-  loginAntigravityVpsAware,
-} from "./antigravity-oauth.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
+import { isRemoteEnvironment, loginAntigravityVpsAware } from "./antigravity-oauth.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import {
-  applyAuthProfileConfig,
-  writeOAuthCredentials,
-} from "./onboard-auth.js";
+import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 
 export async function applyAuthChoiceOAuth(
@@ -22,10 +13,8 @@ export async function applyAuthChoiceOAuth(
     let nextConfig = params.config;
     const isRemote = isRemoteEnvironment();
     const redirectUri =
-      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() ||
-      "http://127.0.0.1:1456/oauth-callback";
-    const scopes =
-      process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
+      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() || "http://127.0.0.1:1456/oauth-callback";
+    const scopes = process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
     const clientId =
       process.env.CHUTES_CLIENT_ID?.trim() ||
       String(
@@ -138,9 +127,7 @@ export async function applyAuthChoiceOAuth(
         async (url) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
-            params.runtime.log(
-              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
-            );
+            params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
           } else {
             spin.update("Complete sign-in in browser…");
             await openUrl(url);
@@ -151,11 +138,7 @@ export async function applyAuthChoiceOAuth(
       );
       spin.stop("Antigravity OAuth complete");
       if (oauthCreds) {
-        await writeOAuthCredentials(
-          "google-antigravity",
-          oauthCreds,
-          params.agentDir,
-        );
+        await writeOAuthCredentials("google-antigravity", oauthCreds, params.agentDir);
         nextConfig = applyAuthProfileConfig(nextConfig, {
           profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
           provider: "google-antigravity",
@@ -170,8 +153,7 @@ export async function applyAuthChoiceOAuth(
               ...nextConfig.agents?.defaults,
               models: {
                 ...nextConfig.agents?.defaults?.models,
-                [modelKey]:
-                  nextConfig.agents?.defaults?.models?.[modelKey] ?? {},
+                [modelKey]: nextConfig.agents?.defaults?.models?.[modelKey] ?? {},
               },
             },
           },
@@ -185,11 +167,9 @@ export async function applyAuthChoiceOAuth(
               defaults: {
                 ...nextConfig.agents?.defaults,
                 model: {
-                  ...(existingModel &&
-                  "fallbacks" in (existingModel as Record<string, unknown>)
+                  ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
                     ? {
-                        fallbacks: (existingModel as { fallbacks?: string[] })
-                          .fallbacks,
+                        fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
                       }
                     : undefined),
                   primary: modelKey,
@@ -197,10 +177,7 @@ export async function applyAuthChoiceOAuth(
               },
             },
           };
-          await params.prompter.note(
-            `Default model set to ${modelKey}`,
-            "Model configured",
-          );
+          await params.prompter.note(`Default model set to ${modelKey}`, "Model configured");
         } else {
           agentModelOverride = modelKey;
           await noteAgentModel(modelKey);

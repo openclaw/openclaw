@@ -3,9 +3,7 @@ import type { AgentModelListConfig } from "../config/types.js";
 
 export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3-pro-preview";
 
-function resolvePrimaryModel(
-  model?: AgentModelListConfig | string,
-): string | undefined {
+function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
   if (typeof model === "string") return model;
   if (model && typeof model === "object" && typeof model.primary === "string") {
     return model.primary;
@@ -30,8 +28,7 @@ export function applyGoogleGeminiModelDefault(cfg: ClawdbotConfig): {
         defaults: {
           ...cfg.agents?.defaults,
           model:
-            cfg.agents?.defaults?.model &&
-            typeof cfg.agents.defaults.model === "object"
+            cfg.agents?.defaults?.model && typeof cfg.agents.defaults.model === "object"
               ? {
                   ...cfg.agents.defaults.model,
                   primary: GOOGLE_GEMINI_DEFAULT_MODEL,

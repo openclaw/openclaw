@@ -106,20 +106,18 @@ const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(
-    async (_resolved: unknown, profile: { cdpPort: number }) => {
-      launchCalls.push({ port: profile.cdpPort });
-      reachable = true;
-      return {
-        pid: 123,
-        exe: { kind: "chrome", path: "/fake/chrome" },
-        userDataDir: "/tmp/clawd",
-        cdpPort: profile.cdpPort,
-        startedAt: Date.now(),
-        proc,
-      };
-    },
-  ),
+  launchClawdChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
+    launchCalls.push({ port: profile.cdpPort });
+    reachable = true;
+    return {
+      pid: 123,
+      exe: { kind: "chrome", path: "/fake/chrome" },
+      userDataDir: "/tmp/clawd",
+      cdpPort: profile.cdpPort,
+      startedAt: Date.now(),
+      proc,
+    };
+  }),
   resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;
@@ -253,9 +251,10 @@ describe("browser control server", () => {
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
 
-    const tabsWhenStopped = (await realFetch(`${base}/tabs`).then((r) =>
-      r.json(),
-    )) as { running: boolean; tabs: unknown[] };
+    const tabsWhenStopped = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
     expect(tabsWhenStopped.running).toBe(false);
     expect(Array.isArray(tabsWhenStopped.tabs)).toBe(true);
 
@@ -280,9 +279,7 @@ describe("browser control server", () => {
     });
     expect(delAmbiguous.status).toBe(409);
 
-    const snapAmbiguous = await realFetch(
-      `${base}/snapshot?format=aria&targetId=abc`,
-    );
+    const snapAmbiguous = await realFetch(`${base}/snapshot?format=aria&targetId=abc`);
     expect(snapAmbiguous.status).toBe(409);
   });
 });
@@ -357,9 +354,10 @@ describe("backward compatibility (profile parameter)", () => {
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
 
-    const result = (await realFetch(`${base}/start`, { method: "POST" }).then(
-      (r) => r.json(),
-    )) as { ok: boolean; profile?: string };
+    const result = (await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      profile?: string;
+    };
     expect(result.ok).toBe(true);
     expect(result.profile).toBe("clawd");
   });
@@ -371,9 +369,10 @@ describe("backward compatibility (profile parameter)", () => {
 
     await realFetch(`${base}/start`, { method: "POST" });
 
-    const result = (await realFetch(`${base}/stop`, { method: "POST" }).then(
-      (r) => r.json(),
-    )) as { ok: boolean; profile?: string };
+    const result = (await realFetch(`${base}/stop`, { method: "POST" }).then((r) => r.json())) as {
+      ok: boolean;
+      profile?: string;
+    };
     expect(result.ok).toBe(true);
     expect(result.profile).toBe("clawd");
   });
@@ -413,9 +412,9 @@ describe("backward compatibility (profile parameter)", () => {
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
 
-    const result = (await realFetch(`${base}/profiles`).then((r) =>
-      r.json(),
-    )) as { profiles: Array<{ name: string }> };
+    const result = (await realFetch(`${base}/profiles`).then((r) => r.json())) as {
+      profiles: Array<{ name: string }>;
+    };
     expect(Array.isArray(result.profiles)).toBe(true);
     // Should at least have the default clawd profile
     expect(result.profiles.some((p) => p.name === "clawd")).toBe(true);
@@ -428,9 +427,10 @@ describe("backward compatibility (profile parameter)", () => {
 
     await realFetch(`${base}/start`, { method: "POST" });
 
-    const result = (await realFetch(`${base}/tabs?profile=clawd`).then((r) =>
-      r.json(),
-    )) as { running: boolean; tabs: unknown[] };
+    const result = (await realFetch(`${base}/tabs?profile=clawd`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
     expect(result.running).toBe(true);
     expect(Array.isArray(result.tabs)).toBe(true);
   });

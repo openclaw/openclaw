@@ -5,9 +5,7 @@ import { ensureClawdbotModelsJson } from "./models-config.js";
 import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -119,9 +117,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config),
-    ).toBe(3);
+    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config)).toBe(3);
   });
   it("handles userId with colons (e.g., email)", () => {
     const config = {
@@ -132,9 +128,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config),
-    ).toBe(7);
+    expect(getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config)).toBe(7);
   });
   it("returns undefined when per-DM historyLimit is not set", () => {
     const config = {
@@ -144,9 +138,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         },
       },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
-    ).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
   });
   it("returns 0 when per-DM historyLimit is explicitly 0 (unlimited)", () => {
     const config = {

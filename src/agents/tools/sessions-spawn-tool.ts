@@ -68,14 +68,12 @@ export function createSessionsSpawnTool(opts?: {
           : "keep";
       const runTimeoutSeconds = (() => {
         const explicit =
-          typeof params.runTimeoutSeconds === "number" &&
-          Number.isFinite(params.runTimeoutSeconds)
+          typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
             ? Math.max(0, Math.floor(params.runTimeoutSeconds))
             : undefined;
         if (explicit !== undefined) return explicit;
         const legacy =
-          typeof params.timeoutSeconds === "number" &&
-          Number.isFinite(params.timeoutSeconds)
+          typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
             ? Math.max(0, Math.floor(params.timeoutSeconds))
             : undefined;
         return legacy ?? 0;
@@ -86,10 +84,7 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
-      if (
-        typeof requesterSessionKey === "string" &&
-        isSubagentSessionKey(requesterSessionKey)
-      ) {
+      if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
         return jsonResult({
           status: "forbidden",
           error: "sessions_spawn is not allowed from sub-agent sessions",
@@ -115,9 +110,7 @@ export function createSessionsSpawnTool(opts?: {
         ? normalizeAgentId(requestedAgentId)
         : requesterAgentId;
       if (targetAgentId !== requesterAgentId) {
-        const allowAgents =
-          resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-          [];
+        const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
         const allowAny = allowAgents.some((value) => value.trim() === "*");
         const normalizedTargetId = targetAgentId.toLowerCase();
         const allowSet = new Set(
@@ -154,14 +147,9 @@ export function createSessionsSpawnTool(opts?: {
           modelApplied = true;
         } catch (err) {
           const messageText =
-            err instanceof Error
-              ? err.message
-              : typeof err === "string"
-                ? err
-                : "error";
+            err instanceof Error ? err.message : typeof err === "string" ? err : "error";
           const recoverable =
-            messageText.includes("invalid model") ||
-            messageText.includes("model not allowed");
+            messageText.includes("invalid model") || messageText.includes("model not allowed");
           if (!recoverable) {
             return jsonResult({
               status: "error",
@@ -204,11 +192,7 @@ export function createSessionsSpawnTool(opts?: {
         }
       } catch (err) {
         const messageText =
-          err instanceof Error
-            ? err.message
-            : typeof err === "string"
-              ? err
-              : "error";
+          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
         return jsonResult({
           status: "error",
           error: messageText,

@@ -3,10 +3,7 @@ import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js"
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxRuntimeStatus,
-} from "../../agents/sandbox.js";
+import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -18,10 +15,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
-import {
-  buildThreadingToolContext,
-  resolveEnforceFinalTag,
-} from "./agent-runner-utils.js";
+import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushSettings,
@@ -54,10 +48,7 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: params.sessionKey,
     });
     if (!runtime.sandboxed) return true;
-    const sandboxCfg = resolveSandboxConfigForAgent(
-      params.cfg,
-      runtime.agentId,
-    );
+    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
@@ -69,9 +60,7 @@ export async function runMemoryFlushIfNeeded(params: {
     shouldRunMemoryFlush({
       entry:
         params.sessionEntry ??
-        (params.sessionKey
-          ? params.sessionStore?.[params.sessionKey]
-          : undefined),
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
       contextWindowTokens: resolveMemoryFlushContextWindowTokens({
         modelId: params.followupRun.run.model ?? params.defaultModel,
         agentCfgContextTokens: params.agentCfgContextTokens,
@@ -111,8 +100,7 @@ export async function runMemoryFlushIfNeeded(params: {
         runEmbeddedPiAgent({
           sessionId: params.followupRun.run.sessionId,
           sessionKey: params.sessionKey,
-          messageProvider:
-            params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
           agentAccountId: params.sessionCtx.AccountId,
           // Provider threading context for tool auto-injection
           ...buildThreadingToolContext({
@@ -128,10 +116,7 @@ export async function runMemoryFlushIfNeeded(params: {
           prompt: memoryFlushSettings.prompt,
           extraSystemPrompt: flushSystemPrompt,
           ownerNumbers: params.followupRun.run.ownerNumbers,
-          enforceFinalTag: resolveEnforceFinalTag(
-            params.followupRun.run,
-            provider,
-          ),
+          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
           provider,
           model,
           authProfileId: params.followupRun.run.authProfileId,
@@ -143,8 +128,7 @@ export async function runMemoryFlushIfNeeded(params: {
           runId: flushRunId,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
-              const phase =
-                typeof evt.data.phase === "string" ? evt.data.phase : "";
+              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
               const willRetry = Boolean(evt.data.willRetry);
               if (phase === "end" && !willRetry) {
                 memoryCompactionCompleted = true;
@@ -155,9 +139,7 @@ export async function runMemoryFlushIfNeeded(params: {
     });
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
-      (params.sessionKey
-        ? activeSessionStore?.[params.sessionKey]?.compactionCount
-        : 0) ??
+      (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const nextCount = await incrementCompactionCount({

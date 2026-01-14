@@ -106,20 +106,18 @@ const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(
-    async (_resolved: unknown, profile: { cdpPort: number }) => {
-      launchCalls.push({ port: profile.cdpPort });
-      reachable = true;
-      return {
-        pid: 123,
-        exe: { kind: "chrome", path: "/fake/chrome" },
-        userDataDir: "/tmp/clawd",
-        cdpPort: profile.cdpPort,
-        startedAt: Date.now(),
-        proc,
-      };
-    },
-  ),
+  launchClawdChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
+    launchCalls.push({ port: profile.cdpPort });
+    reachable = true;
+    return {
+      pid: 123,
+      exe: { kind: "chrome", path: "/fake/chrome" },
+      userDataDir: "/tmp/clawd",
+      cdpPort: profile.cdpPort,
+      startedAt: Date.now(),
+      proc,
+    };
+  }),
   resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;
@@ -254,9 +252,9 @@ describe("browser control server", () => {
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
 
-    const snapAi = (await realFetch(
-      `${base}/snapshot?format=ai&maxChars=0`,
-    ).then((r) => r.json())) as { ok: boolean; format?: string };
+    const snapAi = (await realFetch(`${base}/snapshot?format=ai&maxChars=0`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
 
@@ -343,9 +341,10 @@ describe("browser control server", () => {
     });
     expect(dialogMissingAccept.status).toBe(400);
 
-    const snapDefault = (await realFetch(`${base}/snapshot?format=wat`).then(
-      (r) => r.json(),
-    )) as { ok: boolean; format?: string };
+    const snapDefault = (await realFetch(`${base}/snapshot?format=wat`).then((r) => r.json())) as {
+      ok: boolean;
+      format?: string;
+    };
     expect(snapDefault.ok).toBe(true);
     expect(snapDefault.format).toBe("ai");
 
@@ -412,9 +411,9 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok?: boolean; error?: string };
     expect(started.error).toBeUndefined();
     expect(started.ok).toBe(true);
-    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) =>
-      r.json(),
-    )) as { running?: boolean };
+    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) => r.json())) as {
+      running?: boolean;
+    };
     expect(status.running).toBe(true);
     expect(ensured).toHaveBeenCalledTimes(1);
 

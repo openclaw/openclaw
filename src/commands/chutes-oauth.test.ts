@@ -2,10 +2,7 @@ import net from "node:net";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  CHUTES_TOKEN_ENDPOINT,
-  CHUTES_USERINFO_ENDPOINT,
-} from "../agents/chutes-oauth.js";
+import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
 
 async function getFreePort(): Promise<number> {
@@ -160,8 +157,7 @@ describe("loginChutes", () => {
   });
 
   it("rejects pasted redirect URLs missing state", async () => {
-    const fetchFn: typeof fetch = async () =>
-      new Response("not found", { status: 404 });
+    const fetchFn: typeof fetch = async () => new Response("not found", { status: 404 });
 
     await expect(
       loginChutes({
@@ -174,8 +170,7 @@ describe("loginChutes", () => {
         createPkce: () => ({ verifier: "verifier_123", challenge: "chal_123" }),
         createState: () => "state_456",
         onAuth: async () => {},
-        onPrompt: async () =>
-          "http://127.0.0.1:1456/oauth-callback?code=code_only",
+        onPrompt: async () => "http://127.0.0.1:1456/oauth-callback?code=code_only",
         fetchFn,
       }),
     ).rejects.toThrow("Missing 'state' parameter");

@@ -25,18 +25,12 @@ async function main() {
   const args = process.argv.slice(2);
 
   // Swift side expects `--version` to return a plain semver string.
-  if (
-    hasFlag(args, "--version") ||
-    hasFlag(args, "-V") ||
-    hasFlag(args, "-v")
-  ) {
+  if (hasFlag(args, "--version") || hasFlag(args, "-V") || hasFlag(args, "-v")) {
     console.log(BUNDLED_VERSION);
     process.exit(0);
   }
 
-  const { parseRelaySmokeTest, runRelaySmokeTest } = await import(
-    "./relay-smoke.js"
-  );
+  const { parseRelaySmokeTest, runRelaySmokeTest } = await import("./relay-smoke.js");
   const smokeTest = parseRelaySmokeTest(args, process.env);
   if (smokeTest) {
     try {
@@ -61,9 +55,7 @@ async function main() {
 
   const { assertSupportedRuntime } = await import("../infra/runtime-guard.js");
   assertSupportedRuntime();
-  const { installUnhandledRejectionHandler } = await import(
-    "../infra/unhandled-rejections.js"
-  );
+  const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
   const { buildProgram } = await import("../cli/program.js");
   const program = buildProgram();
@@ -71,10 +63,7 @@ async function main() {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error(
-      "[clawdbot] Uncaught exception:",
-      error.stack ?? error.message,
-    );
+    console.error("[clawdbot] Uncaught exception:", error.stack ?? error.message);
     process.exit(1);
   });
 

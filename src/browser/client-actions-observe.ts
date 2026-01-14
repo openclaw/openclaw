@@ -1,7 +1,4 @@
-import type {
-  BrowserActionPathResult,
-  BrowserActionTargetOk,
-} from "./client-actions-types.js";
+import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
@@ -91,20 +88,17 @@ export async function browserTraceStart(
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/trace/start${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        targetId: opts.targetId,
-        screenshots: opts.screenshots,
-        snapshots: opts.snapshots,
-        sources: opts.sources,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/trace/start${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      screenshots: opts.screenshots,
+      snapshots: opts.snapshots,
+      sources: opts.sources,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserTraceStop(
@@ -112,15 +106,12 @@ export async function browserTraceStop(
   opts: { targetId?: string; path?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(
-    `${baseUrl}/trace/stop${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionPathResult>(`${baseUrl}/trace/stop${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserHighlight(
@@ -128,15 +119,12 @@ export async function browserHighlight(
   opts: { ref: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(
-    `${baseUrl}/highlight${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/highlight${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserResponseBody(

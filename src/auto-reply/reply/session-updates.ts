@@ -156,13 +156,7 @@ export async function incrementCompactionCount(params: {
   storePath?: string;
   now?: number;
 }): Promise<number | undefined> {
-  const {
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    now = Date.now(),
-  } = params;
+  const { sessionEntry, sessionStore, sessionKey, storePath, now = Date.now() } = params;
   if (!sessionStore || !sessionKey) return undefined;
   const entry = sessionStore[sessionKey] ?? sessionEntry;
   if (!entry) return undefined;

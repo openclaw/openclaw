@@ -1,13 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
-import type {
-  ReasoningLevel,
-  VerboseLevel,
-} from "../../../auto-reply/thinking.js";
-import {
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../../auto-reply/tokens.js";
+import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { formatAssistantErrorText } from "../../pi-embedded-helpers.js";
@@ -57,9 +51,7 @@ export function buildEmbeddedRunPayloads(params: {
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
-    params.inlineToolResultsAllowed &&
-    params.verboseLevel === "on" &&
-    params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed && params.verboseLevel === "on" && params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : []);
@@ -90,9 +82,7 @@ export function buildEmbeddedRunPayloads(params: {
       : "";
   if (reasoningText) replyItems.push({ text: reasoningText });
 
-  const fallbackAnswerText = params.lastAssistant
-    ? extractAssistantText(params.lastAssistant)
-    : "";
+  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const answerTexts = params.assistantTexts.length
     ? params.assistantTexts
     : fallbackAnswerText
@@ -108,11 +98,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (
-      !cleanedText &&
-      (!mediaUrls || mediaUrls.length === 0) &&
-      !audioAsVoice
-    ) {
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
     replyItems.push({
@@ -135,12 +121,10 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
-      audioAsVoice:
-        item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
     }))
     .filter((p) => {
-      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0))
-        return false;
+      if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) return false;
       if (p.text && isSilentReplyText(p.text, SILENT_REPLY_TOKEN)) return false;
       return true;
     });

@@ -21,12 +21,7 @@ import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
-import {
-  type AnyAgentTool,
-  imageResultFromFile,
-  jsonResult,
-  readStringParam,
-} from "./common.js";
+import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 
 function resolveBrowserBaseUrl(params: {
   target?: "sandbox" | "host" | "custom";
@@ -42,22 +37,13 @@ function resolveBrowserBaseUrl(params: {
   const normalizedControlUrl = params.controlUrl?.trim() ?? "";
   const normalizedDefault = params.defaultControlUrl?.trim() ?? "";
   const target =
-    params.target ??
-    (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
+    params.target ?? (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
 
   const assertAllowedControlUrl = (url: string) => {
-    const allowedUrls = params.allowedControlUrls?.map((entry) =>
-      entry.trim().replace(/\/$/, ""),
-    );
-    const allowedHosts = params.allowedControlHosts?.map((entry) =>
-      entry.trim().toLowerCase(),
-    );
+    const allowedUrls = params.allowedControlUrls?.map((entry) => entry.trim().replace(/\/$/, ""));
+    const allowedHosts = params.allowedControlHosts?.map((entry) => entry.trim().toLowerCase());
     const allowedPorts = params.allowedControlPorts;
-    if (
-      !allowedUrls?.length &&
-      !allowedHosts?.length &&
-      !allowedPorts?.length
-    ) {
+    if (!allowedUrls?.length && !allowedHosts?.length && !allowedPorts?.length) {
       return;
     }
     let parsed: URL;
@@ -71,21 +57,13 @@ function resolveBrowserBaseUrl(params: {
       throw new Error("Browser controlUrl is not in the allowed URL list.");
     }
     if (allowedHosts?.length && !allowedHosts.includes(parsed.hostname)) {
-      throw new Error(
-        "Browser controlUrl hostname is not in the allowed host list.",
-      );
+      throw new Error("Browser controlUrl hostname is not in the allowed host list.");
     }
     if (allowedPorts?.length) {
       const port =
-        parsed.port?.trim() !== ""
-          ? Number(parsed.port)
-          : parsed.protocol === "https:"
-            ? 443
-            : 80;
+        parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
       if (!Number.isFinite(port) || !allowedPorts.includes(port)) {
-        throw new Error(
-          "Browser controlUrl port is not in the allowed port list.",
-        );
+        throw new Error("Browser controlUrl port is not in the allowed port list.");
       }
     }
   };
@@ -134,9 +112,7 @@ export function createBrowserTool(opts?: {
 }): AnyAgentTool {
   const targetDefault = opts?.defaultControlUrl ? "sandbox" : "host";
   const hostHint =
-    opts?.allowHostControl === false
-      ? "Host target blocked by policy."
-      : "Host target allowed.";
+    opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
   const allowlistHint =
     opts?.allowedControlUrls?.length ||
     opts?.allowedControlHosts?.length ||
@@ -159,11 +135,7 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const controlUrl = readStringParam(params, "controlUrl");
-      const target = readStringParam(params, "target") as
-        | "sandbox"
-        | "host"
-        | "custom"
-        | undefined;
+      const target = readStringParam(params, "target") as "sandbox" | "host" | "custom" | undefined;
       const profile = readStringParam(params, "profile");
       const baseUrl = resolveBrowserBaseUrl({
         target,
@@ -190,9 +162,7 @@ export function createBrowserTool(opts?: {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
-          return jsonResult(
-            await browserOpenTab(baseUrl, targetUrl, { profile }),
-          );
+          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -213,10 +183,7 @@ export function createBrowserTool(opts?: {
               ? (params.format as "ai" | "aria")
               : "ai";
           const hasMaxChars = Object.hasOwn(params, "maxChars");
-          const targetId =
-            typeof params.targetId === "string"
-              ? params.targetId.trim()
-              : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const limit =
             typeof params.limit === "number" && Number.isFinite(params.limit)
               ? params.limit
@@ -228,34 +195,21 @@ export function createBrowserTool(opts?: {
               ? Math.floor(params.maxChars)
               : undefined;
           const resolvedMaxChars =
-            format === "ai"
-              ? hasMaxChars
-                ? maxChars
-                : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-              : undefined;
+            format === "ai" ? (hasMaxChars ? maxChars : DEFAULT_AI_SNAPSHOT_MAX_CHARS) : undefined;
           const interactive =
-            typeof params.interactive === "boolean"
-              ? params.interactive
-              : undefined;
-          const compact =
-            typeof params.compact === "boolean" ? params.compact : undefined;
+            typeof params.interactive === "boolean" ? params.interactive : undefined;
+          const compact = typeof params.compact === "boolean" ? params.compact : undefined;
           const depth =
             typeof params.depth === "number" && Number.isFinite(params.depth)
               ? params.depth
               : undefined;
-          const selector =
-            typeof params.selector === "string"
-              ? params.selector.trim()
-              : undefined;
-          const frame =
-            typeof params.frame === "string" ? params.frame.trim() : undefined;
+          const selector = typeof params.selector === "string" ? params.selector.trim() : undefined;
+          const frame = typeof params.frame === "string" ? params.frame.trim() : undefined;
           const snapshot = await browserSnapshot(baseUrl, {
             format,
             targetId,
             limit,
-            ...(typeof resolvedMaxChars === "number"
-              ? { maxChars: resolvedMaxChars }
-              : {}),
+            ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
             interactive,
             compact,
             depth,
@@ -305,21 +259,12 @@ export function createBrowserTool(opts?: {
           );
         }
         case "console": {
-          const level =
-            typeof params.level === "string" ? params.level.trim() : undefined;
-          const targetId =
-            typeof params.targetId === "string"
-              ? params.targetId.trim()
-              : undefined;
-          return jsonResult(
-            await browserConsoleMessages(baseUrl, { level, targetId, profile }),
-          );
+          const level = typeof params.level === "string" ? params.level.trim() : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
+          return jsonResult(await browserConsoleMessages(baseUrl, { level, targetId, profile }));
         }
         case "pdf": {
-          const targetId =
-            typeof params.targetId === "string"
-              ? params.targetId.trim()
-              : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const result = await browserPdfSave(baseUrl, { targetId, profile });
           return {
             content: [{ type: "text", text: `FILE:${result.path}` }],
@@ -327,20 +272,14 @@ export function createBrowserTool(opts?: {
           };
         }
         case "upload": {
-          const paths = Array.isArray(params.paths)
-            ? params.paths.map((p) => String(p))
-            : [];
+          const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
           if (paths.length === 0) throw new Error("paths required");
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
-          const targetId =
-            typeof params.targetId === "string"
-              ? params.targetId.trim()
-              : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const timeoutMs =
-            typeof params.timeoutMs === "number" &&
-            Number.isFinite(params.timeoutMs)
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
               ? params.timeoutMs
               : undefined;
           return jsonResult(
@@ -357,17 +296,10 @@ export function createBrowserTool(opts?: {
         }
         case "dialog": {
           const accept = Boolean(params.accept);
-          const promptText =
-            typeof params.promptText === "string"
-              ? params.promptText
-              : undefined;
-          const targetId =
-            typeof params.targetId === "string"
-              ? params.targetId.trim()
-              : undefined;
+          const promptText = typeof params.promptText === "string" ? params.promptText : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const timeoutMs =
-            typeof params.timeoutMs === "number" &&
-            Number.isFinite(params.timeoutMs)
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
               ? params.timeoutMs
               : undefined;
           return jsonResult(
@@ -385,11 +317,9 @@ export function createBrowserTool(opts?: {
           if (!request || typeof request !== "object") {
             throw new Error("request required");
           }
-          const result = await browserAct(
-            baseUrl,
-            request as Parameters<typeof browserAct>[1],
-            { profile },
-          );
+          const result = await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+            profile,
+          });
           return jsonResult(result);
         }
         default:

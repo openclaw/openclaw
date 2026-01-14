@@ -32,8 +32,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         dockerArgs[0] === "inspect" &&
         dockerArgs[1] === "-f" &&
         dockerArgs[2] === "{{.State.Running}}";
-      const shouldSucceedImageInspect =
-        dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
+      const shouldSucceedImageInspect = dockerArgs[0] === "image" && dockerArgs[1] === "inspect";
 
       const code = shouldFailContainerInspect ? 1 : 0;
       if (shouldSucceedImageInspect) {
@@ -46,11 +45,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-async function writeSkill(params: {
-  dir: string;
-  name: string;
-  description: string;
-}) {
+async function writeSkill(params: { dir: string; name: string; description: string }) {
   const { dir, name, description } = params;
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
@@ -87,9 +82,7 @@ describe("sandbox skill mirroring", () => {
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {
-    const stateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-state-"),
-    );
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-state-"));
     const bundledDir = path.join(stateDir, "bundled-skills");
     await fs.mkdir(bundledDir, { recursive: true });
 
@@ -99,9 +92,7 @@ describe("sandbox skill mirroring", () => {
 
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "demo-skill"),
       name: "demo-skill",
@@ -134,29 +125,15 @@ describe("sandbox skill mirroring", () => {
     const { context } = await runContext("ro");
 
     expect(context?.enabled).toBe(true);
-    const skillPath = path.join(
-      context?.workspaceDir ?? "",
-      "skills",
-      "demo-skill",
-      "SKILL.md",
-    );
-    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
-      "demo-skill",
-    );
+    const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
+    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
   }, 20_000);
 
   it("copies skills into the sandbox when workspaceAccess is none", async () => {
     const { context } = await runContext("none");
 
     expect(context?.enabled).toBe(true);
-    const skillPath = path.join(
-      context?.workspaceDir ?? "",
-      "skills",
-      "demo-skill",
-      "SKILL.md",
-    );
-    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
-      "demo-skill",
-    );
+    const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
+    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
   }, 20_000);
 });

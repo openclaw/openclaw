@@ -28,18 +28,13 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const running = context.findRunningWizard();
     if (running) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
       return;
     }
     const sessionId = randomUUID();
     const opts = {
       mode: params.mode as "local" | "remote" | undefined,
-      workspace:
-        typeof params.workspace === "string" ? params.workspace : undefined,
+      workspace: typeof params.workspace === "string" ? params.workspace : undefined,
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),
@@ -66,33 +61,19 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = params.sessionId as string;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
-    const answer = params.answer as
-      | { stepId?: string; value?: unknown }
-      | undefined;
+    const answer = params.answer as { stepId?: string; value?: unknown } | undefined;
     if (answer) {
       if (session.getStatus() !== "running") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not running"));
         return;
       }
       try {
         await session.answer(String(answer.stepId ?? ""), answer.value);
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
-        );
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
         return;
       }
     }
@@ -117,11 +98,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = params.sessionId as string;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
     session.cancel();
@@ -147,11 +124,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = params.sessionId as string;
     const session = context.wizardSessions.get(sessionId);
     if (!session) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
       return;
     }
     const status = {

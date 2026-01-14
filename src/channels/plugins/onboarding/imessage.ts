@@ -6,24 +6,16 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
 } from "../../../imessage/accounts.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import type {
-  ChannelOnboardingAdapter,
-  ChannelOnboardingDmPolicy,
-} from "../onboarding-types.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "imessage" as const;
 
 function setIMessageDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.imessage?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.imessage?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -53,10 +45,10 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
       const account = resolveIMessageAccount({ cfg, accountId });
       return Boolean(
         account.config.cliPath ||
-          account.config.dbPath ||
-          account.config.allowFrom ||
-          account.config.service ||
-          account.config.region,
+        account.config.dbPath ||
+        account.config.allowFrom ||
+        account.config.service ||
+        account.config.region,
       );
     });
     const imessageCliPath = cfg.channels?.imessage?.cliPath ?? "imsg";
@@ -72,12 +64,7 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: imessageCliDetected ? 1 : 0,
     };
   },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }) => {
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
     const imessageOverride = accountOverrides.imessage?.trim();
     const defaultIMessageAccountId = resolveDefaultIMessageAccountId(cfg);
     let imessageAccountId = imessageOverride
@@ -109,10 +96,7 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
       });
       resolvedCliPath = String(entered).trim();
       if (!resolvedCliPath) {
-        await prompter.note(
-          "imsg CLI path required to enable iMessage.",
-          "iMessage",
-        );
+        await prompter.note("imsg CLI path required to enable iMessage.", "iMessage");
       }
     }
 
@@ -141,9 +125,7 @@ export const imessageOnboardingAdapter: ChannelOnboardingAdapter = {
                 ...next.channels?.imessage?.accounts,
                 [imessageAccountId]: {
                   ...next.channels?.imessage?.accounts?.[imessageAccountId],
-                  enabled:
-                    next.channels?.imessage?.accounts?.[imessageAccountId]
-                      ?.enabled ?? true,
+                  enabled: next.channels?.imessage?.accounts?.[imessageAccountId]?.enabled ?? true,
                   cliPath: resolvedCliPath,
                 },
               },

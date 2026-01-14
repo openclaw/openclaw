@@ -28,10 +28,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserArmFileChooser(baseUrl, {
           paths,
@@ -39,9 +36,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           inputRef: opts.inputRef?.trim() || undefined,
           element: opts.element?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs)
-            ? opts.timeoutMs
-            : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           profile,
         });
         if (parent?.json) {
@@ -66,17 +61,12 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserWaitForDownload(baseUrl, {
           path: outPath?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs)
-            ? opts.timeoutMs
-            : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           profile,
         });
         if (parent?.json) {
@@ -102,18 +92,13 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const result = await browserDownload(baseUrl, {
           ref,
           path: outPath,
           targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs)
-            ? opts.timeoutMs
-            : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           profile,
         });
         if (parent?.json) {
@@ -140,10 +125,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
         defaultRuntime.error(danger("Specify --accept or --dismiss"));
@@ -155,9 +137,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           accept,
           promptText: opts.prompt?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
-          timeoutMs: Number.isFinite(opts.timeoutMs)
-            ? opts.timeoutMs
-            : undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           profile,
         });
         if (parent?.json) {

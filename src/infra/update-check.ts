@@ -66,10 +66,9 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
 }
 
 async function detectGitRoot(root: string): Promise<string | null> {
-  const res = await runCommandWithTimeout(
-    ["git", "-C", root, "rev-parse", "--show-toplevel"],
-    { timeoutMs: 4000 },
-  ).catch(() => null);
+  const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
+    timeoutMs: 4000,
+  }).catch(() => null);
   if (!res || res.code !== 0) return null;
   const top = res.stdout.trim();
   return top ? path.resolve(top) : null;
@@ -106,21 +105,15 @@ export async function checkGitUpdateStatus(params: {
     ["git", "-C", root, "rev-parse", "--abbrev-ref", "@{upstream}"],
     { timeoutMs },
   ).catch(() => null);
-  const upstream =
-    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  const upstream = upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
 
-  const dirtyRes = await runCommandWithTimeout(
-    ["git", "-C", root, "status", "--porcelain"],
-    { timeoutMs },
-  ).catch(() => null);
-  const dirty =
-    dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
+  const dirtyRes = await runCommandWithTimeout(["git", "-C", root, "status", "--porcelain"], {
+    timeoutMs,
+  }).catch(() => null);
+  const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
   const fetchOk = params.fetch
-    ? await runCommandWithTimeout(
-        ["git", "-C", root, "fetch", "--quiet", "--prune"],
-        { timeoutMs },
-      )
+    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", "--prune"], { timeoutMs })
         .then((r) => r.code === 0)
         .catch(() => false)
     : null;
@@ -128,22 +121,12 @@ export async function checkGitUpdateStatus(params: {
   const counts =
     upstream && upstream.length > 0
       ? await runCommandWithTimeout(
-          [
-            "git",
-            "-C",
-            root,
-            "rev-list",
-            "--left-right",
-            "--count",
-            `HEAD...${upstream}`,
-          ],
+          ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
           { timeoutMs },
         ).catch(() => null)
       : null;
 
-  const parseCounts = (
-    raw: string,
-  ): { ahead: number; behind: number } | null => {
+  const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
     const parts = raw.trim().split(/\s+/);
     if (parts.length < 2) return null;
     const ahead = Number.parseInt(parts[0] ?? "", 10);
@@ -151,8 +134,7 @@ export async function checkGitUpdateStatus(params: {
     if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return null;
     return { ahead, behind };
   };
-  const parsed =
-    counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
+  const parsed = counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
 
   return {
     root,
@@ -268,10 +250,7 @@ export async function checkDepsStatus(params: {
   };
 }
 
-async function fetchWithTimeout(
-  url: string,
-  timeoutMs: number,
-): Promise<Response> {
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), Math.max(250, timeoutMs));
   try {
@@ -286,26 +265,19 @@ export async function fetchNpmLatestVersion(params?: {
 }): Promise<RegistryStatus> {
   const timeoutMs = params?.timeoutMs ?? 3500;
   try {
-    const res = await fetchWithTimeout(
-      "https://registry.npmjs.org/clawdbot/latest",
-      timeoutMs,
-    );
+    const res = await fetchWithTimeout("https://registry.npmjs.org/clawdbot/latest", timeoutMs);
     if (!res.ok) {
       return { latestVersion: null, error: `HTTP ${res.status}` };
     }
     const json = (await res.json()) as { version?: unknown };
-    const latestVersion =
-      typeof json?.version === "string" ? json.version : null;
+    const latestVersion = typeof json?.version === "string" ? json.version : null;
     return { latestVersion };
   } catch (err) {
     return { latestVersion: null, error: String(err) };
   }
 }
 
-export function compareSemverStrings(
-  a: string | null,
-  b: string | null,
-): number | null {
+export function compareSemverStrings(a: string | null, b: string | null): number | null {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
   if (!pa || !pb) return null;
@@ -328,9 +300,7 @@ export async function checkUpdateStatus(params: {
       root: null,
       installKind: "unknown",
       packageManager: "unknown",
-      registry: params.includeRegistry
-        ? await fetchNpmLatestVersion({ timeoutMs })
-        : undefined,
+      registry: params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined,
     };
   }
 
@@ -338,9 +308,7 @@ export async function checkUpdateStatus(params: {
   const gitRoot = await detectGitRoot(root);
   const isGit = gitRoot && path.resolve(gitRoot) === root;
 
-  const installKind: UpdateCheckResult["installKind"] = isGit
-    ? "git"
-    : "package";
+  const installKind: UpdateCheckResult["installKind"] = isGit ? "git" : "package";
   const git = isGit
     ? await checkGitUpdateStatus({
         root,
@@ -349,9 +317,7 @@ export async function checkUpdateStatus(params: {
       })
     : undefined;
   const deps = await checkDepsStatus({ root, manager: pm });
-  const registry = params.includeRegistry
-    ? await fetchNpmLatestVersion({ timeoutMs })
-    : undefined;
+  const registry = params.includeRegistry ? await fetchNpmLatestVersion({ timeoutMs }) : undefined;
 
   return {
     root,

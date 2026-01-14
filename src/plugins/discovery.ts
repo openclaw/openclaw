@@ -50,9 +50,7 @@ function readPackageManifest(dir: string): PackageManifest | null {
 function resolvePackageExtensions(manifest: PackageManifest): string[] {
   const raw = manifest.clawdbot?.extensions;
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
-    .filter(Boolean);
+  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
 function deriveIdHint(params: {

@@ -20,10 +20,8 @@ vi.mock("../auto-reply/reply/dispatch-from-config.js", () => ({
   dispatchReplyFromConfig: (...args: unknown[]) => dispatchMock(...args),
 }));
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 vi.mock("../config/sessions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions.js")>();
@@ -43,9 +41,7 @@ beforeEach(() => {
     return { queuedFinal: true, counts: { final: 1 } };
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock
-    .mockReset()
-    .mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
   vi.resetModules();
 });
 
@@ -343,9 +339,7 @@ describe("discord tool result dispatch", () => {
     );
 
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe(
-      "agent:main:discord:channel:forum-1",
-    );
+    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:forum-1");
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
     expect(restGet).toHaveBeenCalledWith(Routes.channelMessage("t1", "t1"));
@@ -382,9 +376,7 @@ describe("discord tool result dispatch", () => {
           guilds: { "*": { requireMention: false } },
         },
       },
-      bindings: [
-        { agentId: "support", match: { channel: "discord", guildId: "g1" } },
-      ],
+      bindings: [{ agentId: "support", match: { channel: "discord", guildId: "g1" } }],
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = createDiscordMessageHandler({
@@ -457,8 +449,6 @@ describe("discord tool result dispatch", () => {
     );
 
     expect(capturedCtx?.SessionKey).toBe("agent:support:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe(
-      "agent:support:discord:channel:p1",
-    );
+    expect(capturedCtx?.ParentSessionKey).toBe("agent:support:discord:channel:p1");
   });
 });

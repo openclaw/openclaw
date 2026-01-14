@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -12,15 +9,9 @@ import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-export function registerPluginCliCommands(
-  program: Command,
-  cfg?: ClawdbotConfig,
-) {
+export function registerPluginCliCommands(program: Command, cfg?: ClawdbotConfig) {
   const config = cfg ?? loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(
-    config,
-    resolveDefaultAgentId(config),
-  );
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
     info: (msg: string) => log.info(msg),
     warn: (msg: string) => log.warn(msg),
@@ -43,15 +34,11 @@ export function registerPluginCliCommands(
       });
       if (result && typeof (result as Promise<void>).then === "function") {
         void (result as Promise<void>).catch((err) => {
-          log.warn(
-            `plugin CLI register failed (${entry.pluginId}): ${String(err)}`,
-          );
+          log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
         });
       }
     } catch (err) {
-      log.warn(
-        `plugin CLI register failed (${entry.pluginId}): ${String(err)}`,
-      );
+      log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
     }
   }
 }

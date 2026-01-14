@@ -14,9 +14,7 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   }
 }
 
-function getTextContent(result?: {
-  content?: Array<{ type: string; text?: string }>;
-}) {
+function getTextContent(result?: { content?: Array<{ type: string; text?: string }> }) {
   const textBlock = result?.content?.find((block) => block.type === "text");
   return textBlock?.text ?? "";
 }
@@ -63,10 +61,7 @@ describe("workspace path resolution", () => {
             content: contents,
           });
 
-          const written = await fs.readFile(
-            path.join(workspaceDir, testFile),
-            "utf8",
-          );
+          const written = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
           expect(written).toBe(contents);
         } finally {
           process.chdir(prevCwd);
@@ -80,11 +75,7 @@ describe("workspace path resolution", () => {
       await withTempDir("clawdbot-cwd-", async (otherDir) => {
         const prevCwd = process.cwd();
         const testFile = "edit.txt";
-        await fs.writeFile(
-          path.join(workspaceDir, testFile),
-          "hello world",
-          "utf8",
-        );
+        await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
 
         process.chdir(otherDir);
         try {
@@ -98,10 +89,7 @@ describe("workspace path resolution", () => {
             newText: "clawdbot",
           });
 
-          const updated = await fs.readFile(
-            path.join(workspaceDir, testFile),
-            "utf8",
-          );
+          const updated = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
           expect(updated).toBe("hello clawdbot");
         } finally {
           process.chdir(prevCwd);
@@ -120,9 +108,7 @@ describe("workspace path resolution", () => {
         command: "echo ok",
       });
       const cwd =
-        result?.details &&
-        typeof result.details === "object" &&
-        "cwd" in result.details
+        result?.details && typeof result.details === "object" && "cwd" in result.details
           ? (result.details as { cwd?: string }).cwd
           : undefined;
       expect(cwd).toBeTruthy();
@@ -146,9 +132,7 @@ describe("workspace path resolution", () => {
           workdir: overrideDir,
         });
         const cwd =
-          result?.details &&
-          typeof result.details === "object" &&
-          "cwd" in result.details
+          result?.details && typeof result.details === "object" && "cwd" in result.details
             ? (result.details as { cwd?: string }).cwd
             : undefined;
         expect(cwd).toBeTruthy();
@@ -190,16 +174,8 @@ describe("sandboxed workspace paths", () => {
         };
 
         const testFile = "sandbox.txt";
-        await fs.writeFile(
-          path.join(sandboxDir, testFile),
-          "sandbox read",
-          "utf8",
-        );
-        await fs.writeFile(
-          path.join(workspaceDir, testFile),
-          "workspace read",
-          "utf8",
-        );
+        await fs.writeFile(path.join(sandboxDir, testFile), "sandbox read", "utf8");
+        await fs.writeFile(path.join(workspaceDir, testFile), "workspace read", "utf8");
 
         const tools = createClawdbotCodingTools({ workspaceDir, sandbox });
         const readTool = tools.find((tool) => tool.name === "read");
@@ -217,10 +193,7 @@ describe("sandboxed workspace paths", () => {
           path: "new.txt",
           content: "sandbox write",
         });
-        const written = await fs.readFile(
-          path.join(sandboxDir, "new.txt"),
-          "utf8",
-        );
+        const written = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(written).toBe("sandbox write");
 
         await editTool?.execute("sbx-edit", {
@@ -228,10 +201,7 @@ describe("sandboxed workspace paths", () => {
           oldText: "write",
           newText: "edit",
         });
-        const edited = await fs.readFile(
-          path.join(sandboxDir, "new.txt"),
-          "utf8",
-        );
+        const edited = await fs.readFile(path.join(sandboxDir, "new.txt"), "utf8");
         expect(edited).toBe("sandbox edit");
       });
     });

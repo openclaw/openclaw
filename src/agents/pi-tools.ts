@@ -36,10 +36,7 @@ import {
   patchToolSchemaForClaudeCompatibility,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
-import {
-  cleanToolSchemaForGemini,
-  normalizeToolParameters,
-} from "./pi-tools.schema.js";
+import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
@@ -54,9 +51,7 @@ function isApplyPatchAllowedForModel(params: {
   modelId?: string;
   allowModels?: string[];
 }) {
-  const allowModels = Array.isArray(params.allowModels)
-    ? params.allowModels
-    : [];
+  const allowModels = Array.isArray(params.allowModels) ? params.allowModels : [];
   if (allowModels.length === 0) return true;
   const modelId = params.modelId?.trim();
   if (!modelId) return false;
@@ -123,8 +118,7 @@ export function createClawdbotCodingTools(options?: {
     sessionKey: options?.sessionKey,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
-  const scopeKey =
-    options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
@@ -161,21 +155,13 @@ export function createClawdbotCodingTools(options?: {
       if (sandboxRoot) return [];
       // Wrap with param normalization for Claude Code compatibility
       return [
-        wrapToolParamNormalization(
-          createWriteTool(workspaceRoot),
-          CLAUDE_PARAM_GROUPS.write,
-        ),
+        wrapToolParamNormalization(createWriteTool(workspaceRoot), CLAUDE_PARAM_GROUPS.write),
       ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) return [];
       // Wrap with param normalization for Claude Code compatibility
-      return [
-        wrapToolParamNormalization(
-          createEditTool(workspaceRoot),
-          CLAUDE_PARAM_GROUPS.edit,
-        ),
-      ];
+      return [wrapToolParamNormalization(createEditTool(workspaceRoot), CLAUDE_PARAM_GROUPS.edit)];
     }
     return [tool as AnyAgentTool];
   });
@@ -207,17 +193,13 @@ export function createClawdbotCodingTools(options?: {
       ? null
       : createApplyPatchTool({
           cwd: sandboxRoot ?? workspaceRoot,
-          sandboxRoot:
-            sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
+          sandboxRoot: sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
         });
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
       ? allowWorkspaceWrites
-        ? [
-            createSandboxedEditTool(sandboxRoot),
-            createSandboxedWriteTool(sandboxRoot),
-          ]
+        ? [createSandboxedEditTool(sandboxRoot), createSandboxedWriteTool(sandboxRoot)]
         : []
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
@@ -246,15 +228,11 @@ export function createClawdbotCodingTools(options?: {
       hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
-  const toolsFiltered = profilePolicy
-    ? filterToolsByPolicy(tools, profilePolicy)
-    : tools;
+  const toolsFiltered = profilePolicy ? filterToolsByPolicy(tools, profilePolicy) : tools;
   const policyFiltered = effectiveToolsPolicy
     ? filterToolsByPolicy(toolsFiltered, effectiveToolsPolicy)
     : toolsFiltered;
-  const sandboxed = sandbox
-    ? filterToolsByPolicy(policyFiltered, sandbox.tools)
-    : policyFiltered;
+  const sandboxed = sandbox ? filterToolsByPolicy(policyFiltered, sandbox.tools) : policyFiltered;
   const subagentFiltered = subagentPolicy
     ? filterToolsByPolicy(sandboxed, subagentPolicy)
     : sandboxed;
@@ -262,9 +240,7 @@ export function createClawdbotCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
   const withAbort = options?.abortSignal
-    ? normalized.map((tool) =>
-        wrapToolWithAbortSignal(tool, options.abortSignal),
-      )
+    ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : normalized;
 
   // NOTE: Keep canonical (lowercase) tool names here.

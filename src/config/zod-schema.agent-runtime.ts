@@ -114,12 +114,7 @@ export const ToolPolicySchema = z
   .optional();
 
 export const ToolProfileSchema = z
-  .union([
-    z.literal("minimal"),
-    z.literal("coding"),
-    z.literal("messaging"),
-    z.literal("full"),
-  ])
+  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
@@ -129,18 +124,10 @@ export const ElevatedAllowFromSchema = z
 
 export const AgentSandboxSchema = z
   .object({
-    mode: z
-      .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
-      .optional(),
-    workspaceAccess: z
-      .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
-      .optional(),
-    sessionToolsVisibility: z
-      .union([z.literal("spawned"), z.literal("all")])
-      .optional(),
-    scope: z
-      .union([z.literal("session"), z.literal("agent"), z.literal("shared")])
-      .optional(),
+    mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
+    sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
+    scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,

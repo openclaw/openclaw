@@ -28,8 +28,7 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 
 function resolveConsoleSettings(): ConsoleSettings {
   const cfg: ClawdbotConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ??
-    loadConfig().logging;
+    (loggingState.overrideSettings as LoggerSettings | null) ?? loadConfig().logging;
   const level = normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
@@ -64,11 +63,8 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
     loggingState.consoleSubsystemFilter = null;
     return;
   }
-  const normalized = filters
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-  loggingState.consoleSubsystemFilter =
-    normalized.length > 0 ? normalized : null;
+  const normalized = filters.map((value) => value.trim()).filter((value) => value.length > 0);
+  loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
 }
 
 export function shouldLogSubsystemToConsole(subsystem: string): boolean {
@@ -76,9 +72,7 @@ export function shouldLogSubsystemToConsole(subsystem: string): boolean {
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some(
-    (prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`),
-  );
+  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [
@@ -91,9 +85,7 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) return false;
-  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) =>
-    message.startsWith(prefix),
-  );
+  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
 function isEpipeError(err: unknown): boolean {

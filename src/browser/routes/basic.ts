@@ -4,10 +4,7 @@ import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
-export function registerBrowserBasicRoutes(
-  app: express.Express,
-  ctx: BrowserRouteContext,
-) {
+export function registerBrowserBasicRoutes(app: express.Express, ctx: BrowserRouteContext) {
   // List all profiles with their status
   app.get("/profiles", async (_req, res) => {
     try {

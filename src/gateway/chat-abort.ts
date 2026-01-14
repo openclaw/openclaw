@@ -21,13 +21,7 @@ export function resolveChatRunExpiresAtMs(params: {
   minMs?: number;
   maxMs?: number;
 }): number {
-  const {
-    now,
-    timeoutMs,
-    graceMs = 60_000,
-    minMs = 2 * 60_000,
-    maxMs = 24 * 60 * 60_000,
-  } = params;
+  const { now, timeoutMs, graceMs = 60_000, minMs = 2 * 60_000, maxMs = 24 * 60 * 60_000 } = params;
   const boundedTimeoutMs = Math.max(0, timeoutMs);
   const target = now + boundedTimeoutMs + graceMs;
   const min = now + minMs;
@@ -46,16 +40,8 @@ export type ChatAbortOps = {
     sessionKey?: string,
   ) => { sessionKey: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
-  broadcast: (
-    event: string,
-    payload: unknown,
-    opts?: { dropIfSlow?: boolean },
-  ) => void;
-  bridgeSendToSession: (
-    sessionKey: string,
-    event: string,
-    payload: unknown,
-  ) => void;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  bridgeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
 function broadcastChatAborted(

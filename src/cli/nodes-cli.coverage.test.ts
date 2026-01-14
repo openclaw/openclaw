@@ -101,9 +101,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find(
-      (call) => call[0]?.method === "node.invoke",
-    )?.[0];
+    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.idempotencyKey).toBe("rk_test");
@@ -144,9 +142,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find(
-      (call) => call[0]?.method === "node.invoke",
-    )?.[0];
+    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("system.notify");
@@ -188,9 +184,7 @@ describe("nodes-cli coverage", () => {
       { from: "user" },
     );
 
-    const invoke = callGateway.mock.calls.find(
-      (call) => call[0]?.method === "node.invoke",
-    )?.[0];
+    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
 
     expect(invoke).toBeTruthy();
     expect(invoke?.params?.command).toBe("location.get");

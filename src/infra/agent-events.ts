@@ -1,9 +1,4 @@
-export type AgentEventStream =
-  | "lifecycle"
-  | "tool"
-  | "assistant"
-  | "error"
-  | (string & {});
+export type AgentEventStream = "lifecycle" | "tool" | "assistant" | "error" | (string & {});
 
 export type AgentEventPayload = {
   runId: string;
@@ -24,10 +19,7 @@ const seqByRun = new Map<string, number>();
 const listeners = new Set<(evt: AgentEventPayload) => void>();
 const runContextById = new Map<string, AgentRunContext>();
 
-export function registerAgentRunContext(
-  runId: string,
-  context: AgentRunContext,
-) {
+export function registerAgentRunContext(runId: string, context: AgentRunContext) {
   if (!runId) return;
   const existing = runContextById.get(runId);
   if (!existing) {

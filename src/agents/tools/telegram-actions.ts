@@ -1,10 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import {
-  reactMessageTelegram,
-  sendMessageTelegram,
-} from "../../telegram/send.js";
+import { reactMessageTelegram, sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import {
   createActionGate,
@@ -47,23 +44,18 @@ export function readTelegramButtons(
     }
     return row.map((button, buttonIndex) => {
       if (!button || typeof button !== "object") {
-        throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] must be an object`,
-        );
+        throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
       }
       const text =
         typeof (button as { text?: unknown }).text === "string"
           ? (button as { text: string }).text.trim()
           : "";
       const callbackData =
-        typeof (button as { callback_data?: unknown }).callback_data ===
-        "string"
+        typeof (button as { callback_data?: unknown }).callback_data === "string"
           ? (button as { callback_data: string }).callback_data.trim()
           : "";
       if (!text || !callbackData) {
-        throw new Error(
-          `buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`,
-        );
+        throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
       if (callbackData.length > 64) {
         throw new Error(
@@ -124,10 +116,7 @@ export async function handleTelegramAction(
     const content = readStringParam(params, "content", { required: true });
     const mediaUrl = readStringParam(params, "mediaUrl");
     const buttons = readTelegramButtons(params);
-    if (
-      buttons &&
-      !hasInlineButtonsCapability({ cfg, accountId: accountId ?? undefined })
-    ) {
+    if (buttons && !hasInlineButtonsCapability({ cfg, accountId: accountId ?? undefined })) {
       throw new Error(
         'Telegram inline buttons requested but not enabled. Add "inlineButtons" to channels.telegram.capabilities (or channels.telegram.accounts.<id>.capabilities).',
       );

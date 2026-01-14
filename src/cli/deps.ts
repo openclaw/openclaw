@@ -31,10 +31,7 @@ export function createDefaultDeps(): CliDeps {
 }
 
 // Provider docking: extend this mapping when adding new outbound send deps.
-export function createOutboundSendDeps(
-  deps: CliDeps,
-  cfg: ClawdbotConfig,
-): OutboundSendDeps {
+export function createOutboundSendDeps(deps: CliDeps, cfg: ClawdbotConfig): OutboundSendDeps {
   return {
     sendWhatsApp: deps.sendMessageWhatsApp,
     sendTelegram: deps.sendMessageTelegram,

@@ -98,11 +98,7 @@ function injectControlUiBasePath(html: string, basePath: string): string {
   return `${script}${html}`;
 }
 
-function serveIndexHtml(
-  res: ServerResponse,
-  indexPath: string,
-  basePath: string,
-) {
+function serveIndexHtml(res: ServerResponse, indexPath: string, basePath: string) {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const raw = fs.readFileSync(indexPath, "utf8");
@@ -163,9 +159,7 @@ export function handleControlUiHttpRequest(
   }
 
   const uiPath =
-    basePath && pathname.startsWith(`${basePath}/`)
-      ? pathname.slice(basePath.length)
-      : pathname;
+    basePath && pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
   const rel = (() => {
     if (uiPath === ROOT_PREFIX) return "";
     const assetsIndex = uiPath.indexOf("/assets/");

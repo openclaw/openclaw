@@ -10,9 +10,7 @@ const sendChatActionSpy = vi.fn();
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   sendChatAction: typeof sendChatActionSpy;
-  setMyCommands: (
-    commands: Array<{ command: string; description: string }>,
-  ) => Promise<void>;
+  setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
 };
 
 const apiStub: ApiStub = {
@@ -95,24 +93,21 @@ vi.mock("../auto-reply/reply.js", () => {
 });
 
 describe("telegram inbound media", () => {
-  const _INBOUND_MEDIA_TEST_TIMEOUT_MS =
-    process.platform === "win32" ? 30_000 : 20_000;
+  const _INBOUND_MEDIA_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
   it(
     "includes location text and ctx fields for pins",
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<
-        typeof vi.fn
-      >;
+      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<typeof vi.fn>;
 
       onSpy.mockReset();
       replySpy.mockReset();
 
       createTelegramBot({ token: "tok" });
-      const handler = onSpy.mock.calls.find(
-        (call) => call[0] === "message",
-      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
       expect(handler).toBeDefined();
 
       await handler({
@@ -148,17 +143,15 @@ describe("telegram inbound media", () => {
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<
-        typeof vi.fn
-      >;
+      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<typeof vi.fn>;
 
       onSpy.mockReset();
       replySpy.mockReset();
 
       createTelegramBot({ token: "tok" });
-      const handler = onSpy.mock.calls.find(
-        (call) => call[0] === "message",
-      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
       expect(handler).toBeDefined();
 
       await handler({

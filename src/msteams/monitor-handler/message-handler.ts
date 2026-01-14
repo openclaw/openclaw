@@ -69,16 +69,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
-    const attachmentPlaceholder =
-      buildMSTeamsAttachmentPlaceholder(attachments);
+    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
     const from = activity.from;
     const conversation = activity.conversation;
 
     const attachmentTypes = attachments
-      .map((att) =>
-        typeof att.contentType === "string" ? att.contentType : undefined,
-      )
+      .map((att) => (typeof att.contentType === "string" ? att.contentType : undefined))
       .filter(Boolean)
       .slice(0, 3);
     const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
@@ -101,19 +98,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // Teams conversation.id may include ";messageid=..." suffix - strip it for session key.
     const rawConversationId = conversation?.id ?? "";
     const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-    const conversationMessageId =
-      extractMSTeamsConversationMessageId(rawConversationId);
+    const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
-    const isGroupChat =
-      conversationType === "groupChat" || conversation?.isGroup === true;
+    const isGroupChat = conversationType === "groupChat" || conversation?.isGroup === true;
     const isChannel = conversationType === "channel";
     const isDirectMessage = !isGroupChat && !isChannel;
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
-    const storedAllowFrom = await readChannelAllowFromStore("msteams").catch(
-      () => [],
-    );
+    const storedAllowFrom = await readChannelAllowFromStore("msteams").catch(() => []);
 
     // Check DM policy for direct messages.
     if (isDirectMessage && msteamsCfg) {
@@ -165,13 +158,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       const groupPolicy = msteamsCfg.groupPolicy ?? "allowlist";
       const groupAllowFrom =
         msteamsCfg.groupAllowFrom ??
-        (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0
-          ? msteamsCfg.allowFrom
-          : []);
-      const effectiveGroupAllowFrom = [
-        ...groupAllowFrom.map((v) => String(v)),
-        ...storedAllowFrom,
-      ];
+        (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []);
+      const effectiveGroupAllowFrom = [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom];
 
       if (groupPolicy === "disabled") {
         log.debug("dropping group message (groupPolicy: disabled)", {
@@ -182,12 +170,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       if (groupPolicy === "allowlist") {
         if (effectiveGroupAllowFrom.length === 0) {
-          log.debug(
-            "dropping group message (groupPolicy: allowlist, no groupAllowFrom)",
-            {
-              conversationId,
-            },
-          );
+          log.debug("dropping group message (groupPolicy: allowlist, no groupAllowFrom)", {
+            conversationId,
+          });
           return;
         }
         const allowed = isMSTeamsGroupAllowed({
@@ -268,9 +253,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : isChannel
         ? `msteams:channel:${conversationId}`
         : `msteams:group:${conversationId}`;
-    const teamsTo = isDirectMessage
-      ? `user:${senderId}`
-      : `conversation:${conversationId}`;
+    const teamsTo = isDirectMessage ? `user:${senderId}` : `conversation:${conversationId}`;
 
     const route = resolveAgentRoute({
       cfg,
@@ -391,24 +374,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     };
 
     if (shouldLogVerbose()) {
-      logVerbose(
-        `msteams inbound: from=${ctxPayload.From} preview="${preview}"`,
-      );
+      logVerbose(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
     }
 
-    const { dispatcher, replyOptions, markDispatchIdle } =
-      createMSTeamsReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime,
-        log,
-        adapter,
-        appId,
-        conversationRef,
-        context,
-        replyStyle,
-        textLimit,
-      });
+    const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
+      cfg,
+      agentId: route.agentId,
+      runtime,
+      log,
+      adapter,
+      appId,
+      conversationRef,
+      context,
+      replyStyle,
+      textLimit,
+    });
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {

@@ -1,41 +1,32 @@
 import { spawn } from "node:child_process";
 
-import {
-  DEFAULT_SANDBOX_IMAGE,
-  SANDBOX_AGENT_WORKSPACE_MOUNT,
-} from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
-import type {
-  SandboxConfig,
-  SandboxDockerConfig,
-  SandboxWorkspaceAccess,
-} from "./types.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 export function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>(
-    (resolve, reject) => {
-      const child = spawn("docker", args, {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout?.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-      child.stderr?.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      child.on("close", (code) => {
-        const exitCode = code ?? 0;
-        if (exitCode !== 0 && !opts?.allowFailure) {
-          reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
-          return;
-        }
-        resolve({ stdout, stderr, code: exitCode });
-      });
-    },
-  );
+  return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
+    const child = spawn("docker", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => {
+      const exitCode = code ?? 0;
+      if (exitCode !== 0 && !opts?.allowFailure) {
+        reject(new Error(stderr.trim() || `docker ${args.join(" ")} failed`));
+        return;
+      }
+      resolve({ stdout, stderr, code: exitCode });
+    });
+  });
 }
 
 export async function readDockerPort(containerName: string, port: number) {
@@ -69,10 +60,9 @@ export async function ensureDockerImage(image: string) {
 }
 
 export async function dockerContainerState(name: string) {
-  const result = await execDocker(
-    ["inspect", "-f", "{{.State.Running}}", name],
-    { allowFailure: true },
-  );
+  const result = await execDocker(["inspect", "-f", "{{.State.Running}}", name], {
+    allowFailure: true,
+  });
   if (result.code !== 0) return { exists: false, running: false };
   return { exists: true, running: result.stdout.trim() === "true" };
 }
@@ -95,10 +85,8 @@ function formatUlimitValue(
     const raw = String(value).trim();
     return raw ? `${name}=${raw}` : null;
   }
-  const soft =
-    typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
-  const hard =
-    typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
+  const soft = typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
+  const hard = typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
   if (soft === undefined && hard === undefined) return null;
   if (soft === undefined) return `${name}=${hard}`;
   if (hard === undefined) return `${name}=${soft}`;
@@ -184,14 +172,9 @@ async function createSandboxContainer(params: {
   });
   args.push("--workdir", cfg.workdir);
   const mainMountSuffix =
-    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir
-      ? ":ro"
-      : "";
+    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir ? ":ro" : "";
   args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
-  if (
-    params.workspaceAccess !== "none" &&
-    workspaceDir !== params.agentWorkspaceDir
-  ) {
+  if (params.workspaceAccess !== "none" && workspaceDir !== params.agentWorkspaceDir) {
     const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
     args.push(
       "-v",
@@ -215,8 +198,7 @@ export async function ensureSandboxContainer(params: {
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
-  const slug =
-    params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);

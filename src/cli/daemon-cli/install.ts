@@ -38,9 +38,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     defaultRuntime.exit(1);
     return;
   }
-  const runtimeRaw = opts.runtime
-    ? String(opts.runtime)
-    : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
     defaultRuntime.error('Invalid --runtime (use "node" or "bun")');
     defaultRuntime.exit(1);
@@ -66,19 +64,17 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-    process.argv[1]?.endsWith(".ts");
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const nodePath = await resolvePreferredNodePath({
     env: process.env,
     runtime: runtimeRaw,
   });
-  const { programArguments, workingDirectory } =
-    await resolveGatewayProgramArguments({
-      port,
-      dev: devMode,
-      runtime: runtimeRaw,
-      nodePath,
-    });
+  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    port,
+    dev: devMode,
+    runtime: runtimeRaw,
+    nodePath,
+  });
   if (runtimeRaw === "node") {
     const systemNode = await resolveSystemNodeInfo({ env: process.env });
     const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
@@ -87,14 +83,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const environment = buildServiceEnvironment({
     env: process.env,
     port,
-    token:
-      opts.token ||
-      cfg.gateway?.auth?.token ||
-      process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: opts.token || cfg.gateway?.auth?.token || process.env.CLAWDBOT_GATEWAY_TOKEN,
     launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(profile)
-        : undefined,
+      process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined,
   });
 
   try {

@@ -54,9 +54,7 @@ export function stripHeartbeatToken(
   const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
   const parsedAckChars =
-    typeof maxAckCharsRaw === "string"
-      ? Number(maxAckCharsRaw)
-      : maxAckCharsRaw;
+    typeof maxAckCharsRaw === "string" ? Number(maxAckCharsRaw) : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
     typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
@@ -77,9 +75,7 @@ export function stripHeartbeatToken(
       .replace(/[*`~_]+$/, "");
 
   const trimmedNormalized = stripMarkup(trimmed);
-  const hasToken =
-    trimmed.includes(HEARTBEAT_TOKEN) ||
-    trimmedNormalized.includes(HEARTBEAT_TOKEN);
+  const hasToken = trimmed.includes(HEARTBEAT_TOKEN) || trimmedNormalized.includes(HEARTBEAT_TOKEN);
   if (!hasToken) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
@@ -87,9 +83,7 @@ export function stripHeartbeatToken(
   const strippedOriginal = stripTokenAtEdges(trimmed);
   const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
   const picked =
-    strippedOriginal.didStrip && strippedOriginal.text
-      ? strippedOriginal
-      : strippedNormalized;
+    strippedOriginal.didStrip && strippedOriginal.text ? strippedOriginal : strippedNormalized;
   if (!picked.didStrip) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }

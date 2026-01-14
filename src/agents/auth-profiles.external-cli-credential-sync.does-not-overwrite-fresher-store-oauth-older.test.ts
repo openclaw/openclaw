@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-} from "./auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID, ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
   it("does not overwrite fresher store oauth with older CLI oauth", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-oauth-no-downgrade-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-oauth-no-downgrade-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -52,9 +47,7 @@ describe("external CLI credential sync", () => {
           // Fresher store oauth should be kept
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("oauth");
-          expect((cliProfile as { access: string }).access).toBe(
-            "store-oauth-access",
-          );
+          expect((cliProfile as { access: string }).access).toBe("store-oauth-access");
         },
         { prefix: "clawdbot-home-" },
       );
@@ -63,9 +56,7 @@ describe("external CLI credential sync", () => {
     }
   });
   it("does not downgrade store oauth to token when CLI lacks refresh token", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-oauth-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-oauth-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -104,9 +95,7 @@ describe("external CLI credential sync", () => {
           // Keep oauth to preserve auto-refresh capability
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("oauth");
-          expect((cliProfile as { access: string }).access).toBe(
-            "store-oauth-access",
-          );
+          expect((cliProfile as { access: string }).access).toBe("store-oauth-access");
         },
         { prefix: "clawdbot-home-" },
       );

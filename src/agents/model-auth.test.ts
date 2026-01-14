@@ -107,11 +107,7 @@ describe("getApiKeyForModel", () => {
       process.env.CLAWDBOT_AGENT_DIR = path.join(tempDir, "agent");
       process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
-      const authProfilesPath = path.join(
-        tempDir,
-        "agent",
-        "auth-profiles.json",
-      );
+      const authProfilesPath = path.join(tempDir, "agent", "auth-profiles.json");
       await fs.mkdir(path.dirname(authProfilesPath), {
         recursive: true,
         mode: 0o700,

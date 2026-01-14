@@ -41,9 +41,8 @@ vi.mock("@homebridge/ciao", () => {
 
 vi.mock("./unhandled-rejections.js", () => {
   return {
-    registerUnhandledRejectionHandler: (
-      handler: (reason: unknown) => boolean,
-    ) => registerUnhandledRejectionHandler(handler),
+    registerUnhandledRejectionHandler: (handler: (reason: unknown) => boolean) =>
+      registerUnhandledRejectionHandler(handler),
   };
 });
 
@@ -98,8 +97,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "announced",
         on: vi.fn(),
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -114,28 +112,18 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
-    const [bridgeCall] = createService.mock.calls as Array<
-      [Record<string, unknown>]
-    >;
+    const [bridgeCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
     expect(bridgeCall?.[0]?.type).toBe("clawdbot-bridge");
     expect(bridgeCall?.[0]?.port).toBe(18790);
     expect(bridgeCall?.[0]?.domain).toBe("local");
     expect(bridgeCall?.[0]?.hostname).toBe("test-host");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
-      "test-host.local",
-    );
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.bridgePort).toBe(
-      "18790",
-    );
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe(
-      "2222",
-    );
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.bridgePort).toBe("18790");
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
     expect((bridgeCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
       "/opt/homebrew/bin/clawdbot",
     );
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.transport).toBe(
-      "bridge",
-    );
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.transport).toBe("bridge");
 
     // We don't await `advertise()`, but it should still be called for each service.
     expect(advertise).toHaveBeenCalledTimes(1);
@@ -165,8 +153,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "announced",
         on,
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -179,10 +166,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     // 1 service × 2 listeners
-    expect(onCalls.map((c) => c.event)).toEqual([
-      "name-change",
-      "hostname-change",
-    ]);
+    expect(onCalls.map((c) => c.event)).toEqual(["name-change", "hostname-change"]);
 
     await started.stop();
   });
@@ -207,8 +191,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "announced",
         on: vi.fn(),
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -252,8 +235,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "unannounced",
         on: vi.fn(),
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -270,9 +252,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("advertise failed"),
-    );
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
 
     // watchdog should attempt re-advertise at the 60s interval tick
     await vi.advanceTimersByTimeAsync(60_000);
@@ -302,8 +282,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "unannounced",
         on: vi.fn(),
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -316,9 +295,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith(
-      expect.stringContaining("advertise threw"),
-    );
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
 
     await started.stop();
   });
@@ -338,8 +315,7 @@ describe("gateway bonjour advertiser", () => {
         destroy,
         serviceState: "announced",
         on: vi.fn(),
-        getFQDN: () =>
-          `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
+        getFQDN: () => `${asString(options.type, "service")}.${asString(options.domain, "local")}.`,
         getHostname: () => asString(options.hostname, "unknown"),
         getPort: () => Number(options.port ?? -1),
       };
@@ -355,9 +331,7 @@ describe("gateway bonjour advertiser", () => {
     expect(bridgeCall?.[0]?.name).toBe("Mac (Clawdbot)");
     expect(bridgeCall?.[0]?.domain).toBe("local");
     expect(bridgeCall?.[0]?.hostname).toBe("Mac");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
-      "Mac.local",
-    );
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
 
     await started.stop();
   });

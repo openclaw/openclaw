@@ -1,9 +1,6 @@
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageWindow,
-} from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type ClaudeUsageResponse = {
   five_hour?: { utilization?: number; resets_at?: string };
@@ -21,8 +18,7 @@ type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
 function resolveClaudeWebSessionKey(): string | undefined {
   const direct =
-    process.env.CLAUDE_AI_SESSION_KEY?.trim() ??
-    process.env.CLAUDE_WEB_SESSION_KEY?.trim();
+    process.env.CLAUDE_AI_SESSION_KEY?.trim() ?? process.env.CLAUDE_WEB_SESSION_KEY?.trim();
   if (direct?.startsWith("sk-ant-")) return direct;
 
   const cookieHeader = process.env.CLAUDE_WEB_COOKIE?.trim();
@@ -70,9 +66,7 @@ async function fetchClaudeWebUsage(
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at
-        ? new Date(data.five_hour.resets_at).getTime()
-        : undefined,
+      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
     });
   }
 
@@ -80,9 +74,7 @@ async function fetchClaudeWebUsage(
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at
-        ? new Date(data.seven_day.resets_at).getTime()
-        : undefined,
+      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
     });
   }
 
@@ -137,10 +129,7 @@ export async function fetchClaudeUsage(
     // Claude CLI setup-token yields tokens that can be used for inference, but may not
     // include user:profile scope required by the OAuth usage endpoint. When a claude.ai
     // browser sessionKey is available, fall back to the web API.
-    if (
-      res.status === 403 &&
-      message?.includes("scope requirement user:profile")
-    ) {
+    if (res.status === 403 && message?.includes("scope requirement user:profile")) {
       const sessionKey = resolveClaudeWebSessionKey();
       if (sessionKey) {
         const web = await fetchClaudeWebUsage(sessionKey, timeoutMs, fetchFn);
@@ -164,9 +153,7 @@ export async function fetchClaudeUsage(
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at
-        ? new Date(data.five_hour.resets_at).getTime()
-        : undefined,
+      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
     });
   }
 
@@ -174,9 +161,7 @@ export async function fetchClaudeUsage(
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at
-        ? new Date(data.seven_day.resets_at).getTime()
-        : undefined,
+      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
     });
   }
 

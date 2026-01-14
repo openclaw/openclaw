@@ -4,11 +4,7 @@ import path from "node:path";
 import { CHANNEL_IDS } from "../../channels/registry.js";
 import { STATE_DIR_CLAWDBOT } from "../../config/config.js";
 
-export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(
-  os.homedir(),
-  ".clawdbot",
-  "sandboxes",
-);
+export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(os.homedir(), ".clawdbot", "sandboxes");
 
 export const DEFAULT_SANDBOX_IMAGE = "clawdbot-sandbox:bookworm-slim";
 export const DEFAULT_SANDBOX_CONTAINER_PREFIX = "clawdbot-sbx-";
@@ -41,10 +37,8 @@ export const DEFAULT_TOOL_DENY = [
   ...CHANNEL_IDS,
 ] as const;
 
-export const DEFAULT_SANDBOX_BROWSER_IMAGE =
-  "clawdbot-sandbox-browser:bookworm-slim";
-export const DEFAULT_SANDBOX_COMMON_IMAGE =
-  "clawdbot-sandbox-common:bookworm-slim";
+export const DEFAULT_SANDBOX_BROWSER_IMAGE = "clawdbot-sandbox-browser:bookworm-slim";
+export const DEFAULT_SANDBOX_COMMON_IMAGE = "clawdbot-sandbox-common:bookworm-slim";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdbot-sbx-browser-";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
@@ -55,11 +49,5 @@ export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
 export const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDBOT, "sandbox");
-export const SANDBOX_REGISTRY_PATH = path.join(
-  SANDBOX_STATE_DIR,
-  "containers.json",
-);
-export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(
-  SANDBOX_STATE_DIR,
-  "browsers.json",
-);
+export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
+export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");

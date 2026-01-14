@@ -106,8 +106,7 @@ function wrapLine(text: string, width: number): string[] {
   let bufVisible = 0;
   let lastBreakIndex: number | null = null;
 
-  const bufToString = (slice?: Token[]) =>
-    (slice ?? buf).map((t) => t.value).join("");
+  const bufToString = (slice?: Token[]) => (slice ?? buf).map((t) => t.value).join("");
 
   const bufVisibleWidth = (slice: Token[]) =>
     slice.reduce((acc, t) => acc + (t.kind === "char" ? 1 : 0), 0);
@@ -132,11 +131,7 @@ function wrapLine(text: string, width: number): string[] {
     const rest = buf.slice(breakAt);
     pushLine(bufToString(left));
 
-    while (
-      rest.length > 0 &&
-      rest[0]?.kind === "char" &&
-      isSpaceChar(rest[0].value)
-    ) {
+    while (rest.length > 0 && rest[0]?.kind === "char" && isSpaceChar(rest[0].value)) {
       rest.shift();
     }
 
@@ -177,10 +172,7 @@ export function renderTable(opts: RenderTableOptions): string {
   if (border === "none") {
     const columns = opts.columns;
     const header = columns.map((c) => c.header).join(" | ");
-    const lines = [
-      header,
-      ...opts.rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | ")),
-    ];
+    const lines = [header, ...opts.rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | "))];
     return `${lines.join("\n")}\n`;
   }
 
@@ -189,10 +181,7 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const metrics = columns.map((c) => {
     const headerW = visibleWidth(c.header);
-    const cellW = Math.max(
-      0,
-      ...opts.rows.map((r) => visibleWidth(r[c.key] ?? "")),
-    );
+    const cellW = Math.max(0, ...opts.rows.map((r) => visibleWidth(r[c.key] ?? "")));
     return { headerW, cellW };
   });
 
@@ -272,8 +261,7 @@ export function renderTable(opts: RenderTableOptions): string {
         while (extra > 0) {
           let progressed = false;
           for (const i of flexCols) {
-            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY))
-              continue;
+            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY)) continue;
             widths[i] = (widths[i] ?? 0) + 1;
             extra -= 1;
             progressed = true;
@@ -321,20 +309,14 @@ export function renderTable(opts: RenderTableOptions): string {
   const padStr = repeat(" ", padding);
 
   const renderRow = (record: Record<string, string>, isHeader = false) => {
-    const cells = columns.map((c) =>
-      isHeader ? c.header : (record[c.key] ?? ""),
-    );
+    const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
     const wrapped = cells.map((cell, i) => wrapLine(cell, contentWidthFor(i)));
     const height = Math.max(...wrapped.map((w) => w.length));
     const out: string[] = [];
     for (let li = 0; li < height; li += 1) {
       const parts = wrapped.map((lines, i) => {
         const raw = lines[li] ?? "";
-        const aligned = padCell(
-          raw,
-          contentWidthFor(i),
-          columns[i]?.align ?? "left",
-        );
+        const aligned = padCell(raw, contentWidthFor(i), columns[i]?.align ?? "left");
         return `${padStr}${aligned}${padStr}`;
       });
       out.push(`${box.v}${parts.join(box.v)}${box.v}`);

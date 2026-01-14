@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   agentCommand,
   connectOk,
@@ -87,9 +84,7 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
 
     await waitFor(() => spy.mock.calls.length > callsBefore);
-    const call = spy.mock.calls.at(-1)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const call = spy.mock.calls.at(-1)?.[0] as { sessionKey?: string } | undefined;
     expect(call?.sessionKey).toBe("agent:main:subagent:abc");
 
     ws.close();
@@ -137,9 +132,7 @@ describe("gateway server chat", () => {
       idempotencyKey: "idem-1",
     });
     expect(res.ok).toBe(false);
-    expect(
-      (res.error as { message?: string } | undefined)?.message ?? "",
-    ).toMatch(/send blocked/i);
+    expect((res.error as { message?: string } | undefined)?.message ?? "").toMatch(/send blocked/i);
 
     ws.close();
     await server.close();
@@ -179,9 +172,7 @@ describe("gateway server chat", () => {
       idempotencyKey: "idem-2",
     });
     expect(res.ok).toBe(false);
-    expect(
-      (res.error as { message?: string } | undefined)?.message ?? "",
-    ).toMatch(/send blocked/i);
+    expect((res.error as { message?: string } | undefined)?.message ?? "").toMatch(/send blocked/i);
 
     ws.close();
     await server.close();
@@ -218,11 +209,7 @@ describe("gateway server chat", () => {
       }),
     );
 
-    const res = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === reqId,
-      8000,
-    );
+    const res = await onceMessage(ws, (o) => o.type === "res" && o.id === reqId, 8000);
     expect(res.ok).toBe(true);
     expect(res.payload?.runId).toBeDefined();
 
@@ -230,9 +217,7 @@ describe("gateway server chat", () => {
     const call = spy.mock.calls.at(-1)?.[0] as
       | { images?: Array<{ type: string; data: string; mimeType: string }> }
       | undefined;
-    expect(call?.images).toEqual([
-      { type: "image", data: pngB64, mimeType: "image/png" },
-    ]);
+    expect(call?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
     ws.close();
     await server.close();
@@ -278,35 +263,23 @@ describe("gateway server chat", () => {
         }),
       );
     }
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      lines.join("\n"),
-      "utf-8",
-    );
+    await fs.writeFile(path.join(dir, "sess-main.jsonl"), lines.join("\n"), "utf-8");
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const defaultRes = await rpcReq<{ messages?: unknown[] }>(
-      ws,
-      "chat.history",
-      {
-        sessionKey: "main",
-      },
-    );
+    const defaultRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
     expect(defaultRes.ok).toBe(true);
     const defaultMsgs = defaultRes.payload?.messages ?? [];
     expect(defaultMsgs.length).toBe(200);
     expect(firstContentText(defaultMsgs[0])).toBe("m100");
 
-    const limitedRes = await rpcReq<{ messages?: unknown[] }>(
-      ws,
-      "chat.history",
-      {
-        sessionKey: "main",
-        limit: 5,
-      },
-    );
+    const limitedRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+      limit: 5,
+    });
     expect(limitedRes.ok).toBe(true);
     const limitedMsgs = limitedRes.payload?.messages ?? [];
     expect(limitedMsgs.length).toBe(5);
@@ -324,19 +297,11 @@ describe("gateway server chat", () => {
         }),
       );
     }
-    await fs.writeFile(
-      path.join(dir, "sess-main.jsonl"),
-      largeLines.join("\n"),
-      "utf-8",
-    );
+    await fs.writeFile(path.join(dir, "sess-main.jsonl"), largeLines.join("\n"), "utf-8");
 
-    const cappedRes = await rpcReq<{ messages?: unknown[] }>(
-      ws,
-      "chat.history",
-      {
-        sessionKey: "main",
-      },
-    );
+    const cappedRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
     expect(cappedRes.ok).toBe(true);
     const cappedMsgs = cappedRes.payload?.messages ?? [];
     expect(cappedMsgs.length).toBe(200);

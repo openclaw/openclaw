@@ -131,11 +131,7 @@ describe("routeReply", () => {
       sessionKey: "agent:rich:main",
       cfg,
     });
-    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
-      "channel:C123",
-      "hi",
-      expect.any(Object),
-    );
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith("channel:C123", "hi", expect.any(Object));
   });
 
   it("passes thread id to Telegram sends", async () => {

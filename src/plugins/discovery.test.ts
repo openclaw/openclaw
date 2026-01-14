@@ -46,19 +46,11 @@ describe("discoverClawdbotPlugins", () => {
 
     const globalExt = path.join(stateDir, "extensions");
     fs.mkdirSync(globalExt, { recursive: true });
-    fs.writeFileSync(
-      path.join(globalExt, "alpha.ts"),
-      "export default function () {}",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(globalExt, "alpha.ts"), "export default function () {}", "utf-8");
 
     const workspaceExt = path.join(workspaceDir, ".clawdbot", "extensions");
     fs.mkdirSync(workspaceExt, { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceExt, "beta.ts"),
-      "export default function () {}",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await withStateDir(stateDir, async () => {
       const { discoverClawdbotPlugins } = await import("./discovery.js");
@@ -145,11 +137,7 @@ describe("discoverClawdbotPlugins", () => {
       }),
       "utf-8",
     );
-    fs.writeFileSync(
-      path.join(packDir, "index.js"),
-      "module.exports = {}",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(packDir, "index.js"), "module.exports = {}", "utf-8");
 
     const { candidates } = await withStateDir(stateDir, async () => {
       const { discoverClawdbotPlugins } = await import("./discovery.js");

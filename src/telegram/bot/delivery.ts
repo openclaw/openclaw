@@ -12,14 +12,10 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { markdownToTelegramHtml } from "../format.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
-import {
-  buildTelegramThreadParams,
-  resolveTelegramReplyId,
-} from "./helpers.js";
+import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
 
-const PARSE_ERR_RE =
-  /can't parse entities|parse entities|find end of the entity/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -31,15 +27,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   messageThreadId?: number;
 }) {
-  const {
-    replies,
-    chatId,
-    runtime,
-    bot,
-    replyToMode,
-    textLimit,
-    messageThreadId,
-  } = params;
+  const { replies, chatId, runtime, bot, replyToMode, textLimit, messageThreadId } = params;
   const threadParams = buildTelegramThreadParams(messageThreadId);
   let hasReplied = false;
   for (const reply of replies) {
@@ -47,10 +35,7 @@ export async function deliverReplies(params: {
       runtime.error?.(danger("reply missing text/media"));
       continue;
     }
-    const replyToId =
-      replyToMode === "off"
-        ? undefined
-        : resolveTelegramReplyId(reply.replyToId);
+    const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -60,9 +45,7 @@ export async function deliverReplies(params: {
       for (const chunk of chunkMarkdownText(reply.text || "", textLimit)) {
         await sendTelegramText(bot, chatId, chunk, runtime, {
           replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied)
-              ? replyToId
-              : undefined,
+            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
           messageThreadId,
         });
         if (replyToId && !hasReplied) {
@@ -85,9 +68,7 @@ export async function deliverReplies(params: {
       const caption = first ? (reply.text ?? undefined) : undefined;
       first = false;
       const replyToMessageId =
-        replyToId && (replyToMode === "all" || !hasReplied)
-          ? replyToId
-          : undefined;
+        replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
       const mediaParams: Record<string, unknown> = {
         caption,
         reply_to_message_id: replyToMessageId,
@@ -145,11 +126,7 @@ export async function resolveMedia(
 ): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
   const msg = ctx.message;
   const m =
-    msg.photo?.[msg.photo.length - 1] ??
-    msg.video ??
-    msg.document ??
-    msg.audio ??
-    msg.voice;
+    msg.photo?.[msg.photo.length - 1] ?? msg.video ?? msg.document ?? msg.audio ?? msg.voice;
   if (!m?.file_id) return null;
   const file = await ctx.getFile();
   if (!file.file_path) {
@@ -157,9 +134,7 @@ export async function resolveMedia(
   }
   const fetchImpl = proxyFetch ?? globalThis.fetch;
   if (!fetchImpl) {
-    throw new Error(
-      "fetch is not available; set channels.telegram.proxy in config",
-    );
+    throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
   const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
   const fetched = await fetchRemoteMedia({
@@ -167,12 +142,7 @@ export async function resolveMedia(
     fetchImpl,
     filePathHint: file.file_path,
   });
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-  );
+  const saved = await saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes);
   let placeholder = "<media:document>";
   if (msg.photo) placeholder = "<media:image>";
   else if (msg.video) placeholder = "<media:video>";
@@ -204,9 +174,7 @@ async function sendTelegramText(
   } catch (err) {
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
-      runtime.log?.(
-        `telegram HTML parse failed; retrying without formatting: ${errText}`,
-      );
+      runtime.log?.(`telegram HTML parse failed; retrying without formatting: ${errText}`);
       const res = await bot.api.sendMessage(chatId, text, {
         ...baseParams,
       });

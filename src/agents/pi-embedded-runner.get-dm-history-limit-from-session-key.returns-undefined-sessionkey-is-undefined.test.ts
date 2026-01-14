@@ -5,9 +5,7 @@ import { ensureClawdbotModelsJson } from "./models-config.js";
 import { getDmHistoryLimitFromSessionKey } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-    "@mariozechner/pi-ai",
-  );
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...actual,
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -103,9 +101,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     expect(getDmHistoryLimitFromSessionKey(undefined, {})).toBeUndefined();
   });
   it("returns undefined when config is undefined", () => {
-    expect(
-      getDmHistoryLimitFromSessionKey("telegram:dm:123", undefined),
-    ).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", undefined)).toBeUndefined();
   });
   it("returns dmHistoryLimit for telegram provider", () => {
     const config = {
@@ -123,9 +119,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 10 } },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config),
-    ).toBe(10);
+    expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
   });
   it("returns undefined for non-dm session kinds", () => {
     const config = {
@@ -134,26 +128,18 @@ describe("getDmHistoryLimitFromSessionKey", () => {
         slack: { dmHistoryLimit: 10 },
       },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:C1", config),
-    ).toBeUndefined();
-    expect(
-      getDmHistoryLimitFromSessionKey("telegram:slash:123", config),
-    ).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:C1", config)).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("telegram:slash:123", config)).toBeUndefined();
   });
   it("returns undefined for unknown provider", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 15 } },
     } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("unknown:dm:123", config),
-    ).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("unknown:dm:123", config)).toBeUndefined();
   });
   it("returns undefined when provider config has no dmHistoryLimit", () => {
     const config = { channels: { telegram: {} } } as ClawdbotConfig;
-    expect(
-      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
-    ).toBeUndefined();
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
   });
   it("handles all supported providers", () => {
     const providers = [
@@ -170,9 +156,7 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       const config = {
         channels: { [provider]: { dmHistoryLimit: 5 } },
       } as ClawdbotConfig;
-      expect(
-        getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config),
-      ).toBe(5);
+      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config)).toBe(5);
     }
   });
   it("handles per-DM overrides for all supported providers", () => {
@@ -196,27 +180,16 @@ describe("getDmHistoryLimitFromSessionKey", () => {
           },
         },
       } as ClawdbotConfig;
-      expect(
-        getDmHistoryLimitFromSessionKey(
-          `${provider}:dm:user123`,
-          configWithOverride,
-        ),
-      ).toBe(7);
+      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:user123`, configWithOverride)).toBe(7);
 
       // Test fallback to provider default when user not in dms
-      expect(
-        getDmHistoryLimitFromSessionKey(
-          `${provider}:dm:otheruser`,
-          configWithOverride,
-        ),
-      ).toBe(20);
+      expect(getDmHistoryLimitFromSessionKey(`${provider}:dm:otheruser`, configWithOverride)).toBe(
+        20,
+      );
 
       // Test with agent-prefixed key
       expect(
-        getDmHistoryLimitFromSessionKey(
-          `agent:main:${provider}:dm:user123`,
-          configWithOverride,
-        ),
+        getDmHistoryLimitFromSessionKey(`agent:main:${provider}:dm:user123`, configWithOverride),
       ).toBe(7);
     }
   });

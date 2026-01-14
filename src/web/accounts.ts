@@ -3,11 +3,7 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import type {
-  DmPolicy,
-  GroupPolicy,
-  WhatsAppAccountConfig,
-} from "../config/types.js";
+import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -75,10 +71,10 @@ function legacyAuthExists(authDir: string): boolean {
   }
 }
 
-export function resolveWhatsAppAuthDir(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-}): { authDir: string; isLegacy: boolean } {
+export function resolveWhatsAppAuthDir(params: { cfg: ClawdbotConfig; accountId: string }): {
+  authDir: string;
+  isLegacy: boolean;
+} {
   const accountId = params.accountId.trim() || DEFAULT_ACCOUNT_ID;
   const account = resolveAccountConfig(params.cfg, accountId);
   const configured = account?.authDir?.trim();
@@ -101,8 +97,7 @@ export function resolveWhatsAppAccount(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedWhatsAppAccount {
-  const accountId =
-    params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
+  const accountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   const accountCfg = resolveAccountConfig(params.cfg, accountId);
   const enabled = accountCfg?.enabled !== false;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
@@ -119,33 +114,20 @@ export function resolveWhatsAppAccount(params: {
       params.cfg.messages?.messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
-    selfChatMode:
-      accountCfg?.selfChatMode ?? params.cfg.channels?.whatsapp?.selfChatMode,
+    selfChatMode: accountCfg?.selfChatMode ?? params.cfg.channels?.whatsapp?.selfChatMode,
     dmPolicy: accountCfg?.dmPolicy ?? params.cfg.channels?.whatsapp?.dmPolicy,
-    allowFrom:
-      accountCfg?.allowFrom ?? params.cfg.channels?.whatsapp?.allowFrom,
-    groupAllowFrom:
-      accountCfg?.groupAllowFrom ??
-      params.cfg.channels?.whatsapp?.groupAllowFrom,
-    groupPolicy:
-      accountCfg?.groupPolicy ?? params.cfg.channels?.whatsapp?.groupPolicy,
-    textChunkLimit:
-      accountCfg?.textChunkLimit ??
-      params.cfg.channels?.whatsapp?.textChunkLimit,
-    mediaMaxMb:
-      accountCfg?.mediaMaxMb ?? params.cfg.channels?.whatsapp?.mediaMaxMb,
-    blockStreaming:
-      accountCfg?.blockStreaming ??
-      params.cfg.channels?.whatsapp?.blockStreaming,
-    ackReaction:
-      accountCfg?.ackReaction ?? params.cfg.channels?.whatsapp?.ackReaction,
+    allowFrom: accountCfg?.allowFrom ?? params.cfg.channels?.whatsapp?.allowFrom,
+    groupAllowFrom: accountCfg?.groupAllowFrom ?? params.cfg.channels?.whatsapp?.groupAllowFrom,
+    groupPolicy: accountCfg?.groupPolicy ?? params.cfg.channels?.whatsapp?.groupPolicy,
+    textChunkLimit: accountCfg?.textChunkLimit ?? params.cfg.channels?.whatsapp?.textChunkLimit,
+    mediaMaxMb: accountCfg?.mediaMaxMb ?? params.cfg.channels?.whatsapp?.mediaMaxMb,
+    blockStreaming: accountCfg?.blockStreaming ?? params.cfg.channels?.whatsapp?.blockStreaming,
+    ackReaction: accountCfg?.ackReaction ?? params.cfg.channels?.whatsapp?.ackReaction,
     groups: accountCfg?.groups ?? params.cfg.channels?.whatsapp?.groups,
   };
 }
 
-export function listEnabledWhatsAppAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedWhatsAppAccount[] {
+export function listEnabledWhatsAppAccounts(cfg: ClawdbotConfig): ResolvedWhatsAppAccount[] {
   return listWhatsAppAccountIds(cfg)
     .map((accountId) => resolveWhatsAppAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

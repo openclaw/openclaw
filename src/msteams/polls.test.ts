@@ -4,11 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  buildMSTeamsPollCard,
-  createMSTeamsPollStoreFs,
-  extractMSTeamsPollVote,
-} from "./polls.js";
+import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
 
 describe("msteams polls", () => {
   it("builds poll cards with fallback text", () => {
@@ -38,9 +34,7 @@ describe("msteams polls", () => {
   });
 
   it("stores and records poll votes", async () => {
-    const home = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-msteams-polls-"),
-    );
+    const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "clawdbot-msteams-polls-"));
     const store = createMSTeamsPollStoreFs({ homedir: () => home });
     await store.createPoll({
       id: "poll-2",

@@ -187,10 +187,7 @@ describe("directive parsing", () => {
   });
 
   it("preserves newlines when stripping reply tags", () => {
-    const res = extractReplyToTag(
-      "line 1\nline 2 [[reply_to_current]]\n\nline 3",
-      "msg-2",
-    );
+    const res = extractReplyToTag("line 1\nline 2 [[reply_to_current]]\n\nline 3", "msg-2");
     expect(res.replyToId).toBe("msg-2");
     expect(res.cleaned).toBe("line 1\nline 2\n\nline 3");
   });

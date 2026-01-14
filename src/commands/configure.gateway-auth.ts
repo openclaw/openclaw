@@ -2,10 +2,7 @@ import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  applyAuthChoice,
-  resolvePreferredProviderForAuthChoice,
-} from "./auth-choice.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyPrimaryModel, promptDefaultModel } from "./model-picker.js";
 

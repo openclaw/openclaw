@@ -33,9 +33,7 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
 // Both patterns are flattened to { type: "string", enum: ["a", "b", ...] }.
-function tryFlattenLiteralAnyOf(
-  variants: unknown[],
-): { type: string; enum: unknown[] } | null {
+function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unknown[] } | null {
   if (variants.length === 0) return null;
 
   const allValues: unknown[] = [];
@@ -62,8 +60,7 @@ function tryFlattenLiteralAnyOf(
     allValues.push(literalValue);
   }
 
-  if (commonType && allValues.length > 0)
-    return { type: commonType, enum: allValues };
+  if (commonType && allValues.length > 0) return { type: commonType, enum: allValues };
   return null;
 }
 
@@ -78,11 +75,7 @@ function isNullSchema(variant: unknown): boolean {
   }
   const typeValue = record.type;
   if (typeValue === "null") return true;
-  if (
-    Array.isArray(typeValue) &&
-    typeValue.length === 1 &&
-    typeValue[0] === "null"
-  ) {
+  if (Array.isArray(typeValue) && typeValue.length === 1 && typeValue[0] === "null") {
     return true;
   }
   return false;
@@ -107,9 +100,7 @@ function extendSchemaDefs(
   schema: Record<string, unknown>,
 ): SchemaDefs | undefined {
   const defsEntry =
-    schema.$defs &&
-    typeof schema.$defs === "object" &&
-    !Array.isArray(schema.$defs)
+    schema.$defs && typeof schema.$defs === "object" && !Array.isArray(schema.$defs)
       ? (schema.$defs as Record<string, unknown>)
       : undefined;
   const legacyDefsEntry =
@@ -126,8 +117,7 @@ function extendSchemaDefs(
     for (const [key, value] of Object.entries(defsEntry)) next.set(key, value);
   }
   if (legacyDefsEntry) {
-    for (const [key, value] of Object.entries(legacyDefsEntry))
-      next.set(key, value);
+    for (const [key, value] of Object.entries(legacyDefsEntry)) next.set(key, value);
   }
   return next;
 }
@@ -136,10 +126,7 @@ function decodeJsonPointerSegment(segment: string): string {
   return segment.replaceAll("~1", "/").replaceAll("~0", "~");
 }
 
-function tryResolveLocalRef(
-  ref: string,
-  defs: SchemaDefs | undefined,
-): unknown {
+function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) return undefined;
   const match = ref.match(/^#\/(?:\$defs|definitions)\/(.+)$/);
   if (!match) return undefined;
@@ -155,9 +142,7 @@ function cleanSchemaForGeminiWithDefs(
 ): unknown {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) {
-    return schema.map((item) =>
-      cleanSchemaForGeminiWithDefs(item, defs, refStack),
-    );
+    return schema.map((item) => cleanSchemaForGeminiWithDefs(item, defs, refStack));
   }
 
   const obj = schema as Record<string, unknown>;
@@ -172,11 +157,7 @@ function cleanSchemaForGeminiWithDefs(
       const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
       nextRefStack.add(refValue);
 
-      const cleaned = cleanSchemaForGeminiWithDefs(
-        resolved,
-        nextDefs,
-        nextRefStack,
-      );
+      const cleaned = cleanSchemaForGeminiWithDefs(resolved, nextDefs, nextRefStack);
       if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
         return cleaned;
       }
@@ -211,9 +192,7 @@ function cleanSchemaForGeminiWithDefs(
     : undefined;
 
   if (hasAnyOf) {
-    const { variants: nonNullVariants, stripped } = stripNullVariants(
-      cleanedAnyOf ?? [],
-    );
+    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedAnyOf ?? []);
     if (stripped) cleanedAnyOf = nonNullVariants;
 
     const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
@@ -243,9 +222,7 @@ function cleanSchemaForGeminiWithDefs(
   }
 
   if (hasOneOf) {
-    const { variants: nonNullVariants, stripped } = stripNullVariants(
-      cleanedOneOf ?? [],
-    );
+    const { variants: nonNullVariants, stripped } = stripNullVariants(cleanedOneOf ?? []);
     if (stripped) cleanedOneOf = nonNullVariants;
 
     const flattened = tryFlattenLiteralAnyOf(nonNullVariants);
@@ -308,15 +285,11 @@ function cleanSchemaForGeminiWithDefs(
     } else if (key === "anyOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedAnyOf ??
-        value.map((variant) =>
-          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-        );
+        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
     } else if (key === "oneOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedOneOf ??
-        value.map((variant) =>
-          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-        );
+        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
     } else if (key === "allOf" && Array.isArray(value)) {
       cleaned[key] = value.map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),

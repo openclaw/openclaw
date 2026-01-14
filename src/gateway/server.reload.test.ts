@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getFreePort,
-  installGatewayTestHooks,
-  startGatewayServer,
-} from "./test-helpers.js";
+import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
   const cronInstances: Array<{
@@ -103,16 +99,11 @@ const hoisted = vi.hoisted(() => {
   const createChannelManager = vi.fn(() => providerManager);
 
   const reloaderStop = vi.fn(async () => {});
-  let onHotReload:
-    | ((plan: unknown, nextConfig: unknown) => Promise<void>)
-    | null = null;
+  let onHotReload: ((plan: unknown, nextConfig: unknown) => Promise<void>) | null = null;
   let onRestart: ((plan: unknown, nextConfig: unknown) => void) | null = null;
 
   const startGatewayConfigReloader = vi.fn(
-    (opts: {
-      onHotReload: typeof onHotReload;
-      onRestart: typeof onRestart;
-    }) => {
+    (opts: { onHotReload: typeof onHotReload; onRestart: typeof onRestart }) => {
       onHotReload = opts.onHotReload as typeof onHotReload;
       onRestart = opts.onRestart as typeof onRestart;
       return { stop: reloaderStop };
@@ -142,8 +133,7 @@ vi.mock("../cron/service.js", () => ({
 }));
 
 vi.mock("./server-browser.js", () => ({
-  startBrowserControlServerIfEnabled:
-    hoisted.startBrowserControlServerIfEnabled,
+  startBrowserControlServerIfEnabled: hoisted.startBrowserControlServerIfEnabled,
 }));
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
@@ -235,13 +225,7 @@ describe("gateway hot reload", () => {
         restartBrowserControl: true,
         restartCron: true,
         restartHeartbeat: true,
-        restartChannels: new Set([
-          "whatsapp",
-          "telegram",
-          "discord",
-          "signal",
-          "imessage",
-        ]),
+        restartChannels: new Set(["whatsapp", "telegram", "discord", "signal", "imessage"]),
         noopPaths: [],
       },
       nextConfig,
@@ -262,30 +246,16 @@ describe("gateway hot reload", () => {
 
     expect(hoisted.providerManager.stopChannel).toHaveBeenCalledTimes(5);
     expect(hoisted.providerManager.startChannel).toHaveBeenCalledTimes(5);
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
-      "whatsapp",
-    );
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
-      "whatsapp",
-    );
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
-      "telegram",
-    );
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
-      "telegram",
-    );
+    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("whatsapp");
+    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("whatsapp");
+    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
     expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("discord");
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
-      "discord",
-    );
+    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("discord");
     expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("signal");
     expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("signal");
-    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith(
-      "imessage",
-    );
-    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith(
-      "imessage",
-    );
+    expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("imessage");
+    expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("imessage");
 
     await server.close();
   });

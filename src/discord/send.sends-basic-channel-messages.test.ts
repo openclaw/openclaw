@@ -283,9 +283,7 @@ describe("fetchReactionsDiscord", () => {
           { count: 1, emoji: { name: "party_blob", id: "123" } },
         ],
       })
-      .mockResolvedValueOnce([
-        { id: "u1", username: "alpha", discriminator: "0001" },
-      ])
+      .mockResolvedValueOnce([{ id: "u1", username: "alpha", discriminator: "0001" }])
       .mockResolvedValueOnce([{ id: "u2", username: "beta" }]);
     const res = await fetchReactionsDiscord("chan1", "msg1", {
       rest,
@@ -313,8 +311,7 @@ describe("fetchChannelPermissionsDiscord", () => {
 
   it("calculates permissions from guild roles", async () => {
     const { rest, getMock } = makeRest();
-    const perms =
-      PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
+    const perms = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages;
     getMock
       .mockResolvedValueOnce({
         id: "chan1",
@@ -349,11 +346,7 @@ describe("readMessagesDiscord", () => {
   it("passes query params as an object", async () => {
     const { rest, getMock } = makeRest();
     getMock.mockResolvedValue([]);
-    await readMessagesDiscord(
-      "chan1",
-      { limit: 5, before: "10" },
-      { rest, token: "t" },
-    );
+    await readMessagesDiscord("chan1", { limit: 5, before: "10" }, { rest, token: "t" });
     const call = getMock.mock.calls[0];
     const options = call?.[1] as Record<string, unknown>;
     expect(options).toEqual({ limit: 5, before: "10" });
@@ -368,12 +361,7 @@ describe("edit/delete message helpers", () => {
   it("edits message content", async () => {
     const { rest, patchMock } = makeRest();
     patchMock.mockResolvedValue({ id: "m1" });
-    await editMessageDiscord(
-      "chan1",
-      "m1",
-      { content: "hello" },
-      { rest, token: "t" },
-    );
+    await editMessageDiscord("chan1", "m1", { content: "hello" }, { rest, token: "t" });
     expect(patchMock).toHaveBeenCalledWith(
       Routes.channelMessage("chan1", "m1"),
       expect.objectContaining({ body: { content: "hello" } }),
@@ -384,9 +372,7 @@ describe("edit/delete message helpers", () => {
     const { rest, deleteMock } = makeRest();
     deleteMock.mockResolvedValue({});
     await deleteMessageDiscord("chan1", "m1", { rest, token: "t" });
-    expect(deleteMock).toHaveBeenCalledWith(
-      Routes.channelMessage("chan1", "m1"),
-    );
+    expect(deleteMock).toHaveBeenCalledWith(Routes.channelMessage("chan1", "m1"));
   });
 });
 

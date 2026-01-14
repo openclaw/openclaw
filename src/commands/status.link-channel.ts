@@ -1,9 +1,6 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelPlugin,
-} from "../channels/plugins/types.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 
 export type LinkChannelContext = {
@@ -25,9 +22,7 @@ export async function resolveLinkChannelContext(
       accountIds,
     });
     const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled
-      ? plugin.config.isEnabled(account, cfg)
-      : true;
+    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
     const configured = plugin.config.isConfigured
       ? await plugin.config.isConfigured(account, cfg)
       : true;
@@ -48,14 +43,10 @@ export async function resolveLinkChannelContext(
       : undefined;
     const summaryRecord = summary as Record<string, unknown> | undefined;
     const linked =
-      summaryRecord && typeof summaryRecord.linked === "boolean"
-        ? summaryRecord.linked
-        : null;
+      summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     if (linked === null) continue;
     const authAgeMs =
-      summaryRecord && typeof summaryRecord.authAgeMs === "number"
-        ? summaryRecord.authAgeMs
-        : null;
+      summaryRecord && typeof summaryRecord.authAgeMs === "number" ? summaryRecord.authAgeMs : null;
     return { linked, authAgeMs, account, accountId: defaultAccountId, plugin };
   }
   return null;

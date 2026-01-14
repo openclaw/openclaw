@@ -1,9 +1,6 @@
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageWindow,
-} from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -115,10 +112,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function pickNumber(
-  record: Record<string, unknown>,
-  keys: readonly string[],
-): number | undefined {
+function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -130,10 +124,7 @@ function pickNumber(
   return undefined;
 }
 
-function pickString(
-  record: Record<string, unknown>,
-  keys: readonly string[],
-): string | undefined {
+function pickString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -217,14 +208,8 @@ export async function fetchMinimaxUsage(
     };
   }
 
-  const baseResp = isRecord(data.base_resp)
-    ? (data.base_resp as MinimaxBaseResp)
-    : undefined;
-  if (
-    baseResp &&
-    typeof baseResp.status_code === "number" &&
-    baseResp.status_code !== 0
-  ) {
+  const baseResp = isRecord(data.base_resp) ? (data.base_resp as MinimaxBaseResp) : undefined;
+  if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
     return {
       provider: "minimax",
       displayName: PROVIDER_LABELS.minimax,
@@ -245,8 +230,7 @@ export async function fetchMinimaxUsage(
   }
 
   const resetAt =
-    parseEpoch(pickString(payload, RESET_KEYS)) ??
-    parseEpoch(pickNumber(payload, RESET_KEYS));
+    parseEpoch(pickString(payload, RESET_KEYS)) ?? parseEpoch(pickNumber(payload, RESET_KEYS));
   const windows: UsageWindow[] = [
     {
       label: deriveWindowLabel(payload),

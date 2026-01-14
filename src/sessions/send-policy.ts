@@ -3,9 +3,7 @@ import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
-export function normalizeSendPolicy(
-  raw?: string | null,
-): SessionSendPolicyDecision | undefined {
+export function normalizeSendPolicy(raw?: string | null): SessionSendPolicyDecision | undefined {
   const value = raw?.trim().toLowerCase();
   if (value === "allow") return "allow";
   if (value === "deny") return "deny";

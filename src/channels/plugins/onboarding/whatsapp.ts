@@ -4,10 +4,7 @@ import { loginWeb } from "../../../channel-web.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164 } from "../../../utils.js";
@@ -22,28 +19,15 @@ import { promptAccountId } from "./helpers.js";
 
 const channel = "whatsapp" as const;
 
-function setWhatsAppDmPolicy(
-  cfg: ClawdbotConfig,
-  dmPolicy: DmPolicy,
-): ClawdbotConfig {
+function setWhatsAppDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy): ClawdbotConfig {
   return mergeWhatsAppConfig(cfg, { dmPolicy });
 }
 
-function setWhatsAppAllowFrom(
-  cfg: ClawdbotConfig,
-  allowFrom?: string[],
-): ClawdbotConfig {
-  return mergeWhatsAppConfig(
-    cfg,
-    { allowFrom },
-    { unsetOnUndefined: ["allowFrom"] },
-  );
+function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]): ClawdbotConfig {
+  return mergeWhatsAppConfig(cfg, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
 }
 
-function setMessagesResponsePrefix(
-  cfg: ClawdbotConfig,
-  responsePrefix?: string,
-): ClawdbotConfig {
+function setMessagesResponsePrefix(cfg: ClawdbotConfig, responsePrefix?: string): ClawdbotConfig {
   return {
     ...cfg,
     messages: {
@@ -53,10 +37,7 @@ function setMessagesResponsePrefix(
   };
 }
 
-function setWhatsAppSelfChatMode(
-  cfg: ClawdbotConfig,
-  selfChatMode: boolean,
-): ClawdbotConfig {
+function setWhatsAppSelfChatMode(cfg: ClawdbotConfig, selfChatMode: boolean): ClawdbotConfig {
   return mergeWhatsAppConfig(cfg, { selfChatMode });
 }
 
@@ -69,10 +50,7 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function detectWhatsAppLinked(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): Promise<boolean> {
+async function detectWhatsAppLinked(cfg: ClawdbotConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
   const credsPath = path.join(authDir, "creds.json");
   return await pathExists(credsPath);
@@ -86,8 +64,7 @@ async function promptWhatsAppAllowFrom(
 ): Promise<ClawdbotConfig> {
   const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
   const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
-  const existingLabel =
-    existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
+  const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
   const existingResponsePrefix = cfg.messages?.responsePrefix;
 
   if (options?.forceAllowlist) {
@@ -96,8 +73,7 @@ async function promptWhatsAppAllowFrom(
       "WhatsApp number",
     );
     const entry = await prompter.text({
-      message:
-        "Your personal WhatsApp number (the phone you will message from)",
+      message: "Your personal WhatsApp number (the phone you will message from)",
       placeholder: "+15555550123",
       initialValue: existingAllowFrom[0],
       validate: (value) => {
@@ -164,8 +140,7 @@ async function promptWhatsAppAllowFrom(
       "WhatsApp number",
     );
     const entry = await prompter.text({
-      message:
-        "Your personal WhatsApp number (the phone you will message from)",
+      message: "Your personal WhatsApp number (the phone you will message from)",
       placeholder: "+15555550123",
       initialValue: existingAllowFrom[0],
       validate: (value) => {
@@ -274,9 +249,7 @@ async function promptWhatsAppAllowFrom(
       .split(/[\n,;]+/g)
       .map((p) => p.trim())
       .filter(Boolean);
-    const normalized = parts.map((part) =>
-      part === "*" ? "*" : normalizeE164(part),
-    );
+    const normalized = parts.map((part) => (part === "*" ? "*" : normalizeE164(part)));
     const unique = [...new Set(normalized.filter(Boolean))];
     next = setWhatsAppAllowFrom(next, unique);
   }
@@ -289,18 +262,13 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
   getStatus: async ({ cfg, accountOverrides }) => {
     const overrideId = accountOverrides.whatsapp?.trim();
     const defaultAccountId = resolveDefaultWhatsAppAccountId(cfg);
-    const accountId = overrideId
-      ? normalizeAccountId(overrideId)
-      : defaultAccountId;
+    const accountId = overrideId ? normalizeAccountId(overrideId) : defaultAccountId;
     const linked = await detectWhatsAppLinked(cfg, accountId);
-    const accountLabel =
-      accountId === DEFAULT_ACCOUNT_ID ? "default" : accountId;
+    const accountLabel = accountId === DEFAULT_ACCOUNT_ID ? "default" : accountId;
     return {
       channel,
       configured: linked,
-      statusLines: [
-        `WhatsApp (${accountLabel}): ${linked ? "linked" : "not linked"}`,
-      ],
+      statusLines: [`WhatsApp (${accountLabel}): ${linked ? "linked" : "not linked"}`],
       selectionHint: linked ? "linked" : "not linked",
       quickstartScore: linked ? 5 : 4,
     };
@@ -343,9 +311,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
               ...next.channels?.whatsapp?.accounts,
               [accountId]: {
                 ...next.channels?.whatsapp?.accounts?.[accountId],
-                enabled:
-                  next.channels?.whatsapp?.accounts?.[accountId]?.enabled ??
-                  true,
+                enabled: next.channels?.whatsapp?.accounts?.[accountId]?.enabled ?? true,
               },
             },
           },
@@ -370,9 +336,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
       );
     }
     const wantsLink = await prompter.confirm({
-      message: linked
-        ? "WhatsApp already linked. Re-link now?"
-        : "Link WhatsApp now (QR)?",
+      message: linked ? "WhatsApp already linked. Re-link now?" : "Link WhatsApp now (QR)?",
       initialValue: !linked,
     });
     if (wantsLink) {
@@ -380,16 +344,10 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
         await loginWeb(false, undefined, runtime, accountId);
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
-        await prompter.note(
-          `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
-          "WhatsApp help",
-        );
+        await prompter.note(`Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`, "WhatsApp help");
       }
     } else if (!linked) {
-      await prompter.note(
-        "Run `clawdbot channels login` later to link WhatsApp.",
-        "WhatsApp",
-      );
+      await prompter.note("Run `clawdbot channels login` later to link WhatsApp.", "WhatsApp");
     }
 
     next = await promptWhatsAppAllowFrom(next, runtime, prompter, {

@@ -77,13 +77,8 @@ const STRUCTURAL_ROLES = new Set([
   "none",
 ]);
 
-export function getRoleSnapshotStats(
-  snapshot: string,
-  refs: RoleRefMap,
-): RoleSnapshotStats {
-  const interactive = Object.values(refs).filter((r) =>
-    INTERACTIVE_ROLES.has(r.role),
-  ).length;
+export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
+  const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
     lines: snapshot.split("\n").length,
     chars: snapshot.length,
@@ -137,10 +132,7 @@ function createRoleNameTracker(): RoleNameTracker {
   };
 }
 
-function removeNthFromNonDuplicates(
-  refs: RoleRefMap,
-  tracker: RoleNameTracker,
-) {
+function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) {
   const duplicates = tracker.getDuplicateKeys();
   for (const [ref, data] of Object.entries(refs)) {
     const key = tracker.getKey(data.role, data.name);

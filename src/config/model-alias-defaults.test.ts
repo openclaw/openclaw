@@ -16,12 +16,8 @@ describe("applyModelDefaults", () => {
     } satisfies ClawdbotConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(
-      next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias,
-    ).toBe("opus");
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe(
-      "gpt",
-    );
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 
   it("does not override existing aliases", () => {
@@ -37,9 +33,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(
-      next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias,
-    ).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {
@@ -56,11 +50,9 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(
-      next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias,
-    ).toBe("");
-    expect(
-      next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias,
-    ).toBe("gemini-flash");
+    expect(next.agents?.defaults?.models?.["google/gemini-3-pro-preview"]?.alias).toBe("");
+    expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
+      "gemini-flash",
+    );
   });
 });

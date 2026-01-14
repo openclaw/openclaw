@@ -4,10 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  readTelegramUpdateOffset,
-  writeTelegramUpdateOffset,
-} from "./update-offset-store.js";
+import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   const previous = process.env.CLAWDBOT_STATE_DIR;
@@ -25,18 +22,14 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
 describe("telegram update offset store", () => {
   it("persists and reloads the last update id", async () => {
     await withTempStateDir(async () => {
-      expect(
-        await readTelegramUpdateOffset({ accountId: "primary" }),
-      ).toBeNull();
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
 
       await writeTelegramUpdateOffset({
         accountId: "primary",
         updateId: 421,
       });
 
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(
-        421,
-      );
+      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
     });
   });
 });

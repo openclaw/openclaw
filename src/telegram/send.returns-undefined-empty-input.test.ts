@@ -207,12 +207,12 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await expect(
-      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
-    ).rejects.toThrow(/chat not found/i);
-    await expect(
-      sendMessageTelegram(chatId, "hi", { token: "tok", api }),
-    ).rejects.toThrow(/chat_id=123/);
+    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
+      /chat not found/i,
+    );
+    await expect(sendMessageTelegram(chatId, "hi", { token: "tok", api })).rejects.toThrow(
+      /chat_id=123/,
+    );
   });
 
   it("retries on transient errors with retry_after", async () => {
@@ -248,9 +248,7 @@ describe("sendMessageTelegram", () => {
 
   it("does not retry on non-transient errors", async () => {
     const chatId = "123";
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValue(new Error("400: Bad Request"));
+    const sendMessage = vi.fn().mockRejectedValue(new Error("400: Bad Request"));
     const api = { sendMessage } as unknown as {
       sendMessage: typeof sendMessage;
     };
@@ -430,14 +428,10 @@ describe("sendMessageTelegram", () => {
       sendMessage: typeof sendMessage;
     };
 
-    await sendMessageTelegram(
-      `telegram:group:${chatId}:topic:271`,
-      "hello forum",
-      {
-        token: "tok",
-        api,
-      },
-    );
+    await sendMessageTelegram(`telegram:group:${chatId}:topic:271`, "hello forum", {
+      token: "tok",
+      api,
+    });
 
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
       parse_mode: "HTML",

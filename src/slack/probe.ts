@@ -20,10 +20,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-export async function probeSlack(
-  token: string,
-  timeoutMs = 2500,
-): Promise<SlackProbe> {
+export async function probeSlack(token: string, timeoutMs = 2500): Promise<SlackProbe> {
   const client = new WebClient(token);
   const start = Date.now();
   try {

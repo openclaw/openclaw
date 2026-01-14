@@ -46,9 +46,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
 
-    const tempHome = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-onboard-remote-"),
-    );
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-remote-"));
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
@@ -73,9 +71,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
     };
 
     try {
-      const { runNonInteractiveOnboarding } = await import(
-        "./onboard-non-interactive.js"
-      );
+      const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
       await runNonInteractiveOnboarding(
         {
           nonInteractive: true,
@@ -89,9 +85,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
       );
 
       const { CONFIG_PATH_CLAWDBOT } = await import("../config/config.js");
-      const cfg = JSON.parse(
-        await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8"),
-      ) as {
+      const cfg = JSON.parse(await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8")) as {
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
       };
 

@@ -11,18 +11,12 @@ export type GuardedSessionManager = SessionManager & {
  * Apply the tool-result guard to a SessionManager exactly once and expose
  * a flush method on the instance for easy teardown handling.
  */
-export function guardSessionManager(
-  sessionManager: SessionManager,
-): GuardedSessionManager {
-  if (
-    typeof (sessionManager as GuardedSessionManager).flushPendingToolResults ===
-    "function"
-  ) {
+export function guardSessionManager(sessionManager: SessionManager): GuardedSessionManager {
+  if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
     return sessionManager as GuardedSessionManager;
   }
 
   const guard = installSessionToolResultGuard(sessionManager);
-  (sessionManager as GuardedSessionManager).flushPendingToolResults =
-    guard.flushPendingToolResults;
+  (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;
 }

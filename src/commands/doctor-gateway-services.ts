@@ -3,14 +3,8 @@ import path from "node:path";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import {
-  findExtraGatewayServices,
-  renderGatewayServiceCleanupHints,
-} from "../daemon/inspect.js";
-import {
-  findLegacyGatewayServices,
-  uninstallLegacyGatewayServices,
-} from "../daemon/legacy.js";
+import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
+import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
   renderSystemNodeWarning,
@@ -33,9 +27,7 @@ import {
 } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 
-function detectGatewayRuntime(
-  programArguments: string[] | undefined,
-): GatewayDaemonRuntime {
+function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
   if (first) {
     const base = path.basename(first).toLowerCase();
@@ -66,9 +58,7 @@ export async function maybeMigrateLegacyGatewayService(
   if (legacyServices.length === 0) return;
 
   note(
-    legacyServices
-      .map((svc) => `- ${svc.label} (${svc.platform}, ${svc.detail})`)
-      .join("\n"),
+    legacyServices.map((svc) => `- ${svc.label} (${svc.platform}, ${svc.detail})`).join("\n"),
     "Legacy Clawdis services detected",
   );
 
@@ -123,20 +113,18 @@ export async function maybeMigrateLegacyGatewayService(
     DEFAULT_GATEWAY_DAEMON_RUNTIME,
   );
   const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-    process.argv[1]?.endsWith(".ts");
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
   const nodePath = await resolvePreferredNodePath({
     env: process.env,
     runtime: daemonRuntime,
   });
-  const { programArguments, workingDirectory } =
-    await resolveGatewayProgramArguments({
-      port,
-      dev: devMode,
-      runtime: daemonRuntime,
-      nodePath,
-    });
+  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    port,
+    dev: devMode,
+    runtime: daemonRuntime,
+    nodePath,
+  });
   const environment = buildServiceEnvironment({
     env: process.env,
     port,
@@ -199,24 +187,21 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const devMode =
-    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-    process.argv[1]?.endsWith(".ts");
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
   const runtimeChoice = detectGatewayRuntime(command.programArguments);
-  const { programArguments, workingDirectory } =
-    await resolveGatewayProgramArguments({
-      port,
-      dev: devMode,
-      runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
-      nodePath: systemNodePath ?? undefined,
-    });
+  const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+    port,
+    dev: devMode,
+    runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
+    nodePath: systemNodePath ?? undefined,
+  });
   const expectedEntrypoint = findGatewayEntrypoint(programArguments);
   const currentEntrypoint = findGatewayEntrypoint(command.programArguments);
   if (
     expectedEntrypoint &&
     currentEntrypoint &&
-    normalizeExecutablePath(expectedEntrypoint) !==
-      normalizeExecutablePath(currentEntrypoint)
+    normalizeExecutablePath(expectedEntrypoint) !== normalizeExecutablePath(currentEntrypoint)
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
@@ -231,17 +216,13 @@ export async function maybeRepairGatewayServiceConfig(
   note(
     audit.issues
       .map((issue) =>
-        issue.detail
-          ? `- ${issue.message} (${issue.detail})`
-          : `- ${issue.message}`,
+        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
       )
       .join("\n"),
     "Gateway service config",
   );
 
-  const aggressiveIssues = audit.issues.filter(
-    (issue) => issue.level === "aggressive",
-  );
+  const aggressiveIssues = audit.issues.filter((issue) => issue.level === "aggressive");
   const needsAggressive = aggressiveIssues.length > 0;
 
   if (needsAggressive && !prompter.shouldForce) {
@@ -257,8 +238,7 @@ export async function maybeRepairGatewayServiceConfig(
         initialValue: Boolean(prompter.shouldForce),
       })
     : await prompter.confirmRepair({
-        message:
-          "Update gateway service config to the recommended defaults now?",
+        message: "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });
   if (!repair) return;
@@ -292,9 +272,7 @@ export async function maybeScanExtraGatewayServices(options: DoctorOptions) {
   if (extraServices.length === 0) return;
 
   note(
-    extraServices
-      .map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`)
-      .join("\n"),
+    extraServices.map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`).join("\n"),
     "Other gateway-like services detected",
   );
 

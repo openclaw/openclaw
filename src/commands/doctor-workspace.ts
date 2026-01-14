@@ -18,13 +18,8 @@ export const MEMORY_SYSTEM_PROMPT = [
   "https://github.com/clawdbot/clawdbot/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
 
-export async function shouldSuggestMemorySystem(
-  workspaceDir: string,
-): Promise<boolean> {
-  const memoryPaths = [
-    path.join(workspaceDir, "MEMORY.md"),
-    path.join(workspaceDir, "memory.md"),
-  ];
+export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
+  const memoryPaths = [path.join(workspaceDir, "MEMORY.md"), path.join(workspaceDir, "memory.md")];
 
   for (const memoryPath of memoryPaths) {
     try {
@@ -51,10 +46,7 @@ export type LegacyWorkspaceDetection = {
   legacyDirs: string[];
 };
 
-function looksLikeWorkspaceDir(
-  dir: string,
-  exists: (value: string) => boolean,
-) {
+function looksLikeWorkspaceDir(dir: string, exists: (value: string) => boolean) {
   const markers = [
     DEFAULT_AGENTS_FILENAME,
     DEFAULT_SOUL_FILENAME,
@@ -85,9 +77,7 @@ export function detectLegacyWorkspaceDirs(params: {
   return { activeWorkspace, legacyDirs };
 }
 
-export function formatLegacyWorkspaceWarning(
-  detection: LegacyWorkspaceDetection,
-): string {
+export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection): string {
   return [
     "Legacy workspace directories detected (may contain old agent files):",
     ...detection.legacyDirs.map((dir) => `- ${dir}`),

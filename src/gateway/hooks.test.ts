@@ -57,10 +57,7 @@ describe("gateway hooks helpers", () => {
   });
 
   test("normalizeAgentPayload defaults + validates channel", () => {
-    const ok = normalizeAgentPayload(
-      { message: "hello" },
-      { idFactory: () => "fixed" },
-    );
+    const ok = normalizeAgentPayload({ message: "hello" }, { idFactory: () => "fixed" });
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.value.sessionKey).toBe("hook:fixed");

@@ -34,8 +34,7 @@ export function inferLegacyName(job: {
   const text =
     job?.payload?.kind === "systemEvent" && typeof job.payload.text === "string"
       ? job.payload.text
-      : job?.payload?.kind === "agentTurn" &&
-          typeof job.payload.message === "string"
+      : job?.payload?.kind === "agentTurn" && typeof job.payload.message === "string"
         ? job.payload.message
         : "";
   const firstLine =

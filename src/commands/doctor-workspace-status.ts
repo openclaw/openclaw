@@ -1,21 +1,12 @@
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { note } from "../terminal/note.js";
-import {
-  detectLegacyWorkspaceDirs,
-  formatLegacyWorkspaceWarning,
-} from "./doctor-workspace.js";
+import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
 export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
-  const workspaceDir = resolveAgentWorkspaceDir(
-    cfg,
-    resolveDefaultAgentId(cfg),
-  );
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
     note(formatLegacyWorkspaceWarning(legacyWorkspace), "Legacy workspace");
@@ -26,13 +17,10 @@ export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
       `Missing requirements: ${
-        skillsReport.skills.filter(
-          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
-        ).length
+        skillsReport.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist)
+          .length
       }`,
-      `Blocked by allowlist: ${
-        skillsReport.skills.filter((s) => s.blockedByAllowlist).length
-      }`,
+      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length}`,
     ].join("\n"),
     "Skills status",
   );
@@ -49,9 +37,7 @@ export function noteWorkspaceStatus(cfg: ClawdbotConfig) {
   });
   if (pluginRegistry.plugins.length > 0) {
     const loaded = pluginRegistry.plugins.filter((p) => p.status === "loaded");
-    const disabled = pluginRegistry.plugins.filter(
-      (p) => p.status === "disabled",
-    );
+    const disabled = pluginRegistry.plugins.filter((p) => p.status === "disabled");
     const errored = pluginRegistry.plugins.filter((p) => p.status === "error");
 
     const lines = [

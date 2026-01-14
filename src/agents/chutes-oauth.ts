@@ -59,10 +59,7 @@ export function parseOAuthCallbackInput(
 }
 
 function coerceExpiresAt(expiresInSeconds: number, now: number): number {
-  const value =
-    now +
-    Math.max(0, Math.floor(expiresInSeconds)) * 1000 -
-    DEFAULT_EXPIRES_BUFFER_MS;
+  const value = now + Math.max(0, Math.floor(expiresInSeconds)) * 1000 - DEFAULT_EXPIRES_BUFFER_MS;
   return Math.max(value, now + 30_000);
 }
 
@@ -122,8 +119,7 @@ export async function exchangeChutesCodeForTokens(params: {
   const refresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access)
-    throw new Error("Chutes token exchange returned no access_token");
+  if (!access) throw new Error("Chutes token exchange returned no access_token");
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
@@ -153,12 +149,9 @@ export async function refreshChutesTokens(params: {
     throw new Error("Chutes OAuth credential is missing refresh token");
   }
 
-  const clientId =
-    params.credential.clientId?.trim() ?? process.env.CHUTES_CLIENT_ID?.trim();
+  const clientId = params.credential.clientId?.trim() ?? process.env.CHUTES_CLIENT_ID?.trim();
   if (!clientId) {
-    throw new Error(
-      "Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).",
-    );
+    throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
   }
   const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
 

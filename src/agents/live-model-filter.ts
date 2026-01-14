@@ -3,11 +3,7 @@ export type ModelRef = {
   id?: string | null;
 };
 
-const ANTHROPIC_PREFIXES = [
-  "claude-opus-4-5",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-];
+const ANTHROPIC_PREFIXES = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"];
 const OPENAI_MODELS = ["gpt-5.2", "gpt-5.0"];
 const CODEX_MODELS = [
   "gpt-5.2",
@@ -55,10 +51,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
   }
 
   if (provider === "google-antigravity") {
-    return (
-      matchesPrefix(id, GOOGLE_PREFIXES) ||
-      matchesPrefix(id, ANTHROPIC_PREFIXES)
-    );
+    return matchesPrefix(id, GOOGLE_PREFIXES) || matchesPrefix(id, ANTHROPIC_PREFIXES);
   }
 
   if (provider === "zai") {

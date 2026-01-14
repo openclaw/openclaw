@@ -2,10 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  peekSystemEvents,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorSignalProvider } from "./monitor.js";
@@ -34,10 +31,8 @@ vi.mock("./send.js", () => ({
 }));
 
 vi.mock("../pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) =>
-    readAllowFromStoreMock(...args),
-  upsertChannelPairingRequest: (...args: unknown[]) =>
-    upsertPairingRequestMock(...args),
+  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -76,9 +71,7 @@ beforeEach(() => {
   signalCheckMock.mockReset().mockResolvedValue({});
   signalRpcRequestMock.mockReset().mockResolvedValue({});
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-  upsertPairingRequestMock
-    .mockReset()
-    .mockResolvedValue({ code: "PAIRCODE", created: true });
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
   resetSystemEventsForTest();
 });
 
@@ -165,12 +158,8 @@ describe("monitorSignalProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
-      "Your Signal number: +15550001111",
-    );
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
-      "Pairing code: PAIRCODE",
-    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Your Signal number: +15550001111");
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain("Pairing code: PAIRCODE");
   });
 
   it("ignores reaction-only messages", async () => {
@@ -299,9 +288,7 @@ describe("monitorSignalProvider tool results", () => {
       peer: { kind: "dm", id: normalizeE164("+15550001111") },
     });
     const events = peekSystemEvents(route.sessionKey);
-    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
-      true,
-    );
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it("notifies on own reactions when target includes uuid + phone", async () => {
@@ -357,9 +344,7 @@ describe("monitorSignalProvider tool results", () => {
       peer: { kind: "dm", id: normalizeE164("+15550001111") },
     });
     const events = peekSystemEvents(route.sessionKey);
-    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
-      true,
-    );
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
   it("processes messages when reaction metadata is present", async () => {

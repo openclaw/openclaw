@@ -13,10 +13,7 @@ type QRCodeConstructor = new (
 };
 
 const QRCode = QRCodeModule as unknown as QRCodeConstructor;
-const QRErrorCorrectLevel = QRErrorCorrectLevelModule as Record<
-  string,
-  unknown
->;
+const QRErrorCorrectLevel = QRErrorCorrectLevelModule as Record<string, unknown>;
 
 function createQrMatrix(input: string) {
   const qr = new QRCode(-1, QRErrorCorrectLevel.L);
@@ -84,9 +81,7 @@ function encodePngRgba(buffer: Buffer, width: number, height: number) {
   }
   const compressed = deflateSync(raw);
 
-  const signature = Buffer.from([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-  ]);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);

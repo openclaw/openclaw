@@ -32,9 +32,7 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
-      false,
-    );
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 
   it("respects Slack channel requireMention settings", () => {
@@ -58,8 +56,6 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(
-      false,
-    );
+    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
   });
 });

@@ -41,11 +41,7 @@ export class CustomEditor extends Editor {
       this.onShiftTab();
       return;
     }
-    if (
-      matchesKey(data, Key.escape) &&
-      this.onEscape &&
-      !this.isShowingAutocomplete()
-    ) {
+    if (matchesKey(data, Key.escape) && this.onEscape && !this.isShowingAutocomplete()) {
       this.onEscape();
       return;
     }

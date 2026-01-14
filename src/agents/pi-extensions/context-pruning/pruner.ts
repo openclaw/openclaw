@@ -1,9 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type {
-  ImageContent,
-  TextContent,
-  ToolResultMessage,
-} from "@mariozechner/pi-ai";
+import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import type { EffectiveContextPruningSettings } from "./settings.js";
@@ -18,9 +14,7 @@ function asText(text: string): TextContent {
   return { type: "text", text };
 }
 
-function collectTextSegments(
-  content: ReadonlyArray<TextContent | ImageContent>,
-): string[] {
+function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
   const parts: string[] = [];
   for (const block of content) {
     if (block.type === "text") parts.push(block.text);
@@ -82,9 +76,7 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
   return out.join("");
 }
 
-function hasImageBlocks(
-  content: ReadonlyArray<TextContent | ImageContent>,
-): boolean {
+function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boolean {
   for (const block of content) {
     if (block.type === "image") return true;
   }
@@ -208,21 +200,16 @@ export function pruneContextMessages(params: {
   const charWindow = contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE;
   if (charWindow <= 0) return messages;
 
-  const cutoffIndex = findAssistantCutoffIndex(
-    messages,
-    settings.keepLastAssistants,
-  );
+  const cutoffIndex = findAssistantCutoffIndex(messages, settings.keepLastAssistants);
   if (cutoffIndex === null) return messages;
 
   // Bootstrap safety: never prune anything before the first user message. This protects initial
   // "identity" reads (SOUL.md, USER.md, etc.) which typically happen before the first inbound user
   // message exists in the session transcript.
   const firstUserIndex = findFirstUserIndex(messages);
-  const pruneStartIndex =
-    firstUserIndex === null ? messages.length : firstUserIndex;
+  const pruneStartIndex = firstUserIndex === null ? messages.length : firstUserIndex;
 
-  const isToolPrunable =
-    params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
+  const isToolPrunable = params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
 
   if (settings.mode === "aggressive") {
     let next: AgentMessage[] | null = null;

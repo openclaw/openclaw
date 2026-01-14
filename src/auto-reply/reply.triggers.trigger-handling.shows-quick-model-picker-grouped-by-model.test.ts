@@ -9,8 +9,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
@@ -50,10 +49,7 @@ const modelCatalogMocks = vi.hoisted(() => ({
 
 vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
 
-import {
-  abortEmbeddedPiRun,
-  runEmbeddedPiAgent,
-} from "../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 
@@ -119,12 +115,8 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       const normalized = normalizeTestText(text ?? "");
-      expect(normalized).toContain(
-        "Pick: /model <#> or /model <provider/model>",
-      );
-      expect(normalized).toContain(
-        "1) claude-opus-4-5 — anthropic, openrouter",
-      );
+      expect(normalized).toContain("Pick: /model <#> or /model <provider/model>");
+      expect(normalized).toContain("1) claude-opus-4-5 — anthropic, openrouter");
       expect(normalized).toContain("3) gpt-5.2 — openai, openai-codex");
       expect(normalized).toContain("More: /model status");
       expect(normalized).not.toContain("reasoning");
@@ -202,9 +194,7 @@ describe("trigger handling", () => {
 
       const store = loadSessionStore(cfg.session.store);
       expect(store[sessionKey]?.providerOverride).toBe("openrouter");
-      expect(store[sessionKey]?.modelOverride).toBe(
-        "anthropic/claude-opus-4-5",
-      );
+      expect(store[sessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
     });
   });
   it("selects a model by index via /model <#>", async () => {
@@ -227,9 +217,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(normalizeTestText(text ?? "")).toContain(
-        "Model set to openai/gpt-5.2",
-      );
+      expect(normalizeTestText(text ?? "")).toContain("Model set to openai/gpt-5.2");
 
       const store = loadSessionStore(cfg.session.store);
       expect(store[sessionKey]?.providerOverride).toBe("openai");

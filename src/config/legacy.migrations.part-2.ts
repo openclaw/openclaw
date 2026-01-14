@@ -21,12 +21,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
       if (!agent) return;
       const label = agentRoot ? "agent" : "agents.defaults";
 
-      const legacyModel =
-        typeof agent.model === "string" ? String(agent.model) : undefined;
+      const legacyModel = typeof agent.model === "string" ? String(agent.model) : undefined;
       const legacyImageModel =
-        typeof agent.imageModel === "string"
-          ? String(agent.imageModel)
-          : undefined;
+        typeof agent.imageModel === "string" ? String(agent.imageModel) : undefined;
       const legacyAllowed = Array.isArray(agent.allowedModels)
         ? (agent.allowedModels as unknown[]).map(String)
         : [];
@@ -96,8 +93,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
         }
         if (
           legacyModelFallbacks.length > 0 &&
-          (!Array.isArray(currentModel.fallbacks) ||
-            currentModel.fallbacks.length === 0)
+          (!Array.isArray(currentModel.fallbacks) || currentModel.fallbacks.length === 0)
         ) {
           currentModel.fallbacks = legacyModelFallbacks;
         }
@@ -119,8 +115,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
         }
         if (
           legacyImageModelFallbacks.length > 0 &&
-          (!Array.isArray(currentImageModel.fallbacks) ||
-            currentImageModel.fallbacks.length === 0)
+          (!Array.isArray(currentImageModel.fallbacks) || currentImageModel.fallbacks.length === 0)
         ) {
           currentImageModel.fallbacks = legacyImageModelFallbacks;
         }
@@ -128,41 +123,29 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
       } else if (legacyImageModel || legacyImageModelFallbacks.length > 0) {
         agent.imageModel = {
           primary: legacyImageModel,
-          fallbacks: legacyImageModelFallbacks.length
-            ? legacyImageModelFallbacks
-            : [],
+          fallbacks: legacyImageModelFallbacks.length ? legacyImageModelFallbacks : [],
         };
       }
 
       agent.models = models;
 
       if (legacyModel !== undefined) {
-        changes.push(
-          `Migrated ${label}.model string → ${label}.model.primary.`,
-        );
+        changes.push(`Migrated ${label}.model string → ${label}.model.primary.`);
       }
       if (legacyModelFallbacks.length > 0) {
-        changes.push(
-          `Migrated ${label}.modelFallbacks → ${label}.model.fallbacks.`,
-        );
+        changes.push(`Migrated ${label}.modelFallbacks → ${label}.model.fallbacks.`);
       }
       if (legacyImageModel !== undefined) {
-        changes.push(
-          `Migrated ${label}.imageModel string → ${label}.imageModel.primary.`,
-        );
+        changes.push(`Migrated ${label}.imageModel string → ${label}.imageModel.primary.`);
       }
       if (legacyImageModelFallbacks.length > 0) {
-        changes.push(
-          `Migrated ${label}.imageModelFallbacks → ${label}.imageModel.fallbacks.`,
-        );
+        changes.push(`Migrated ${label}.imageModelFallbacks → ${label}.imageModel.fallbacks.`);
       }
       if (legacyAllowed.length > 0) {
         changes.push(`Migrated ${label}.allowedModels → ${label}.models.`);
       }
       if (Object.keys(legacyAliases).length > 0) {
-        changes.push(
-          `Migrated ${label}.modelAliases → ${label}.models.*.alias.`,
-        );
+        changes.push(`Migrated ${label}.modelAliases → ${label}.models.*.alias.`);
       }
 
       delete agent.allowedModels;
@@ -237,13 +220,10 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
       }
 
       const defaultAgentId =
-        typeof routing.defaultAgentId === "string"
-          ? routing.defaultAgentId.trim()
-          : "";
+        typeof routing.defaultAgentId === "string" ? routing.defaultAgentId.trim() : "";
       if (defaultAgentId) {
         const hasDefault = list.some(
-          (entry): entry is Record<string, unknown> =>
-            isRecord(entry) && entry.default === true,
+          (entry): entry is Record<string, unknown> => isRecord(entry) && entry.default === true,
         );
         if (!hasDefault) {
           const entry = ensureAgentEntry(list, defaultAgentId);
@@ -252,9 +232,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
             `Moved routing.defaultAgentId → agents.list (id "${defaultAgentId}").default.`,
           );
         } else {
-          changes.push(
-            "Removed routing.defaultAgentId (agents.list default already set).",
-          );
+          changes.push("Removed routing.defaultAgentId (agents.list default already set).");
         }
         delete routing.defaultAgentId;
       }
@@ -270,8 +248,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
   },
   {
     id: "routing.config-v2",
-    describe:
-      "Move routing bindings/groupChat/queue/agentToAgent/transcribeAudio",
+    describe: "Move routing bindings/groupChat/queue/agentToAgent/transcribeAudio",
     apply: (raw, changes) => {
       const routing = getRecord(raw.routing);
       if (!routing) return;
@@ -292,9 +269,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           tools.agentToAgent = routing.agentToAgent;
           changes.push("Moved routing.agentToAgent → tools.agentToAgent.");
         } else {
-          changes.push(
-            "Removed routing.agentToAgent (tools.agentToAgent already set).",
-          );
+          changes.push("Removed routing.agentToAgent (tools.agentToAgent already set).");
         }
         delete routing.agentToAgent;
       }
@@ -318,9 +293,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           const messagesGroup = ensureRecord(messages, "groupChat");
           if (messagesGroup.historyLimit === undefined) {
             messagesGroup.historyLimit = historyLimit;
-            changes.push(
-              "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
-            );
+            changes.push("Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.");
           } else {
             changes.push(
               "Removed routing.groupChat.historyLimit (messages.groupChat.historyLimit already set).",
@@ -360,18 +333,14 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           const toolsAudio = ensureRecord(tools, "audio");
           if (toolsAudio.transcription === undefined) {
             toolsAudio.transcription = mapped;
-            changes.push(
-              "Moved routing.transcribeAudio → tools.audio.transcription.",
-            );
+            changes.push("Moved routing.transcribeAudio → tools.audio.transcription.");
           } else {
             changes.push(
               "Removed routing.transcribeAudio (tools.audio.transcription already set).",
             );
           }
         } else {
-          changes.push(
-            "Removed routing.transcribeAudio (unsupported transcription CLI).",
-          );
+          changes.push("Removed routing.transcribeAudio (unsupported transcription CLI).");
         }
         delete routing.transcribeAudio;
       }
@@ -384,22 +353,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           const toolsAudio = ensureRecord(tools, "audio");
           if (toolsAudio.transcription === undefined) {
             toolsAudio.transcription = mapped;
-            changes.push(
-              "Moved audio.transcription → tools.audio.transcription.",
-            );
+            changes.push("Moved audio.transcription → tools.audio.transcription.");
           } else {
-            changes.push(
-              "Removed audio.transcription (tools.audio.transcription already set).",
-            );
+            changes.push("Removed audio.transcription (tools.audio.transcription already set).");
           }
           delete audio.transcription;
           if (Object.keys(audio).length === 0) delete raw.audio;
           else raw.audio = audio;
         } else {
           delete audio.transcription;
-          changes.push(
-            "Removed audio.transcription (unsupported transcription CLI).",
-          );
+          changes.push("Removed audio.transcription (unsupported transcription CLI).");
           if (Object.keys(audio).length === 0) delete raw.audio;
           else raw.audio = audio;
         }

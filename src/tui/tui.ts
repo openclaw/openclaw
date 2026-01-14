@@ -37,8 +37,7 @@ export type { TuiOptions } from "./tui-types.js";
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
-  let sessionScope: SessionScope = (config.session?.scope ??
-    "per-sender") as SessionScope;
+  let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
@@ -256,9 +255,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const renderStatus = () => {
-    const text = activityStatus
-      ? `${connectionStatus} | ${activityStatus}`
-      : connectionStatus;
+    const text = activityStatus ? `${connectionStatus} | ${activityStatus}` : connectionStatus;
     setStatus(text);
   };
 
@@ -290,19 +287,12 @@ export async function runTui(opts: TuiOptions) {
         ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
         : sessionInfo.model
       : "unknown";
-    const tokens = formatTokens(
-      sessionInfo.totalTokens ?? null,
-      sessionInfo.contextTokens ?? null,
-    );
+    const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const think = sessionInfo.thinkingLevel ?? "off";
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
-      reasoning === "on"
-        ? "reasoning"
-        : reasoning === "stream"
-          ? "reasoning:stream"
-          : null;
+      reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
     footer.setText(
       theme.dim(
         `agent ${agentLabel} | session ${sessionLabel} | ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens}`,
@@ -342,13 +332,8 @@ export async function runTui(opts: TuiOptions) {
     updateAutocompleteProvider,
     setActivityStatus,
   });
-  const {
-    refreshAgents,
-    refreshSessionInfo,
-    loadHistory,
-    setSession,
-    abortActive,
-  } = sessionActions;
+  const { refreshAgents, refreshSessionInfo, loadHistory, setSession, abortActive } =
+    sessionActions;
 
   const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
@@ -357,29 +342,24 @@ export async function runTui(opts: TuiOptions) {
     setActivityStatus,
   });
 
-  const {
-    handleCommand,
-    sendMessage,
-    openModelSelector,
-    openAgentSelector,
-    openSessionSelector,
-  } = createCommandHandlers({
-    client,
-    chatLog,
-    tui,
-    opts,
-    state,
-    deliverDefault,
-    openOverlay,
-    closeOverlay,
-    refreshSessionInfo,
-    loadHistory,
-    setSession,
-    refreshAgents,
-    abortActive,
-    setActivityStatus,
-    formatSessionKey,
-  });
+  const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
+    createCommandHandlers({
+      client,
+      chatLog,
+      tui,
+      opts,
+      state,
+      deliverDefault,
+      openOverlay,
+      closeOverlay,
+      refreshSessionInfo,
+      loadHistory,
+      setSession,
+      refreshAgents,
+      abortActive,
+      setActivityStatus,
+      formatSessionKey,
+    });
 
   updateAutocompleteProvider();
   editor.onSubmit = (text) => {
@@ -475,10 +455,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onGap = (info) => {
-    setConnectionStatus(
-      `event gap: expected ${info.expected}, got ${info.received}`,
-      5000,
-    );
+    setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
     tui.requestRender();
   };
 

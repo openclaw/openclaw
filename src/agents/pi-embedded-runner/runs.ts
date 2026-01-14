@@ -12,10 +12,7 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
-export function queueEmbeddedPiMessage(
-  sessionId: string,
-  text: string,
-): boolean {
+export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) return false;
   if (!handle.isStreaming()) return false;
@@ -41,12 +38,8 @@ export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
   return handle.isStreaming();
 }
 
-export function waitForEmbeddedPiRunEnd(
-  sessionId: string,
-  timeoutMs = 15_000,
-): Promise<boolean> {
-  if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId))
-    return Promise.resolve(true);
+export function waitForEmbeddedPiRunEnd(sessionId: string, timeoutMs = 15_000): Promise<boolean> {
+  if (!sessionId || !ACTIVE_EMBEDDED_RUNS.has(sessionId)) return Promise.resolve(true);
   return new Promise((resolve) => {
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
@@ -81,17 +74,11 @@ function notifyEmbeddedRunEnded(sessionId: string) {
   }
 }
 
-export function setActiveEmbeddedRun(
-  sessionId: string,
-  handle: EmbeddedPiQueueHandle,
-) {
+export function setActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
 }
 
-export function clearActiveEmbeddedRun(
-  sessionId: string,
-  handle: EmbeddedPiQueueHandle,
-) {
+export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
   if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     notifyEmbeddedRunEnded(sessionId);

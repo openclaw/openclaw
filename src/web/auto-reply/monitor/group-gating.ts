@@ -2,17 +2,10 @@ import { parseActivationCommand } from "../../../auto-reply/group-activation.js"
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
-import {
-  buildMentionConfig,
-  debugMention,
-  resolveOwnerList,
-} from "../mentions.js";
+import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { isStatusCommand, stripMentionsForCommand } from "./commands.js";
-import {
-  resolveGroupActivationFor,
-  resolveGroupPolicyFor,
-} from "./group-activation.js";
+import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -47,9 +40,7 @@ export function applyGroupGating(params: {
 }) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
-    params.logVerbose(
-      `Skipping group message ${params.conversationId} (not in allowlist)`,
-    );
+    params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
   }
 
@@ -69,13 +60,10 @@ export function applyGroupGating(params: {
   const activationCommand = parseActivationCommand(commandBody);
   const owner = isOwnerSender(params.baseMentionConfig, params.msg);
   const statusCommand = isStatusCommand(commandBody);
-  const shouldBypassMention =
-    owner && (activationCommand.hasCommand || statusCommand);
+  const shouldBypassMention = owner && (activationCommand.hasCommand || statusCommand);
 
   if (activationCommand.hasCommand && !owner) {
-    params.logVerbose(
-      `Ignoring /activation from non-owner in group ${params.conversationId}`,
-    );
+    params.logVerbose(`Ignoring /activation from non-owner in group ${params.conversationId}`);
     return { shouldProcess: false };
   }
 

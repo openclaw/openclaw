@@ -1,13 +1,7 @@
 import { chunkText } from "../../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../../globals.js";
-import {
-  sendMessageWhatsApp,
-  sendPollWhatsApp,
-} from "../../../web/outbound.js";
-import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../../../whatsapp/normalize.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "../../../web/outbound.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
 import type { ChannelOutboundAdapter } from "../types.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
@@ -17,9 +11,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) => {
     const trimmed = to?.trim() ?? "";
-    const allowListRaw = (allowFrom ?? [])
-      .map((entry) => String(entry).trim())
-      .filter(Boolean);
+    const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
     const hasWildcard = allowListRaw.includes("*");
     const allowList = allowListRaw
       .filter((entry) => entry !== "*")
@@ -29,10 +21,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     if (trimmed) {
       const normalizedTo = normalizeWhatsAppTarget(trimmed);
       if (!normalizedTo) {
-        if (
-          (mode === "implicit" || mode === "heartbeat") &&
-          allowList.length > 0
-        ) {
+        if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
           return { ok: true, to: allowList[0] };
         }
         return {

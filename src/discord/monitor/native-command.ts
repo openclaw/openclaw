@@ -1,15 +1,7 @@
-import {
-  ChannelType,
-  Command,
-  type CommandInteraction,
-  type CommandOptions,
-} from "@buape/carbon";
+import { ChannelType, Command, type CommandInteraction, type CommandOptions } from "@buape/carbon";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 
-import {
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-} from "../../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { buildCommandText } from "../../auto-reply/commands-registry.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
@@ -48,14 +40,7 @@ export function createDiscordNativeCommand(params: {
   sessionPrefix: string;
   ephemeralDefault: boolean;
 }) {
-  const {
-    command,
-    cfg,
-    discordConfig,
-    accountId,
-    sessionPrefix,
-    ephemeralDefault,
-  } = params;
+  const { command, cfg, discordConfig, accountId, sessionPrefix, ephemeralDefault } = params;
   return new (class extends Command {
     name = command.name;
     description = command.description;
@@ -80,14 +65,11 @@ export function createDiscordNativeCommand(params: {
       const channelType = channel?.type;
       const isDirectMessage = channelType === ChannelType.DM;
       const isGroupDm = channelType === ChannelType.GroupDM;
-      const channelName =
-        channel && "name" in channel ? (channel.name as string) : undefined;
+      const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
       const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
       const prompt = buildCommandText(
         this.name,
-        command.acceptsArgs
-          ? interaction.options.getString("input")
-          : undefined,
+        command.acceptsArgs ? interaction.options.getString("input") : undefined,
       );
       const guildInfo = resolveDiscordGuildEntry({
         guild: interaction.guild ?? undefined,
@@ -115,8 +97,7 @@ export function createDiscordNativeCommand(params: {
       }
       if (useAccessGroups && interaction.guild) {
         const channelAllowlistConfigured =
-          Boolean(guildInfo?.channels) &&
-          Object.keys(guildInfo?.channels ?? {}).length > 0;
+          Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
         const channelAllowed = channelConfig?.allowed !== false;
         const allowByPolicy = isDiscordGroupAllowedByPolicy({
           groupPolicy: discordConfig?.groupPolicy ?? "open",
@@ -139,17 +120,9 @@ export function createDiscordNativeCommand(params: {
           return;
         }
         if (dmPolicy !== "open") {
-          const storeAllowFrom = await readChannelAllowFromStore(
-            "discord",
-          ).catch(() => []);
-          const effectiveAllowFrom = [
-            ...(discordConfig?.dm?.allowFrom ?? []),
-            ...storeAllowFrom,
-          ];
-          const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
-            "discord:",
-            "user:",
-          ]);
+          const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+          const effectiveAllowFrom = [...(discordConfig?.dm?.allowFrom ?? []), ...storeAllowFrom];
+          const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:"]);
           const permitted = allowList
             ? allowListMatches(allowList, {
                 id: user.id,
@@ -237,19 +210,13 @@ export function createDiscordNativeCommand(params: {
         GroupSystemPrompt: isGuild
           ? (() => {
               const channelTopic =
-                channel && "topic" in channel
-                  ? (channel.topic ?? undefined)
-                  : undefined;
+                channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
               const channelDescription = channelTopic?.trim();
               const systemPromptParts = [
-                channelDescription
-                  ? `Channel topic: ${channelDescription}`
-                  : null,
+                channelDescription ? `Channel topic: ${channelDescription}` : null,
                 channelConfig?.systemPrompt?.trim() || null,
               ].filter((entry): entry is string => Boolean(entry));
-              return systemPromptParts.length > 0
-                ? systemPromptParts.join("\n\n")
-                : undefined;
+              return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
             })()
           : undefined,
         SenderName: user.globalName ?? user.username,
@@ -270,8 +237,7 @@ export function createDiscordNativeCommand(params: {
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
-          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-            .responsePrefix,
+          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
           humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload) => {
             await deliverDiscordInteractionReply({
@@ -308,22 +274,12 @@ async function deliverDiscordInteractionReply(params: {
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
 }) {
-  const {
-    interaction,
-    payload,
-    textLimit,
-    maxLinesPerMessage,
-    preferFollowUp,
-  } = params;
-  const mediaList =
-    payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+  const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp } = params;
+  const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
   const text = payload.text ?? "";
 
   let hasReplied = false;
-  const sendMessage = async (
-    content: string,
-    files?: { name: string; data: Buffer }[],
-  ) => {
+  const sendMessage = async (content: string, files?: { name: string; data: Buffer }[]) => {
     const payload =
       files && files.length > 0
         ? {

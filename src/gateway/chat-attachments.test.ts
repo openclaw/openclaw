@@ -52,9 +52,9 @@ describe("buildMessageWithAttachments", () => {
       fileName: "big.png",
       content: big,
     };
-    expect(() =>
-      buildMessageWithAttachments("x", [att], { maxBytes: 5_000_000 }),
-    ).toThrow(/exceeds size limit/i);
+    expect(() => buildMessageWithAttachments("x", [att], { maxBytes: 5_000_000 })).toThrow(
+      /exceeds size limit/i,
+    );
   });
 });
 

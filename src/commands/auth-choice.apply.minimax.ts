@@ -4,10 +4,7 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import type {
-  ApplyAuthChoiceParams,
-  ApplyAuthChoiceResult,
-} from "./auth-choice.apply.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyAuthProfileConfig,
@@ -37,9 +34,7 @@ export async function applyAuthChoiceMiniMax(
     params.authChoice === "minimax-api-lightning"
   ) {
     const modelId =
-      params.authChoice === "minimax-api-lightning"
-        ? "MiniMax-M2.1-lightning"
-        : "MiniMax-M2.1";
+      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.1-lightning" : "MiniMax-M2.1";
     let hasCredential = false;
     const envKey = resolveEnvApiKey("minimax");
     if (envKey) {
@@ -57,10 +52,7 @@ export async function applyAuthChoiceMiniMax(
         message: "Enter MiniMax API key",
         validate: validateApiKeyInput,
       });
-      await setMinimaxApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
+      await setMinimaxApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
@@ -74,8 +66,7 @@ export async function applyAuthChoiceMiniMax(
         setDefaultModel: params.setDefaultModel,
         defaultModel: modelRef,
         applyDefaultConfig: (config) => applyMinimaxApiConfig(config, modelId),
-        applyProviderConfig: (config) =>
-          applyMinimaxApiProviderConfig(config, modelId),
+        applyProviderConfig: (config) => applyMinimaxApiProviderConfig(config, modelId),
         noteAgentModel,
         prompter: params.prompter,
       });

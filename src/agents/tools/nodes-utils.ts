@@ -43,21 +43,13 @@ type PairingList = {
 };
 
 function parseNodeList(value: unknown): NodeListNode[] {
-  const obj =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {};
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
 }
 
 function parsePairingList(value: unknown): PairingList {
-  const obj =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {};
-  const pending = Array.isArray(obj.pending)
-    ? (obj.pending as PendingRequest[])
-    : [];
+  const obj = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const pending = Array.isArray(obj.pending) ? (obj.pending as PendingRequest[]) : [];
   const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
   return { pending, paired };
 }

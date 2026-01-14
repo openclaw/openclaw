@@ -1,15 +1,10 @@
 import type { Command } from "commander";
 import type { MessageCliHelpers } from "./helpers.js";
 
-export function registerMessageReactionsCommands(
-  message: Command,
-  helpers: MessageCliHelpers,
-) {
+export function registerMessageReactionsCommands(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
-      helpers.withMessageTarget(
-        message.command("react").description("Add or remove a reaction"),
-      ),
+      helpers.withMessageTarget(message.command("react").description("Add or remove a reaction")),
     )
     .requiredOption("--message-id <id>", "Message id")
     .option("--emoji <emoji>", "Emoji for reactions")

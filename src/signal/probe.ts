@@ -17,10 +17,7 @@ function parseSignalVersion(value: unknown): string | null {
   return null;
 }
 
-export async function probeSignal(
-  baseUrl: string,
-  timeoutMs: number,
-): Promise<SignalProbe> {
+export async function probeSignal(baseUrl: string, timeoutMs: number): Promise<SignalProbe> {
   const started = Date.now();
   const result: SignalProbe = {
     ok: false,

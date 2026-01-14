@@ -58,13 +58,7 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: ["session_status"],
   },
   coding: {
-    allow: [
-      "group:fs",
-      "group:runtime",
-      "group:sessions",
-      "group:memory",
-      "image",
-    ],
+    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
   },
   messaging: {
     allow: [
@@ -102,9 +96,7 @@ export function expandToolGroups(list?: string[]) {
   return Array.from(new Set(expanded));
 }
 
-export function resolveToolProfilePolicy(
-  profile?: string,
-): ToolProfilePolicy | undefined {
+export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) return undefined;
   const resolved = TOOL_PROFILES[profile as ToolProfileId];
   if (!resolved) return undefined;

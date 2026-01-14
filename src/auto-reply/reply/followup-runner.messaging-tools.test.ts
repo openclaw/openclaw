@@ -103,9 +103,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
       messagingToolSentTexts: ["different message"],
-      messagingToolSentTargets: [
-        { tool: "slack", provider: "slack", to: "channel:C1" },
-      ],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
       meta: {},
     });
 

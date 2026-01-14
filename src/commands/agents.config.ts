@@ -26,9 +26,7 @@ export type AgentSummary = {
   isDefault: boolean;
 };
 
-type AgentEntry = NonNullable<
-  NonNullable<ClawdbotConfig["agents"]>["list"]
->[number];
+type AgentEntry = NonNullable<NonNullable<ClawdbotConfig["agents"]>["list"]>[number];
 
 type AgentIdentity = {
   name?: string;
@@ -40,15 +38,10 @@ type AgentIdentity = {
 export function listAgentEntries(cfg: ClawdbotConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) return [];
-  return list.filter((entry): entry is AgentEntry =>
-    Boolean(entry && typeof entry === "object"),
-  );
+  return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
 }
 
-export function findAgentEntryIndex(
-  list: AgentEntry[],
-  agentId: string,
-): number {
+export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
   const id = normalizeAgentId(agentId);
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
 }
@@ -120,9 +113,7 @@ export function buildAgentSummaries(cfg: ClawdbotConfig): AgentSummary[] {
     bindingCounts.set(agentId, (bindingCounts.get(agentId) ?? 0) + 1);
   }
 
-  const ordered = orderedIds.filter(
-    (id, index) => orderedIds.indexOf(id) === index,
-  );
+  const ordered = orderedIds.filter((id, index) => orderedIds.indexOf(id) === index);
 
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
@@ -178,10 +169,7 @@ export function applyAgentConfig(
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
-    if (
-      nextList.length === 0 &&
-      agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))
-    ) {
+    if (nextList.length === 0 && agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))) {
       nextList.push({ id: resolveDefaultAgentId(cfg) });
     }
     nextList.push(nextEntry);
@@ -205,15 +193,11 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const agents = listAgentEntries(cfg);
-  const nextAgentsList = agents.filter(
-    (entry) => normalizeAgentId(entry.id) !== id,
-  );
+  const nextAgentsList = agents.filter((entry) => normalizeAgentId(entry.id) !== id);
   const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
 
   const bindings = cfg.bindings ?? [];
-  const filteredBindings = bindings.filter(
-    (binding) => normalizeAgentId(binding.agentId) !== id,
-  );
+  const filteredBindings = bindings.filter((binding) => normalizeAgentId(binding.agentId) !== id);
 
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);

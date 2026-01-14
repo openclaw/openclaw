@@ -31,11 +31,7 @@ function resolveHeartbeatReplyPayload(
   for (let idx = replyResult.length - 1; idx >= 0; idx -= 1) {
     const payload = replyResult[idx];
     if (!payload) continue;
-    if (
-      payload.text ||
-      payload.mediaUrl ||
-      (payload.mediaUrls && payload.mediaUrls.length > 0)
-    ) {
+    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
   }
@@ -52,14 +48,7 @@ export async function runWebHeartbeatOnce(opts: {
   overrideBody?: string;
   dryRun?: boolean;
 }) {
-  const {
-    cfg: cfgOverride,
-    to,
-    verbose = false,
-    sessionId,
-    overrideBody,
-    dryRun = false,
-  } = opts;
+  const { cfg: cfgOverride, to, verbose = false, sessionId, overrideBody, dryRun = false } = opts;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
   const sender = opts.sender ?? sendMessageWhatsApp;
   const runId = newConnectionId();
@@ -127,9 +116,7 @@ export async function runWebHeartbeatOnce(opts: {
         },
         "manual heartbeat message sent",
       );
-      whatsappHeartbeatLog.info(
-        `manual heartbeat sent to ${to} (id ${sendResult.messageId})`,
-      );
+      whatsappHeartbeatLog.info(`manual heartbeat sent to ${to} (id ${sendResult.messageId})`);
       return;
     }
 
@@ -147,9 +134,7 @@ export async function runWebHeartbeatOnce(opts: {
 
     if (
       !replyPayload ||
-      (!replyPayload.text &&
-        !replyPayload.mediaUrl &&
-        !replyPayload.mediaUrls?.length)
+      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
       heartbeatLogger.info(
         {
@@ -163,13 +148,10 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const hasMedia = Boolean(
-      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
-    );
+    const hasMedia = Boolean(replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0);
     const ackMaxChars = Math.max(
       0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
@@ -193,21 +175,13 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     if (hasMedia) {
-      heartbeatLogger.warn(
-        { to },
-        "heartbeat reply contained media; sending text only",
-      );
+      heartbeatLogger.warn({ to }, "heartbeat reply contained media; sending text only");
     }
 
     const finalText = stripped.text || replyPayload.text || "";
     if (dryRun) {
-      heartbeatLogger.info(
-        { to, reason: "dry-run", chars: finalText.length },
-        "heartbeat dry-run",
-      );
-      whatsappHeartbeatLog.info(
-        `[dry-run] heartbeat -> ${to}: ${elide(finalText, 200)}`,
-      );
+      heartbeatLogger.info({ to, reason: "dry-run", chars: finalText.length }, "heartbeat dry-run");
+      whatsappHeartbeatLog.info(`[dry-run] heartbeat -> ${to}: ${elide(finalText, 200)}`);
       return;
     }
 

@@ -2,14 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import {
-  emitAgentEvent,
-  registerAgentRunContext,
-} from "../infra/agent-events.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -48,10 +42,7 @@ describe("gateway server agent", () => {
 
     const agentEvtP = onceMessage(
       ws,
-      (o) =>
-        o.type === "event" &&
-        o.event === "agent" &&
-        o.payload?.runId === "run-tool-1",
+      (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
       8000,
     );
 
@@ -116,10 +107,7 @@ describe("gateway server agent", () => {
 
     const evt = await onceMessage(
       ws,
-      (o) =>
-        o.type === "event" &&
-        o.event === "agent" &&
-        o.payload?.runId === "run-tool-off",
+      (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-off",
       8000,
     );
     const payload =

@@ -10,10 +10,7 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
-import {
-  resolveSandboxScopeKey,
-  resolveSandboxWorkspaceDir,
-} from "./shared.js";
+import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
@@ -41,11 +38,8 @@ export async function resolveSandboxContext(params: {
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
   const sandboxWorkspaceDir =
-    cfg.scope === "shared"
-      ? workspaceRoot
-      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir =
-    cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
+  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -60,8 +54,7 @@ export async function resolveSandboxContext(params: {
           config: params.config,
         });
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : JSON.stringify(error);
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
         defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
       }
     }
@@ -123,11 +116,8 @@ export async function ensureSandboxWorkspaceForSession(params: {
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
   const sandboxWorkspaceDir =
-    cfg.scope === "shared"
-      ? workspaceRoot
-      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir =
-    cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
+  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -142,8 +132,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
           config: params.config,
         });
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : JSON.stringify(error);
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
         defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
       }
     }

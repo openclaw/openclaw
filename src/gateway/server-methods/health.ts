@@ -13,9 +13,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     if (cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
       respond(true, cached, undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
-        logHealth.error(
-          `background health refresh failed: ${formatError(err)}`,
-        ),
+        logHealth.error(`background health refresh failed: ${formatError(err)}`),
       );
       return;
     }
@@ -23,11 +21,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       const snap = await refreshHealthSnapshot({ probe: false });
       respond(true, snap, undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
   status: async ({ respond }) => {

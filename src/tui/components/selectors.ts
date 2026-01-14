@@ -1,9 +1,4 @@
-import {
-  type SelectItem,
-  SelectList,
-  type SettingItem,
-  SettingsList,
-} from "@mariozechner/pi-tui";
+import { type SelectItem, SelectList, type SettingItem, SettingsList } from "@mariozechner/pi-tui";
 import { selectListTheme, settingsListTheme } from "../theme/theme.js";
 
 export function createSelectList(items: SelectItem[], maxVisible = 7) {
@@ -16,11 +11,5 @@ export function createSettingsList(
   onCancel: () => void,
   maxVisible = 7,
 ) {
-  return new SettingsList(
-    items,
-    maxVisible,
-    settingsListTheme,
-    onChange,
-    onCancel,
-  );
+  return new SettingsList(items, maxVisible, settingsListTheme, onChange, onCancel);
 }

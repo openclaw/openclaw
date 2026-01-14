@@ -28,12 +28,8 @@ ${body ?? `# ${name}\n`}
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("syncs merged skills into a target workspace", async () => {
-    const sourceWorkspace = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-"),
-    );
-    const targetWorkspace = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-"),
-    );
+    const sourceWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const targetWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
     const extraDir = path.join(sourceWorkspace, ".extra");
     const bundledDir = path.join(sourceWorkspace, ".bundled");
     const managedDir = path.join(sourceWorkspace, ".managed");
@@ -76,9 +72,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
     expect(prompt).not.toContain("Extra version");
-    expect(prompt).toContain(
-      path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md"),
-    );
+    expect(prompt).toContain(path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md"));
   });
   it("filters skills based on env/config gates", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));

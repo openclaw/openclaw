@@ -5,9 +5,7 @@ export type DiscordGatewayHandle = {
   disconnect?: () => void;
 };
 
-export function getDiscordGatewayEmitter(
-  gateway?: unknown,
-): EventEmitter | undefined {
+export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
   return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
 }
 

@@ -27,10 +27,7 @@ export function requireRef(value: unknown): string {
   return ref;
 }
 
-export function normalizeTimeoutMs(
-  timeoutMs: number | undefined,
-  fallback: number,
-) {
+export function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number) {
   return Math.max(500, Math.min(120_000, timeoutMs ?? fallback));
 }
 

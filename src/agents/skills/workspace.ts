@@ -13,11 +13,7 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { parseFrontmatter, resolveClawdbotMetadata } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
-import type {
-  ParsedSkillFrontmatter,
-  SkillEntry,
-  SkillSnapshot,
-} from "./types.js";
+import type { ParsedSkillFrontmatter, SkillEntry, SkillSnapshot } from "./types.js";
 
 const fsp = fs.promises;
 
@@ -26,23 +22,17 @@ function filterSkillEntries(
   config?: ClawdbotConfig,
   skillFilter?: string[],
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) =>
-    shouldIncludeSkill({ entry, config }),
-  );
+  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
-    const normalized = skillFilter
-      .map((entry) => String(entry).trim())
-      .filter(Boolean);
+    const normalized = skillFilter.map((entry) => String(entry).trim()).filter(Boolean);
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
     console.log(`[skills] Applying skill filter: ${label}`);
     filtered =
       normalized.length > 0
         ? filtered.filter((entry) => normalized.includes(entry.skill.name))
         : [];
-    console.log(
-      `[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`,
-    );
+    console.log(`[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`);
   }
   return filtered;
 }
@@ -69,8 +59,7 @@ function loadSkillEntries(
     return [];
   };
 
-  const managedSkillsDir =
-    opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.join(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
@@ -107,22 +96,20 @@ function loadSkillEntries(
   for (const skill of managedSkills) merged.set(skill.name, skill);
   for (const skill of workspaceSkills) merged.set(skill.name, skill);
 
-  const skillEntries: SkillEntry[] = Array.from(merged.values()).map(
-    (skill) => {
-      let frontmatter: ParsedSkillFrontmatter = {};
-      try {
-        const raw = fs.readFileSync(skill.filePath, "utf-8");
-        frontmatter = parseFrontmatter(raw);
-      } catch {
-        // ignore malformed skills
-      }
-      return {
-        skill,
-        frontmatter,
-        clawdbot: resolveClawdbotMetadata(frontmatter),
-      };
-    },
-  );
+  const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
+    let frontmatter: ParsedSkillFrontmatter = {};
+    try {
+      const raw = fs.readFileSync(skill.filePath, "utf-8");
+      frontmatter = parseFrontmatter(raw);
+    } catch {
+      // ignore malformed skills
+    }
+    return {
+      skill,
+      frontmatter,
+      clawdbot: resolveClawdbotMetadata(frontmatter),
+    };
+  });
   return skillEntries;
 }
 
@@ -138,11 +125,7 @@ export function buildWorkspaceSkillSnapshot(
   },
 ): SkillSnapshot {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-  );
+  const eligible = filterSkillEntries(skillEntries, opts?.config, opts?.skillFilter);
   const resolvedSkills = eligible.map((entry) => entry.skill);
   return {
     prompt: formatSkillsForPrompt(resolvedSkills),
@@ -166,11 +149,7 @@ export function buildWorkspaceSkillsPrompt(
   },
 ): string {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-  );
+  const eligible = filterSkillEntries(skillEntries, opts?.config, opts?.skillFilter);
   return formatSkillsForPrompt(eligible.map((entry) => entry.skill));
 }
 
@@ -234,11 +213,8 @@ export async function syncSkillsToWorkspace(params: {
           force: true,
         });
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : JSON.stringify(error);
-        console.warn(
-          `[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`,
-        );
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        console.warn(`[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
   });

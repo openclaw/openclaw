@@ -4,11 +4,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
-import {
-  formatIMessageChatTarget,
-  type IMessageService,
-  parseIMessageTarget,
-} from "./targets.js";
+import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
 export type IMessageSendOpts = {
   cliPath?: string;
@@ -51,12 +47,9 @@ export async function sendMessageIMessage(
     cfg,
     accountId: opts.accountId,
   });
-  const cliPath =
-    opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
+  const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
-  const target = parseIMessageTarget(
-    opts.chatId ? formatIMessageChatTarget(opts.chatId) : to,
-  );
+  const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
     (target.kind === "handle" ? target.service : undefined) ??
@@ -76,8 +69,7 @@ export async function sendMessageIMessage(
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);
-      if (kind)
-        message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
+      if (kind) message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
     }
   }
 
@@ -102,8 +94,7 @@ export async function sendMessageIMessage(
     params.to = target.to;
   }
 
-  const client =
-    opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath }));
+  const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath }));
   const shouldClose = !opts.client;
   try {
     const result = await client.request<{ ok?: boolean }>("send", params, {

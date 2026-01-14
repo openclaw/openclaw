@@ -28,9 +28,7 @@ import {
   readStringParam,
 } from "./common.js";
 
-function readParentIdParam(
-  params: Record<string, unknown>,
-): string | null | undefined {
+function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
   if (params.clearParent === true) return null;
   if (params.parentId === null) return null;
   return readStringParam(params, "parentId");
@@ -206,8 +204,7 @@ export async function handleDiscordGuildAction(
       const channelId = readStringParam(params, "channelId");
       const location = readStringParam(params, "location");
       const entityTypeRaw = readStringParam(params, "entityType");
-      const entityType =
-        entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
+      const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
       const payload = {
         name,
         description,
@@ -215,8 +212,7 @@ export async function handleDiscordGuildAction(
         scheduled_end_time: endTime,
         entity_type: entityType,
         channel_id: channelId,
-        entity_metadata:
-          entityType === 3 && location ? { location } : undefined,
+        entity_metadata: entityType === 3 && location ? { location } : undefined,
         privacy_level: 2,
       };
       const event = await createScheduledEventDiscord(guildId, payload);

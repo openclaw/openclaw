@@ -1,15 +1,9 @@
 import type { Component, TUI } from "@mariozechner/pi-tui";
-import {
-  formatThinkingLevels,
-  normalizeUsageDisplay,
-} from "../auto-reply/thinking.js";
+import { formatThinkingLevels, normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
-import {
-  createSelectList,
-  createSettingsList,
-} from "./components/selectors.js";
+import { createSelectList, createSettingsList } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -143,9 +137,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         label: session.displayName
           ? `${session.displayName} (${formatSessionKey(session.key)})`
           : formatSessionKey(session.key),
-        description: session.updatedAt
-          ? new Date(session.updatedAt).toLocaleString()
-          : "",
+        description: session.updatedAt ? new Date(session.updatedAt).toLocaleString() : "",
       }));
       const selector = createSelectList(items, 9);
       selector.onSelect = (item) => {
@@ -338,9 +330,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             key: state.currentSessionKey,
             responseUsage: next === "off" ? null : next,
           });
-          chatLog.addSystem(
-            next === "on" ? "usage line enabled" : "usage line disabled",
-          );
+          chatLog.addSystem(next === "on" ? "usage line enabled" : "usage line disabled");
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`cost failed: ${String(err)}`);

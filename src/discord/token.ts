@@ -1,8 +1,5 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type DiscordTokenSource = "env" | "config" | "none";
 
@@ -37,9 +34,7 @@ export function resolveDiscordToken(
     : undefined;
   if (envToken) return { token: envToken, source: "env" };
 
-  const configToken = allowEnv
-    ? normalizeDiscordToken(discordCfg?.token ?? undefined)
-    : undefined;
+  const configToken = allowEnv ? normalizeDiscordToken(discordCfg?.token ?? undefined) : undefined;
   if (configToken) return { token: configToken, source: "config" };
 
   return { token: "", source: "none" };

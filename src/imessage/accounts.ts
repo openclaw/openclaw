@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { IMessageAccountConfig } from "../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -40,10 +37,7 @@ function resolveAccountConfig(
   return accounts[accountId] as IMessageAccountConfig | undefined;
 }
 
-function mergeIMessageAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): IMessageAccountConfig {
+function mergeIMessageAccountConfig(cfg: ClawdbotConfig, accountId: string): IMessageAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.imessage ??
     {}) as IMessageAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -60,17 +54,17 @@ export function resolveIMessageAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const configured = Boolean(
     merged.cliPath?.trim() ||
-      merged.dbPath?.trim() ||
-      merged.service ||
-      merged.region?.trim() ||
-      (merged.allowFrom && merged.allowFrom.length > 0) ||
-      (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||
-      merged.dmPolicy ||
-      merged.groupPolicy ||
-      typeof merged.includeAttachments === "boolean" ||
-      typeof merged.mediaMaxMb === "number" ||
-      typeof merged.textChunkLimit === "number" ||
-      (merged.groups && Object.keys(merged.groups).length > 0),
+    merged.dbPath?.trim() ||
+    merged.service ||
+    merged.region?.trim() ||
+    (merged.allowFrom && merged.allowFrom.length > 0) ||
+    (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||
+    merged.dmPolicy ||
+    merged.groupPolicy ||
+    typeof merged.includeAttachments === "boolean" ||
+    typeof merged.mediaMaxMb === "number" ||
+    typeof merged.textChunkLimit === "number" ||
+    (merged.groups && Object.keys(merged.groups).length > 0),
   );
   return {
     accountId,
@@ -81,9 +75,7 @@ export function resolveIMessageAccount(params: {
   };
 }
 
-export function listEnabledIMessageAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedIMessageAccount[] {
+export function listEnabledIMessageAccounts(cfg: ClawdbotConfig): ResolvedIMessageAccount[] {
   return listIMessageAccountIds(cfg)
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

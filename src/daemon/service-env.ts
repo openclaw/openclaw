@@ -27,9 +27,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   return [];
 }
 
-export function getMinimalServicePathParts(
-  options: MinimalServicePathOptions = {},
-): string[] {
+export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") return [];
 
@@ -48,9 +46,7 @@ export function getMinimalServicePathParts(
   return parts;
 }
 
-export function buildMinimalServicePath(
-  options: BuildServicePathOptions = {},
-): string {
+export function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
@@ -70,9 +66,7 @@ export function buildServiceEnvironment(params: {
   const profile = env.CLAWDBOT_PROFILE;
   const resolvedLaunchdLabel =
     launchdLabel ||
-    (process.platform === "darwin"
-      ? resolveGatewayLaunchAgentLabel(profile)
-      : undefined);
+    (process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     PATH: buildMinimalServicePath({ env }),

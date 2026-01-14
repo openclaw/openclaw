@@ -19,14 +19,9 @@ export function createTelegramDraftStream(params: {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
-  const maxChars = Math.min(
-    params.maxChars ?? TELEGRAM_DRAFT_MAX_CHARS,
-    TELEGRAM_DRAFT_MAX_CHARS,
-  );
+  const maxChars = Math.min(params.maxChars ?? TELEGRAM_DRAFT_MAX_CHARS, TELEGRAM_DRAFT_MAX_CHARS);
   const throttleMs = Math.max(50, params.throttleMs ?? DEFAULT_THROTTLE_MS);
-  const rawDraftId = Number.isFinite(params.draftId)
-    ? Math.trunc(params.draftId)
-    : 1;
+  const rawDraftId = Number.isFinite(params.draftId) ? Math.trunc(params.draftId) : 1;
   const draftId = rawDraftId === 0 ? 1 : Math.abs(rawDraftId);
   const chatId = params.chatId;
   const threadParams =
@@ -49,9 +44,7 @@ export function createTelegramDraftStream(params: {
       // Drafts are capped at 4096 chars. Stop streaming once we exceed the cap
       // so we don't keep sending failing updates or a truncated preview.
       stopped = true;
-      params.warn?.(
-        `telegram draft stream stopped (draft length ${trimmed.length} > ${maxChars})`,
-      );
+      params.warn?.(`telegram draft stream stopped (draft length ${trimmed.length} > ${maxChars})`);
       return;
     }
     if (trimmed === lastSentText) return;

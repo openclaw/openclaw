@@ -1,9 +1,6 @@
 import { createActionGate } from "../../../agents/tools/common.js";
 import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "../types.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { handleDiscordMessageAction } from "./discord/handle-action.js";
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
@@ -78,8 +75,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       return to ? { to } : null;
     }
     if (action === "threadReply") {
-      const channelId =
-        typeof args.channelId === "string" ? args.channelId.trim() : "";
+      const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
       return channelId ? { to: `channel:${channelId}` } : null;
     }
     return null;

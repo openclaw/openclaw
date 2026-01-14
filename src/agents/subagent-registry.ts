@@ -165,9 +165,7 @@ function ensureListener() {
     const phase = evt.data?.phase;
     if (phase === "start") {
       const startedAt =
-        typeof evt.data?.startedAt === "number"
-          ? (evt.data.startedAt as number)
-          : undefined;
+        typeof evt.data?.startedAt === "number" ? (evt.data.startedAt as number) : undefined;
       if (startedAt) {
         entry.startedAt = startedAt;
         persistSubagentRuns();
@@ -176,9 +174,7 @@ function ensureListener() {
     }
     if (phase !== "end" && phase !== "error") return;
     const endedAt =
-      typeof evt.data?.endedAt === "number"
-        ? (evt.data.endedAt as number)
-        : Date.now();
+      typeof evt.data?.endedAt === "number" ? (evt.data.endedAt as number) : Date.now();
     entry.endedAt = endedAt;
     persistSubagentRuns();
 
@@ -205,11 +201,7 @@ function ensureListener() {
   });
 }
 
-function finalizeSubagentAnnounce(
-  runId: string,
-  cleanup: "delete" | "keep",
-  didAnnounce: boolean,
-) {
+function finalizeSubagentAnnounce(runId: string, cleanup: "delete" | "keep", didAnnounce: boolean) {
   const entry = subagentRuns.get(runId);
   if (!entry) return;
   if (cleanup === "delete") {
@@ -247,10 +239,7 @@ export function registerSubagentRun(params: {
   const cfg = loadConfig();
   const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
-  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(
-    cfg,
-    params.runTimeoutSeconds,
-  );
+  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, params.runTimeoutSeconds);
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,

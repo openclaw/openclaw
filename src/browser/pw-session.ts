@@ -39,9 +39,7 @@ type SnapshotForAIResult = { full: string; incremental?: string };
 type SnapshotForAIOptions = { timeout?: number; track?: string };
 
 export type WithSnapshotForAI = {
-  _snapshotForAI?: (
-    options?: SnapshotForAIOptions,
-  ) => Promise<SnapshotForAIResult>;
+  _snapshotForAI?: (options?: SnapshotForAIOptions) => Promise<SnapshotForAIResult>;
 };
 
 type TargetInfoResponse = {
@@ -213,9 +211,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(
-          () => null,
-        );
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const browser = await chromium.connectOverCDP(endpoint, { timeout });
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized };
@@ -234,9 +230,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     if (lastErr instanceof Error) {
       throw lastErr;
     }
-    const message = lastErr
-      ? formatErrorMessage(lastErr)
-      : "CDP connect failed";
+    const message = lastErr ? formatErrorMessage(lastErr) : "CDP connect failed";
     throw new Error(message);
   };
 
@@ -256,9 +250,7 @@ async function getAllPages(browser: Browser): Promise<Page[]> {
 async function pageTargetId(page: Page): Promise<string | null> {
   const session = await page.context().newCDPSession(page);
   try {
-    const info = (await session.send(
-      "Target.getTargetInfo",
-    )) as TargetInfoResponse;
+    const info = (await session.send("Target.getTargetInfo")) as TargetInfoResponse;
     const targetId = String(info?.targetInfo?.targetId ?? "").trim();
     return targetId || null;
   } finally {
@@ -266,10 +258,7 @@ async function pageTargetId(page: Page): Promise<string | null> {
   }
 }
 
-async function findPageByTargetId(
-  browser: Browser,
-  targetId: string,
-): Promise<Page | null> {
+async function findPageByTargetId(browser: Browser, targetId: string): Promise<Page | null> {
   const pages = await getAllPages(browser);
   for (const page of pages) {
     const tid = await pageTargetId(page).catch(() => null);
@@ -284,8 +273,7 @@ export async function getPageForTargetId(opts: {
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
-  if (!pages.length)
-    throw new Error("No pages available in the connected browser.");
+  if (!pages.length) throw new Error("No pages available in the connected browser.");
   const first = pages[0];
   if (!opts.targetId) return first;
   const found = await findPageByTargetId(browser, opts.targetId);

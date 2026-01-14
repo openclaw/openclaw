@@ -1,18 +1,9 @@
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../../../routing/session-key.js";
-import type {
-  PromptAccountId,
-  PromptAccountIdParams,
-} from "../onboarding-types.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import type { PromptAccountId, PromptAccountIdParams } from "../onboarding-types.js";
 
-export const promptAccountId: PromptAccountId = async (
-  params: PromptAccountIdParams,
-) => {
+export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
-  const initial =
-    params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
+  const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
   const choice = (await params.prompter.select({
     message: `${params.label} account`,
     options: [

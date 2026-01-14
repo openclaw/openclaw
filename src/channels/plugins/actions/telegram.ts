@@ -1,14 +1,8 @@
-import {
-  createActionGate,
-  readStringParam,
-} from "../../../agents/tools/common.js";
+import { createActionGate, readStringParam } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "../types.js";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
@@ -49,8 +43,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (action !== "sendMessage") return null;
     const to = typeof args.to === "string" ? args.to : undefined;
     if (!to) return null;
-    const accountId =
-      typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+    const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
     return { to, accountId };
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
@@ -84,14 +77,12 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         required: true,
       });
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
-      const remove =
-        typeof params.remove === "boolean" ? params.remove : undefined;
+      const remove = typeof params.remove === "boolean" ? params.remove : undefined;
       return await handleTelegramAction(
         {
           action: "react",
           chatId:
-            readStringParam(params, "chatId") ??
-            readStringParam(params, "to", { required: true }),
+            readStringParam(params, "chatId") ?? readStringParam(params, "to", { required: true }),
           messageId,
           emoji,
           remove,
@@ -101,8 +92,6 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       );
     }
 
-    throw new Error(
-      `Action ${action} is not supported for provider ${providerId}.`,
-    );
+    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };

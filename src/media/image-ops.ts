@@ -18,9 +18,7 @@ function isBun(): boolean {
 function prefersSips(): boolean {
   return (
     process.env.CLAWDBOT_IMAGE_BACKEND === "sips" ||
-    (process.env.CLAWDBOT_IMAGE_BACKEND !== "sharp" &&
-      isBun() &&
-      process.platform === "darwin")
+    (process.env.CLAWDBOT_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
   );
 }
 
@@ -39,9 +37,7 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-async function sipsMetadataFromBuffer(
-  buffer: Buffer,
-): Promise<ImageMetadata | null> {
+async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
   return await withTempDir(async (dir) => {
     const input = path.join(dir, "in.img");
     await fs.writeFile(input, buffer);
@@ -94,9 +90,7 @@ async function sipsResizeToJpeg(params: {
   });
 }
 
-export async function getImageMetadata(
-  buffer: Buffer,
-): Promise<ImageMetadata | null> {
+export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
   if (prefersSips()) {
     return await sipsMetadataFromBuffer(buffer).catch(() => null);
   }

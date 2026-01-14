@@ -54,9 +54,7 @@ export function registerPairingCli(program: Command) {
       for (const r of requests) {
         const meta = r.meta ? JSON.stringify(r.meta) : "";
         const idLabel = resolvePairingIdLabel(channel);
-        console.log(
-          `${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
-        );
+        console.log(`${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`);
       }
     });
 
@@ -86,9 +84,7 @@ export function registerPairingCli(program: Command) {
         code: String(resolvedCode),
       });
       if (!approved) {
-        throw new Error(
-          `No pending pairing request found for code: ${String(resolvedCode)}`,
-        );
+        throw new Error(`No pending pairing request found for code: ${String(resolvedCode)}`);
       }
 
       console.log(`Approved ${channel} sender ${approved.id}.`);

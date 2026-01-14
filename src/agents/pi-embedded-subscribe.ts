@@ -14,8 +14,7 @@ import type {
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage } from "./pi-embedded-utils.js";
 
-const THINKING_TAG_SCAN_RE =
-  /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
@@ -24,9 +23,7 @@ export type {
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
 
-export function subscribeEmbeddedPiSession(
-  params: SubscribeEmbeddedPiSessionParams,
-) {
+export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
@@ -37,9 +34,7 @@ export function subscribeEmbeddedPiSession(
     reasoningMode,
     includeReasoning: reasoningMode === "on",
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
-    streamReasoning:
-      reasoningMode === "stream" &&
-      typeof params.onReasoningStream === "function",
+    streamReasoning: reasoningMode === "stream" && typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
@@ -66,8 +61,7 @@ export function subscribeEmbeddedPiSession(
   const toolMetaById = state.toolMetaById;
   const toolSummaryById = state.toolSummaryById;
   const messagingToolSentTexts = state.messagingToolSentTexts;
-  const messagingToolSentTextsNormalized =
-    state.messagingToolSentTextsNormalized;
+  const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
   const messagingToolSentTargets = state.messagingToolSentTargets;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
@@ -131,8 +125,7 @@ export function subscribeEmbeddedPiSession(
       messagingToolSentTextsNormalized.splice(0, overflow);
     }
     if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
-      const overflow =
-        messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
+      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
       messagingToolSentTargets.splice(0, overflow);
     }
   };
@@ -169,9 +162,7 @@ export function subscribeEmbeddedPiSession(
   };
 
   const blockChunking = params.blockReplyChunking;
-  const blockChunker = blockChunking
-    ? new EmbeddedBlockChunker(blockChunking)
-    : null;
+  const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
   // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
   // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
   // Tests: `src/agents/pi-embedded-subscribe.test.ts` (e.g. late text_end cases).
@@ -194,10 +185,7 @@ export function subscribeEmbeddedPiSession(
     }
   };
 
-  const stripBlockTags = (
-    text: string,
-    state: { thinking: boolean; final: boolean },
-  ): string => {
+  const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean }): string => {
     if (!text) return text;
 
     // 1. Handle <think> blocks (stateful, strip content inside)
@@ -279,15 +267,8 @@ export function subscribeEmbeddedPiSession(
     // Only check committed (successful) messaging tool texts - checking pending texts
     // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
-    if (
-      isMessagingToolDuplicateNormalized(
-        normalizedChunk,
-        messagingToolSentTextsNormalized,
-      )
-    ) {
-      log.debug(
-        `Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`,
-      );
+    if (isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)) {
+      log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
       return;
     }
 
@@ -297,8 +278,7 @@ export function subscribeEmbeddedPiSession(
     const splitResult = parseReplyDirectives(chunk);
     const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice)
-      return;
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
@@ -365,16 +345,13 @@ export function subscribeEmbeddedPiSession(
     maybeResolveCompactionWait,
   };
 
-  const unsubscribe = params.session.subscribe(
-    createEmbeddedPiSessionEventHandler(ctx),
-  );
+  const unsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
 
   return {
     assistantTexts,
     toolMetas,
     unsubscribe,
-    isCompacting: () =>
-      state.compactionInFlight || state.pendingCompactionRetry > 0,
+    isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     // Returns true if any messaging tool successfully sent a message.
@@ -390,9 +367,7 @@ export function subscribeEmbeddedPiSession(
         queueMicrotask(() => {
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
             ensureCompactionPromise();
-            void (state.compactionRetryPromise ?? Promise.resolve()).then(
-              resolve,
-            );
+            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve);
           } else {
             resolve();
           }

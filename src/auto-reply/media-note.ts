@@ -18,9 +18,7 @@ function formatMediaAttachedLine(params: {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths
-    : undefined;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
       ? pathsFromArray

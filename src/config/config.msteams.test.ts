@@ -22,13 +22,10 @@ describe("config msteams", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.channels?.msteams?.replyStyle).toBe("top-level");
-      expect(res.config.channels?.msteams?.teams?.team123?.replyStyle).toBe(
-        "thread",
+      expect(res.config.channels?.msteams?.teams?.team123?.replyStyle).toBe("thread");
+      expect(res.config.channels?.msteams?.teams?.team123?.channels?.chan456?.replyStyle).toBe(
+        "top-level",
       );
-      expect(
-        res.config.channels?.msteams?.teams?.team123?.channels?.chan456
-          ?.replyStyle,
-      ).toBe("top-level");
     }
   });
 

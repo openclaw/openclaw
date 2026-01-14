@@ -3,10 +3,7 @@ import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
-async function waitForQueueDebounce(queue: {
-  debounceMs: number;
-  lastEnqueuedAt: number;
-}) {
+async function waitForQueueDebounce(queue: { debounceMs: number; lastEnqueuedAt: number }) {
   const debounceMs = Math.max(0, queue.debounceMs);
   if (debounceMs <= 0) return;
   while (true) {
@@ -71,12 +68,9 @@ function hasCrossChannelItems(items: FollowupRun[]): boolean {
       return true;
     }
     keys.add(
-      [
-        channel,
-        to,
-        accountId || "",
-        typeof threadId === "number" ? String(threadId) : "",
-      ].join("|"),
+      [channel, to, accountId || "", typeof threadId === "number" ? String(threadId) : ""].join(
+        "|",
+      ),
     );
   }
 
@@ -127,12 +121,8 @@ export function scheduleFollowupDrain(
           if (!run) break;
 
           // Preserve originating channel from items when collecting same-channel.
-          const originatingChannel = items.find(
-            (i) => i.originatingChannel,
-          )?.originatingChannel;
-          const originatingTo = items.find(
-            (i) => i.originatingTo,
-          )?.originatingTo;
+          const originatingChannel = items.find((i) => i.originatingChannel)?.originatingChannel;
+          const originatingTo = items.find((i) => i.originatingTo)?.originatingTo;
           const originatingAccountId = items.find(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
@@ -170,9 +160,7 @@ export function scheduleFollowupDrain(
         await runFollowup(next);
       }
     } catch (err) {
-      defaultRuntime.error?.(
-        `followup queue drain failed for ${key}: ${String(err)}`,
-      );
+      defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
     } finally {
       queue.draining = false;
       if (queue.items.length === 0 && queue.droppedCount === 0) {

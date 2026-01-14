@@ -8,50 +8,74 @@
       (() => {
         try {
           const params = new URLSearchParams(window.location.search);
-          const platform = (params.get('platform') || '').trim().toLowerCase();
+          const platform = (params.get("platform") || "").trim().toLowerCase();
           if (platform) {
             document.documentElement.dataset.platform = platform;
             return;
           }
-          if (/android/i.test(navigator.userAgent || '')) {
-            document.documentElement.dataset.platform = 'android';
+          if (/android/i.test(navigator.userAgent || "")) {
+            document.documentElement.dataset.platform = "android";
           }
         } catch (_) {}
       })();
     </script>
     <style>
-      :root { color-scheme: dark; }
-      @media (prefers-reduced-motion: reduce) {
-        body::before, body::after { animation: none !important; }
+      :root {
+        color-scheme: dark;
       }
-      html, body { height: 100%; margin: 0; }
+      @media (prefers-reduced-motion: reduce) {
+        body::before,
+        body::after {
+          animation: none !important;
+        }
+      }
+      html,
       body {
-        font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font:
+          14px system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Roboto",
+          sans-serif;
         background:
-          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0,0,0,0) 55%),
-          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.14), rgba(0,0,0,0) 60%),
-          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.10), rgba(0,0,0,0) 60%),
+          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0, 0, 0, 0) 55%),
+          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.14), rgba(0, 0, 0, 0) 60%),
+          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.1), rgba(0, 0, 0, 0) 60%),
           #000;
         color: #e5e7eb;
         overflow: hidden;
       }
       :root[data-platform="android"] body {
         background:
-          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.62), rgba(0,0,0,0) 55%),
-          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.52), rgba(0,0,0,0) 60%),
-          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.48), rgba(0,0,0,0) 60%),
+          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.62), rgba(0, 0, 0, 0) 55%),
+          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.52), rgba(0, 0, 0, 0) 60%),
+          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.48), rgba(0, 0, 0, 0) 60%),
           #0b1328;
       }
       body::before {
-        content:"";
+        content: "";
         position: fixed;
         inset: -20%;
         background:
-          repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
-                                 transparent 1px, transparent 48px),
-          repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
-                                 transparent 1px, transparent 48px);
-        transform: translate3d(0,0,0) rotate(-7deg);
+          repeating-linear-gradient(
+            0deg,
+            rgba(255, 255, 255, 0.03) 0,
+            rgba(255, 255, 255, 0.03) 1px,
+            transparent 1px,
+            transparent 48px
+          ),
+          repeating-linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.03) 0,
+            rgba(255, 255, 255, 0.03) 1px,
+            transparent 1px,
+            transparent 48px
+          );
+        transform: translate3d(0, 0, 0) rotate(-7deg);
         will-change: transform, opacity;
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
@@ -59,40 +83,66 @@
         pointer-events: none;
         animation: clawdbot-grid-drift 140s ease-in-out infinite alternate;
       }
-      :root[data-platform="android"] body::before { opacity: 0.80; }
+      :root[data-platform="android"] body::before {
+        opacity: 0.8;
+      }
       body::after {
-        content:"";
+        content: "";
         position: fixed;
         inset: -35%;
         background:
-          radial-gradient(900px 700px at 30% 30%, rgba(42,113,255,0.16), rgba(0,0,0,0) 60%),
-          radial-gradient(800px 650px at 70% 35%, rgba(255,0,138,0.12), rgba(0,0,0,0) 62%),
-          radial-gradient(900px 800px at 55% 75%, rgba(0,209,255,0.10), rgba(0,0,0,0) 62%);
+          radial-gradient(900px 700px at 30% 30%, rgba(42, 113, 255, 0.16), rgba(0, 0, 0, 0) 60%),
+          radial-gradient(800px 650px at 70% 35%, rgba(255, 0, 138, 0.12), rgba(0, 0, 0, 0) 62%),
+          radial-gradient(900px 800px at 55% 75%, rgba(0, 209, 255, 0.1), rgba(0, 0, 0, 0) 62%);
         filter: blur(28px);
         opacity: 0.52;
         will-change: transform, opacity;
         -webkit-backface-visibility: hidden;
         backface-visibility: hidden;
-        transform: translate3d(0,0,0);
+        transform: translate3d(0, 0, 0);
         pointer-events: none;
         animation: clawdbot-glow-drift 110s ease-in-out infinite alternate;
       }
-      :root[data-platform="android"] body::after { opacity: 0.85; }
+      :root[data-platform="android"] body::after {
+        opacity: 0.85;
+      }
       @supports (mix-blend-mode: screen) {
-        body::after { mix-blend-mode: screen; }
+        body::after {
+          mix-blend-mode: screen;
+        }
       }
       @supports not (mix-blend-mode: screen) {
-        body::after { opacity: 0.70; }
+        body::after {
+          opacity: 0.7;
+        }
       }
       @keyframes clawdbot-grid-drift {
-        0%   { transform: translate3d(-12px, 8px, 0) rotate(-7deg); opacity: 0.40; }
-        50%  { transform: translate3d( 10px,-7px, 0) rotate(-6.6deg); opacity: 0.56; }
-        100% { transform: translate3d(-8px,  6px, 0) rotate(-7.2deg); opacity: 0.42; }
+        0% {
+          transform: translate3d(-12px, 8px, 0) rotate(-7deg);
+          opacity: 0.4;
+        }
+        50% {
+          transform: translate3d(10px, -7px, 0) rotate(-6.6deg);
+          opacity: 0.56;
+        }
+        100% {
+          transform: translate3d(-8px, 6px, 0) rotate(-7.2deg);
+          opacity: 0.42;
+        }
       }
       @keyframes clawdbot-glow-drift {
-        0%   { transform: translate3d(-18px, 12px, 0) scale(1.02); opacity: 0.40; }
-        50%  { transform: translate3d( 14px,-10px, 0) scale(1.05); opacity: 0.52; }
-        100% { transform: translate3d(-10px,  8px, 0) scale(1.03); opacity: 0.43; }
+        0% {
+          transform: translate3d(-18px, 12px, 0) scale(1.02);
+          opacity: 0.4;
+        }
+        50% {
+          transform: translate3d(14px, -10px, 0) scale(1.05);
+          opacity: 0.52;
+        }
+        100% {
+          transform: translate3d(-10px, 8px, 0) scale(1.03);
+          opacity: 0.43;
+        }
       }
       canvas {
         position: fixed;
@@ -105,9 +155,9 @@
       }
       :root[data-platform="android"] #clawdbot-canvas {
         background:
-          radial-gradient(1100px 800px at 20% 15%, rgba(42, 113, 255, 0.78), rgba(0,0,0,0) 58%),
-          radial-gradient(900px 650px at 82% 28%, rgba(255, 0, 138, 0.66), rgba(0,0,0,0) 62%),
-          radial-gradient(1000px 900px at 60% 88%, rgba(0, 209, 255, 0.58), rgba(0,0,0,0) 62%),
+          radial-gradient(1100px 800px at 20% 15%, rgba(42, 113, 255, 0.78), rgba(0, 0, 0, 0) 58%),
+          radial-gradient(900px 650px at 82% 28%, rgba(255, 0, 138, 0.66), rgba(0, 0, 0, 0) 62%),
+          radial-gradient(1000px 900px at 60% 88%, rgba(0, 209, 255, 0.58), rgba(0, 0, 0, 0) 62%),
           #141c33;
       }
       #clawdbot-status {
@@ -127,23 +177,34 @@
         text-align: left;
         padding: 14px 16px 12px;
         border-radius: 16px;
-        background:
-          linear-gradient(140deg, rgba(23, 24, 35, 0.78), rgba(18, 19, 28, 0.55));
-        border: 1px solid rgba(255,255,255,0.12);
-        box-shadow: 0 16px 46px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.06);
+        background: linear-gradient(140deg, rgba(23, 24, 35, 0.78), rgba(18, 19, 28, 0.55));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow:
+          0 16px 46px rgba(0, 0, 0, 0.52),
+          inset 0 1px 0 rgba(255, 255, 255, 0.06);
         -webkit-backdrop-filter: blur(18px) saturate(140%);
         backdrop-filter: blur(18px) saturate(140%);
       }
       #clawdbot-status .title {
-        font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        font:
+          600 12px/1.2 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          system-ui,
+          sans-serif;
         letter-spacing: 0.45px;
         text-transform: uppercase;
-        color: rgba(255,255,255,0.7);
+        color: rgba(255, 255, 255, 0.7);
       }
       #clawdbot-status .subtitle {
         margin-top: 8px;
-        font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-        color: rgba(255,255,255,0.9);
+        font:
+          500 13px/1.45 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          system-ui,
+          sans-serif;
+        color: rgba(255, 255, 255, 0.9);
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
@@ -175,18 +236,18 @@
     <script src="a2ui.bundle.js"></script>
     <script>
       (() => {
-        const canvas = document.getElementById('clawdbot-canvas');
-        const ctx = canvas.getContext('2d');
-        const statusEl = document.getElementById('clawdbot-status');
-        const titleEl = document.getElementById('clawdbot-status-title');
-        const subtitleEl = document.getElementById('clawdbot-status-subtitle');
+        const canvas = document.getElementById("clawdbot-canvas");
+        const ctx = canvas.getContext("2d");
+        const statusEl = document.getElementById("clawdbot-status");
+        const titleEl = document.getElementById("clawdbot-status-title");
+        const subtitleEl = document.getElementById("clawdbot-status-subtitle");
         const debugStatusEnabledByQuery = (() => {
           try {
             const params = new URLSearchParams(window.location.search);
-            const raw = params.get('debugStatus') ?? params.get('debug');
+            const raw = params.get("debugStatus") ?? params.get("debug");
             if (!raw) return false;
             const normalized = String(raw).trim().toLowerCase();
-            return normalized === '1' || normalized === 'true' || normalized === 'yes';
+            return normalized === "1" || normalized === "true" || normalized === "yes";
           } catch (_) {
             return false;
           }
@@ -202,19 +263,19 @@
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         }
 
-        window.addEventListener('resize', resize);
+        window.addEventListener("resize", resize);
         resize();
 
         const setDebugStatusEnabled = (enabled) => {
           debugStatusEnabled = !!enabled;
           if (!statusEl) return;
           if (!debugStatusEnabled) {
-            statusEl.style.display = 'none';
+            statusEl.style.display = "none";
           }
         };
 
         if (statusEl && !debugStatusEnabled) {
-          statusEl.style.display = 'none';
+          statusEl.style.display = "none";
         }
 
         window.__clawdbot = {
@@ -224,21 +285,21 @@
           setStatus: (title, subtitle) => {
             if (!statusEl || !debugStatusEnabled) return;
             if (!title && !subtitle) {
-              statusEl.style.display = 'none';
+              statusEl.style.display = "none";
               return;
             }
-            statusEl.style.display = 'flex';
-            if (titleEl && typeof title === 'string') titleEl.textContent = title;
-            if (subtitleEl && typeof subtitle === 'string') subtitleEl.textContent = subtitle;
+            statusEl.style.display = "flex";
+            if (titleEl && typeof title === "string") titleEl.textContent = title;
+            if (subtitleEl && typeof subtitle === "string") subtitleEl.textContent = subtitle;
             if (!debugStatusEnabled) {
               clearTimeout(window.__statusTimeout);
               window.__statusTimeout = setTimeout(() => {
-                statusEl.style.display = 'none';
+                statusEl.style.display = "none";
               }, 3000);
             } else {
               clearTimeout(window.__statusTimeout);
             }
-          }
+          },
         };
       })();
     </script>

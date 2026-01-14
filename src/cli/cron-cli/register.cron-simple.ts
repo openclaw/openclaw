@@ -73,8 +73,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .action(async (opts) => {
         try {
           const limitRaw = Number.parseInt(String(opts.limit ?? "50"), 10);
-          const limit =
-            Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
+          const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50;
           const id = String(opts.id);
           const res = await callGatewayFromCli("cron.runs", opts, {
             id,

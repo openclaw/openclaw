@@ -1,9 +1,5 @@
 import fs from "node:fs/promises";
-import http, {
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -52,15 +48,8 @@ export type CanvasHostHandlerOpts = {
 export type CanvasHostHandler = {
   rootDir: string;
   basePath: string;
-  handleHttpRequest: (
-    req: IncomingMessage,
-    res: ServerResponse,
-  ) => Promise<boolean>;
-  handleUpgrade: (
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ) => boolean;
+  handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
   close: () => Promise<void>;
 };
 
@@ -169,9 +158,7 @@ async function resolveFilePath(rootReal: string, urlPath: string) {
     // ignore
   }
 
-  const rootPrefix = rootReal.endsWith(path.sep)
-    ? rootReal
-    : `${rootReal}${path.sep}`;
+  const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
   try {
     const lstat = await fs.lstat(candidate);
     if (lstat.isSymbolicLink()) return null;
@@ -205,11 +192,7 @@ async function prepareCanvasRoot(rootDir: string) {
     await fs.stat(indexPath);
   } catch {
     try {
-      await fs.writeFile(
-        path.join(rootReal, "index.html"),
-        defaultIndexHTML(),
-        "utf8",
-      );
+      await fs.writeFile(path.join(rootReal, "index.html"), defaultIndexHTML(), "utf8");
     } catch {
       // ignore; we'll still serve the "missing file" message if needed.
     }
@@ -231,9 +214,7 @@ export async function createCanvasHostHandler(
     };
   }
 
-  const rootDir = resolveUserPath(
-    opts.rootDir ?? path.join(os.homedir(), "clawd", "canvas"),
-  );
+  const rootDir = resolveUserPath(opts.rootDir ?? path.join(os.homedir(), "clawd", "canvas"));
   const rootReal = await prepareCanvasRoot(rootDir);
 
   const liveReload = opts.liveReload !== false;
@@ -288,11 +269,7 @@ export async function createCanvasHostHandler(
     void watcher.close().catch(() => {});
   });
 
-  const handleUpgrade = (
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-  ) => {
+  const handleUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     if (!wss) return false;
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== CANVAS_WS_PATH) return false;
@@ -302,10 +279,7 @@ export async function createCanvasHostHandler(
     return true;
   };
 
-  const handleHttpRequest = async (
-    req: IncomingMessage,
-    res: ServerResponse,
-  ) => {
+  const handleHttpRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const urlRaw = req.url;
     if (!urlRaw) return false;
 
@@ -394,9 +368,7 @@ export async function createCanvasHostHandler(
   };
 }
 
-export async function startCanvasHost(
-  opts: CanvasHostServerOpts,
-): Promise<CanvasHostServer> {
+export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<CanvasHostServer> {
   if (isDisabledByEnv() && opts.allowInTests !== true) {
     return { port: 0, rootDir: "", close: async () => {} };
   }
@@ -434,9 +406,7 @@ export async function startCanvasHost(
   });
 
   const listenPort =
-    typeof opts.port === "number" && Number.isFinite(opts.port) && opts.port > 0
-      ? opts.port
-      : 0;
+    typeof opts.port === "number" && Number.isFinite(opts.port) && opts.port > 0 ? opts.port : 0;
   await new Promise<void>((resolve, reject) => {
     const onError = (err: NodeJS.ErrnoException) => {
       server.off("listening", onListening);

@@ -30,9 +30,7 @@ export type PromptAccountIdParams = {
   defaultAccountId: string;
 };
 
-export type PromptAccountId = (
-  params: PromptAccountIdParams,
-) => Promise<string>;
+export type PromptAccountId = (params: PromptAccountIdParams) => Promise<string>;
 
 export type ChannelOnboardingStatus = {
   channel: ChatChannelId;
@@ -74,16 +72,9 @@ export type ChannelOnboardingDmPolicy = {
 
 export type ChannelOnboardingAdapter = {
   channel: ChatChannelId;
-  getStatus: (
-    ctx: ChannelOnboardingStatusContext,
-  ) => Promise<ChannelOnboardingStatus>;
-  configure: (
-    ctx: ChannelOnboardingConfigureContext,
-  ) => Promise<ChannelOnboardingResult>;
+  getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
+  configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;
-  onAccountRecorded?: (
-    accountId: string,
-    options?: SetupChannelsOptions,
-  ) => void;
+  onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
   disable?: (cfg: ClawdbotConfig) => ClawdbotConfig;
 };

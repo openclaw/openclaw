@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
-import {
-  CLAUDE_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
-} from "./auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID, ensureAuthProfileStore } from "./auth-profiles.js";
 
 describe("external CLI credential sync", () => {
   it("does not overwrite API keys when syncing external CLI creds", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-no-overwrite-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-no-overwrite-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -26,10 +21,7 @@ describe("external CLI credential sync", () => {
               expiresAt: Date.now() + 30 * 60 * 1000,
             },
           };
-          fs.writeFileSync(
-            path.join(claudeDir, ".credentials.json"),
-            JSON.stringify(claudeCreds),
-          );
+          fs.writeFileSync(path.join(claudeDir, ".credentials.json"), JSON.stringify(claudeCreds));
 
           // Create auth-profiles.json with an API key
           const authPath = path.join(agentDir, "auth-profiles.json");
@@ -50,9 +42,7 @@ describe("external CLI credential sync", () => {
           const store = ensureAuthProfileStore(agentDir);
 
           // Should keep the store's API key and still add the CLI profile.
-          expect(
-            (store.profiles["anthropic:default"] as { key: string }).key,
-          ).toBe("sk-store");
+          expect((store.profiles["anthropic:default"] as { key: string }).key).toBe("sk-store");
           expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
         },
         { prefix: "clawdbot-home-" },
@@ -62,9 +52,7 @@ describe("external CLI credential sync", () => {
     }
   });
   it("prefers oauth over token even if token has later expiry (oauth enables auto-refresh)", async () => {
-    const agentDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-cli-oauth-preferred-"),
-    );
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-cli-oauth-preferred-"));
     try {
       await withTempHome(
         async (tempHome) => {
@@ -103,9 +91,7 @@ describe("external CLI credential sync", () => {
           // OAuth should be preferred over token because it can auto-refresh
           const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
           expect(cliProfile.type).toBe("oauth");
-          expect((cliProfile as { access: string }).access).toBe(
-            "cli-oauth-access",
-          );
+          expect((cliProfile as { access: string }).access).toBe("cli-oauth-access");
         },
         { prefix: "clawdbot-home-" },
       );

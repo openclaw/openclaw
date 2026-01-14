@@ -14,9 +14,7 @@ installGatewayTestHooks();
 
 describe("gateway server sessions", () => {
   test("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-sessions-agents-"),
-    );
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-agents-"));
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -84,9 +82,7 @@ describe("gateway server sessions", () => {
       agentId: "work",
     });
     expect(workSessions.ok).toBe(true);
-    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual([
-      "agent:work:main",
-    ]);
+    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
   });
 
   test("resolves and patches main alias to default agent main key", async () => {
@@ -113,19 +109,16 @@ describe("gateway server sessions", () => {
 
     const { ws } = await startServerWithClient();
     await connectOk(ws);
-    const resolved = await rpcReq<{ ok: true; key: string }>(
-      ws,
-      "sessions.resolve",
-      { key: "main" },
-    );
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      key: "main",
+    });
     expect(resolved.ok).toBe(true);
     expect(resolved.payload?.key).toBe("agent:ops:work");
 
-    const patched = await rpcReq<{ ok: true; key: string }>(
-      ws,
-      "sessions.patch",
-      { key: "main", thinkingLevel: "medium" },
-    );
+    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+      key: "main",
+      thinkingLevel: "medium",
+    });
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 

@@ -48,8 +48,7 @@ async function startGmailWatch(
   try {
     const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
     if (result.code !== 0) {
-      const message =
-        result.stderr || result.stdout || "gog watch start failed";
+      const message = result.stderr || result.stdout || "gog watch start failed";
       log.error(`watch start failed: ${message}`);
       return false;
     }
@@ -122,9 +121,7 @@ export type GmailWatcherStartResult = {
  * Start the Gmail watcher service.
  * Called automatically by the gateway if hooks.gmail is configured.
  */
-export async function startGmailWatcher(
-  cfg: ClawdbotConfig,
-): Promise<GmailWatcherStartResult> {
+export async function startGmailWatcher(cfg: ClawdbotConfig): Promise<GmailWatcherStartResult> {
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {
     return { started: false, reason: "hooks not enabled" };

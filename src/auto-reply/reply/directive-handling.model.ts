@@ -22,10 +22,7 @@ import {
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import {
-  type ModelDirectiveSelection,
-  resolveModelDirectiveSelection,
-} from "./model-selection.js";
+import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
 function buildModelPickerCatalog(params: {
   cfg: ClawdbotConfig;
@@ -127,10 +124,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const items = buildModelPickerItems(pickerCatalog);
     if (items.length === 0) return { text: "No models available." };
     const current = `${params.provider}/${params.model}`;
-    const lines: string[] = [
-      `Current: ${current}`,
-      "Pick: /model <#> or /model <provider/model>",
-    ];
+    const lines: string[] = [`Current: ${current}`, "Pick: /model <#> or /model <provider/model>"];
     for (const [idx, item] of items.entries()) {
       lines.push(`${idx + 1}) ${item.model} — ${item.providers.join(", ")}`);
     }
@@ -194,8 +188,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     for (const entry of models) {
       const label = `${provider}/${entry.id}`;
       const aliases = params.aliasIndex.byKey.get(label);
-      const aliasSuffix =
-        aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+      const aliasSuffix = aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
       lines.push(`  • ${label}${aliasSuffix}`);
     }
   }
@@ -217,10 +210,7 @@ export function resolveModelSelectionFromDirective(params: {
   profileOverride?: string;
   errorText?: string;
 } {
-  if (
-    !params.directives.hasModelDirective ||
-    !params.directives.rawModelDirective
-  ) {
+  if (!params.directives.hasModelDirective || !params.directives.rawModelDirective) {
     if (params.directives.rawModelProfile) {
       return { errorText: "Auth profile override requires a model selection." };
     }
@@ -261,9 +251,7 @@ export function resolveModelSelectionFromDirective(params: {
     modelSelection = {
       provider: picked.provider,
       model: picked.model,
-      isDefault:
-        picked.provider === params.defaultProvider &&
-        picked.model === params.defaultModel,
+      isDefault: picked.provider === params.defaultProvider && picked.model === params.defaultModel,
       ...(alias ? { alias } : {}),
     };
   } else {

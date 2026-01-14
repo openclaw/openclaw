@@ -21,12 +21,7 @@ export function isActKind(value: unknown): value is ActKind {
 }
 
 export type ClickButton = "left" | "right" | "middle";
-export type ClickModifier =
-  | "Alt"
-  | "Control"
-  | "ControlOrMeta"
-  | "Meta"
-  | "Shift";
+export type ClickModifier = "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift";
 
 const ALLOWED_CLICK_MODIFIERS = new Set<ClickModifier>([
   "Alt",
@@ -45,9 +40,7 @@ export function parseClickModifiers(raw: string[]): {
   modifiers?: ClickModifier[];
   error?: string;
 } {
-  const invalid = raw.filter(
-    (m) => !ALLOWED_CLICK_MODIFIERS.has(m as ClickModifier),
-  );
+  const invalid = raw.filter((m) => !ALLOWED_CLICK_MODIFIERS.has(m as ClickModifier));
   if (invalid.length) {
     return { error: "modifiers must be Alt|Control|ControlOrMeta|Meta|Shift" };
   }

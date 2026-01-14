@@ -64,9 +64,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "CLAWDBOT_TEST_HOME", value: process.env.CLAWDBOT_TEST_HOME },
   ];
 
-  const tempHome = fs.mkdtempSync(
-    path.join(os.tmpdir(), "clawdbot-test-home-"),
-  );
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-test-home-"));
 
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;

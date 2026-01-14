@@ -91,10 +91,6 @@ describe("resolveAuthProfileOrder", () => {
       },
       provider: "anthropic",
     });
-    expect(order).toEqual([
-      "anthropic:ready",
-      "anthropic:cool2",
-      "anthropic:cool1",
-    ]);
+    expect(order).toEqual(["anthropic:ready", "anthropic:cool2", "anthropic:cool1"]);
   });
 });

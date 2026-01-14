@@ -16,10 +16,7 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--fields-file <path>", "Read JSON array from a file")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const fields = await readFields({
           fields: opts.fields,
@@ -62,16 +59,11 @@ export function registerBrowserFormWaitEvalCommands(
     )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (selector: string | undefined, opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const sel = selector?.trim() || undefined;
         const load =
-          opts.load === "load" ||
-          opts.load === "domcontentloaded" ||
-          opts.load === "networkidle"
+          opts.load === "load" || opts.load === "domcontentloaded" || opts.load === "networkidle"
             ? (opts.load as "load" | "domcontentloaded" | "networkidle")
             : undefined;
         const result = await browserAct(
@@ -86,9 +78,7 @@ export function registerBrowserFormWaitEvalCommands(
             loadState: load,
             fn: opts.fn?.trim() || undefined,
             targetId: opts.targetId?.trim() || undefined,
-            timeoutMs: Number.isFinite(opts.timeoutMs)
-              ? opts.timeoutMs
-              : undefined,
+            timeoutMs: Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined,
           },
           { profile },
         );
@@ -110,10 +100,7 @@ export function registerBrowserFormWaitEvalCommands(
     .option("--ref <id>", "Ref from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
-      const { parent, baseUrl, profile } = resolveBrowserActionContext(
-        cmd,
-        parentOpts,
-      );
+      const { parent, baseUrl, profile } = resolveBrowserActionContext(cmd, parentOpts);
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));
         defaultRuntime.exit(1);

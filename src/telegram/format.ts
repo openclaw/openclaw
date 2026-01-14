@@ -31,8 +31,7 @@ function getLinkStack(env: RenderEnv): boolean[] {
   return env.telegramLinkStack;
 }
 
-md.renderer.rules.text = (tokens, idx) =>
-  escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.text = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 
 md.renderer.rules.softbreak = () => "\n";
 md.renderer.rules.hardbreak = () => "\n";
@@ -110,10 +109,8 @@ md.renderer.rules.image = (tokens, idx) => {
   return escapeHtml(alt);
 };
 
-md.renderer.rules.html_block = (tokens, idx) =>
-  escapeHtml(tokens[idx]?.content ?? "");
-md.renderer.rules.html_inline = (tokens, idx) =>
-  escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.html_block = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
+md.renderer.rules.html_inline = (tokens, idx) => escapeHtml(tokens[idx]?.content ?? "");
 
 md.renderer.rules.table_open = () => "";
 md.renderer.rules.table_close = () => "";

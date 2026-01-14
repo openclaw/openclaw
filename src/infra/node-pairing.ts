@@ -131,9 +131,7 @@ function newToken() {
   return randomUUID().replaceAll("-", "");
 }
 
-export async function listNodePairing(
-  baseDir?: string,
-): Promise<NodePairingList> {
+export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).sort((a, b) => b.ts - a.ts);
   const paired = Object.values(state.pairedByNodeId).sort(
@@ -165,9 +163,7 @@ export async function requestNodePairing(
       throw new Error("nodeId required");
     }
 
-    const existing = Object.values(state.pendingById).find(
-      (p) => p.nodeId === nodeId,
-    );
+    const existing = Object.values(state.pendingById).find((p) => p.nodeId === nodeId);
     if (existing) {
       return { status: "pending", request: existing, created: false };
     }
@@ -257,12 +253,7 @@ export async function verifyNodeToken(
 
 export async function updatePairedNodeMetadata(
   nodeId: string,
-  patch: Partial<
-    Omit<
-      NodePairingPairedNode,
-      "nodeId" | "token" | "createdAtMs" | "approvedAtMs"
-    >
-  >,
+  patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
   baseDir?: string,
 ) {
   await withLock(async () => {

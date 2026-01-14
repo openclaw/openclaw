@@ -7,8 +7,7 @@ const hasForceColor =
   process.env.FORCE_COLOR.trim().length > 0 &&
   process.env.FORCE_COLOR.trim() !== "0";
 
-const baseChalk =
-  process.env.NO_COLOR && !hasForceColor ? new Chalk({ level: 0 }) : chalk;
+const baseChalk = process.env.NO_COLOR && !hasForceColor ? new Chalk({ level: 0 }) : chalk;
 
 const hex = (value: string) => baseChalk.hex(value);
 
@@ -28,8 +27,5 @@ export const theme = {
 
 export const isRich = () => Boolean(baseChalk.level > 0);
 
-export const colorize = (
-  rich: boolean,
-  color: (value: string) => string,
-  value: string,
-) => (rich ? color(value) : value);
+export const colorize = (rich: boolean, color: (value: string) => string, value: string) =>
+  rich ? color(value) : value;

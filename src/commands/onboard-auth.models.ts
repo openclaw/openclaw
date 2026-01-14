@@ -69,9 +69,7 @@ export function buildMinimaxModelDefinition(params: {
   };
 }
 
-export function buildMinimaxApiModelDefinition(
-  modelId: string,
-): ModelDefinitionConfig {
+export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
   return buildMinimaxModelDefinition({
     id: modelId,
     cost: MINIMAX_API_COST,

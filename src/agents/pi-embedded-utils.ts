@@ -22,9 +22,7 @@ function stripMinimaxToolCallXml(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const isTextBlock = (
-    block: unknown,
-  ): block is { type: "text"; text: string } => {
+  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
     if (!block || typeof block !== "object") return false;
     const rec = block as Record<string, unknown>;
     return rec.type === "text" && typeof rec.text === "string";
@@ -66,9 +64,7 @@ type ThinkTaggedSplitBlock =
   | { type: "thinking"; thinking: string }
   | { type: "text"; text: string };
 
-export function splitThinkingTaggedText(
-  text: string,
-): ThinkTaggedSplitBlock[] | null {
+export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
   // Avoid false positives: only treat it as structured thinking when it begins
   // with a think tag (common for local/OpenAI-compat providers that emulate
@@ -123,9 +119,7 @@ export function splitThinkingTaggedText(
 
 export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) return;
-  const hasThinkingBlock = message.content.some(
-    (block) => block.type === "thinking",
-  );
+  const hasThinkingBlock = message.content.some((block) => block.type === "thinking");
   if (hasThinkingBlock) return;
 
   const next: AssistantMessage["content"] = [];
@@ -193,10 +187,7 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-): string | undefined {
+export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
   const display = resolveToolDisplay({ name: toolName, args });
   return formatToolDetail(display);
 }

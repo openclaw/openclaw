@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DiscordAccountConfig } from "../config/types.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -42,12 +39,10 @@ function resolveAccountConfig(
   return accounts[accountId] as DiscordAccountConfig | undefined;
 }
 
-function mergeDiscordAccountConfig(
-  cfg: ClawdbotConfig,
-  accountId: string,
-): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.discord ??
-    {}) as DiscordAccountConfig & { accounts?: unknown };
+function mergeDiscordAccountConfig(cfg: ClawdbotConfig, accountId: string): DiscordAccountConfig {
+  const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
+    accounts?: unknown;
+  };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
@@ -72,9 +67,7 @@ export function resolveDiscordAccount(params: {
   };
 }
 
-export function listEnabledDiscordAccounts(
-  cfg: ClawdbotConfig,
-): ResolvedDiscordAccount[] {
+export function listEnabledDiscordAccounts(cfg: ClawdbotConfig): ResolvedDiscordAccount[] {
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

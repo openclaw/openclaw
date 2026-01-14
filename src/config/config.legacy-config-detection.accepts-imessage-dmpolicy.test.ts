@@ -69,9 +69,7 @@ describe("legacy config detection", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some((i) => i.path === "channels.imessage.cliPath"),
-      ).toBe(true);
+      expect(res.issues.some((i) => i.path === "channels.imessage.cliPath")).toBe(true);
     }
   });
   it("accepts tools audio transcription without cli", async () => {
@@ -139,9 +137,7 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain(
       'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
     );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(
-      false,
-    );
+    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.channels?.telegram?.requireMention).toBeUndefined();
   });
   it("migrates legacy model config to agent.models + model lists", async () => {
@@ -158,24 +154,16 @@ describe("legacy config detection", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.model?.primary).toBe(
-      "anthropic/claude-opus-4-5",
-    );
-    expect(res.config?.agents?.defaults?.model?.fallbacks).toEqual([
-      "openai/gpt-4.1-mini",
-    ]);
-    expect(res.config?.agents?.defaults?.imageModel?.primary).toBe(
-      "openai/gpt-4.1-mini",
-    );
+    expect(res.config?.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expect(res.config?.agents?.defaults?.model?.fallbacks).toEqual(["openai/gpt-4.1-mini"]);
+    expect(res.config?.agents?.defaults?.imageModel?.primary).toBe("openai/gpt-4.1-mini");
     expect(res.config?.agents?.defaults?.imageModel?.fallbacks).toEqual([
       "anthropic/claude-opus-4-5",
     ]);
-    expect(
-      res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"],
-    ).toMatchObject({ alias: "Opus" });
-    expect(
-      res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"],
-    ).toBeTruthy();
+    expect(res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]).toMatchObject({
+      alias: "Opus",
+    });
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
     expect(res.config?.agent).toBeUndefined();
   });
   it("auto-migrates legacy config in snapshot (no legacyIssues)", async () => {
@@ -205,9 +193,7 @@ describe("legacy config detection", () => {
         expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
         expect(parsed.routing).toBeUndefined();
         expect(
-          warnSpy.mock.calls.some(([msg]) =>
-            String(msg).includes("Auto-migrated config"),
-          ),
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
         ).toBe(true);
       } finally {
         warnSpy.mockRestore();
@@ -239,9 +225,7 @@ describe("legacy config detection", () => {
         expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
         expect(parsed.whatsapp).toBeUndefined();
         expect(
-          warnSpy.mock.calls.some(([msg]) =>
-            String(msg).includes("Auto-migrated config"),
-          ),
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
         ).toBe(true);
       } finally {
         warnSpy.mockRestore();
@@ -307,9 +291,7 @@ describe("legacy config detection", () => {
         expect(parsed.bindings?.[0]?.match?.channel).toBe("slack");
         expect(parsed.bindings?.[0]?.match?.provider).toBeUndefined();
         expect(
-          warnSpy.mock.calls.some(([msg]) =>
-            String(msg).includes("Auto-migrated config"),
-          ),
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
         ).toBe(true);
       } finally {
         warnSpy.mockRestore();
@@ -341,9 +323,7 @@ describe("legacy config detection", () => {
       try {
         const { loadConfig } = await import("./config.js");
         const cfg = loadConfig();
-        expect(cfg.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe(
-          "telegram",
-        );
+        expect(cfg.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe("telegram");
 
         const raw = await fs.readFile(configPath, "utf-8");
         const parsed = JSON.parse(raw) as {
@@ -355,16 +335,10 @@ describe("legacy config detection", () => {
             };
           };
         };
-        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe(
-          "telegram",
-        );
+        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe("telegram");
+        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBeUndefined();
         expect(
-          parsed.session?.sendPolicy?.rules?.[0]?.match?.provider,
-        ).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) =>
-            String(msg).includes("Auto-migrated config"),
-          ),
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
         ).toBe(true);
       } finally {
         warnSpy.mockRestore();
@@ -377,11 +351,7 @@ describe("legacy config detection", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify(
-          { messages: { queue: { byProvider: { whatsapp: "queue" } } } },
-          null,
-          2,
-        ),
+        JSON.stringify({ messages: { queue: { byProvider: { whatsapp: "queue" } } } }, null, 2),
         "utf-8",
       );
 
@@ -404,9 +374,7 @@ describe("legacy config detection", () => {
         expect(parsed.messages?.queue?.byChannel?.whatsapp).toBe("queue");
         expect(parsed.messages?.queue?.byProvider).toBeUndefined();
         expect(
-          warnSpy.mock.calls.some(([msg]) =>
-            String(msg).includes("Auto-migrated config"),
-          ),
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
         ).toBe(true);
       } finally {
         warnSpy.mockRestore();

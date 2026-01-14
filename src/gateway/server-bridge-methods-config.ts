@@ -1,7 +1,4 @@
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   loadConfig,
@@ -52,10 +49,7 @@ export const handleConfigBridgeMethods: BridgeMethodHandler = async (
         };
       }
       const cfg = loadConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(
-        cfg,
-        resolveDefaultAgentId(cfg),
-      );
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
       const pluginRegistry = loadClawdbotPlugins({
         config: cfg,
         workspaceDir,

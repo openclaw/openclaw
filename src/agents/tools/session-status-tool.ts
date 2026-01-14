@@ -6,10 +6,7 @@ import {
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -20,10 +17,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
-import {
-  getFollowupQueueDepth,
-  resolveQueueSettings,
-} from "../../auto-reply/reply/queue.js";
+import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
@@ -45,10 +39,7 @@ import {
 } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./sessions-helpers.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -179,10 +170,8 @@ async function resolveModelOverride(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const currentProvider =
-    params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel =
-    params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
+  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -209,8 +198,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
-    resolved.ref.provider === configDefault.provider &&
-    resolved.ref.model === configDefault.model;
+    resolved.ref.provider === configDefault.provider && resolved.ref.model === configDefault.model;
   return {
     kind: "set",
     provider: resolved.ref.provider,
@@ -234,15 +222,12 @@ export function createSessionStatusTool(opts?: {
       const cfg = opts?.config ?? loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
 
-      const requestedKeyRaw =
-        readStringParam(params, "sessionKey") ?? opts?.agentSessionKey;
+      const requestedKeyRaw = readStringParam(params, "sessionKey") ?? opts?.agentSessionKey;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
 
-      const agentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? requestedKeyRaw,
-      );
+      const agentId = resolveAgentIdFromSessionKey(opts?.agentSessionKey ?? requestedKeyRaw);
       const storePath = resolveStorePath(cfg.session?.store, { agentId });
       const store = loadSessionStore(storePath);
 
@@ -289,8 +274,7 @@ export function createSessionStatusTool(opts?: {
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
-      const providerForCard =
-        resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -316,22 +300,18 @@ export function createSessionStatusTool(opts?: {
         resolved.key.includes(":group:") ||
         resolved.key.includes(":channel:");
       const groupActivation = isGroup
-        ? (normalizeGroupActivation(resolved.entry.groupActivation) ??
-          "mention")
+        ? (normalizeGroupActivation(resolved.entry.groupActivation) ?? "mention")
         : undefined;
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        channel:
-          resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
+        channel: resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;
       const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
       const queueOverrides = Boolean(
-        resolved.entry.queueDebounceMs ??
-          resolved.entry.queueCap ??
-          resolved.entry.queueDrop,
+        resolved.entry.queueDebounceMs ?? resolved.entry.queueCap ?? resolved.entry.queueDrop,
       );
 
       const statusText = buildStatusMessage({

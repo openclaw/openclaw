@@ -90,10 +90,7 @@ function listAgents(cfg: ClawdbotConfig) {
   return Array.isArray(agents) ? agents : [];
 }
 
-function pickFirstExistingAgentId(
-  cfg: ClawdbotConfig,
-  agentId: string,
-): string {
+function pickFirstExistingAgentId(cfg: ClawdbotConfig, agentId: string): string {
   const normalized = normalizeAgentId(agentId);
   const agents = listAgents(cfg);
   if (agents.length === 0) return normalized;
@@ -133,23 +130,16 @@ function matchesGuild(
   return id === guildId;
 }
 
-function matchesTeam(
-  match: { teamId?: string | undefined } | undefined,
-  teamId: string,
-): boolean {
+function matchesTeam(match: { teamId?: string | undefined } | undefined, teamId: string): boolean {
   const id = normalizeId(match?.teamId);
   if (!id) return false;
   return id === teamId;
 }
 
-export function resolveAgentRoute(
-  input: ResolveAgentRouteInput,
-): ResolvedAgentRoute {
+export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentRoute {
   const channel = normalizeToken(input.channel);
   const accountId = normalizeAccountId(input.accountId);
-  const peer = input.peer
-    ? { kind: input.peer.kind, id: normalizeId(input.peer.id) }
-    : null;
+  const peer = input.peer ? { kind: input.peer.kind, id: normalizeId(input.peer.id) } : null;
   const guildId = normalizeId(input.guildId);
   const teamId = normalizeId(input.teamId);
 
@@ -159,10 +149,7 @@ export function resolveAgentRoute(
     return matchesAccountId(binding.match?.accountId, accountId);
   });
 
-  const choose = (
-    agentId: string,
-    matchedBy: ResolvedAgentRoute["matchedBy"],
-  ) => {
+  const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     return {
       agentId: resolvedAgentId,
@@ -198,22 +185,15 @@ export function resolveAgentRoute(
 
   const accountMatch = bindings.find(
     (b) =>
-      b.match?.accountId?.trim() !== "*" &&
-      !b.match?.peer &&
-      !b.match?.guildId &&
-      !b.match?.teamId,
+      b.match?.accountId?.trim() !== "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
   );
   if (accountMatch) return choose(accountMatch.agentId, "binding.account");
 
   const anyAccountMatch = bindings.find(
     (b) =>
-      b.match?.accountId?.trim() === "*" &&
-      !b.match?.peer &&
-      !b.match?.guildId &&
-      !b.match?.teamId,
+      b.match?.accountId?.trim() === "*" && !b.match?.peer && !b.match?.guildId && !b.match?.teamId,
   );
-  if (anyAccountMatch)
-    return choose(anyAccountMatch.agentId, "binding.channel");
+  if (anyAccountMatch) return choose(anyAccountMatch.agentId, "binding.channel");
 
   return choose(resolveDefaultAgentId(input.cfg), "default");
 }

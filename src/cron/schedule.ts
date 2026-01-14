@@ -1,10 +1,7 @@
 import { Cron } from "croner";
 import type { CronSchedule } from "./types.js";
 
-export function computeNextRunAtMs(
-  schedule: CronSchedule,
-  nowMs: number,
-): number | undefined {
+export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     return schedule.atMs > nowMs ? schedule.atMs : undefined;
   }
