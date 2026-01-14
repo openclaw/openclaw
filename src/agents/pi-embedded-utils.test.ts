@@ -423,6 +423,22 @@ File contents here`,
     expect(result).toBe("The actual answer.");
   });
 
+  it("strips thought tags", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<thought>Internal deliberation</thought>Final response.",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Final response.");
+  });
+
   it("handles nested or multiple thinking blocks", () => {
     const msg: AssistantMessage = {
       role: "assistant",
