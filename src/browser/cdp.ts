@@ -1,4 +1,33 @@
-import { fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
+import { isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
+
+export function getHeadersWithAuth(
+  url: string,
+  headers: Record<string, string> = {},
+) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) {
+      const auth = Buffer.from(
+        `${parsed.username}:${parsed.password}`,
+      ).toString("base64");
+      return { ...headers, Authorization: `Basic ${auth}` };
+    }
+  } catch (_e) {
+    // ignore
+  }
+  return headers;
+}
+
+export async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url, { headers: getHeadersWithAuth(url) });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return (await res.json()) as Promise<T>;
+}
+
+export async function fetchOk(url: string): Promise<void> {
+  const res = await fetch(url, { headers: getHeadersWithAuth(url) });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
@@ -69,7 +98,9 @@ export async function createTargetViaCdp(opts: {
   url: string;
 }): Promise<{ targetId: string }> {
   const base = opts.cdpUrl.replace(/\/$/, "");
-  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(`${base}/json/version`, 1500);
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+    `${base}/json/version`,
+  );
   const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
   const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
   if (!wsUrl) throw new Error("CDP /json/version missing webSocketDebuggerUrl");

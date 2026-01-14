@@ -1,6 +1,10 @@
 import fs from "node:fs";
 
-import { createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  createTargetViaCdp,
+  getHeadersWithAuth,
+  normalizeCdpWsUrl,
+} from "./cdp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -10,6 +14,7 @@ import {
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
+import { getConnectedBrowser } from "./pw-session.js";
 import type {
   BrowserRouteContext,
   BrowserTab,
@@ -50,7 +55,11 @@ async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const headers = getHeadersWithAuth(
+      url,
+      (init?.headers as Record<string, string>) || {},
+    );
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
   } finally {
@@ -62,7 +71,11 @@ async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promi
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const headers = getHeadersWithAuth(
+      url,
+      (init?.headers as Record<string, string>) || {},
+    );
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } finally {
     clearTimeout(t);
@@ -97,7 +110,40 @@ function createProfileContext(
     profileState.running = running;
   };
 
+  const listTabsViaPlaywright = async (): Promise<BrowserTab[]> => {
+    const browser = await getConnectedBrowser(profile.cdpUrl);
+    const contexts = browser.contexts();
+    const pages = contexts.flatMap((c) => c.pages());
+    // Note: Playwright pages don't sync title instantly, returning URL is safer for list
+    return pages.map((p) => ({
+      targetId: p.url(),
+      title: "",
+      url: p.url(),
+      type: "page",
+    }));
+  };
+
+  const openTabViaPlaywright = async (url?: string): Promise<BrowserTab> => {
+    const browser = await getConnectedBrowser(profile.cdpUrl);
+    // Reuse context or create new
+    const context = browser.contexts()[0] || (await browser.newContext());
+    const page = await context.newPage();
+    if (url) await page.goto(url);
+    return { targetId: page.url(), title: "", url: page.url(), type: "page" };
+  };
+
+  const closeTabViaPlaywright = async (targetId: string) => {
+    const browser = await getConnectedBrowser(profile.cdpUrl);
+    const pages = browser.contexts().flatMap((c) => c.pages());
+    // Find page by URL match (simple strategy)
+    const page = pages.find((p) => p.url() === targetId);
+    if (page) await page.close();
+  };
+
   const listTabs = async (): Promise<BrowserTab[]> => {
+    if (!profile.cdpIsLoopback) {
+      return await listTabsViaPlaywright();
+    }
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -119,6 +165,9 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    if (!profile.cdpIsLoopback) {
+      return await openTabViaPlaywright(url);
+    }
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
@@ -342,6 +391,9 @@ function createProfileContext(
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
+    if (!profile.cdpIsLoopback) {
+      return await closeTabViaPlaywright(targetId);
+    }
     const base = profile.cdpUrl.replace(/\/$/, "");
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);

@@ -256,6 +256,11 @@ function observeBrowser(browser: Browser) {
   for (const context of browser.contexts()) observeContext(context);
 }
 
+export async function getConnectedBrowser(cdpUrl: string): Promise<Browser> {
+  const { browser } = await connectBrowser(cdpUrl);
+  return browser;
+}
+
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) return cached;

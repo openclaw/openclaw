@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR } from "../utils.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
+import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -74,6 +74,7 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
     const base = cdpUrl.replace(/\/$/, "");
     const res = await fetch(`${base}/json/version`, {
       signal: ctrl.signal,
+      headers: getHeadersWithAuth(`${base}/json/version`),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as ChromeVersion;
