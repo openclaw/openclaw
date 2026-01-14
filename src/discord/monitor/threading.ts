@@ -3,6 +3,7 @@ import { Routes } from "discord-api-types/v10";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import type { ReplyToMode } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { DiscordMessageEvent } from "./listeners.js";
@@ -159,6 +160,47 @@ type DiscordReplyDeliveryPlan = {
   replyTarget: string;
   replyReference: ReturnType<typeof createReplyReferencePlanner>;
 };
+
+export type DiscordAutoThreadContext = {
+  createdThreadId: string;
+  From: string;
+  To: string;
+  OriginatingTo: string;
+  SessionKey: string;
+  ParentSessionKey: string;
+};
+
+export function resolveDiscordAutoThreadContext(params: {
+  agentId: string;
+  channel: string;
+  messageChannelId: string;
+  createdThreadId?: string | null;
+}): DiscordAutoThreadContext | null {
+  const createdThreadId = String(params.createdThreadId ?? "").trim();
+  if (!createdThreadId) return null;
+  const messageChannelId = params.messageChannelId.trim();
+  if (!messageChannelId) return null;
+
+  const threadSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: createdThreadId },
+  });
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel: params.channel,
+    peer: { kind: "channel", id: messageChannelId },
+  });
+
+  return {
+    createdThreadId,
+    From: `group:${createdThreadId}`,
+    To: `channel:${createdThreadId}`,
+    OriginatingTo: `channel:${createdThreadId}`,
+    SessionKey: threadSessionKey,
+    ParentSessionKey: parentSessionKey,
+  };
+}
 
 export async function maybeCreateDiscordAutoThread(params: {
   client: Client;
