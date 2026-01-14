@@ -193,6 +193,12 @@ def main() -> int:
 
     prompts = [args.prompt] * count if args.prompt else pick_prompts(count)
 
+    # Determine file extension based on output format
+    if args.model.startswith("gpt-image") and args.output_format:
+        file_ext = args.output_format
+    else:
+        file_ext = "png"
+
     items: list[dict] = []
     for idx, prompt in enumerate(prompts, start=1):
         print(f"[{idx}/{len(prompts)}] {prompt}")
@@ -209,9 +215,9 @@ def main() -> int:
         b64 = res.get("data", [{}])[0].get("b64_json")
         if not b64:
             raise RuntimeError(f"Unexpected response: {json.dumps(res)[:400]}")
-        png = base64.b64decode(b64)
-        filename = f"{idx:03d}-{slugify(prompt)[:40]}.png"
-        (out_dir / filename).write_bytes(png)
+        image_bytes = base64.b64decode(b64)
+        filename = f"{idx:03d}-{slugify(prompt)[:40]}.{file_ext}"
+        (out_dir / filename).write_bytes(image_bytes)
         items.append({"prompt": prompt, "file": filename})
 
     (out_dir / "prompts.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
