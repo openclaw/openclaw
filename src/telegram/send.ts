@@ -396,6 +396,44 @@ export async function reactMessageTelegram(
   return { ok: true };
 }
 
+type TelegramDeleteOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+};
+
+export async function deleteMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  opts: TelegramDeleteOpts = {},
+): Promise<{ ok: true }> {
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+  });
+  await request(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  logVerbose(
+    `[telegram] Deleted message ${messageId} from chat ${chatId}`,
+  );
+  return { ok: true };
+}
+
 function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {
   switch (kind) {
     case "image":

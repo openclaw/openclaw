@@ -35,6 +35,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const gate = createActionGate(cfg.channels?.telegram?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
     if (gate("reactions")) actions.add("react");
+    if (gate("deleteMessage")) actions.add("delete");
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => hasTelegramInlineButtons(cfg),
@@ -86,6 +87,22 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           emoji,
           remove,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "delete") {
+      const chatId = readStringParam(params, "chatId", { required: true });
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+      });
+      return await handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId,
+          messageId: Number(messageId),
           accountId: accountId ?? undefined,
         },
         cfg,
