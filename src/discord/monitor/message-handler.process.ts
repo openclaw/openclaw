@@ -26,6 +26,7 @@ import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-
 import { deliverDiscordReply } from "./reply-delivery.js";
 import {
   maybeCreateDiscordAutoThread,
+  resolveDiscordAutoThreadContext,
   resolveDiscordReplyDeliveryPlan,
   resolveDiscordThreadStarter,
 } from "./threading.js";
@@ -192,100 +193,85 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         peer: { kind: "channel", id: threadParentId },
       });
     }
-  }
-  const mediaPayload = buildDiscordMediaPayload(mediaList);
-  const discordTo = `channel:${message.channelId}`;
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey,
-    threadId: threadChannel ? message.channelId : undefined,
-    parentSessionKey,
-    useSuffix: false,
-  });
-  let ctxPayload = {
-    Body: combinedBody,
-    RawBody: baseText,
-    CommandBody: baseText,
-    From: isDirectMessage ? `discord:${author.id}` : `group:${message.channelId}`,
-    To: discordTo,
-    SessionKey: threadKeys.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "group",
-    SenderName: data.member?.nickname ?? author.globalName ?? author.username,
-    SenderId: author.id,
-    SenderUsername: author.username,
-    SenderTag: formatDiscordUserTag(author),
-    GroupSubject: groupSubject,
-    GroupRoom: groupRoom,
-    GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
-    GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
-    Provider: "discord" as const,
-    Surface: "discord" as const,
-    WasMentioned: effectiveWasMentioned,
-    MessageSid: message.id,
-    ParentSessionKey: threadKeys.parentSessionKey,
-    ThreadStarterBody: threadStarterBody,
-    ThreadLabel: threadLabel,
-    Timestamp: resolveTimestampMs(message.timestamp),
-    ...mediaPayload,
-    CommandAuthorized: commandAuthorized,
-    CommandSource: "text" as const,
-    // Originating channel for reply routing.
-    OriginatingChannel: "discord" as const,
-    OriginatingTo: discordTo,
-  };
-  let replyTarget = ctxPayload.To ?? undefined;
-  if (!replyTarget) {
-    runtime.error?.(danger("discord: missing reply target"));
-    return;
-  }
-  const createdThreadId = await maybeCreateDiscordAutoThread({
-    client,
-    message,
-    isGuildMessage,
-    channelConfig,
+	  }
+	  const mediaPayload = buildDiscordMediaPayload(mediaList);
+	  const threadKeys = resolveThreadSessionKeys({
+	    baseSessionKey,
+	    threadId: threadChannel ? message.channelId : undefined,
+	    parentSessionKey,
+	    useSuffix: false,
+	  });
+	  const inboundTarget = `channel:${message.channelId}`;
+	  const createdThreadId = await maybeCreateDiscordAutoThread({
+	    client,
+	    message,
+	    isGuildMessage,
+	    channelConfig,
     threadChannel,
-    baseText: baseText ?? "",
-    combinedBody,
-  });
-  const replyPlan = resolveDiscordReplyDeliveryPlan({
-    replyTarget,
-    replyToMode,
-    messageId: message.id,
-    threadChannel,
-    createdThreadId,
-  });
-  const deliverTarget = replyPlan.deliverTarget;
-  replyTarget = replyPlan.replyTarget;
-  const replyReference = replyPlan.replyReference;
+	    baseText: baseText ?? "",
+	    combinedBody,
+	  });
+	  const replyPlan = resolveDiscordReplyDeliveryPlan({
+	    replyTarget: inboundTarget,
+	    replyToMode,
+	    messageId: message.id,
+	    threadChannel,
+	    createdThreadId,
+	  });
+	  const deliverTarget = replyPlan.deliverTarget;
+	  const replyTarget = replyPlan.replyTarget;
+	  const replyReference = replyPlan.replyReference;
 
-  // If autoThread created a new thread, ensure we also isolate session context to that thread.
-  if (createdThreadId && replyTarget === `channel:${createdThreadId}`) {
-    const threadSessionKey = buildAgentSessionKey({
-      agentId: route.agentId,
-      channel: route.channel,
-      peer: { kind: "channel", id: createdThreadId },
-    });
-    const autoParentSessionKey = buildAgentSessionKey({
-      agentId: route.agentId,
-      channel: route.channel,
-      peer: { kind: "channel", id: message.channelId },
-    });
-    const autoThreadKeys = resolveThreadSessionKeys({
-      baseSessionKey: threadSessionKey,
-      threadId: createdThreadId,
-      parentSessionKey: autoParentSessionKey,
-      useSuffix: false,
-    });
+	  const autoThreadContext = isGuildMessage
+	    ? resolveDiscordAutoThreadContext({
+	        agentId: route.agentId,
+	        channel: route.channel,
+	        messageChannelId: message.channelId,
+	        createdThreadId,
+	      })
+	    : null;
 
-    ctxPayload = {
-      ...ctxPayload,
-      From: `group:${createdThreadId}`,
-      To: `channel:${createdThreadId}`,
-      OriginatingTo: `channel:${createdThreadId}`,
-      SessionKey: autoThreadKeys.sessionKey,
-      ParentSessionKey: autoThreadKeys.parentSessionKey,
-    };
-  }
+	  const effectiveFrom = isDirectMessage
+	    ? `discord:${author.id}`
+	    : (autoThreadContext?.From ?? `group:${message.channelId}`);
+	  const effectiveTo = autoThreadContext?.To ?? replyTarget;
+	  if (!effectiveTo) {
+	    runtime.error?.(danger("discord: missing reply target"));
+	    return;
+	  }
+
+	  const ctxPayload = {
+	    Body: combinedBody,
+	    RawBody: baseText,
+	    CommandBody: baseText,
+	    From: effectiveFrom,
+	    To: effectiveTo,
+	    SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
+	    AccountId: route.accountId,
+	    ChatType: isDirectMessage ? "direct" : "group",
+	    SenderName: data.member?.nickname ?? author.globalName ?? author.username,
+	    SenderId: author.id,
+	    SenderUsername: author.username,
+	    SenderTag: formatDiscordUserTag(author),
+	    GroupSubject: groupSubject,
+	    GroupRoom: groupRoom,
+	    GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
+	    GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+	    Provider: "discord" as const,
+	    Surface: "discord" as const,
+	    WasMentioned: effectiveWasMentioned,
+	    MessageSid: message.id,
+	    ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,
+	    ThreadStarterBody: threadStarterBody,
+	    ThreadLabel: threadLabel,
+	    Timestamp: resolveTimestampMs(message.timestamp),
+	    ...mediaPayload,
+	    CommandAuthorized: commandAuthorized,
+	    CommandSource: "text" as const,
+	    // Originating channel for reply routing.
+	    OriginatingChannel: "discord" as const,
+	    OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
+	  };
 
   if (isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -301,17 +287,20 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     });
   }
 
-  if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
-    logVerbose(
-      `discord inbound: channel=${message.channelId} from=${ctxPayload.From} preview="${preview}"`,
-    );
-  }
+	  if (shouldLogVerbose()) {
+	    const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
+	    logVerbose(
+	      `discord inbound: channel=${message.channelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
+	    );
+	  }
 
-  let didSendReply = false;
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
-    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+	  let didSendReply = false;
+	  const typingChannelId = deliverTarget.startsWith("channel:")
+	    ? deliverTarget.slice("channel:".length)
+	    : message.channelId;
+	  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+	    responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+	    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
       await deliverDiscordReply({
@@ -328,11 +317,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       didSendReply = true;
       replyReference.markSent();
     },
-    onError: (err, info) => {
-      runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
-    },
-    onReplyStart: () => sendTyping({ client, channelId: message.channelId }),
-  });
+	    onError: (err, info) => {
+	      runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
+	    },
+	    onReplyStart: () => sendTyping({ client, channelId: typingChannelId }),
+	  });
 
   const { queuedFinal, counts } = await dispatchReplyFromConfig({
     ctx: ctxPayload,
