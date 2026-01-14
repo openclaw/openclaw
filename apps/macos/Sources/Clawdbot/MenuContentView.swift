@@ -313,34 +313,7 @@ struct MenuContent: View {
     private func openDashboard() async {
         do {
             let config = try await GatewayEndpointStore.shared.requireConfig()
-            let wsURL = config.url
-            guard var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false) else {
-                throw NSError(domain: "Dashboard", code: 1, userInfo: [
-                    NSLocalizedDescriptionKey: "Invalid gateway URL",
-                ])
-            }
-            switch components.scheme?.lowercased() {
-            case "ws":
-                components.scheme = "http"
-            case "wss":
-                components.scheme = "https"
-            default:
-                components.scheme = "http"
-            }
-            components.path = "/"
-            var queryItems: [URLQueryItem] = []
-            if let token = config.token, !token.isEmpty {
-                queryItems.append(URLQueryItem(name: "token", value: token))
-            }
-            if let password = config.password, !password.isEmpty {
-                queryItems.append(URLQueryItem(name: "password", value: password))
-            }
-            components.queryItems = queryItems.isEmpty ? nil : queryItems
-            guard let url = components.url else {
-                throw NSError(domain: "Dashboard", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Failed to build dashboard URL",
-                ])
-            }
+            let url = try GatewayEndpointStore.dashboardURL(for: config)
             NSWorkspace.shared.open(url)
         } catch {
             let alert = NSAlert()

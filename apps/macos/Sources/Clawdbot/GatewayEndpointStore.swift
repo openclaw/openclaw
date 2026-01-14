@@ -388,6 +388,43 @@ actor GatewayEndpointStore {
     }
 }
 
+extension GatewayEndpointStore {
+    static func dashboardURL(for config: GatewayConnection.Config) throws -> URL {
+        guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
+            throw NSError(domain: "Dashboard", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid gateway URL",
+            ])
+        }
+        switch components.scheme?.lowercased() {
+        case "ws":
+            components.scheme = "http"
+        case "wss":
+            components.scheme = "https"
+        default:
+            components.scheme = "http"
+        }
+        components.path = "/"
+        var queryItems: [URLQueryItem] = []
+        if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty
+        {
+            queryItems.append(URLQueryItem(name: "token", value: token))
+        }
+        if let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !password.isEmpty
+        {
+            queryItems.append(URLQueryItem(name: "password", value: password))
+        }
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let url = components.url else {
+            throw NSError(domain: "Dashboard", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to build dashboard URL",
+            ])
+        }
+        return url
+    }
+}
+
 #if DEBUG
 extension GatewayEndpointStore {
     static func _testResolveGatewayPassword(
