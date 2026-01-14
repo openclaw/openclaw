@@ -1017,11 +1017,11 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 
 ### Fix checklist for `No credentials found for profile "anthropic:claude-cli"`
 
-This means the run is pinned to the **Claude CLI** profile, but the Gateway
+This means the run is pinned to the **Claude Code CLI** profile, but the Gateway
 can’t find that profile in its auth store.
 
-- **Sync the Claude CLI token on the gateway host**
-  - Run `clawdbot models status` (it loads + syncs Claude CLI credentials).
+- **Sync the Claude Code CLI token on the gateway host**
+  - Run `clawdbot models status` (it loads + syncs Claude Code CLI credentials).
   - If it still says missing: run `claude setup-token` (or `clawdbot models auth setup-token --provider anthropic`) and retry.
 - **If you want to use an API key instead**
   - Put `ANTHROPIC_API_KEY` in `~/.clawdbot/.env` on the **gateway host**.

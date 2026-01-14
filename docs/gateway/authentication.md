@@ -47,10 +47,10 @@ API keys for daemon use: `clawdbot onboard`.
 See [/start/faq](/start/faq) for details on env inheritance (`env.shellEnv`,
 `~/.clawdbot/.env`, systemd/launchd).
 
-## Anthropic: Claude CLI setup-token (supported)
+## Anthropic: Claude Code CLI setup-token (supported)
 
 For Anthropic, the recommended path is an **API key**. If you’re already using
-Claude Code, the Claude CLI setup-token is also supported.
+Claude Code CLI, the setup-token flow is also supported.
 Run it on the **gateway host**:
 
 ```bash
@@ -138,7 +138,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
    `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` when the auth store is
    loaded.
 3. Refreshable OAuth profiles can be refreshed automatically on use. Static
-   token profiles (including Claude CLI setup-token) are not refreshable by
+   token profiles (including Claude Code CLI setup-token) are not refreshable by
    Clawdbot.
 
 ## Troubleshooting
