@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.14-1 (unreleased)
+## 2026.1.14-1
 
 ### Highlights
 - Web search: `web_search`/`web_fetch` tools (Brave API) + first-time setup in onboarding/configure.

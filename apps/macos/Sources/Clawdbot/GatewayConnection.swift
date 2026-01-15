@@ -233,14 +233,18 @@ actor GatewayConnection {
 
     func canvasHostUrl() async -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
-        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = snapshot.canvashosturl?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func sessionDefaultString(_ defaults: [String: AnyCodable]?, key: String) -> String {
+        (defaults?[key]?.stringValue ?? "")
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 
     func cachedMainSessionKey() -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
-        let trimmed = snapshot.snapshot.sessiondefaults?.mainsessionkey
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = self.sessionDefaultString(snapshot.snapshot.sessiondefaults, key: "mainSessionKey")
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -287,13 +291,13 @@ actor GatewayConnection {
     }
 
     private func canonicalizeSessionKey(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
         guard let defaults = self.lastSnapshot?.snapshot.sessiondefaults else { return trimmed }
-        let mainSessionKey = defaults.mainsessionkey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mainSessionKey = self.sessionDefaultString(defaults, key: "mainSessionKey")
         guard !mainSessionKey.isEmpty else { return trimmed }
-        let mainKey = defaults.mainkey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let defaultAgentId = defaults.defaultagentid.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mainKey = self.sessionDefaultString(defaults, key: "mainKey")
+        let defaultAgentId = self.sessionDefaultString(defaults, key: "defaultAgentId")
         let isMainAlias =
             trimmed == "main" ||
             (!mainKey.isEmpty && trimmed == mainKey) ||
