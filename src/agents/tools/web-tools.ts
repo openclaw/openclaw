@@ -110,6 +110,15 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
+function missingSearchKeyPayload() {
+  return {
+    error: "missing_brave_api_key",
+    message:
+      "web_search needs a Brave Search API key. Run `clawdbot configure --section web` to store it, or set BRAVE_API_KEY in the Gateway environment.",
+    docs: "https://docs.clawd.bot/tools/web",
+  };
+}
+
 function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
@@ -412,8 +421,6 @@ export function createWebSearchTool(options?: {
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) return null;
-  const apiKey = resolveSearchApiKey(search);
-  if (!apiKey) return null;
   return {
     label: "Web Search",
     name: "web_search",
@@ -421,6 +428,10 @@ export function createWebSearchTool(options?: {
       "Search the web using Brave Search API. Returns titles, URLs, and snippets for fast research.",
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const apiKey = resolveSearchApiKey(search);
+      if (!apiKey) {
+        return jsonResult(missingSearchKeyPayload());
+      }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =

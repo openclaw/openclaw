@@ -110,3 +110,4 @@ Notes:
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
+ - If the Brave key is missing, `web_search` returns a short setup hint with a docs link.
