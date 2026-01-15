@@ -468,6 +468,9 @@ AI/vibe-coded PRs welcome! 🤖
 
 Special thanks to @andrewting19 for the Anthropic OAuth tool-name fix.
 
+Core contributors:
+- @cpojer — Telegram onboarding UX + docs
+
 Thanks to all clawtributors:
 
 <p align="left">
