@@ -181,10 +181,10 @@ actor MacNodeRuntime {
                 var height: Int
             }
             let payload = try Self.encodePayload(SnapPayload(
-                                                    format: (params.format ?? .jpg).rawValue,
-                                                    base64: res.data.base64EncodedString(),
-                                                    width: Int(res.size.width),
-                                                    height: Int(res.size.height)))
+                format: (params.format ?? .jpg).rawValue,
+                base64: res.data.base64EncodedString(),
+                width: Int(res.size.width),
+                height: Int(res.size.height)))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case ClawdbotCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(ClawdbotCameraClipParams.self, from: req.paramsJSON)) ??
@@ -204,10 +204,10 @@ actor MacNodeRuntime {
                 var hasAudio: Bool
             }
             let payload = try Self.encodePayload(ClipPayload(
-                                                    format: (params.format ?? .mp4).rawValue,
-                                                    base64: data.base64EncodedString(),
-                                                    durationMs: res.durationMs,
-                                                    hasAudio: res.hasAudio))
+                format: (params.format ?? .mp4).rawValue,
+                base64: data.base64EncodedString(),
+                durationMs: res.durationMs,
+                hasAudio: res.hasAudio))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case ClawdbotCameraCommand.list.rawValue:
             let devices = await self.cameraCapture.listDevices()
@@ -312,12 +312,12 @@ actor MacNodeRuntime {
             var hasAudio: Bool
         }
         let payload = try Self.encodePayload(ScreenPayload(
-                                                format: "mp4",
-                                                base64: data.base64EncodedString(),
-                                                durationMs: params.durationMs,
-                                                fps: params.fps,
-                                                screenIndex: params.screenIndex,
-                                                hasAudio: res.hasAudio))
+            format: "mp4",
+            base64: data.base64EncodedString(),
+            durationMs: params.durationMs,
+            fps: params.fps,
+            screenIndex: params.screenIndex,
+            hasAudio: res.hasAudio))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -454,12 +454,12 @@ actor MacNodeRuntime {
         }
 
         let payload = try Self.encodePayload(RunPayload(
-                                                exitCode: result.exitCode,
-                                                timedOut: result.timedOut,
-                                                success: result.success,
-                                                stdout: result.stdout,
-                                                stderr: result.stderr,
-                                                error: result.errorMessage))
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            success: result.success,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: result.errorMessage))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -576,8 +576,8 @@ actor MacNodeRuntime {
         case .jpeg:
             let clamped = min(1.0, max(0.05, quality))
             guard let data = rep.representation(
-                    using: .jpeg,
-                    properties: [.compressionFactor: clamped])
+                using: .jpeg,
+                properties: [.compressionFactor: clamped])
             else {
                 throw NSError(domain: "Canvas", code: 24, userInfo: [
                     NSLocalizedDescriptionKey: "jpeg encode failed",

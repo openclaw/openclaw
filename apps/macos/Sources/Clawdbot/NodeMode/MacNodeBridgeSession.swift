@@ -39,7 +39,7 @@ actor MacNodeBridgeSession {
         onConnected: (@Sendable (String, String?) async -> Void)? = nil,
         onDisconnected: (@Sendable (String) async -> Void)? = nil,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)
-    async throws
+        async throws
     {
         await self.disconnect()
         self.disconnectHandler = onDisconnected
@@ -77,15 +77,15 @@ actor MacNodeBridgeSession {
             })
 
         guard let line = try await AsyncTimeout.withTimeout(
-                seconds: 6,
-                onTimeout: {
-                    TimeoutError(message: "operation timed out")
-                },
-                operation: {
-                    try await self.receiveLine()
-                }),
-              let data = line.data(using: .utf8),
-              let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
+            seconds: 6,
+            onTimeout: {
+                TimeoutError(message: "operation timed out")
+            },
+            operation: {
+                try await self.receiveLine()
+            }),
+            let data = line.data(using: .utf8),
+            let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
         else {
             self.logger.error("node bridge hello failed (unexpected response)")
             await self.disconnect()

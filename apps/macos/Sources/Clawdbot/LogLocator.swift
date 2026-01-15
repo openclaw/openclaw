@@ -30,9 +30,9 @@ enum LogLocator {
         self.ensureLogDirExists()
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(
-                        at: self.logDir,
-                        includingPropertiesForKeys: [.contentModificationDateKey],
-                        options: [.skipsHiddenFiles])) ?? []
+            at: self.logDir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles])) ?? []
 
         return files
             .filter { $0.lastPathComponent.hasPrefix("clawdbot") && $0.pathExtension == "log" }

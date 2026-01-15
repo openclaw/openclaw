@@ -206,10 +206,10 @@ actor GatewayEndpointStore {
             let port = self.deps.localPort()
             let host = await self.deps.localHost()
             self.setState(.ready(
-                            mode: .local,
-                            url: URL(string: "ws://\(host):\(port)")!,
-                            token: token,
-                            password: password))
+                mode: .local,
+                url: URL(string: "ws://\(host):\(port)")!,
+                token: token,
+                password: password))
         case .remote:
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
@@ -219,10 +219,10 @@ actor GatewayEndpointStore {
             }
             self.cancelRemoteEnsure()
             self.setState(.ready(
-                            mode: .remote,
-                            url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
-                            token: token,
-                            password: password))
+                mode: .remote,
+                url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
+                token: token,
+                password: password))
         case .unconfigured:
             self.cancelRemoteEnsure()
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))

@@ -403,10 +403,10 @@ final class MacNodeModeCoordinator {
                     let preferred = BridgeDiscoveryPreferences.preferredStableID()
                     if let preferred,
                        let match = results.first(where: {
-                        if case .service = $0.endpoint {
-                            return BridgeEndpointID.stableID($0.endpoint) == preferred
-                        }
-                        return false
+                           if case .service = $0.endpoint {
+                               return BridgeEndpointID.stableID($0.endpoint) == preferred
+                           }
+                           return false
                        })
                     {
                         state.finish(match.endpoint)
