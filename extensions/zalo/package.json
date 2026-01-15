@@ -1,6 +1,6 @@
 {
   "name": "@clawdbot/zalo",
-  "version": "0.1.0",
+  "version": "2026.1.14",
   "type": "module",
   "description": "Clawdbot Zalo channel plugin",
   "clawdbot": {
