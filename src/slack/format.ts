@@ -24,7 +24,7 @@ function isAllowedSlackAngleToken(token: string): boolean {
   );
 }
 
-function escapeSlackMrkdwnText(text: string): string {
+function escapeSlackMrkdwnContent(text: string): string {
   if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
     return text;
   }
@@ -47,6 +47,22 @@ function escapeSlackMrkdwnText(text: string): string {
 
   out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex)));
   return out.join("");
+}
+
+function escapeSlackMrkdwnText(text: string): string {
+  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
+    return text;
+  }
+
+  return text
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("> ")) {
+        return `> ${escapeSlackMrkdwnContent(line.slice(2))}`;
+      }
+      return escapeSlackMrkdwnContent(line);
+    })
+    .join("\n");
 }
 
 function buildSlackLink(link: MarkdownLinkSpan, text: string) {

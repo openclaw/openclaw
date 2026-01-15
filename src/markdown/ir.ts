@@ -459,11 +459,18 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
 
   const trimmedText = state.text.trimEnd();
   const trimmedLength = trimmedText.length;
+  let codeBlockEnd = 0;
+  for (const span of state.styles) {
+    if (span.style !== "code_block") continue;
+    if (span.end > codeBlockEnd) codeBlockEnd = span.end;
+  }
+  const finalLength = Math.max(trimmedLength, codeBlockEnd);
+  const finalText = finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
 
   return {
-    text: trimmedText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, trimmedLength)),
-    links: clampLinkSpans(state.links, trimmedLength),
+    text: finalText,
+    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
+    links: clampLinkSpans(state.links, finalLength),
   };
 }
 
