@@ -64,12 +64,12 @@ function stripDowngradedToolCallText(text: string): string {
             escape = false;
           } else if (ch === "\\") {
             escape = true;
-          } else if (ch === "\"") {
+          } else if (ch === '"') {
             inString = false;
           }
           continue;
         }
-        if (ch === "\"") {
+        if (ch === '"') {
           inString = true;
           continue;
         }
@@ -85,7 +85,7 @@ function stripDowngradedToolCallText(text: string): string {
       return null;
     }
 
-    if (startChar === "\"") {
+    if (startChar === '"') {
       let escape = false;
       for (let i = index + 1; i < input.length; i += 1) {
         const ch = input[i];
@@ -97,7 +97,7 @@ function stripDowngradedToolCallText(text: string): string {
           escape = true;
           continue;
         }
-        if (ch === "\"") return i + 1;
+        if (ch === '"') return i + 1;
       }
       return null;
     }
@@ -154,10 +154,7 @@ function stripDowngradedToolCallText(text: string): string {
   let cleaned = stripToolCalls(text);
 
   // Remove [Tool Result for ID ...] blocks and their content.
-  cleaned = cleaned.replace(
-    /\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi,
-    "",
-  );
+  cleaned = cleaned.replace(/\[Tool Result for ID[^\]]*\]\n?[\s\S]*?(?=\n*\[Tool |\n*$)/gi, "");
 
   return cleaned.trim();
 }
