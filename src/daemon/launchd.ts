@@ -16,6 +16,7 @@ import {
 } from "./launchd-plist.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,11 +29,6 @@ function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefine
   const envLabel = args?.env?.CLAWDBOT_LAUNCHD_LABEL?.trim();
   if (envLabel) return envLabel;
   return resolveGatewayLaunchAgentLabel(args?.env?.CLAWDBOT_PROFILE);
-}
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) throw new Error("Missing HOME");
-  return home;
 }
 
 function resolveLaunchAgentPlistPathForLabel(
@@ -53,28 +49,13 @@ export function resolveGatewayLogPaths(env: Record<string, string | undefined>):
   stdoutPath: string;
   stderrPath: string;
 } {
-  const home = resolveHomeDir(env);
-  const stateOverride = env.CLAWDBOT_STATE_DIR?.trim();
-  const profile = env.CLAWDBOT_PROFILE?.trim();
-  const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
-  const defaultStateDir = path.join(home, `.clawdbot${suffix}`);
-  const stateDir = stateOverride ? resolveUserPathWithHome(stateOverride, home) : defaultStateDir;
+  const stateDir = resolveGatewayStateDir(env);
   const logDir = path.join(stateDir, "logs");
   return {
     logDir,
     stdoutPath: path.join(logDir, "gateway.log"),
     stderrPath: path.join(logDir, "gateway.err.log"),
   };
-}
-
-function resolveUserPathWithHome(input: string, home: string): string {
-  const trimmed = input.trim();
-  if (!trimmed) return trimmed;
-  if (trimmed.startsWith("~")) {
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, home);
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
 }
 
 export async function readLaunchAgentProgramArguments(

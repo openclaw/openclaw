@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
+import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -15,17 +16,9 @@ const formatLine = (label: string, value: string) => {
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
 
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.USERPROFILE?.trim() || env.HOME?.trim();
-  if (!home) throw new Error("Missing HOME");
-  return home;
-}
-
 export function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
-  const home = resolveHomeDir(env);
-  const profile = env.CLAWDBOT_PROFILE?.trim();
-  const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
-  return path.join(home, `.clawdbot${suffix}`, "gateway.cmd");
+  const stateDir = resolveGatewayStateDir(env);
+  return path.join(stateDir, "gateway.cmd");
 }
 
 function quoteCmdArg(value: string): string {

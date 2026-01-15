@@ -10,6 +10,7 @@ import {
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
+import { resolveHomeDir } from "./paths.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -27,12 +28,6 @@ const formatLine = (label: string, value: string) => {
   const rich = isRich();
   return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
 };
-
-function resolveHomeDir(env: Record<string, string | undefined>): string {
-  const home = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (!home) throw new Error("Missing HOME");
-  return home;
-}
 
 function resolveSystemdUnitPathForName(
   env: Record<string, string | undefined>,

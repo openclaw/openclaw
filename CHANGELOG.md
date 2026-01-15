@@ -4,6 +4,7 @@
 
 - Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
 - Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
+- Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.
