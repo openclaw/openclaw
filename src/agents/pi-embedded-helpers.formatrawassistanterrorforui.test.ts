@@ -18,4 +18,3 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("")).toContain("unknown error");
   });
 });
-

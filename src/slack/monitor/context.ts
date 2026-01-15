@@ -29,7 +29,12 @@ export function normalizeSlackChannelType(
   channelId?: string | null,
 ): SlackMessageEvent["channel_type"] {
   const normalized = channelType?.trim().toLowerCase();
-  if (normalized === "im" || normalized === "mpim" || normalized === "channel" || normalized === "group") {
+  if (
+    normalized === "im" ||
+    normalized === "mpim" ||
+    normalized === "channel" ||
+    normalized === "group"
+  ) {
     return normalized;
   }
   return inferSlackChannelType(channelId) ?? "channel";

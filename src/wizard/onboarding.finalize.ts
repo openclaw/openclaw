@@ -141,11 +141,11 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           "Gateway daemon",
           { doneMessage: "Gateway daemon restarted." },
           async (progress) => {
-          progress.update("Restarting Gateway daemon…");
-          await service.restart({
-            profile: process.env.CLAWDBOT_PROFILE,
-            stdout: process.stdout,
-          });
+            progress.update("Restarting Gateway daemon…");
+            await service.restart({
+              profile: process.env.CLAWDBOT_PROFILE,
+              stdout: process.stdout,
+            });
           },
         );
       } else if (action === "reinstall") {
@@ -153,8 +153,8 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           "Gateway daemon",
           { doneMessage: "Gateway daemon uninstalled." },
           async (progress) => {
-          progress.update("Uninstalling Gateway daemon…");
-          await service.uninstall({ env: process.env, stdout: process.stdout });
+            progress.update("Uninstalling Gateway daemon…");
+            await service.uninstall({ env: process.env, stdout: process.stdout });
           },
         );
       }
@@ -170,40 +170,40 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         "Gateway daemon",
         { doneMessage: "Gateway daemon installed." },
         async (progress) => {
-        progress.update("Preparing Gateway daemon…");
-        const nodePath = await resolvePreferredNodePath({
-          env: process.env,
-          runtime: daemonRuntime,
-        });
-        const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-          port: settings.port,
-          dev: devMode,
-          runtime: daemonRuntime,
-          nodePath,
-        });
-        if (daemonRuntime === "node") {
-          const systemNode = await resolveSystemNodeInfo({ env: process.env });
-          const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-          if (warning) await prompter.note(warning, "Gateway runtime");
-        }
-        const environment = buildServiceEnvironment({
-          env: process.env,
-          port: settings.port,
-          token: settings.gatewayToken,
-          launchdLabel:
-            process.platform === "darwin"
-              ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-              : undefined,
-        });
+          progress.update("Preparing Gateway daemon…");
+          const nodePath = await resolvePreferredNodePath({
+            env: process.env,
+            runtime: daemonRuntime,
+          });
+          const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
+            port: settings.port,
+            dev: devMode,
+            runtime: daemonRuntime,
+            nodePath,
+          });
+          if (daemonRuntime === "node") {
+            const systemNode = await resolveSystemNodeInfo({ env: process.env });
+            const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
+            if (warning) await prompter.note(warning, "Gateway runtime");
+          }
+          const environment = buildServiceEnvironment({
+            env: process.env,
+            port: settings.port,
+            token: settings.gatewayToken,
+            launchdLabel:
+              process.platform === "darwin"
+                ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
+                : undefined,
+          });
 
-        progress.update("Installing Gateway daemon…");
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
-        });
+          progress.update("Installing Gateway daemon…");
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
         },
       );
     }

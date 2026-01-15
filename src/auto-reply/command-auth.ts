@@ -155,11 +155,7 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const isOwner =
-    !enforceOwner ||
-    allowAll ||
-    ownerList.length === 0 ||
-    Boolean(matchedSender);
+  const isOwner = !enforceOwner || allowAll || ownerList.length === 0 || Boolean(matchedSender);
   const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
