@@ -289,6 +289,9 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 WhatsApp credentials go under `~/.clawdbot/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
+Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+will prompt to install it (npm or a local path) before it can be configured.
+
 ## Related docs
 
 - macOS app onboarding: [Onboarding](/start/onboarding)
