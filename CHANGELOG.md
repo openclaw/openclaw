@@ -3,6 +3,10 @@
 ## 2026.1.15 (unreleased)
 
 - Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.
+- Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
+- Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
+- Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
+- Browser: fix `tab not found` for extension relay snapshots/actions when Playwright blocks `newCDPSession` (use the single available Page).
 - Telegram: add bidirectional reaction support with configurable notifications and agent guidance. (#964) — thanks @bohdanpodvirnyi.
 
 ## 2026.1.14-1
@@ -24,10 +28,6 @@
 - Browser: ship a built-in `chrome` profile for extension relay and start the relay automatically when running locally.
 - Browser: default `browser.defaultProfile` to `chrome` (existing Chrome takeover mode).
 - Browser: add `clawdbot browser extension install/path` and copy extension path to clipboard.
-- Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
-- Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
-- Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
-- Browser: fix `tab not found` for extension relay snapshots/actions when Playwright blocks `newCDPSession` (use the single available Page).
 - Control UI: show raw any-map entries in config views; move Docs link into the left nav.
 
 #### Plugins
