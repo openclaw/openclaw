@@ -10,6 +10,7 @@
 - Security: add detect-secrets CI scan and baseline guidance. (#227) — thanks @Hyaxia.
 
 ### Fixes
+- Doctor: avoid re-adding WhatsApp config when only legacy ack reactions are set. (#927, fixes #900) — thanks @grp06.
 - Agents: scrub tuple `items` schemas for Gemini tool calls. (#926, fixes #746) — thanks @grp06.
 - Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
 - Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.

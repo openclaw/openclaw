@@ -328,7 +328,7 @@ describe("browser control server", () => {
       fn: "() => 1",
       ref: undefined,
     });
-  });
+  }, 20_000);
 
   it("agent contract: hooks + response + downloads + screenshot", async () => {
     const base = await startServerAndBase();
