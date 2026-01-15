@@ -30,6 +30,76 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   );
 }
 
+const ERROR_PAYLOAD_PREFIX_RE =
+  /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
+
+type ErrorPayload = Record<string, unknown>;
+
+function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const record = payload as ErrorPayload;
+  if (record.type === "error") return true;
+  if (typeof record.request_id === "string" || typeof record.requestId === "string") return true;
+  if ("error" in record) {
+    const err = record.error;
+    if (err && typeof err === "object" && !Array.isArray(err)) {
+      const errRecord = err as ErrorPayload;
+      if (
+        typeof errRecord.message === "string" ||
+        typeof errRecord.type === "string" ||
+        typeof errRecord.code === "string"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parseApiErrorPayload(raw: string): ErrorPayload | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const candidates = [trimmed];
+  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
+    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
+  }
+  for (const candidate of candidates) {
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) continue;
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (isErrorPayloadObject(parsed)) return parsed;
+    } catch {
+      // ignore parse errors
+    }
+  }
+  return null;
+}
+
+function stableStringify(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  const entries = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  return `{${entries.join(",")}}`;
+}
+
+export function getApiErrorPayloadFingerprint(raw?: string): string | null {
+  if (!raw) return null;
+  const payload = parseApiErrorPayload(raw);
+  if (!payload) return null;
+  return stableStringify(payload);
+}
+
+export function isRawApiErrorPayload(raw?: string): boolean {
+  return getApiErrorPayloadFingerprint(raw) !== null;
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
@@ -71,6 +141,10 @@ export function formatAssistantErrorText(
 
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
+  }
+
+  if (isRawApiErrorPayload(raw)) {
+    return "The AI service returned an error. Please try again.";
   }
 
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;

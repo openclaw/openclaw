@@ -9,6 +9,7 @@
 
 ### Fixes
 - Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
+
 ## 2026.1.14
 
 ### Changes
