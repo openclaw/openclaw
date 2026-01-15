@@ -280,7 +280,8 @@ async function chmodCredentialsAndAgentState(params: {
   const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents?.list : [];
   for (const agent of list ?? []) {
     if (!agent || typeof agent !== "object") continue;
-    const id = typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
+    const id =
+      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
     if (id) ids.add(id);
   }
 
@@ -365,9 +366,11 @@ export async function fixSecurityFootguns(opts?: {
     }
   }
 
-  await chmodCredentialsAndAgentState({ env, stateDir, cfg: snap.config ?? {}, actions }).catch((err) => {
-    errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
-  });
+  await chmodCredentialsAndAgentState({ env, stateDir, cfg: snap.config ?? {}, actions }).catch(
+    (err) => {
+      errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
+    },
+  );
 
   return {
     ok: errors.length === 0,

@@ -36,7 +36,11 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
-function summarizeGroupPolicy(cfg: ClawdbotConfig): { open: number; allowlist: number; other: number } {
+function summarizeGroupPolicy(cfg: ClawdbotConfig): {
+  open: number;
+  allowlist: number;
+  other: number;
+} {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") return { open: 0, allowlist: 0, other: 0 };
   let open = 0;
@@ -113,25 +117,31 @@ function looksLikeEnvRef(value: string): boolean {
 
 export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const password = typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
+  const password =
+    typeof cfg.gateway?.auth?.password === "string" ? cfg.gateway.auth.password.trim() : "";
   if (password && !looksLikeEnvRef(password)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
       title: "Gateway password is stored in config",
-      detail: "gateway.auth.password is set in the config file; prefer environment variables for secrets when possible.",
-      remediation: "Prefer CLAWDBOT_GATEWAY_PASSWORD (env) and remove gateway.auth.password from disk.",
+      detail:
+        "gateway.auth.password is set in the config file; prefer environment variables for secrets when possible.",
+      remediation:
+        "Prefer CLAWDBOT_GATEWAY_PASSWORD (env) and remove gateway.auth.password from disk.",
     });
   }
 
-  const browserToken = typeof cfg.browser?.controlToken === "string" ? cfg.browser.controlToken.trim() : "";
+  const browserToken =
+    typeof cfg.browser?.controlToken === "string" ? cfg.browser.controlToken.trim() : "";
   if (browserToken && !looksLikeEnvRef(browserToken)) {
     findings.push({
       checkId: "config.secrets.browser_control_token_in_config",
       severity: "warn",
       title: "Browser control token is stored in config",
-      detail: "browser.controlToken is set in the config file; prefer environment variables for secrets when possible.",
-      remediation: "Prefer CLAWDBOT_BROWSER_CONTROL_TOKEN (env) and remove browser.controlToken from disk.",
+      detail:
+        "browser.controlToken is set in the config file; prefer environment variables for secrets when possible.",
+      remediation:
+        "Prefer CLAWDBOT_BROWSER_CONTROL_TOKEN (env) and remove browser.controlToken from disk.",
     });
   }
 
@@ -141,7 +151,8 @@ export function collectSecretsInConfigFindings(cfg: ClawdbotConfig): SecurityAud
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
       title: "Hooks token is stored in config",
-      detail: "hooks.token is set in the config file; keep config perms tight and treat it like an API secret.",
+      detail:
+        "hooks.token is set in the config file; keep config perms tight and treat it like an API secret.",
     });
   }
 
@@ -171,7 +182,8 @@ export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAudi
       checkId: "hooks.token_reuse_gateway_token",
       severity: "warn",
       title: "Hooks token reuses the Gateway token",
-      detail: "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+      detail:
+        "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
       remediation: "Use a separate hooks.token dedicated to hook ingress.",
     });
   }
@@ -185,7 +197,8 @@ export function collectHooksHardeningFindings(cfg: ClawdbotConfig): SecurityAudi
       checkId: "hooks.token_reuse_browser_token",
       severity: "warn",
       title: "Hooks token reuses the browser control token",
-      detail: "hooks.token matches browser control token; compromise of hooks may enable browser control endpoints.",
+      detail:
+        "hooks.token matches browser control token; compromise of hooks may enable browser control endpoints.",
       remediation: "Use a separate hooks.token dedicated to hook ingress.",
     });
   }
@@ -216,7 +229,8 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
 function collectModels(cfg: ClawdbotConfig): ModelRef[] {
   const out: ModelRef[] = [];
   addModel(out, cfg.agents?.defaults?.model?.primary, "agents.defaults.model.primary");
-  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? []) addModel(out, f, "agents.defaults.model.fallbacks");
+  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? [])
+    addModel(out, f, "agents.defaults.model.fallbacks");
   addModel(out, cfg.agents?.defaults?.imageModel?.primary, "agents.defaults.imageModel.primary");
   for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? [])
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
@@ -224,7 +238,8 @@ function collectModels(cfg: ClawdbotConfig): ModelRef[] {
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
   for (const agent of list ?? []) {
     if (!agent || typeof agent !== "object") continue;
-    const id = typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
+    const id =
+      typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
     const model = (agent as { model?: unknown }).model;
     if (typeof model === "string") {
       addModel(out, model, `agents.list.${id}.model`);
@@ -271,7 +286,9 @@ export function collectModelHygieneFindings(cfg: ClawdbotConfig): SecurityAuditF
       severity: "warn",
       title: "Some configured models look legacy",
       detail:
-        "Older/legacy models can be less robust against prompt injection and tool misuse.\n" + lines + more,
+        "Older/legacy models can be less robust against prompt injection and tool misuse.\n" +
+        lines +
+        more,
       remediation: "Prefer modern, instruction-hardened models for any bot that can run tools.",
     });
   }
@@ -289,7 +306,10 @@ export async function collectPluginsTrustFindings(params: {
   if (!st.ok || !st.isDir) return findings;
 
   const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch(() => []);
-  const pluginDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name).filter(Boolean);
+  const pluginDirs = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .filter(Boolean);
   if (pluginDirs.length === 0) return findings;
 
   const allow = params.cfg.plugins?.allow;
@@ -501,7 +521,8 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const logFile = typeof params.cfg.logging?.file === "string" ? params.cfg.logging.file.trim() : "";
+  const logFile =
+    typeof params.cfg.logging?.file === "string" ? params.cfg.logging.file.trim() : "";
   if (logFile) {
     const expanded = logFile.startsWith("~") ? expandTilde(logFile, params.env) : logFile;
     if (expanded) {
@@ -538,7 +559,8 @@ function listGroupPolicyOpen(cfg: ClawdbotConfig): string[] {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
         if (!accountVal || typeof accountVal !== "object") continue;
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open") out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
+        if (acc.groupPolicy === "open")
+          out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
       }
     }
   }
@@ -570,5 +592,8 @@ export async function readConfigSnapshotForAudit(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
 }): Promise<ConfigFileSnapshot> {
-  return await createConfigIO({ env: params.env, configPath: params.configPath }).readConfigFileSnapshot();
+  return await createConfigIO({
+    env: params.env,
+    configPath: params.configPath,
+  }).readConfigFileSnapshot();
 }

@@ -258,10 +258,10 @@ describe("security fix", () => {
     const res = await fixSecurityFootguns({ env });
     expect(res.ok).toBe(true);
 
-    expect((await fs.stat(credsDir)).mode & 0o777).toBe(0o700);
-    expect((await fs.stat(allowFromPath)).mode & 0o777).toBe(0o600);
-    expect((await fs.stat(authProfilesPath)).mode & 0o777).toBe(0o600);
-    expect((await fs.stat(sessionsStorePath)).mode & 0o777).toBe(0o600);
-    expect((await fs.stat(includePath)).mode & 0o777).toBe(0o600);
+    expectPerms((await fs.stat(credsDir)).mode & 0o777, 0o700);
+    expectPerms((await fs.stat(allowFromPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(authProfilesPath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(sessionsStorePath)).mode & 0o777, 0o600);
+    expectPerms((await fs.stat(includePath)).mode & 0o777, 0o600);
   });
 });

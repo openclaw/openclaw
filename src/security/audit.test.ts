@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+const isWindows = process.platform === "win32";
+
 describe("security audit", () => {
   it("includes an attack surface summary (info)", async () => {
     const cfg: ClawdbotConfig = {
@@ -212,7 +214,9 @@ describe("security audit", () => {
     });
 
     expect(res.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "models.legacy", severity: "warn" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "models.legacy", severity: "warn" }),
+      ]),
     );
   });
 
@@ -228,7 +232,9 @@ describe("security audit", () => {
     });
 
     expect(res.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "hooks.token_too_short", severity: "warn" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "hooks.token_too_short", severity: "warn" }),
+      ]),
     );
   });
 
@@ -244,7 +250,9 @@ describe("security audit", () => {
     });
 
     expect(res.findings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ checkId: "fs.synced_dir", severity: "warn" })]),
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "fs.synced_dir", severity: "warn" }),
+      ]),
     );
   });
 
@@ -270,9 +278,13 @@ describe("security audit", () => {
       configPath,
     });
 
+    const expectedCheckId = isWindows
+      ? "fs.config_include.perms_writable"
+      : "fs.config_include.perms_world_readable";
+
     expect(res.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ checkId: "fs.config_include.perms_world_readable", severity: "critical" }),
+        expect.objectContaining({ checkId: expectedCheckId, severity: "critical" }),
       ]),
     );
   });
@@ -280,7 +292,10 @@ describe("security audit", () => {
   it("flags extensions without plugins.allow", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-"));
     const stateDir = path.join(tmp, "state");
-    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
+    });
 
     const cfg: ClawdbotConfig = {};
     const res = await runSecurityAudit({
