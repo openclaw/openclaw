@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
+  downgradeGeminiThinkingBlocks,
   downgradeGeminiHistory,
   isCompactionFailureError,
   isGoogleModelApi,
@@ -148,10 +149,13 @@ export async function sanitizeSessionHistory(params: {
     enforceToolCallLast: params.modelApi === "anthropic-messages",
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
-
-  const downgraded = isGoogleModelApi(params.modelApi)
-    ? downgradeGeminiHistory(repairedTools)
+  // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
+  const downgradedThinking = isGoogleModelApi(params.modelApi)
+    ? downgradeGeminiThinkingBlocks(repairedTools)
     : repairedTools;
+  const downgraded = isGoogleModelApi(params.modelApi)
+    ? downgradeGeminiHistory(downgradedThinking)
+    : downgradedThinking;
 
   return applyGoogleTurnOrderingFix({
     messages: downgraded,

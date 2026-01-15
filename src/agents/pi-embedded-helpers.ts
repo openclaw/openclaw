@@ -26,6 +26,7 @@ export {
 } from "./pi-embedded-helpers/errors.js";
 export {
   downgradeGeminiHistory,
+  downgradeGeminiThinkingBlocks,
   isGoogleModelApi,
   sanitizeGoogleTurnOrdering,
 } from "./pi-embedded-helpers/google.js";
