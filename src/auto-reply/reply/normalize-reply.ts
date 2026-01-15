@@ -1,3 +1,4 @@
+import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
@@ -43,9 +44,17 @@ export function normalizeReplyPayload(
   }
 
   // Resolve template variables in responsePrefix if context is provided
+  if (opts.responsePrefix?.includes("{")) {
+    logVerbose(
+      `[responsePrefix] normalizing: prefix="${opts.responsePrefix}", context=${JSON.stringify(opts.responsePrefixContext)}`,
+    );
+  }
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;
+  if (opts.responsePrefix?.includes("{") && effectivePrefix !== opts.responsePrefix) {
+    logVerbose(`[responsePrefix] resolved to: "${effectivePrefix}"`);
+  }
 
   if (
     effectivePrefix &&
