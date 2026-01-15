@@ -329,6 +329,27 @@ Arguments: { "action": "act", "request": "click button" }`,
     expect(result).toBe("Let me check that for you.");
   });
 
+  it("preserves trailing text after downgraded tool call blocks", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Intro text.
+[Tool Call: read (ID: toolu_1)]
+Arguments: {
+  "path": "/tmp/file.txt"
+}
+Back to the user.`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Intro text.\nBack to the user.");
+  });
+
   it("handles multiple text blocks with tool calls and results", () => {
     const msg: AssistantMessage = {
       role: "assistant",
@@ -373,6 +394,22 @@ File contents here`,
 
     const result = extractAssistantText(msg);
     expect(result).toBe("Aquí está tu respuesta.");
+  });
+
+  it("strips thinking tags with attributes", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<think reason="deliberate">Hidden</think>Visible`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Visible");
   });
 
   it("strips thinking tags without closing tag", () => {

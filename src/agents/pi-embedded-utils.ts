@@ -31,12 +31,127 @@ function stripDowngradedToolCallText(text: string): string {
   if (!text) return text;
   if (!/\[Tool (?:Call|Result)/i.test(text)) return text;
 
+  const consumeJsonish = (
+    input: string,
+    start: number,
+    options?: { allowLeadingNewlines?: boolean },
+  ): number | null => {
+    const { allowLeadingNewlines = false } = options ?? {};
+    let index = start;
+    while (index < input.length) {
+      const ch = input[index];
+      if (ch === " " || ch === "\t") {
+        index += 1;
+        continue;
+      }
+      if (allowLeadingNewlines && (ch === "\n" || ch === "\r")) {
+        index += 1;
+        continue;
+      }
+      break;
+    }
+    if (index >= input.length) return null;
+
+    const startChar = input[index];
+    if (startChar === "{" || startChar === "[") {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (let i = index; i < input.length; i += 1) {
+        const ch = input[i];
+        if (inString) {
+          if (escape) {
+            escape = false;
+          } else if (ch === "\\") {
+            escape = true;
+          } else if (ch === "\"") {
+            inString = false;
+          }
+          continue;
+        }
+        if (ch === "\"") {
+          inString = true;
+          continue;
+        }
+        if (ch === "{" || ch === "[") {
+          depth += 1;
+          continue;
+        }
+        if (ch === "}" || ch === "]") {
+          depth -= 1;
+          if (depth === 0) return i + 1;
+        }
+      }
+      return null;
+    }
+
+    if (startChar === "\"") {
+      let escape = false;
+      for (let i = index + 1; i < input.length; i += 1) {
+        const ch = input[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (ch === "\\") {
+          escape = true;
+          continue;
+        }
+        if (ch === "\"") return i + 1;
+      }
+      return null;
+    }
+
+    let end = index;
+    while (end < input.length && input[end] !== "\n" && input[end] !== "\r") {
+      end += 1;
+    }
+    return end;
+  };
+
+  const stripToolCalls = (input: string): string => {
+    const markerRe = /\[Tool Call:[^\]]*\]/gi;
+    let result = "";
+    let cursor = 0;
+    for (const match of input.matchAll(markerRe)) {
+      const start = match.index ?? 0;
+      if (start < cursor) continue;
+      result += input.slice(cursor, start);
+      let index = start + match[0].length;
+      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+        index += 1;
+      }
+      if (input[index] === "\r") {
+        index += 1;
+        if (input[index] === "\n") index += 1;
+      } else if (input[index] === "\n") {
+        index += 1;
+      }
+      while (index < input.length && (input[index] === " " || input[index] === "\t")) {
+        index += 1;
+      }
+      if (input.slice(index, index + 9).toLowerCase() === "arguments") {
+        index += 9;
+        if (input[index] === ":") index += 1;
+        if (input[index] === " ") index += 1;
+        const end = consumeJsonish(input, index, { allowLeadingNewlines: true });
+        if (end !== null) index = end;
+      }
+      if (
+        (input[index] === "\n" || input[index] === "\r") &&
+        (result.endsWith("\n") || result.endsWith("\r") || result.length === 0)
+      ) {
+        if (input[index] === "\r") index += 1;
+        if (input[index] === "\n") index += 1;
+      }
+      cursor = index;
+    }
+    result += input.slice(cursor);
+    return result;
+  };
+
   // Remove [Tool Call: name (ID: ...)] blocks and their Arguments.
-  // Match until the next [Tool marker or end of string.
-  let cleaned = text.replace(
-    /\[Tool Call:[^\]]*\]\n?(?:Arguments:[\s\S]*?)?(?=\n*\[Tool |\n*$)/gi,
-    "",
-  );
+  let cleaned = stripToolCalls(text);
 
   // Remove [Tool Result for ID ...] blocks and their content.
   cleaned = cleaned.replace(
@@ -57,7 +172,7 @@ function stripThinkingTagsFromText(text: string): string {
   // Quick check to avoid regex overhead when no tags present.
   if (!/(?:think(?:ing)?|thought|antthinking)/i.test(text)) return text;
 
-  const tagRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+  const tagRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^>]*>/gi;
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
