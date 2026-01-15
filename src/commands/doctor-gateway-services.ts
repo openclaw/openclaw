@@ -59,11 +59,11 @@ export async function maybeMigrateLegacyGatewayService(
 
   note(
     legacyServices.map((svc) => `- ${svc.label} (${svc.platform}, ${svc.detail})`).join("\n"),
-    "Legacy Clawdis services detected",
+    "Legacy gateway services detected",
   );
 
   const migrate = await prompter.confirmSkipInNonInteractive({
-    message: "Migrate legacy Clawdis services to Clawdbot now?",
+    message: "Migrate legacy gateway services to Clawdbot now?",
     initialValue: true,
   });
   if (!migrate) return;

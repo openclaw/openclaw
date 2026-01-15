@@ -57,7 +57,7 @@ export function resolveGatewayLogPaths(env: Record<string, string | undefined>):
   stderrPath: string;
 } {
   const home = resolveHomeDir(env);
-  const stateOverride = env.CLAWDBOT_STATE_DIR?.trim() || env.CLAWDIS_STATE_DIR?.trim();
+  const stateOverride = env.CLAWDBOT_STATE_DIR?.trim();
   const profile = env.CLAWDBOT_PROFILE?.trim();
   const suffix = profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
   const defaultStateDir = path.join(home, `.clawdbot${suffix}`);

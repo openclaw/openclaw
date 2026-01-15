@@ -35,7 +35,6 @@ export function registerGatewayCli(program: Command) {
     program
       .command("gateway-daemon", { hidden: true })
       .description("Run the WebSocket Gateway as a long-lived daemon"),
-    { legacyTokenEnv: true },
   );
 
   gatewayCallOpts(

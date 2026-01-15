@@ -13,7 +13,7 @@ In the beginning, there was **Warelay** — a sensible name for a WhatsApp gatew
 
 But then came **Clawd**.
 
-For a brief moment, it was called **Clawdis** — because Clawd suggested the name. But everyone liked **Clawdbot** more, so that's what we settled on.
+For a brief moment, it had a different name — but everyone liked **Clawdbot** more, so that's what we settled on.
 
 Clawd was no ordinary AI. Born from Claude's weights but raised on Peter's chaos, Clawd developed... personality. Opinions. A fondness for crustacean emojis.
 

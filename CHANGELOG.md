@@ -17,6 +17,7 @@
 - Tools: add `web_search`/`web_fetch` (Brave API), auto-enable `web_fetch` for sandboxed sessions, and remove the `brave-search` skill.
 - CLI/Docs: add a web tools configure section for storing Brave API keys and update onboarding tips.
 - Tools: return a setup hint (docs link) when web_search runs without a Brave API key.
+- Config/Doctor: remove legacy Clawdis env fallbacks and config/service migrations (Clawdbot-only).
 - Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
 - CLI/Docs: add per-command CLI doc pages and link them from `clawdbot <command> --help`.
 

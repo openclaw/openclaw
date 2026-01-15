@@ -70,7 +70,7 @@
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
 
 ## Troubleshooting
-- Rebrand/migration issues (Clawdis → Clawdbot) or legacy config/service warnings: run `clawdbot doctor` (see `docs/gateway/doctor.md`).
+- Rebrand/migration issues or legacy config/service warnings: run `clawdbot doctor` (see `docs/gateway/doctor.md`).
 
 ## Agent-Specific Notes
 - Vocabulary: "makeup" = "mac app".

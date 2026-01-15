@@ -136,14 +136,14 @@ clawdbot daemon status
 It will show the listener(s) and likely causes (gateway already running, SSH tunnel).
 If needed, stop the service or pick a different port.
 
-### Legacy Workspace Folders Detected
+### Extra Workspace Folders Detected
 
-If you upgraded from older installs, you might still have `~/clawdis` or
-`~/clawdbot` on disk. Multiple workspace directories can cause confusing auth
-or state drift because only one workspace is active.
+If you upgraded from older installs, you might still have `~/clawdbot` on disk.
+Multiple workspace directories can cause confusing auth or state drift because
+only one workspace is active.
 
 **Fix:** keep a single active workspace and archive/remove the rest. See
-[Agent workspace](/concepts/agent-workspace#legacy-workspace-folders).
+[Agent workspace](/concepts/agent-workspace#extra-workspace-folders).
 
 ### Main chat running in a sandbox workspace
 
