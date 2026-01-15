@@ -24,6 +24,10 @@ Follow‑up reconfiguration:
 clawdbot configure
 ```
 
+Recommended: set up a Brave Search API key so the agent can use `web_search`
+(`web_fetch` works without a key). Set `BRAVE_API_KEY` or
+`tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
+
 ## QuickStart vs Advanced
 
 The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).

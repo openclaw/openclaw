@@ -24,6 +24,15 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   (HTML → markdown/text). It does **not** execute JavaScript.
 - In sandboxed sessions, `web_fetch` is enabled automatically (unless explicitly disabled).
 
+## Getting a Brave API key
+
+1) Create a Brave Search API account at https://brave.com/search/api/
+2) Generate an API key in the dashboard.
+3) Set `BRAVE_API_KEY` in your environment or paste it into `tools.web.search.apiKey`.
+
+Brave provides a free tier plus paid plans; check the Brave API portal for the
+current limits and pricing.
+
 ## web_search
 
 Search the web with Brave’s API.
@@ -92,12 +101,3 @@ Notes:
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
-
-## Getting a Brave API key
-
-1) Create a Brave Search API account at https://brave.com/search/api/
-2) Generate an API key in the dashboard.
-3) Set `BRAVE_API_KEY` in your environment or paste it into `tools.web.search.apiKey`.
-
-Brave provides a free tier plus paid plans; check the Brave API portal for the
-current limits and pricing.
