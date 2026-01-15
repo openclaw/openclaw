@@ -10,4 +10,4 @@ onlyBuiltDependencies:
   - sharp
 
 patchedDependencies:
-  '@mariozechner/pi-ai@0.45.3': patches/@[redacted-email]
+  '@mariozechner/pi-ai@0.45.7': patches/@[redacted-email]
