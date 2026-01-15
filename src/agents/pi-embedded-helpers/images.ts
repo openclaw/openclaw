@@ -30,7 +30,7 @@ function isEmptyAssistantErrorMessage(
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
-  options?: { sanitizeToolCallIds?: boolean; enforceToolCallLast?: boolean },
+  options?: { sanitizeToolCallIds?: boolean; enforceToolCallLast?: boolean; preserveSignatures?: boolean },
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
@@ -76,7 +76,10 @@ export async function sanitizeSessionMessagesImages(
       }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
-        const strippedContent = stripThoughtSignatures(content);
+        const strippedContent = options?.preserveSignatures
+          ? content  // Keep signatures for Antigravity Claude
+          : stripThoughtSignatures(content);  // Strip for Gemini
+
         const filteredContent = strippedContent.filter((block) => {
           if (!block || typeof block !== "object") return true;
           const rec = block as { type?: unknown; text?: unknown };

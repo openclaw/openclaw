@@ -59,6 +59,34 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinkingSignature).toBe("sig");
   });
 
+  it("keeps unsigned thinking blocks for Antigravity Claude", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      modelId: "anthropic/claude-3.5-sonnet",
+      sessionManager,
+      sessionId: "session:antigravity-claude",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thinking?: string }>;
+    };
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
+    expect(assistant.content?.[0]?.thinking).toBe("reasoning");
+  });
+
   it("preserves order when downgrading mixed assistant content", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [

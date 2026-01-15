@@ -302,6 +302,7 @@ export async function compactEmbeddedPiSession(params: {
             const prior = await sanitizeSessionHistory({
               messages: session.messages,
               modelApi: model.api,
+              modelId,
               sessionManager,
               sessionId: params.sessionId,
             });
