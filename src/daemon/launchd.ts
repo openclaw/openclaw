@@ -47,8 +47,7 @@ function resolveLaunchAgentPlistPathForLabel(
 }
 
 export function resolveLaunchAgentPlistPath(env: Record<string, string | undefined>): string {
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
@@ -206,8 +205,7 @@ export async function readLaunchAgentRuntime(
   env: Record<string, string | undefined>,
 ): Promise<GatewayServiceRuntime> {
   const domain = resolveGuiDomain();
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
     return {
@@ -309,6 +307,7 @@ export async function uninstallLaunchAgent({
   stdout: NodeJS.WritableStream;
 }): Promise<void> {
   const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
@@ -322,8 +321,6 @@ export async function uninstallLaunchAgent({
 
   const home = resolveHomeDir(env);
   const trashDir = path.join(home, ".Trash");
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
   const dest = path.join(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
@@ -378,8 +375,7 @@ export async function installLaunchAgent({
   await fs.mkdir(logDir, { recursive: true });
 
   const domain = resolveGuiDomain();
-  const label =
-    env.CLAWDBOT_LAUNCHD_LABEL?.trim() || resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const label = resolveLaunchAgentLabel({ env });
   for (const legacyLabel of LEGACY_GATEWAY_LAUNCH_AGENT_LABELS) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);

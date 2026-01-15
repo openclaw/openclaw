@@ -112,10 +112,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       );
     }
     const service = resolveGatewayService();
-    const loaded = await service.isLoaded({
-      env: process.env,
-      profile: process.env.CLAWDBOT_PROFILE,
-    });
+    const loaded = await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE });
     if (loaded) {
       const action = (await prompter.select({
         message: "Gateway service already installed",
@@ -127,7 +124,6 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       })) as "restart" | "reinstall" | "skip";
       if (action === "restart") {
         await service.restart({
-          env: process.env,
           profile: process.env.CLAWDBOT_PROFILE,
           stdout: process.stdout,
         });
@@ -139,10 +135,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     if (
       !loaded ||
       (loaded &&
-        (await service.isLoaded({
-          env: process.env,
-          profile: process.env.CLAWDBOT_PROFILE,
-        })) === false)
+        (await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE })) === false)
     ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
