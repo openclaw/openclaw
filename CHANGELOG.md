@@ -122,6 +122,7 @@
 - Slack: isolate thread history and avoid inheriting channel transcripts for new threads by default. (#758)
 - Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
 - Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
+- Commands: add native command argument menus across Discord/Slack/Telegram. (#936) — thanks @thewilloftheshadow.
 - Discord: isolate autoThread thread context. (#856) — thanks @davidguttman.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
 - Telegram: aggregate split inbound messages into one prompt (reduces “one reply per fragment”).

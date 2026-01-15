@@ -19,10 +19,7 @@ export type CodeSpanIndex = {
   isInside: (index: number) => boolean;
 };
 
-export function buildCodeSpanIndex(
-  text: string,
-  inlineState?: InlineCodeState,
-): CodeSpanIndex {
+export function buildCodeSpanIndex(text: string, inlineState?: InlineCodeState): CodeSpanIndex {
   const fenceSpans = parseFenceSpans(text);
   const startState = inlineState
     ? { open: inlineState.open, ticks: inlineState.ticks }

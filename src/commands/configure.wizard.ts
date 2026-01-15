@@ -362,9 +362,11 @@ export async function runConfigureWizard(
           basePath: undefined,
         });
         const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
-        const wsUrl = nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+        const wsUrl =
+          nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
         const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
-        const password = nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+        const password =
+          nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
         await waitForGatewayReachable({
           url: wsUrl,
           token,

@@ -1,5 +1,23 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("matrix-js-sdk", () => ({
+  EventType: {
+    Direct: "m.direct",
+    RoomMessage: "m.room.message",
+    Reaction: "m.reaction",
+  },
+  MsgType: {
+    Text: "m.text",
+    File: "m.file",
+    Image: "m.image",
+    Audio: "m.audio",
+    Video: "m.video",
+  },
+  RelationType: {
+    Annotation: "m.annotation",
+  },
+}));
+
 vi.mock("../../../../src/config/config.js", () => ({
   loadConfig: () => ({}),
 }));
