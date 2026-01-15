@@ -141,8 +141,7 @@ const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin
 export type HookMessageChannel = ChannelId | "last";
 
 const getHookChannelSet = () => new Set<string>(listHookChannelValues());
-export const getHookChannelError = () =>
-  `channel must be ${listHookChannelValues().join("|")}`;
+export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
 export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) return "last";
