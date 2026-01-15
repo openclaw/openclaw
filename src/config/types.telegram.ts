@@ -21,6 +21,8 @@ export type TelegramAccountConfig = {
   capabilities?: string[];
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /**
    * Controls how Telegram direct chats (DMs) are handled:
    * - "pairing" (default): unknown senders get a pairing code; owner must approve

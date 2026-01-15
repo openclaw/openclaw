@@ -168,6 +168,20 @@ Forward any message from the group to `@userinfobot` or `@getidsbot` on Telegram
 
 **Privacy note:** `@userinfobot` is a third-party bot. If you prefer, use gateway logs (`clawdbot logs`) or Telegram developer tools to find user/chat IDs.
 
+## Config writes
+By default, Telegram is allowed to write config updates triggered by channel events or `/config set|unset`.
+
+This happens when:
+- A group is upgraded to a supergroup and Telegram emits `migrate_to_chat_id` (chat ID changes). Clawdbot can migrate `channels.telegram.groups` automatically.
+- You run `/config set` or `/config unset` in a Telegram chat (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { telegram: { configWrites: false } }
+}
+```
+
 ## Topics (forum supergroups)
 Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Appends `:topic:<threadId>` to the Telegram group session key so each topic is isolated.

@@ -35,6 +35,16 @@ Minimal config:
 - DMs share the agent's main session; groups are isolated (`agent:<agentId>:imessage:group:<chat_id>`).
 - If a multi-participant thread arrives with `is_group=false`, you can still isolate it by `chat_id` using `channels.imessage.groups` (see “Group-ish threads” below).
 
+## Config writes
+By default, iMessage is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { imessage: { configWrites: false } }
+}
+```
+
 ## Requirements
 - macOS with Messages signed in.
 - Full Disk Access for Clawdbot + `imsg` (Messages DB access).

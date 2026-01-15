@@ -12,6 +12,8 @@ export type WhatsAppConfig = {
   accounts?: Record<string, WhatsAppAccountConfig>;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /**
    * Inbound message prefix (WhatsApp only).
    * Default: `[{agents.list[].identity.name}]` (or `[clawdbot]`) when allowFrom is empty, else `""`.
@@ -78,6 +80,8 @@ export type WhatsAppAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /** If false, do not start this WhatsApp account provider. Default: true. */
   enabled?: boolean;
   /** Inbound message prefix override for this account (WhatsApp only). */

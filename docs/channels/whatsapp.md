@@ -31,6 +31,16 @@ Minimal config:
 - Deterministic routing: replies return to WhatsApp, no model routing.
 - Model sees enough context to understand quoted replies.
 
+## Config writes
+By default, WhatsApp is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { whatsapp: { configWrites: false } }
+}
+```
+
 ## Architecture (who owns what)
 - **Gateway** owns the Baileys socket and inbox loop.
 - **CLI / macOS app** talk to the gateway; no direct Baileys use.

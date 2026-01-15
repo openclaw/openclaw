@@ -39,6 +39,16 @@ Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowl
 - Keep routing deterministic: replies always go back to the channel they arrived on.
 - Default to safe channel behavior (mentions required unless configured otherwise).
 
+## Config writes
+By default, Microsoft Teams is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { msteams: { configWrites: false } }
+}
+```
+
 ## Access control (DMs + groups)
 
 **DM access**

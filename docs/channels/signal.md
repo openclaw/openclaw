@@ -36,6 +36,16 @@ Minimal config:
 - Deterministic routing: replies always go back to Signal.
 - DMs share the agent's main session; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 
+## Config writes
+By default, Signal is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { signal: { configWrites: false } }
+}
+```
+
 ## The number model (important)
 - The gateway connects to a **Signal device** (the `signal-cli` account).
 - If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).

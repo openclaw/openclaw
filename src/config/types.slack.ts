@@ -67,6 +67,8 @@ export type SlackAccountConfig = {
   capabilities?: string[];
   /** Override native command registration for Slack (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
   botToken?: string;

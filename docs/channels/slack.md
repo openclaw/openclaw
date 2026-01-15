@@ -32,6 +32,7 @@ Minimal config:
    - `app_mention`
    - `reaction_added`, `reaction_removed`
    - `member_joined_channel`, `member_left_channel`
+   - `channel_id_changed`
    - `channel_rename`
    - `pin_added`, `pin_removed`
 5) Invite the bot to channels you want it to read.
@@ -65,6 +66,20 @@ Or via config:
 ## History context
 - `channels.slack.historyLimit` (or `channels.slack.accounts.*.historyLimit`) controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+
+## Config writes
+By default, Slack is allowed to write config updates triggered by channel events or `/config set|unset`.
+
+This happens when:
+- Slack emits `channel_id_changed` (e.g. Slack Connect channel ID changes). Clawdbot can migrate `channels.slack.channels` automatically.
+- You run `/config set` or `/config unset` in Slack (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { slack: { configWrites: false } }
+}
+```
 
 ## Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
@@ -133,6 +148,7 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
         "reaction_removed",
         "member_joined_channel",
         "member_left_channel",
+        "channel_id_changed",
         "channel_rename",
         "pin_added",
         "pin_removed"

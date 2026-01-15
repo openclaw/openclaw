@@ -61,6 +61,16 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
 Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
+## Config writes
+By default, Discord is allowed to write config updates triggered by `/config set|unset` (requires `commands.config: true`).
+
+Disable with:
+```json5
+{
+  channels: { discord: { configWrites: false } }
+}
+```
+
 ## How to create your own bot
 
 This is the “Discord Developer Portal” setup for running Clawdbot in a server (guild) channel like `#help`.

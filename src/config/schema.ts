@@ -269,6 +269,20 @@ const FIELD_HELP: Record<string, string> = {
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
+  "channels.telegram.configWrites":
+    "Allow Telegram to write config in response to channel events/commands (default: true).",
+  "channels.slack.configWrites":
+    "Allow Slack to write config in response to channel events/commands (default: true).",
+  "channels.discord.configWrites":
+    "Allow Discord to write config in response to channel events/commands (default: true).",
+  "channels.whatsapp.configWrites":
+    "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+  "channels.signal.configWrites":
+    "Allow Signal to write config in response to channel events/commands (default: true).",
+  "channels.imessage.configWrites":
+    "Allow iMessage to write config in response to channel events/commands (default: true).",
+  "channels.msteams.configWrites":
+    "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',

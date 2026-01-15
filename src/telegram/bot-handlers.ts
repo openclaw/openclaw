@@ -9,6 +9,7 @@ import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
+import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -92,6 +93,13 @@ export const registerTelegramHandlers = ({
       const chatTitle = (msg.chat as { title?: string }).title ?? "Unknown";
 
       runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
+
+      if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
+        runtime.log?.(
+          warn("[telegram] Config writes disabled; skipping group config migration."),
+        );
+        return;
+      }
 
       // Check if old chat ID has config and migrate it
       const currentConfig = loadConfig();
