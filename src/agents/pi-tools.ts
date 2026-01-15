@@ -125,8 +125,7 @@ export function createClawdbotCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
-  const scopeKey =
-    options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
@@ -240,9 +239,7 @@ export function createClawdbotCodingTools(options?: {
       hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
-  const toolsFiltered = profilePolicy
-    ? filterToolsByPolicy(tools, profilePolicy)
-    : tools;
+  const toolsFiltered = profilePolicy ? filterToolsByPolicy(tools, profilePolicy) : tools;
   const providerProfileFiltered = providerProfilePolicy
     ? filterToolsByPolicy(toolsFiltered, providerProfilePolicy)
     : toolsFiltered;

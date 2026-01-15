@@ -49,6 +49,40 @@ describe("browser client", () => {
     ).rejects.toThrow(/409: conflict/i);
   });
 
+  it("adds labels + efficient mode query params to snapshots", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            format: "ai",
+            targetId: "t1",
+            url: "https://x",
+            snapshot: "ok",
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await expect(
+      browserSnapshot("http://127.0.0.1:18791", {
+        format: "ai",
+        labels: true,
+        mode: "efficient",
+      }),
+    ).resolves.toMatchObject({ ok: true, format: "ai" });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("labels")).toBe("1");
+    expect(parsed.searchParams.get("mode")).toBe("efficient");
+  });
+
   it("uses the expected endpoints + methods for common calls", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
 
