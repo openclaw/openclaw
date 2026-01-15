@@ -6,7 +6,7 @@ read_when:
 ---
 # Multiple Gateways (same host)
 
-Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy, run separate Gateways. Both are supported.
+Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
 ## Isolation checklist (required)
 - `CLAWDBOT_CONFIG_PATH` — per-instance config file
@@ -34,6 +34,38 @@ clawdbot --profile rescue gateway --port 19001
 Per-profile daemons:
 ```bash
 clawdbot --profile main daemon install
+clawdbot --profile rescue daemon install
+```
+
+## Rescue-bot guide
+
+Run a second Gateway on the same host with its own:
+- profile/config
+- state dir
+- workspace
+- base port (plus derived ports)
+
+This keeps the rescue bot isolated from the main bot so it can debug or apply config changes if the primary bot is down.
+
+Port spacing: leave at least 20 ports between base ports so the derived bridge/browser/canvas/CDP ports never collide.
+
+### How to install (rescue bot)
+
+```bash
+# Main bot (existing or fresh, without --profile param)
+# Runs on port 18789 + Chrome CDC/Canvas/... Ports 
+clawdbot onboard
+clawdbot daemon install
+
+# Rescue bot (isolated profile + ports)
+clawdbot --profile rescue onboard
+# Notes: 
+# - workspace name will be postfixed with -rescue per default
+# - Port should be at least 18789 + 20 Ports, 
+#   better choose completely different base port, like 19789,
+# - rest of the onboarding is the same as normal
+
+# To install the daemon (if not happened automatically during onboarding)
 clawdbot --profile rescue daemon install
 ```
 

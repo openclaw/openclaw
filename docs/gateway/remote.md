@@ -26,7 +26,7 @@ Flow example (Telegram → node):
 - Node returns the result; Gateway replies back out to Telegram.
 
 Notes:
-- **Nodes do not run the gateway daemon.** Only one gateway should run per host.
+- **Nodes do not run the gateway daemon.** Only one gateway should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)).
 - macOS app “node mode” is just a node client over the Bridge.
 
 ## SSH tunnel (CLI + tools)

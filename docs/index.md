@@ -66,7 +66,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 
 ## Network model
 
-- **One Gateway per host**: it is the only process allowed to own the WhatsApp Web session.
+- **One Gateway per host (recommended)**: it is the only process allowed to own the WhatsApp Web session. If you need a rescue bot or strict isolation, run multiple gateways with isolated profiles and ports; see [Multiple gateways](/gateway/multiple-gateways).
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
   - The wizard now generates a gateway token by default (even for loopback).
   - For Tailnet access, run `clawdbot gateway --bind tailnet --token ...` (token is required for non-loopback binds).

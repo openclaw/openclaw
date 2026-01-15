@@ -2512,7 +2512,7 @@ Requires full Gateway restart:
 
 ### Multi-instance isolation
 
-To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
+To run multiple gateways on one host (for redundancy or a rescue bot), isolate per-instance state + config and use unique ports:
 - `CLAWDBOT_CONFIG_PATH` (per-instance config)
 - `CLAWDBOT_STATE_DIR` (sessions/creds)
 - `agents.defaults.workspace` (memories)
