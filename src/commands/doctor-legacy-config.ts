@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,9 +10,12 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { resolveOAuthDir } from "../config/paths.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveWebCredsPath } from "../web/auth-store.js";
 
 function resolveLegacyConfigPath(env: NodeJS.ProcessEnv): string {
   const override = env.CLAWDIS_CONFIG_PATH?.trim();
@@ -51,6 +55,48 @@ export function replaceModernName(value: string | undefined): string | undefined
   if (!value) return value;
   if (!value.includes("clawdbot")) return value;
   return value.replace(/clawdbot/g, "clawdis");
+}
+
+function hasWebCreds(authDir: string): boolean {
+  try {
+    const credsPath = resolveWebCredsPath(authDir);
+    const stats = fs.statSync(credsPath);
+    return stats.isFile() && stats.size > 1;
+  } catch {
+    return false;
+  }
+}
+
+function listWhatsAppAuthDirs(cfg: ClawdbotConfig): string[] {
+  const oauthDir = resolveOAuthDir();
+  const whatsappDir = path.join(oauthDir, "whatsapp");
+  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+
+  const accounts = cfg.channels?.whatsapp?.accounts;
+  if (accounts && typeof accounts === "object") {
+    for (const [accountId, accountCfg] of Object.entries(accounts)) {
+      const configured = accountCfg?.authDir?.trim();
+      const authDir = configured ? resolveUserPath(configured) : path.join(whatsappDir, accountId);
+      authDirs.add(authDir);
+    }
+  }
+
+  try {
+    const entries = fs.readdirSync(whatsappDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      authDirs.add(path.join(whatsappDir, entry.name));
+    }
+  } catch {
+    // ignore missing dirs
+  }
+
+  return Array.from(authDirs);
+}
+
+function hasWhatsAppAuthState(cfg: ClawdbotConfig): boolean {
+  const authDirs = listWhatsAppAuthDirs(cfg);
+  return authDirs.some((authDir) => hasWebCreds(authDir));
 }
 
 export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
@@ -219,7 +265,9 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
   }
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
-  if (legacyAckReaction) {
+  const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
+  const hasWhatsAppAuth = hasWhatsAppAuthState(cfg);
+  if (legacyAckReaction && (hasWhatsAppConfig || hasWhatsAppAuth)) {
     const hasWhatsAppAck = cfg.channels?.whatsapp?.ackReaction !== undefined;
     if (!hasWhatsAppAck) {
       const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
