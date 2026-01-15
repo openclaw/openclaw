@@ -7,6 +7,15 @@ export type AgentToolsConfig = {
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
+  /** Optional tool policy overrides keyed by provider id or "provider/model". */
+  byProvider?: Record<
+    string,
+    {
+      profile?: ToolProfileId;
+      allow?: string[];
+      deny?: string[];
+    }
+  >;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -73,6 +82,15 @@ export type ToolsConfig = {
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
+  /** Optional tool policy overrides keyed by provider id or "provider/model". */
+  byProvider?: Record<
+    string,
+    {
+      profile?: ToolProfileId;
+      allow?: string[];
+      deny?: string[];
+    }
+  >;
   web?: {
     search?: {
       /** Enable web search tool (default: true when API key is present). */

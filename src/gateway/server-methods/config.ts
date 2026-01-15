@@ -27,7 +27,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;
@@ -39,7 +39,7 @@ function resolveBaseHash(params: unknown): string | null {
 function requireConfigBaseHash(
   params: unknown,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-  respond: (ok: boolean, payload?: unknown, error?: unknown) => void,
+  respond: RespondFn,
 ): boolean {
   if (!snapshot.exists) return true;
   if (typeof snapshot.raw !== "string" || !snapshot.hash) {
