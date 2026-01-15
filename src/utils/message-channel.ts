@@ -86,7 +86,9 @@ export const listGatewayAgentChannelAliases = (): string[] =>
 export type GatewayAgentChannelHint = GatewayMessageChannel | "last";
 
 export const listGatewayAgentChannelValues = (): string[] =>
-  Array.from(new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]));
+  Array.from(
+    new Set([...listGatewayMessageChannels(), "last", ...listGatewayAgentChannelAliases()]),
+  );
 
 export function isGatewayMessageChannel(value: string): value is GatewayMessageChannel {
   return listGatewayMessageChannels().includes(value as GatewayMessageChannel);
