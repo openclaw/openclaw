@@ -2,8 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { loginWeb } from "../../../channel-web.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
-import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
+import { mergeWhatsAppConfig, upsertSkillEntry } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
+import type {
+  VoiceNotesTranscriptionConfig,
+  VideoUnderstandingConfig,
+} from "../../../config/types.messages.js";
+import {
+  formatApiKeyPreview,
+  normalizeApiKeyInput,
+  validateGroqApiKey,
+  validateGeminiApiKey,
+} from "../../../commands/auth-choice.api-key.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { formatDocsLink } from "../../../terminal/links.js";
@@ -39,6 +49,38 @@ function setMessagesResponsePrefix(cfg: ClawdbotConfig, responsePrefix?: string)
 
 function setWhatsAppSelfChatMode(cfg: ClawdbotConfig, selfChatMode: boolean): ClawdbotConfig {
   return mergeWhatsAppConfig(cfg, { selfChatMode });
+}
+
+function setVoiceTranscription(
+  cfg: ClawdbotConfig,
+  patch: Partial<VoiceNotesTranscriptionConfig>,
+): ClawdbotConfig {
+  return {
+    ...cfg,
+    voiceNotes: {
+      ...cfg.voiceNotes,
+      transcription: {
+        ...cfg.voiceNotes?.transcription,
+        ...patch,
+      },
+    },
+  };
+}
+
+function setVideoUnderstanding(
+  cfg: ClawdbotConfig,
+  patch: Partial<VideoUnderstandingConfig>,
+): ClawdbotConfig {
+  return {
+    ...cfg,
+    video: {
+      ...cfg.video,
+      understanding: {
+        ...cfg.video?.understanding,
+        ...patch,
+      },
+    },
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -257,6 +299,208 @@ async function promptWhatsAppAllowFrom(
   return next;
 }
 
+async function promptVoiceTranscription(
+  cfg: ClawdbotConfig,
+  prompter: WizardPrompter,
+): Promise<ClawdbotConfig> {
+  // Opt-in confirmation
+  const shouldEnable = await prompter.confirm({
+    message: "Enable voice note transcription?",
+    initialValue: false,
+  });
+
+  if (!shouldEnable) {
+    await prompter.note(
+      [
+        "You can configure voice transcription later via `clawdbot configure`",
+        "Or ask the agent to enable it: /config set voiceNotes.transcription.enabled=true",
+      ].join("\n"),
+      "Voice transcription",
+    );
+    return cfg;
+  }
+
+  // Show setup info
+  await prompter.note(
+    [
+      "Voice transcription requires a Groq API key.",
+      "Get one free: https://console.groq.com/keys",
+      "",
+      "Supports: Whisper Large V3 (fast, accurate)",
+    ].join("\n"),
+    "Groq Setup",
+  );
+
+  let apiKey: string | undefined;
+
+  // Check existing config first
+  const existingGroqKey = cfg.skills?.entries?.groq?.apiKey;
+  if (existingGroqKey && typeof existingGroqKey === "string") {
+    const keep = await prompter.confirm({
+      message: `Groq API key already configured. Keep it (${formatApiKeyPreview(existingGroqKey)})?`,
+      initialValue: true,
+    });
+    if (keep) {
+      apiKey = existingGroqKey;
+    }
+  }
+
+  // Check env var
+  if (!apiKey) {
+    const envKey = process.env.GROQ_API_KEY?.trim();
+    if (envKey) {
+      const useEnv = await prompter.confirm({
+        message: `GROQ_API_KEY detected. Use env var (${formatApiKeyPreview(envKey)})?`,
+        initialValue: true,
+      });
+      if (useEnv) {
+        apiKey = envKey;
+      }
+    }
+  }
+
+  // Prompt for new key
+  if (!apiKey) {
+    const key = await prompter.text({
+      message: "Enter Groq API key",
+      placeholder: "gsk_...",
+      validate: validateGroqApiKey,
+    });
+    apiKey = normalizeApiKeyInput(String(key ?? ""));
+  }
+
+  // Store API key
+  let next = upsertSkillEntry(cfg, "groq", { apiKey });
+
+  // Chat scope selection
+  const chatScope = (await prompter.select({
+    message: "Enable voice transcription for:",
+    options: [
+      { label: "DMs only", value: "dm-only" },
+      { label: "DMs and all groups", value: "dm-and-groups" },
+    ],
+  })) as "dm-only" | "dm-and-groups";
+
+  const groupEnabled = chatScope === "dm-and-groups";
+
+  // Build config (avoid undefined properties)
+  const transcriptionConfig: Partial<VoiceNotesTranscriptionConfig> = {
+    enabled: true,
+    provider: "groq",
+    dmEnabled: true,
+    groupEnabled,
+  };
+
+  if (groupEnabled) {
+    transcriptionConfig.groupAllowFrom = ["*"];
+  }
+
+  next = setVoiceTranscription(next, transcriptionConfig);
+
+  return next;
+}
+
+async function promptVideoUnderstanding(
+  cfg: ClawdbotConfig,
+  prompter: WizardPrompter,
+): Promise<ClawdbotConfig> {
+  // Opt-in confirmation
+  const shouldEnable = await prompter.confirm({
+    message: "Enable video understanding?",
+    initialValue: false,
+  });
+
+  if (!shouldEnable) {
+    await prompter.note(
+      [
+        "You can configure video understanding later via `clawdbot configure`",
+        "Or ask the agent to enable it: /config set video.understanding.enabled=true",
+      ].join("\n"),
+      "Video understanding",
+    );
+    return cfg;
+  }
+
+  // Show setup info
+  await prompter.note(
+    [
+      "Video understanding requires a Google Gemini API key.",
+      "Get one: https://ai.google.dev/gemini-api/docs/api-key",
+      "",
+      "Supports: Gemini 3 Flash (video analysis)",
+    ].join("\n"),
+    "Gemini Setup",
+  );
+
+  let apiKey: string | undefined;
+
+  // Check existing config first
+  const existingGeminiKey = cfg.skills?.entries?.gemini?.apiKey;
+  if (existingGeminiKey && typeof existingGeminiKey === "string") {
+    const keep = await prompter.confirm({
+      message: `Gemini API key already configured. Keep it (${formatApiKeyPreview(existingGeminiKey)})?`,
+      initialValue: true,
+    });
+    if (keep) {
+      apiKey = existingGeminiKey;
+    }
+  }
+
+  // Check env var
+  if (!apiKey) {
+    const envKey = process.env.GEMINI_API_KEY?.trim();
+    if (envKey) {
+      const useEnv = await prompter.confirm({
+        message: `GEMINI_API_KEY detected. Use env var (${formatApiKeyPreview(envKey)})?`,
+        initialValue: true,
+      });
+      if (useEnv) {
+        apiKey = envKey;
+      }
+    }
+  }
+
+  // Prompt for new key
+  if (!apiKey) {
+    const key = await prompter.text({
+      message: "Enter Gemini API key",
+      placeholder: "AIza...",
+      validate: validateGeminiApiKey,
+    });
+    apiKey = normalizeApiKeyInput(String(key ?? ""));
+  }
+
+  // Store API key
+  let next = upsertSkillEntry(cfg, "gemini", { apiKey });
+
+  // Chat scope selection
+  const chatScope = (await prompter.select({
+    message: "Enable video understanding for:",
+    options: [
+      { label: "DMs only", value: "dm-only" },
+      { label: "DMs and all groups", value: "dm-and-groups" },
+    ],
+  })) as "dm-only" | "dm-and-groups";
+
+  const groupEnabled = chatScope === "dm-and-groups";
+
+  // Build config (avoid undefined properties)
+  const understandingConfig: Partial<VideoUnderstandingConfig> = {
+    enabled: true,
+    provider: "gemini",
+    dmEnabled: true,
+    groupEnabled,
+  };
+
+  if (groupEnabled) {
+    understandingConfig.groupAllowFrom = ["*"];
+  }
+
+  next = setVideoUnderstanding(next, understandingConfig);
+
+  return next;
+}
+
 export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg, accountOverrides }) => {
@@ -353,6 +597,10 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
     next = await promptWhatsAppAllowFrom(next, runtime, prompter, {
       forceAllowlist: forceAllowFrom,
     });
+
+    // Media features (voice + video)
+    next = await promptVoiceTranscription(next, prompter);
+    next = await promptVideoUnderstanding(next, prompter);
 
     return { cfg: next, accountId };
   },

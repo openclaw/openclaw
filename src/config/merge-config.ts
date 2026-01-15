@@ -36,3 +36,27 @@ export function mergeWhatsAppConfig(
     },
   };
 }
+
+export function upsertSkillEntry(
+  cfg: ClawdbotConfig,
+  skillKey: string,
+  patch: { apiKey?: string },
+): ClawdbotConfig {
+  if (!skillKey || skillKey.length > 100) {
+    throw new Error(`Invalid skillKey: ${skillKey}`);
+  }
+  if (patch.apiKey && patch.apiKey.length > 1000) {
+    throw new Error("API key exceeds maximum length");
+  }
+
+  const entries = { ...cfg.skills?.entries };
+  const existing = (entries[skillKey] as { apiKey?: string } | undefined) ?? {};
+  entries[skillKey] = { ...existing, ...patch };
+  return {
+    ...cfg,
+    skills: {
+      ...cfg.skills,
+      entries,
+    },
+  };
+}
