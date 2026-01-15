@@ -277,7 +277,18 @@ without WhatsApp/Telegram.
 
 ### Telegram: what goes in `allowFrom`?
 
-`channels.telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username. To find your ID, DM `@userinfobot` or read the `from.id` in the gateway log for a DM. See [/channels/telegram](/channels/telegram#access-control-dms--groups).
+`channels.telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username.
+
+Safer (no third-party bot):
+- DM your bot, then run `clawdbot logs --follow` and read `from.id`.
+
+Official Bot API:
+- DM your bot, then call `https://api.telegram.org/bot<bot_token>/getUpdates` and read `message.from.id`.
+
+Third-party (less private):
+- DM `@userinfobot` or `@getidsbot`.
+
+See [/channels/telegram](/channels/telegram#access-control-dms--groups).
 
 ### Can multiple people use one WhatsApp number with different Clawdbots?
 
