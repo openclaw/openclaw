@@ -197,13 +197,14 @@ Notes:
 
 ## Profiles (multi-browser)
 
-Clawdbot supports multiple named profiles. Each profile has its own:
-- user data directory
-- CDP port (local) or CDP URL (remote)
-- accent color
+Clawdbot supports multiple named profiles (routing configs). Profiles can be:
+- **clawd-managed**: a dedicated Chrome instance with its own user data directory + CDP port
+- **remote**: an explicit CDP URL (Chrome running elsewhere)
+- **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
 
 Defaults:
 - The `clawd` profile is auto-created if missing.
+- The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
 - Local CDP ports allocate from **18800–18899** by default.
 - Deleting a profile moves its local data directory to Trash.
 
@@ -233,25 +234,29 @@ Chrome extension relay takeover requires host browser control, so either:
 
 ### Setup
 
-1) Create a profile that uses the extension driver:
+1) Load the extension (dev/unpacked):
+
+```bash
+clawdbot browser extension install
+```
+
+- Chrome → `chrome://extensions` → enable “Developer mode”
+- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
+- Pin the extension, then click it on the tab you want to control (badge shows `ON`).
+
+2) Use it:
+- CLI: `clawdbot browser --browser-profile chrome tabs`
+- Agent tool: `browser` with `profile="chrome"`
+
+Optional: if you want a different name or relay port, create your own profile:
 
 ```bash
 clawdbot browser create-profile \
-  --name chrome \
+  --name my-chrome \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
 ```
-
-2) Load the extension (dev/unpacked):
-- Chrome → `chrome://extensions` → enable “Developer mode”
-- `clawdbot browser extension install`
-- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
-- Pin the extension, then click it on the tab you want to control (badge shows `ON`).
-
-3) Use it:
-- CLI: `clawdbot browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
 
 Notes:
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
