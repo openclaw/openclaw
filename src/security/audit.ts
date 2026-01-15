@@ -4,11 +4,10 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
-import { CONFIG_DIR } from "../utils.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -497,8 +496,8 @@ async function maybeProbeGateway(params: {
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const cfg = opts.config;
-  const stateDir = opts.stateDir ?? CONFIG_DIR;
-  const configPath = opts.configPath ?? CONFIG_PATH_CLAWDBOT;
+  const stateDir = opts.stateDir ?? resolveStateDir();
+  const configPath = opts.configPath ?? resolveConfigPath();
 
   findings.push(...collectGatewayConfigFindings(cfg));
   findings.push(...collectLoggingFindings(cfg));

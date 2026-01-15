@@ -4,11 +4,13 @@ import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
+import { fixSecurityFootguns } from "../security/fix.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SecurityAuditOptions = {
   json?: boolean;
   deep?: boolean;
+  fix?: boolean;
 };
 
 function formatSummary(summary: { critical: number; warn: number; info: number }): string {
@@ -30,8 +32,11 @@ export function registerSecurityCli(program: Command) {
     .command("audit")
     .description("Audit config + local state for common security foot-guns")
     .option("--deep", "Attempt live Gateway probe (best-effort)", false)
+    .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
+      const fixResult = opts.fix ? await fixSecurityFootguns().catch((_err) => null) : null;
+
       const cfg = loadConfig();
       const report = await runSecurityAudit({
         config: cfg,
@@ -41,7 +46,9 @@ export function registerSecurityCli(program: Command) {
       });
 
       if (opts.json) {
-        defaultRuntime.log(JSON.stringify(report, null, 2));
+        defaultRuntime.log(
+          JSON.stringify(fixResult ? { fix: fixResult, report } : report, null, 2),
+        );
         return;
       }
 
@@ -53,6 +60,34 @@ export function registerSecurityCli(program: Command) {
       lines.push(heading("Clawdbot security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
       lines.push(muted(`Run deeper: clawdbot security audit --deep`));
+
+      if (opts.fix) {
+        lines.push(muted(`Fix: clawdbot security audit --fix`));
+        if (!fixResult) {
+          lines.push(muted("Fixes: failed to apply (unexpected error)"));
+        } else if (
+          fixResult.errors.length === 0 &&
+          fixResult.changes.length === 0 &&
+          fixResult.actions.every((a) => a.ok === false)
+        ) {
+          lines.push(muted("Fixes: no changes applied"));
+        } else {
+          lines.push("");
+          lines.push(heading("FIX"));
+          for (const change of fixResult.changes) {
+            lines.push(muted(`  ${change}`));
+          }
+          for (const action of fixResult.actions) {
+            const mode = action.mode.toString(8).padStart(3, "0");
+            if (action.ok) lines.push(muted(`  chmod ${mode} ${action.path}`));
+            else if (action.skipped) lines.push(muted(`  skip chmod ${mode} ${action.path} (${action.skipped})`));
+            else if (action.error) lines.push(muted(`  chmod ${mode} ${action.path} failed: ${action.error}`));
+          }
+          if (fixResult.errors.length > 0) {
+            for (const err of fixResult.errors) lines.push(muted(`  error: ${err}`));
+          }
+        }
+      }
 
       const bySeverity = (sev: "critical" | "warn" | "info") =>
         report.findings.filter((f) => f.severity === sev);
