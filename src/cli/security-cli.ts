@@ -5,6 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SecurityAuditOptions = {
@@ -26,7 +27,14 @@ function formatSummary(summary: { critical: number; warn: number; info: number }
 }
 
 export function registerSecurityCli(program: Command) {
-  const security = program.command("security").description("Security tools (audit)");
+  const security = program
+    .command("security")
+    .description("Security tools (audit)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.clawd.bot/cli/security")}\n`,
+    );
 
   security
     .command("audit")

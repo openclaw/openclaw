@@ -9,6 +9,8 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -32,6 +34,11 @@ export function registerOnboardCommand(program: Command) {
   program
     .command("onboard")
     .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.clawd.bot/cli/onboard")}\n`,
+    )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
     .option("--reset", "Reset config + credentials + sessions + workspace before running wizard")
     .option("--non-interactive", "Run without prompts", false)
