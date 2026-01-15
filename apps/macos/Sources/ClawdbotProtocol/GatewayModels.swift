@@ -245,31 +245,6 @@ public struct StateVersion: Codable, Sendable {
     }
 }
 
-public struct SessionDefaults: Codable, Sendable {
-    public let defaultagentid: String
-    public let mainkey: String
-    public let mainsessionkey: String
-    public let scope: String?
-
-    public init(
-        defaultagentid: String,
-        mainkey: String,
-        mainsessionkey: String,
-        scope: String?
-    ) {
-        self.defaultagentid = defaultagentid
-        self.mainkey = mainkey
-        self.mainsessionkey = mainsessionkey
-        self.scope = scope
-    }
-    private enum CodingKeys: String, CodingKey {
-        case defaultagentid = "defaultAgentId"
-        case mainkey = "mainKey"
-        case mainsessionkey = "mainSessionKey"
-        case scope
-    }
-}
-
 public struct Snapshot: Codable, Sendable {
     public let presence: [PresenceEntry]
     public let health: AnyCodable
@@ -277,7 +252,7 @@ public struct Snapshot: Codable, Sendable {
     public let uptimems: Int
     public let configpath: String?
     public let statedir: String?
-    public let sessiondefaults: SessionDefaults?
+    public let sessiondefaults: [String: AnyCodable]?
 
     public init(
         presence: [PresenceEntry],
@@ -286,7 +261,7 @@ public struct Snapshot: Codable, Sendable {
         uptimems: Int,
         configpath: String?,
         statedir: String?,
-        sessiondefaults: SessionDefaults?
+        sessiondefaults: [String: AnyCodable]?
     ) {
         self.presence = presence
         self.health = health
