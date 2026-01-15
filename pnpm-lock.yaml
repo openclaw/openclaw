@@ -9,6 +9,9 @@ overrides:
   hono: 4.11.4
 
 patchedDependencies:
+  '@mariozechner/pi-agent-core@0.45.7':
+    hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
+    path: patches/@mariozechner__pi-agent-core.patch
   '@mariozechner/pi-ai@0.45.7':
     hash: e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9
     path: patches/@mariozechner__pi-ai@0.45.7.patch
@@ -33,17 +36,17 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.45.3
-        version: 0.45.3(ws@8.19.0)(zod@4.3.5)
+        specifier: 0.45.7
+        version: 0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: 0.45.7
         version: 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.45.3
-        version: 0.45.3(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.45.7
+        version: 0.45.7(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.45.3
-        version: 0.45.3
+        specifier: ^0.45.7
+        version: 0.45.7
       '@microsoft/agents-hosting':
         specifier: ^1.1.1
         version: 1.1.1
@@ -956,8 +959,8 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.45.3':
-    resolution: {integrity: sha512-yWgIKuhhCOxLdbNUcX5oNELdUSqkvnoYsXWOq6/IDiolvQMag4fWNsabeAd2OqiueH8k9sFx3G5cFR53PtHLEw==}
+  '@mariozechner/pi-agent-core@0.45.7':
+    resolution: {integrity: sha512-AwPwojEyJFBpmUIpgSfXinRh+hbd8TW0uZX2qNpRybyzbP0PnMp0tBthaG0Ao/wAIws4KLZQQEToQiDADpEUhg==}
     engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-ai@0.45.7':
@@ -965,13 +968,13 @@ packages:
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-coding-agent@0.45.3':
-    resolution: {integrity: sha512-Rt1SLmZ5Z2Ch3s/PjIJXP3VNCjbjm43T8q2cujMO/zRCGjgElcfO66ls2MoLoAxCGyfy/9FA1OrCoCrGsWkWcw==}
+  '@mariozechner/pi-coding-agent@0.45.7':
+    resolution: {integrity: sha512-+2TtZXIF6Iy4WxwpyeK9MXyYdfsuvIcRimotRDzhT7nM6TMLxJkDzHovqrcQF9/fAFd9wNHmRBA52PQIBicTSw==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.45.3':
-    resolution: {integrity: sha512-Z/ThVu1JHLQYDR1TgZdCXlaR9rimZ5wuYUO+dy773Cz0xFOg+E6YSfPDRu7t3TErLt59v/gnBw72cIdfIXoYpw==}
+  '@mariozechner/pi-tui@0.45.7':
+    resolution: {integrity: sha512-c4pMvyuC28PfpAYCsO01E651r+SAiNg216plmc0ej5qnizQm2x7X14C3UfxMfmWAMJ+U9Y0O7PucPdmXeHbjnw==}
     engines: {node: '>=20.0.0'}
 
   '@microsoft/agents-activity@1.1.1':
@@ -4049,6 +4052,10 @@ packages:
       jsdom:
         optional: true
 
+  wasm-vips@0.0.16:
+    resolution: {integrity: sha512-4/bEq8noAFt7DX3VT+Vt5AgNtnnOLwvmrDbduWfiv9AV+VYkbUU4f9Dam9e6khRqPinyClFHCqiwATTTJEiGwA==}
+    engines: {node: '>=16.4.0'}
+
   web-streams-polyfill@3.3.3:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
@@ -5069,10 +5076,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.45.3(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.45.3
+      '@mariozechner/pi-tui': 0.45.7
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -5104,13 +5111,13 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.45.3(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.45.7(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.2
-      '@mariozechner/pi-agent-core': 0.45.3(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-agent-core': 0.45.7(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.45.3
+      '@mariozechner/pi-tui': 0.45.7
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.3
@@ -5119,7 +5126,7 @@ snapshots:
       marked: 15.0.12
       minimatch: 10.1.1
       proper-lockfile: 4.1.2
-      sharp: 0.34.5
+      wasm-vips: 0.0.16
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -5129,7 +5136,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.45.3':
+  '@mariozechner/pi-tui@0.45.7':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
@@ -8434,6 +8441,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  wasm-vips@0.0.16: {}
 
   web-streams-polyfill@3.3.3: {}
 
