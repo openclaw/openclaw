@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
@@ -9,6 +7,27 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
+import {
+  collectAttackSurfaceSummaryFindings,
+  collectExposureMatrixFindings,
+  collectHooksHardeningFindings,
+  collectIncludeFilePermFindings,
+  collectModelHygieneFindings,
+  collectPluginsTrustFindings,
+  collectSecretsInConfigFindings,
+  collectStateDeepFilesystemFindings,
+  collectSyncedFolderFindings,
+  readConfigSnapshotForAudit,
+} from "./audit-extra.js";
+import {
+  formatOctal,
+  isGroupReadable,
+  isGroupWritable,
+  isWorldReadable,
+  isWorldWritable,
+  modeBits,
+  safeStat,
+} from "./audit-fs.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -91,68 +110,6 @@ function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity 
     return "info";
   }
   return "warn";
-}
-
-async function safeStat(targetPath: string): Promise<{
-  ok: boolean;
-  isSymlink: boolean;
-  isDir: boolean;
-  mode: number | null;
-  uid: number | null;
-  gid: number | null;
-  error?: string;
-}> {
-  try {
-    const lst = await fs.lstat(targetPath);
-    return {
-      ok: true,
-      isSymlink: lst.isSymbolicLink(),
-      isDir: lst.isDirectory(),
-      mode: typeof lst.mode === "number" ? lst.mode : null,
-      uid: typeof lst.uid === "number" ? lst.uid : null,
-      gid: typeof lst.gid === "number" ? lst.gid : null,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      isSymlink: false,
-      isDir: false,
-      mode: null,
-      uid: null,
-      gid: null,
-      error: String(err),
-    };
-  }
-}
-
-function modeBits(mode: number | null): number | null {
-  if (mode == null) return null;
-  return mode & 0o777;
-}
-
-function formatOctal(bits: number | null): string {
-  if (bits == null) return "unknown";
-  return bits.toString(8).padStart(3, "0");
-}
-
-function isWorldWritable(bits: number | null): boolean {
-  if (bits == null) return false;
-  return (bits & 0o002) !== 0;
-}
-
-function isGroupWritable(bits: number | null): boolean {
-  if (bits == null) return false;
-  return (bits & 0o020) !== 0;
-}
-
-function isWorldReadable(bits: number | null): boolean {
-  if (bits == null) return false;
-  return (bits & 0o004) !== 0;
-}
-
-function isGroupReadable(bits: number | null): boolean {
-  if (bits == null) return false;
-  return (bits & 0o040) !== 0;
 }
 
 async function collectFilesystemFindings(params: {
@@ -580,16 +537,34 @@ async function maybeProbeGateway(params: {
 export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<SecurityAuditReport> {
   const findings: SecurityAuditFinding[] = [];
   const cfg = opts.config;
-  const stateDir = opts.stateDir ?? resolveStateDir();
-  const configPath = opts.configPath ?? resolveConfigPath();
+  const env = process.env;
+  const stateDir = opts.stateDir ?? resolveStateDir(env);
+  const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
+
+  findings.push(...collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg));
   findings.push(...collectBrowserControlFindings(cfg));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
+  findings.push(...collectHooksHardeningFindings(cfg));
+  findings.push(...collectSecretsInConfigFindings(cfg));
+  findings.push(...collectModelHygieneFindings(cfg));
+  findings.push(...collectExposureMatrixFindings(cfg));
+
+  const configSnapshot =
+    opts.includeFilesystem !== false
+      ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
+      : null;
 
   if (opts.includeFilesystem !== false) {
     findings.push(...(await collectFilesystemFindings({ stateDir, configPath })));
+    if (configSnapshot) {
+      findings.push(...(await collectIncludeFilePermFindings({ configSnapshot })));
+    }
+    findings.push(...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir })));
+    findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
   }
 
   if (opts.includeChannelSecurity !== false) {

@@ -27,7 +27,30 @@ It flags common footguns (Gateway auth exposure, browser control exposure, eleva
 `--fix` applies safe guardrails:
 - Tighten `groupPolicy="open"` to `groupPolicy="allowlist"` (and per-account variants) for common channels.
 - Turn `logging.redactSensitive="off"` back to `"tools"`.
-- Tighten local perms (`~/.clawdbot` → `700`, config file → `600`).
+- Tighten local perms (`~/.clawdbot` → `700`, config file → `600`, plus common state files like `credentials/*.json`, `agents/*/agent/auth-profiles.json`, and `agents/*/sessions/sessions.json`).
+
+### What the audit checks (high level)
+
+- **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
+- **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
+- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel).
+- **Browser control exposure** (remote controlUrl without token, HTTP, token reuse).
+- **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
+- **Plugins** (extensions exist without an explicit allowlist).
+- **Model hygiene** (warn when configured models look legacy; not a hard block).
+
+If you run `--deep`, Clawdbot also attempts a best-effort live Gateway probe.
+
+## Security Audit Checklist
+
+When the audit prints findings, treat this as a priority order:
+
+1. **Anything “open” + tools enabled**: lock down DMs/groups first (pairing/allowlists), then tighten tool policy/sandboxing.
+2. **Public network exposure** (LAN bind, Funnel, missing auth): fix immediately.
+3. **Browser control remote exposure**: treat it like a remote admin API (token required; HTTPS/tailnet-only).
+4. **Permissions**: make sure state/config/credentials/auth are not group/world-readable.
+5. **Plugins/extensions**: only load what you explicitly trust.
+6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
 
 ## The Threat Model
 
@@ -108,7 +131,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- **Model choice matters:** we recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)). Using weaker models increases risk.
+- **Model choice matters:** older/legacy models can be less robust against prompt injection and tool misuse. Prefer modern, instruction-hardened models for any bot with tools. We recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)).
 
 ## Reasoning & verbose output in groups
 
@@ -116,6 +139,23 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 was not meant for a public channel. In group settings, treat them as **debug
 only** and keep them off unless you explicitly need them. If you enable them,
 do so only in trusted DMs or tightly controlled rooms.
+
+## Incident Response (if you suspect compromise)
+
+Assume “compromised” means: someone got into a room that can trigger the bot, or a token leaked, or a plugin/tool did something unexpected.
+
+1. **Stop the blast radius**
+   - Disable elevated tools (or stop the Gateway) until you understand what happened.
+   - Lock down inbound surfaces (DM policy, group allowlists, mention gating).
+2. **Rotate secrets**
+   - Rotate `gateway.auth` token/password.
+   - Rotate `browser.controlToken` and `hooks.token` (if used).
+   - Revoke/rotate model provider credentials (API keys / OAuth).
+3. **Review artifacts**
+   - Check Gateway logs and recent sessions/transcripts for unexpected tool calls.
+   - Review `extensions/` and remove anything you don’t fully trust.
+4. **Re-run audit**
+   - `clawdbot security audit --deep` and confirm the report is clean.
 
 ## Lessons Learned (The Hard Way)
 
