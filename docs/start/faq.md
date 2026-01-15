@@ -1290,6 +1290,7 @@ Quick setup (recommended):
 - Install a per-profile daemon: `clawdbot --profile <name> daemon install`.
 
 Profiles also suffix service names (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`, `Clawdbot Gateway (<profile>)`).
+Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does “invalid handshake” / code 1008 mean?
 
