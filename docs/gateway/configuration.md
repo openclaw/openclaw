@@ -2515,6 +2515,7 @@ Convenience flags (CLI):
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
 See [Gateway runbook](/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
+See [Multiple gateways](/gateway/multiple-gateways) for browser/CDP port isolation details.
 
 Example:
 ```bash
