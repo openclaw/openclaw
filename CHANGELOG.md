@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.15
+## 2026.1.14 (unreleased)
 
 ### Changes
 - Security: add `clawdbot security audit` (`--deep`) and surface it in `status --all` and `doctor`.
