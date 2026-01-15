@@ -100,4 +100,36 @@ describe("runMessageAction context isolation", () => {
       }),
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
+
+  it("allows iMessage send when target matches current handle", async () => {
+    const result = await runMessageAction({
+      cfg: whatsappConfig,
+      action: "send",
+      params: {
+        channel: "imessage",
+        to: "imessage:+15551234567",
+        message: "hi",
+      },
+      toolContext: { currentChannelId: "imessage:+15551234567" },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("blocks iMessage send when target differs from current handle", async () => {
+    await expect(
+      runMessageAction({
+        cfg: whatsappConfig,
+        action: "send",
+        params: {
+          channel: "imessage",
+          to: "imessage:+15551230000",
+          message: "hi",
+        },
+        toolContext: { currentChannelId: "imessage:+15551234567" },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
+  });
 });

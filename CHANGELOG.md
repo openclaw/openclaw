@@ -57,6 +57,7 @@
 
 #### Messaging / Channels
 - Messaging: unify markdown formatting + format-first chunking for Slack/Telegram/Signal. (#920) — thanks @TheSethRose.
+- iMessage: prefer handle routing for direct-message replies; include imsg RPC error details. (#935)
 - Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
 - Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
 - Discord: isolate autoThread thread context. (#856) — thanks @davidguttman.
