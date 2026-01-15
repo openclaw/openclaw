@@ -138,6 +138,32 @@ Behavior:
 - Self-chat mode (allowFrom includes your number) avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
+## Read receipts
+By default, the gateway marks inbound WhatsApp messages as read (blue ticks) once they are accepted.
+
+Disable globally:
+```json5
+{
+  channels: { whatsapp: { sendReadReceipts: false } }
+}
+```
+
+Disable per account:
+```json5
+{
+  channels: {
+    whatsapp: {
+      accounts: {
+        personal: { sendReadReceipts: false }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Self-chat mode always skips read receipts.
+
 ## WhatsApp FAQ: sending messages + pairing
 
 **Will Clawdbot message random contacts when I link WhatsApp?**  

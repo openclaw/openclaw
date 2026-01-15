@@ -93,6 +93,7 @@ group messages, so use admin if you need full visibility.
 - Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - Replies always route back to the same Telegram chat.
 - Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agents.defaults.maxConcurrent`.
+- Telegram Bot API does not support read receipts; there is no `sendReadReceipts` option.
 
 ## Formatting (Telegram HTML)
 - Outbound Telegram text uses `parse_mode: "HTML"` (Telegram’s supported tag subset).

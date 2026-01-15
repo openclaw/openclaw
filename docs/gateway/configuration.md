@@ -430,6 +430,22 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
 }
 ```
 
+### `channels.whatsapp.sendReadReceipts`
+
+Controls whether inbound WhatsApp messages are marked as read (blue ticks). Default: `true`.
+
+Self-chat mode always skips read receipts, even when enabled.
+
+Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
+
+```json5
+{
+  channels: {
+    whatsapp: { sendReadReceipts: false }
+  }
+}
+```
+
 ### `channels.whatsapp.accounts` (multi-account)
 
 Run multiple WhatsApp accounts in one gateway:
