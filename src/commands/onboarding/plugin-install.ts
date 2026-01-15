@@ -82,24 +82,26 @@ async function promptInstallChoice(params: {
   prompter: WizardPrompter;
 }): Promise<InstallChoice> {
   const { entry, localPath, prompter } = params;
+  const localOptions: Array<{ value: InstallChoice; label: string; hint?: string }> = localPath
+    ? [
+        {
+          value: "local",
+          label: "Use local plugin path",
+          hint: localPath,
+        },
+      ]
+    : [];
   const options: Array<{ value: InstallChoice; label: string; hint?: string }> = [
     { value: "npm", label: `Download from npm (${entry.install.npmSpec})` },
-    ...(localPath
-      ? [
-          {
-            value: "local",
-            label: "Use local plugin path",
-            hint: localPath,
-          },
-        ]
-      : []),
+    ...localOptions,
     { value: "skip", label: "Skip for now" },
   ];
-  return (await prompter.select({
+  const initialValue: InstallChoice = localPath ? "local" : "npm";
+  return await prompter.select<InstallChoice>({
     message: `Install ${entry.meta.label} plugin?`,
     options,
-    initialValue: localPath ? "local" : "npm",
-  })) as InstallChoice;
+    initialValue,
+  });
 }
 
 export async function ensureOnboardingPluginInstalled(params: {

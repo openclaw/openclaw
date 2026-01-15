@@ -246,15 +246,19 @@ export async function setupChannels(
 
   options?.onSelection?.(selection);
 
-  const selectionNotes = new Map(
-    [
-      ...installedPlugins.map((plugin) => [plugin.id, plugin.meta]),
-      ...catalogEntries.map((entry) => [entry.id, entry.meta]),
-    ].map(([id, meta]) => [
-      id,
-      formatChannelSelectionLine(meta, formatDocsLink),
-    ]),
-  );
+  const selectionNotes = new Map<string, string>();
+  for (const plugin of installedPlugins) {
+    selectionNotes.set(
+      plugin.id,
+      formatChannelSelectionLine(plugin.meta, formatDocsLink),
+    );
+  }
+  for (const entry of catalogEntries) {
+    selectionNotes.set(
+      entry.id,
+      formatChannelSelectionLine(entry.meta, formatDocsLink),
+    );
+  }
   const selectedLines = selection
     .map((channel) => selectionNotes.get(channel))
     .filter((line): line is string => Boolean(line));

@@ -4,13 +4,21 @@ import { describe, expect, it, vi } from "vitest";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 
-const makeResponse = () =>
-  ({
+const makeResponse = (): {
+  res: ServerResponse;
+  setHeader: ReturnType<typeof vi.fn>;
+  end: ReturnType<typeof vi.fn>;
+} => {
+  const setHeader = vi.fn();
+  const end = vi.fn();
+  const res = {
     headersSent: false,
     statusCode: 200,
-    setHeader: vi.fn(),
-    end: vi.fn(),
-  }) as unknown as ServerResponse;
+    setHeader,
+    end,
+  } as unknown as ServerResponse;
+  return { res, setHeader, end };
+};
 
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
@@ -21,7 +29,8 @@ describe("createGatewayPluginRequestHandler", () => {
       registry: createTestRegistry(),
       log,
     });
-    const handled = await handler({} as IncomingMessage, makeResponse());
+    const { res } = makeResponse();
+    const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(false);
   });
 
@@ -38,7 +47,8 @@ describe("createGatewayPluginRequestHandler", () => {
       log: { warn: vi.fn() } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
     });
 
-    const handled = await handler({} as IncomingMessage, makeResponse());
+    const { res } = makeResponse();
+    const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
@@ -63,15 +73,15 @@ describe("createGatewayPluginRequestHandler", () => {
       log,
     });
 
-    const res = makeResponse();
+    const { res, setHeader, end } = makeResponse();
     const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
     expect(res.statusCode).toBe(500);
-    expect(res.setHeader).toHaveBeenCalledWith(
+    expect(setHeader).toHaveBeenCalledWith(
       "Content-Type",
       "text/plain; charset=utf-8",
     );
-    expect(res.end).toHaveBeenCalledWith("Internal Server Error");
+    expect(end).toHaveBeenCalledWith("Internal Server Error");
   });
 });

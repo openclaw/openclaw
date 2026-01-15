@@ -111,8 +111,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const rawChannel = typeof request.channel === "string" ? request.channel.trim() : "";
     if (rawChannel) {
+      const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
       const normalized = normalizeMessageChannel(rawChannel);
-      if (normalized && normalized !== "last" && !isGatewayMessageChannel(normalized)) {
+      if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
         respond(
           false,
           undefined,
