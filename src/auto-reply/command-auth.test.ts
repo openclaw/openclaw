@@ -96,4 +96,27 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.senderId).toBe("+123");
     expect(auth.isAuthorizedSender).toBe(true);
   });
+
+  it("prefers SenderE164 when SenderId does not match allowFrom", () => {
+    const cfg = {
+      channels: { whatsapp: { allowFrom: ["+41796666864"] } },
+    } as ClawdbotConfig;
+
+    const ctx = {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "whatsapp:120363401234567890@g.us",
+      SenderId: "123@lid",
+      SenderE164: "+41796666864",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderId).toBe("+41796666864");
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
 });

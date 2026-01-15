@@ -167,4 +167,87 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
     expect(result.bodyStripped).toBe("");
   });
+
+  it("Reset trigger /new works when SenderId is LID but SenderE164 is authorized", async () => {
+    const storePath = await createStorePath("clawdbot-group-reset-lid-");
+    const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
+    const existingSessionId = "existing-session-123";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+    });
+
+    const cfg = makeCfg({
+      storePath,
+      allowFrom: ["+41796666864"],
+    });
+
+    const groupMessageCtx = {
+      Body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Owner: /new\n[from: Owner (+41796666864)]`,
+      RawBody: "/new",
+      CommandBody: "/new",
+      From: "120363406150318674@g.us",
+      To: "+41779241027",
+      ChatType: "group",
+      SessionKey: sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SenderName: "Owner",
+      SenderE164: "+41796666864",
+      SenderId: "123@lid",
+    };
+
+    const result = await initSessionState({
+      ctx: groupMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.triggerBodyNormalized).toBe("/new");
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("");
+  });
+
+  it("Reset trigger /new blocked when SenderId is LID but SenderE164 is unauthorized", async () => {
+    const storePath = await createStorePath("clawdbot-group-reset-lid-unauth-");
+    const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
+    const existingSessionId = "existing-session-123";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+    });
+
+    const cfg = makeCfg({
+      storePath,
+      allowFrom: ["+41796666864"],
+    });
+
+    const groupMessageCtx = {
+      Body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Other: /new\n[from: Other (+1555123456)]`,
+      RawBody: "/new",
+      CommandBody: "/new",
+      From: "120363406150318674@g.us",
+      To: "+41779241027",
+      ChatType: "group",
+      SessionKey: sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SenderName: "Other",
+      SenderE164: "+1555123456",
+      SenderId: "123@lid",
+    };
+
+    const result = await initSessionState({
+      ctx: groupMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.triggerBodyNormalized).toBe("/new");
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.isNewSession).toBe(false);
+  });
 });

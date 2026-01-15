@@ -61,35 +61,49 @@ function normalizeAllowFromEntry(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
   value: string;
-}): string | undefined {
-  return formatAllowFromList({
+}): string[] {
+  const normalized = formatAllowFromList({
     dock: params.dock,
     cfg: params.cfg,
     accountId: params.accountId,
     allowFrom: [params.value],
-  })[0];
+  });
+  return normalized.filter((entry) => entry.trim().length > 0);
 }
 
-function resolveSenderId(params: {
+function resolveSenderCandidates(params: {
   dock?: ChannelDock;
+  providerId?: ChannelId;
   cfg: ClawdbotConfig;
   accountId?: string | null;
   senderId?: string | null;
   senderE164?: string | null;
   from?: string | null;
-}): string | undefined {
+}): string[] {
   const { dock, cfg, accountId } = params;
-
-  const senderCandidates = [params.senderId, params.senderE164, params.from]
-    .map((value) => (value ?? "").trim())
-    .filter(Boolean);
-
-  for (const sender of senderCandidates) {
-    const normalized = normalizeAllowFromEntry({ dock, cfg, accountId, value: sender });
-    if (normalized) return normalized;
+  const candidates: string[] = [];
+  const pushCandidate = (value?: string | null) => {
+    const trimmed = (value ?? "").trim();
+    if (!trimmed) return;
+    candidates.push(trimmed);
+  };
+  if (params.providerId === "whatsapp") {
+    pushCandidate(params.senderE164);
+    pushCandidate(params.senderId);
+  } else {
+    pushCandidate(params.senderId);
+    pushCandidate(params.senderE164);
   }
+  pushCandidate(params.from);
 
-  return undefined;
+  const normalized: string[] = [];
+  for (const sender of candidates) {
+    const entries = normalizeAllowFromEntry({ dock, cfg, accountId, value: sender });
+    for (const entry of entries) {
+      if (!normalized.includes(entry)) normalized.push(entry);
+    }
+  }
+  return normalized;
 }
 
 export function resolveCommandAuthorization(params: {
@@ -122,25 +136,30 @@ export function resolveCommandAuthorization(params: {
       accountId: ctx.AccountId,
       value: to,
     });
-    if (normalizedTo) ownerCandidates.push(normalizedTo);
+    if (normalizedTo.length > 0) ownerCandidates.push(...normalizedTo);
   }
-  const ownerList = ownerCandidates;
+  const ownerList = Array.from(new Set(ownerCandidates));
 
-  const senderId = resolveSenderId({
+  const senderCandidates = resolveSenderCandidates({
     dock,
+    providerId,
     cfg,
     accountId: ctx.AccountId,
     senderId: ctx.SenderId,
     senderE164: ctx.SenderE164,
     from,
   });
+  const matchedSender = ownerList.length
+    ? senderCandidates.find((candidate) => ownerList.includes(candidate))
+    : undefined;
+  const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const isOwner =
     !enforceOwner ||
     allowAll ||
     ownerList.length === 0 ||
-    (senderId ? ownerList.includes(senderId) : false);
+    Boolean(matchedSender);
   const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
