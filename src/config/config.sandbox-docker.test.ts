@@ -9,10 +9,7 @@ describe("sandbox docker config", () => {
         defaults: {
           sandbox: {
             docker: {
-              binds: [
-                "/var/run/docker.sock:/var/run/docker.sock",
-                "/home/user/source:/source:rw",
-              ],
+              binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"],
             },
           },
         },

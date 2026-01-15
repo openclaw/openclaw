@@ -112,9 +112,7 @@ export type ClawdbotPluginApi = {
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
     opts?: { name?: string; names?: string[] },
   ) => void;
-  registerChannel: (
-    registration: ClawdbotPluginChannelRegistration | ChannelPlugin,
-  ) => void;
+  registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;
   registerService: (service: ClawdbotPluginService) => void;
