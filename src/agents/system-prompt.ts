@@ -1,9 +1,7 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { CHANNEL_IDS } from "../channels/registry.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-
-const MESSAGE_CHANNEL_OPTIONS = CHANNEL_IDS.join("|");
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
@@ -169,6 +167,7 @@ export function buildAgentSystemPrompt(params: {
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
   const skillsSection = skillsPrompt
     ? [
@@ -319,7 +318,7 @@ export function buildAgentSystemPrompt(params: {
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
-          `- If multiple channels are configured, pass \`channel\` (${MESSAGE_CHANNEL_OPTIONS}).`,
+          `- If multiple channels are configured, pass \`channel\` (${messageChannelOptions}).`,
           inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
             : runtimeChannel

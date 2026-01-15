@@ -2,17 +2,17 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  DELIVERABLE_MESSAGE_CHANNELS,
+  listDeliverableMessageChannels,
   type DeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 
 export type MessageChannelId = DeliverableMessageChannel;
 
-const MESSAGE_CHANNELS = [...DELIVERABLE_MESSAGE_CHANNELS];
+const getMessageChannels = () => listDeliverableMessageChannels();
 
 function isKnownChannel(value: string): value is MessageChannelId {
-  return (MESSAGE_CHANNELS as readonly string[]).includes(value);
+  return getMessageChannels().includes(value as MessageChannelId);
 }
 
 function isAccountEnabled(account: unknown): boolean {

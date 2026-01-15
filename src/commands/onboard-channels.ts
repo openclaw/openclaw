@@ -1,9 +1,5 @@
-import {
-  formatChannelPrimerLine,
-  formatChannelSelectionLine,
-  getChatChannelMeta,
-  listChatChannels,
-} from "../channels/registry.js";
+import { listChannelPlugins, getChannelPlugin } from "../channels/plugins/index.js";
+import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -17,7 +13,7 @@ import {
 import type { ChannelOnboardingDmPolicy, SetupChannelsOptions } from "./onboarding/types.js";
 
 async function noteChannelPrimer(prompter: WizardPrompter): Promise<void> {
-  const channelLines = listChatChannels().map((meta) => formatChannelPrimerLine(meta));
+  const channelLines = listChannelPlugins().map((plugin) => formatChannelPrimerLine(plugin.meta));
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
@@ -130,11 +126,12 @@ export async function setupChannels(
 
   await noteChannelPrimer(prompter);
 
-  const selectionOptions = listChatChannels().map((meta) => {
+  const selectionOptions = listChannelPlugins().map((plugin) => {
+    const meta = plugin.meta;
     const status = statusByChannel.get(meta.id as ChannelChoice);
     return {
       value: meta.id,
-      label: meta.selectionLabel,
+      label: meta.selectionLabel ?? meta.label,
       ...(status?.selectionHint ? { hint: status.selectionHint } : {}),
     };
   });
@@ -169,7 +166,10 @@ export async function setupChannels(
   options?.onSelection?.(selection);
 
   const selectionNotes = new Map(
-    listChatChannels().map((meta) => [meta.id, formatChannelSelectionLine(meta, formatDocsLink)]),
+    listChannelPlugins().map((plugin) => [
+      plugin.id,
+      formatChannelSelectionLine(plugin.meta, formatDocsLink),
+    ]),
   );
   const selectedLines = selection
     .map((channel) => selectionNotes.get(channel))
@@ -214,9 +214,9 @@ export async function setupChannels(
       if (!status.configured) continue;
       const adapter = getChannelOnboardingAdapter(channelId);
       if (!adapter?.disable) continue;
-      const meta = getChatChannelMeta(channelId);
+      const meta = getChannelPlugin(channelId)?.meta;
       const disable = await prompter.confirm({
-        message: `Disable ${meta.label} channel?`,
+        message: `Disable ${meta?.label ?? channelId} channel?`,
         initialValue: false,
       });
       if (disable) {

@@ -33,6 +33,12 @@ export type PluginUiMetadata = {
   >;
 };
 
+export type ChannelUiMetadata = {
+  id: string;
+  label?: string;
+  description?: string;
+};
+
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
   logging: "Logging",
@@ -413,6 +419,24 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
   return next;
 }
 
+function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]): ConfigUiHints {
+  const next: ConfigUiHints = { ...hints };
+  for (const channel of channels) {
+    const id = channel.id.trim();
+    if (!id) continue;
+    const basePath = `channels.${id}`;
+    const current = next[basePath] ?? {};
+    const label = channel.label?.trim();
+    const help = channel.description?.trim();
+    next[basePath] = {
+      ...current,
+      ...(label ? { label } : {}),
+      ...(help ? { help } : {}),
+    };
+  }
+  return next;
+}
+
 let cachedBase: ConfigSchemaResponse | null = null;
 
 function buildBaseConfigSchema(): ConfigSchemaResponse {
@@ -433,11 +457,17 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: { plugins?: PluginUiMetadata[] }): ConfigSchemaResponse {
+export function buildConfigSchema(params?: {
+  plugins?: PluginUiMetadata[];
+  channels?: ChannelUiMetadata[];
+}): ConfigSchemaResponse {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
-  if (plugins.length === 0) return base;
-  const merged = applySensitiveHints(applyPluginHints(base.uiHints, plugins));
+  const channels = params?.channels ?? [];
+  if (plugins.length === 0 && channels.length === 0) return base;
+  const merged = applySensitiveHints(
+    applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
+  );
   return {
     ...base,
     uiHints: merged,
