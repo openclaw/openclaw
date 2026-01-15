@@ -414,6 +414,7 @@ Then Chrome → `chrome://extensions` → enable “Developer mode” → “Loa
 Full guide (including remote Gateway via Tailscale + security notes): [Chrome extension](/tools/chrome-extension)
 
 If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+You still need to click the extension button on the tab you want to control (it doesn’t auto-attach).
 
 ## Sandboxing and memory
 

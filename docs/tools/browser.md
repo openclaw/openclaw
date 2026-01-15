@@ -218,7 +218,7 @@ Full guide: [Chrome extension](/tools/chrome-extension)
 Flow:
 - You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
-- You click the **Clawdbot Browser Relay** extension icon on a tab to attach.
+- You click the **Clawdbot Browser Relay** extension icon on a tab to attach (it does not auto-attach).
 - The agent controls that tab via the normal `browser` tool, by selecting the right profile.
 
 If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
