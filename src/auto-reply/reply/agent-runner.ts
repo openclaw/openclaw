@@ -351,6 +351,7 @@ export async function runReplyAgent(params: {
                 modelProvider: providerUsed,
                 model: modelUsed,
                 contextTokens: contextTokensUsed ?? entry.contextTokens,
+                systemPromptReport: runResult.meta.systemPromptReport ?? entry.systemPromptReport,
                 updatedAt: Date.now(),
               };
               if (cliSessionId) {
@@ -378,6 +379,7 @@ export async function runReplyAgent(params: {
                 modelProvider: providerUsed ?? entry.modelProvider,
                 model: modelUsed ?? entry.model,
                 contextTokens: contextTokensUsed ?? entry.contextTokens,
+                systemPromptReport: runResult.meta.systemPromptReport ?? entry.systemPromptReport,
                 updatedAt: Date.now(),
               };
               if (cliSessionId) {

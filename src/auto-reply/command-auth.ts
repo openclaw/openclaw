@@ -56,6 +56,42 @@ function formatAllowFromList(params: {
   return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
+function normalizeAllowFromEntry(params: {
+  dock?: ChannelDock;
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  value: string;
+}): string | undefined {
+  return formatAllowFromList({
+    dock: params.dock,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    allowFrom: [params.value],
+  })[0];
+}
+
+function resolveSenderId(params: {
+  dock?: ChannelDock;
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+  senderE164?: string | null;
+  from?: string | null;
+}): string | undefined {
+  const { dock, cfg, accountId } = params;
+
+  const senderCandidates = [params.senderId, params.senderE164, params.from]
+    .map((value) => (value ?? "").trim())
+    .filter(Boolean);
+
+  for (const sender of senderCandidates) {
+    const normalized = normalizeAllowFromEntry({ dock, cfg, accountId, value: sender });
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
+
 export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
@@ -80,27 +116,19 @@ export function resolveCommandAuthorization(params: {
 
   const ownerCandidates = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidates.length === 0 && to) {
-    const normalizedTo = formatAllowFromList({
-      dock,
-      cfg,
-      accountId: ctx.AccountId,
-      allowFrom: [to],
-    })[0];
+    const normalizedTo = normalizeAllowFromEntry({ dock, cfg, accountId: ctx.AccountId, value: to });
     if (normalizedTo) ownerCandidates.push(normalizedTo);
   }
   const ownerList = ownerCandidates;
 
-  const senderIdCandidate = ctx.SenderId?.trim() ?? "";
-  const senderE164Candidate = ctx.SenderE164?.trim() ?? "";
-  const senderRaw = senderIdCandidate || senderE164Candidate || from;
-  const senderId = senderRaw
-    ? formatAllowFromList({
-        dock,
-        cfg,
-        accountId: ctx.AccountId,
-        allowFrom: [senderRaw],
-      })[0]
-    : undefined;
+  const senderId = resolveSenderId({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    senderId: ctx.SenderId,
+    senderE164: ctx.SenderE164,
+    from,
+  });
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const isOwner =

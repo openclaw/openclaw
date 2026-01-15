@@ -109,6 +109,13 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/status",
     }),
     defineChatCommand({
+      key: "context",
+      nativeName: "context",
+      description: "Explain how context is built and used.",
+      textAlias: "/context",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "whoami",
       nativeName: "whoami",
       description: "Show your sender id.",

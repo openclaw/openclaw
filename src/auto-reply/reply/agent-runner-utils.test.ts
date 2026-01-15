@@ -23,6 +23,21 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("123@g.us");
   });
 
+  it("falls back to To for WhatsApp when From is missing", () => {
+    const sessionCtx = {
+      Provider: "whatsapp",
+      To: "+15550001",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("+15550001");
+  });
+
   it("uses the recipient id for other channels", () => {
     const sessionCtx = {
       Provider: "telegram",

@@ -282,6 +282,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   registerTelegramHandlers({
+    cfg,
+    accountId: account.accountId,
     bot,
     opts,
     runtime,

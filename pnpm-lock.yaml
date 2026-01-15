@@ -9,7 +9,7 @@ overrides:
 
 patchedDependencies:
   '@mariozechner/pi-ai@0.45.7':
-    hash: 899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd
+    hash: e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9
     path: patches/@mariozechner__pi-ai@0.45.7.patch
 
 importers:
@@ -36,7 +36,7 @@ importers:
         version: 0.45.3(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: 0.45.7
-        version: 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
+        version: 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
         specifier: ^0.45.3
         version: 0.45.3(ws@8.19.0)(zod@4.3.5)
@@ -5067,7 +5067,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.45.3(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.45.3
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -5078,7 +5078,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@aws-sdk/client-bedrock-runtime': 3.967.0
@@ -5105,7 +5105,7 @@ snapshots:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.2
       '@mariozechner/pi-agent-core': 0.45.3(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.45.7(patch_hash=899187c39b551e0b611a32006f5f06bc329d3478fe4bac9bac044b2df079e2cd)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.45.7(patch_hash=e8b10ed06e0bcda571016bc4979ef2c5bf8a99ccade0201a3f74bc1914754fe9)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.45.3
       chalk: 5.6.2
       cli-highlight: 2.1.11

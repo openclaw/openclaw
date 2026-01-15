@@ -11,6 +11,7 @@ import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  deleteMessage?: boolean;
 };
 
 export type TelegramAccountConfig = {

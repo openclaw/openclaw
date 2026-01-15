@@ -46,6 +46,14 @@
       "destination": "/concepts/messages"
     },
     {
+      "source": "/context",
+      "destination": "/concepts/context"
+    },
+    {
+      "source": "/context/",
+      "destination": "/concepts/context"
+    },
+    {
       "source": "/minimax",
       "destination": "/providers/minimax"
     },
@@ -765,6 +773,7 @@
           "concepts/agent",
           "concepts/agent-loop",
           "concepts/system-prompt",
+          "concepts/context",
           "token-use",
           "concepts/oauth",
           "concepts/agent-workspace",
