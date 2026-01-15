@@ -67,6 +67,7 @@
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
     "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",
+    "plugins:sync": "tsx scripts/sync-plugin-versions.ts",
     "release:check": "tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
     "ui:dev": "node scripts/ui.js dev",
