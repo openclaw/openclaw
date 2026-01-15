@@ -32,7 +32,9 @@ clawdbot browser snapshot
 
 ## Profiles
 
-Profiles are named browser instances with their own data directory and CDP settings.
+Profiles are named browser routing configs. In practice:
+- `clawd`: launches/attaches to a dedicated Clawdbot-managed Chrome instance (isolated user data dir).
+- `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
 
 ```bash
 clawdbot browser profiles
@@ -103,4 +105,3 @@ clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
 Then point the Gateway at it using `browser.controlUrl` + `browser.controlToken` (or `CLAWDBOT_BROWSER_CONTROL_TOKEN`).
 
 Security + TLS best-practices: [Browser tool](/tools/browser), [Tailscale](/gateway/tailscale), [Security](/gateway/security)
-

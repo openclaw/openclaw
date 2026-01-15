@@ -49,19 +49,23 @@ After upgrading Clawdbot:
 - Re-run `clawdbot browser extension install` to refresh the installed files under your Clawdbot state directory.
 - Chrome → `chrome://extensions` → click “Reload” on the extension.
 
-## Create a browser profile for the extension
+## Use it (no extra config)
+
+Clawdbot ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+
+Use it:
+- CLI: `clawdbot browser --browser-profile chrome tabs`
+- Agent tool: `browser` with `profile="chrome"`
+
+If you want a different name or a different relay port, create your own profile:
 
 ```bash
 clawdbot browser create-profile \
-  --name chrome \
+  --name my-chrome \
   --driver extension \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
 ```
-
-Then target it:
-- CLI: `clawdbot browser --browser-profile chrome tabs`
-- Agent tool: `browser` with `profile="chrome"`
 
 ## Attach / detach (toolbar button)
 
@@ -94,7 +98,7 @@ If the Gateway is running on the same machine as Chrome and your `browser.contro
 you typically **do not** need `clawdbot browser serve`.
 
 The Gateway’s built-in browser control server will start on `http://127.0.0.1:18791/` and Clawdbot will
-auto-start the local relay server when you use a profile with `driver="extension"`.
+auto-start the local relay server on `http://127.0.0.1:18792/`.
 
 ### Remote Gateway (Gateway runs elsewhere) — **yes**
 

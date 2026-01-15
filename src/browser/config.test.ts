@@ -13,6 +13,11 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(18800);
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
     expect(profile?.cdpIsLoopback).toBe(true);
+
+    const chrome = resolveProfile(resolved, "chrome");
+    expect(chrome?.driver).toBe("extension");
+    expect(chrome?.cdpPort).toBe(18792);
+    expect(chrome?.cdpUrl).toBe("http://127.0.0.1:18792");
   });
 
   it("derives default ports from CLAWDBOT_GATEWAY_PORT when unset", () => {
@@ -24,6 +29,11 @@ describe("browser config", () => {
       const profile = resolveProfile(resolved, resolved.defaultProfile);
       expect(profile?.cdpPort).toBe(19012);
       expect(profile?.cdpUrl).toBe("http://127.0.0.1:19012");
+
+      const chrome = resolveProfile(resolved, "chrome");
+      expect(chrome?.driver).toBe("extension");
+      expect(chrome?.cdpPort).toBe(19004);
+      expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19004");
     } finally {
       if (prev === undefined) {
         delete process.env.CLAWDBOT_GATEWAY_PORT;
@@ -107,5 +117,15 @@ describe("browser config", () => {
     expect(() => resolveBrowserConfig({ controlUrl: "ws://127.0.0.1:18791" })).toThrow(
       /must be http/i,
     );
+  });
+
+  it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
+    const resolved = resolveBrowserConfig({
+      controlUrl: "http://127.0.0.1:18791",
+      profiles: {
+        clawd: { cdpPort: 18792, color: "#FF4500" },
+      },
+    });
+    expect(resolveProfile(resolved, "chrome")).toBe(null);
   });
 });
