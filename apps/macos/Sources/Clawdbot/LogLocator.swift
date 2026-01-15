@@ -1,9 +1,21 @@
 import Foundation
 
 enum LogLocator {
-    private static let logDir = URL(fileURLWithPath: "/tmp/clawdbot")
-    private static let stdoutLog = logDir.appendingPathComponent("clawdbot-stdout.log")
-    private static let gatewayLog = logDir.appendingPathComponent("clawdbot-gateway.log")
+    private static var logDir: URL {
+        if let override = ProcessInfo.processInfo.environment["CLAWDBOT_LOG_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+
+        return URL(fileURLWithPath: "/tmp/clawdbot")
+    }
+
+    private static var stdoutLog: URL {
+        logDir.appendingPathComponent("clawdbot-stdout.log")
+    }
+
+    private static var gatewayLog: URL {
+        logDir.appendingPathComponent("clawdbot-gateway.log")
+    }
 
     private static func ensureLogDirExists() {
         try? FileManager.default.createDirectory(at: self.logDir, withIntermediateDirectories: true)
