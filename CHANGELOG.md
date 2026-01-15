@@ -15,6 +15,7 @@
 - macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
 - Telegram: split long captions into media + follow-up text messages. (#907) - thanks @jalehman.
+- Messaging: unify markdown formatting + format-first chunking for Slack/Telegram/Signal. (#920) — thanks @TheSethRose.
 - Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
 - Discord: isolate autoThread thread context. (#856) — thanks @davidguttman.
 - WhatsApp: fix context isolation using wrong ID (was bot's number, now conversation ID). (#911) — thanks @tristanmanchester.
