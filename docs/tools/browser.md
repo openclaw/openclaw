@@ -224,6 +224,13 @@ Flow:
 If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
 Use `browser serve` only when the Gateway runs elsewhere (remote mode).
 
+### Sandboxed sessions
+
+If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
+Chrome extension relay takeover requires host browser control, so either:
+- run the session unsandboxed, or
+- set `agents.defaults.sandbox.browser.allowHostControl: true` and use `target="host"` when calling the tool.
+
 ### Setup
 
 1) Create a profile that uses the extension driver:

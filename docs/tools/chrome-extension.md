@@ -85,6 +85,35 @@ auto-start the local relay server when you use a profile with `driver="extension
 If your Gateway runs on another machine, run `clawdbot browser serve` on the machine that runs Chrome
 (and publish it via Tailscale Serve / TLS). See the section below.
 
+## Sandboxing (tool containers)
+
+If your agent session is sandboxed (`agents.defaults.sandbox.mode != "off"`), the `browser` tool can be restricted:
+
+- By default, sandboxed sessions often target the **sandbox browser** (`target="sandbox"`), not your host Chrome.
+- Chrome extension relay takeover requires controlling the **host** browser control server.
+
+Options:
+- Easiest: use the extension from a **non-sandboxed** session/agent.
+- Or allow host browser control for sandboxed sessions:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        browser: {
+          allowHostControl: true
+        }
+      }
+    }
+  }
+}
+```
+
+Then ensure the tool isn’t denied by tool policy, and (if needed) call `browser` with `target="host"`.
+
+Debugging: `clawdbot sandbox explain`
+
 ## Remote Gateway (recommended: Tailscale Serve)
 
 Goal: Gateway runs on one machine, but Chrome runs somewhere else.
