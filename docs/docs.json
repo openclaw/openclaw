@@ -54,6 +54,14 @@
       "destination": "/concepts/context"
     },
     {
+      "source": "/compaction",
+      "destination": "/concepts/compaction"
+    },
+    {
+      "source": "/compaction/",
+      "destination": "/concepts/compaction"
+    },
+    {
       "source": "/minimax",
       "destination": "/providers/minimax"
     },
@@ -558,14 +566,6 @@
       "destination": "/concepts/channel-routing"
     },
     {
-      "source": "/refactor/provider-plugin",
-      "destination": "/refactor/channel-plugin"
-    },
-    {
-      "source": "/refactor/provider-plugin/",
-      "destination": "/refactor/channel-plugin"
-    },
-    {
       "source": "/queue",
       "destination": "/concepts/queue"
     },
@@ -758,6 +758,7 @@
           "install/index",
           "install/installer",
           "install/updating",
+          "install/uninstall",
           "install/ansible",
           "install/nix",
           "install/docker",
@@ -797,6 +798,7 @@
           "concepts/channel-routing",
           "concepts/messages",
           "concepts/streaming",
+          "concepts/markdown-formatting",
           "concepts/groups",
           "concepts/group-messages",
           "concepts/typing-indicators",
@@ -823,11 +825,14 @@
           "gateway/configuration-examples",
           "gateway/authentication",
           "gateway/openai-http-api",
+          "gateway/cli-backends",
+          "gateway/local-models",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
+          "logging",
           "gateway/security",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
@@ -875,9 +880,11 @@
           "providers/models",
           "providers/openai",
           "providers/anthropic",
+          "bedrock",
           "providers/moonshot",
           "providers/minimax",
           "providers/openrouter",
+          "providers/synthetic",
           "providers/opencode",
           "providers/glm",
           "providers/zai"
@@ -898,11 +905,13 @@
         "pages": [
           "tools",
           "plugin",
+          "plugins/voice-call",
           "tools/exec",
           "tools/web",
           "tools/apply-patch",
           "tools/elevated",
           "tools/browser",
+          "tools/browser-login",
           "tools/chrome-extension",
           "tools/browser-linux-troubleshooting",
           "tools/slash-commands",
