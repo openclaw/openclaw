@@ -4,6 +4,7 @@
 
 ### Changes
 - Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
+- Daemon: support profile-aware service names for multi-gateway setups. (#671) — thanks @bjesuiter.
 - Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
 - Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
 - Security: add `clawdbot security audit` (`--deep`, `--fix`) and surface it in `status --all` and `doctor`.
