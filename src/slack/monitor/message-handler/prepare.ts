@@ -19,7 +19,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import { allowListMatches, resolveSlackUserAllowed } from "../allow-list.js";
 import { isSlackSenderAllowListed, resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
-import type { SlackMonitorContext } from "../context.js";
+import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
 
 import type { PreparedSlackMessage } from "./types.js";
@@ -45,7 +45,7 @@ export async function prepareSlackMessage(params: {
     channelType = channelType ?? channelInfo.type;
   }
   const channelName = channelInfo?.name;
-  const resolvedChannelType = channelType;
+  const resolvedChannelType = normalizeSlackChannelType(channelType, message.channel);
   const isDirectMessage = resolvedChannelType === "im";
   const isGroupDm = resolvedChannelType === "mpim";
   const isRoom = resolvedChannelType === "channel" || resolvedChannelType === "group";
