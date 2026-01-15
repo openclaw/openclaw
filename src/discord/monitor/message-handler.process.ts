@@ -2,7 +2,12 @@ import {
   resolveAckReaction,
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
+  resolveIdentityName,
 } from "../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../auto-reply/reply/response-prefix-template.js";
 import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
@@ -280,8 +285,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
+
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(cfg, route.agentId),
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+    responsePrefixContextProvider: () => prefixContext,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
@@ -316,6 +328,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         typeof discordConfig?.blockStreaming === "boolean"
           ? !discordConfig.blockStreaming
           : undefined,
+      onModelSelected: (ctx) => {
+        // Mutate the object directly instead of reassigning to ensure the closure sees updates
+        prefixContext.provider = ctx.provider;
+        prefixContext.model = extractShortModelName(ctx.model);
+        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
+      },
     },
   });
   markDispatchIdle();
