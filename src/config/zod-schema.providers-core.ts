@@ -63,8 +63,12 @@ export const TelegramAccountSchemaBase = z.object({
   actions: z
     .object({
       reactions: z.boolean().optional(),
+      sendMessage: z.boolean().optional(),
+      deleteMessage: z.boolean().optional(),
     })
     .optional(),
+  reactionNotifications: z.enum(["off", "all"]).optional(),
+  reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
 });
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {

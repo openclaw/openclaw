@@ -76,6 +76,20 @@ export type TelegramAccountConfig = {
   webhookPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /**
+   * Controls which user reactions trigger notifications:
+   * - "off" (default): ignore all reactions
+   * - "all": notify agent of all reactions
+   */
+  reactionNotifications?: "off" | "all";
+  /**
+   * Controls agent's reaction capability:
+   * - "off": agent cannot react
+   * - "ack" (default): bot sends acknowledgment reactions (👀 while processing)
+   * - "minimal": agent can react sparingly (guideline: 1 per 5-10 exchanges)
+   * - "extensive": agent can react liberally when appropriate
+   */
+  reactionLevel?: "off" | "ack" | "minimal" | "extensive";
 };
 
 export type TelegramTopicConfig = {
