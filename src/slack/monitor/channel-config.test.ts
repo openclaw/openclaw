@@ -29,4 +29,3 @@ describe("resolveSlackChannelConfig", () => {
     expect(res).toMatchObject({ requireMention: true });
   });
 });
-
