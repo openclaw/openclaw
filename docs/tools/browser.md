@@ -204,6 +204,8 @@ Inspection:
 - `clawdbot browser snapshot`
 - `clawdbot browser snapshot --format aria --limit 200`
 - `clawdbot browser snapshot --interactive --compact --depth 6`
+- `clawdbot browser snapshot --efficient`
+- `clawdbot browser snapshot --labels`
 - `clawdbot browser snapshot --selector "#main" --interactive`
 - `clawdbot browser snapshot --frame "iframe#main" --interactive`
 - `clawdbot browser console --level error`
@@ -260,9 +262,11 @@ Notes:
 - `snapshot`:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
   - `--format aria`: returns the accessibility tree (no refs; inspection only).
+  - `--efficient` (or `--mode efficient`): compact role snapshot preset (interactive + compact + depth + lower maxChars).
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
   - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
+  - `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 
@@ -279,6 +283,7 @@ Clawdbot supports two “snapshot” styles:
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `clawdbot browser click e12`, `clawdbot browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
+  - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
 Ref behavior:
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.

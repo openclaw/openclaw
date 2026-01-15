@@ -42,6 +42,7 @@ export {
   setTimezoneViaPlaywright,
   snapshotAiViaPlaywright,
   snapshotRoleViaPlaywright,
+  screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,
   storageSetViaPlaywright,
