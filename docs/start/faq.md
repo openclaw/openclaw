@@ -1027,6 +1027,21 @@ Z.AI (GLM models):
 
 If you reference a provider/model but the required provider key is missing, you’ll get a runtime auth error (e.g. `No API key found for provider "zai"`).
 
+### “No API key found for provider …” after adding a new agent
+
+This usually means the **new agent** has an empty auth store. Auth is per-agent and
+stored in:
+
+```
+~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+```
+
+Fix options:
+- Run `clawdbot agents add <id>` and configure auth during the wizard.
+- Or copy `auth-profiles.json` from the main agent’s `agentDir` into the new agent’s `agentDir`.
+
+Do **not** reuse `agentDir` across agents; it causes auth/session collisions.
+
 ## Model failover and “All models failed”
 
 ### How does failover work?
@@ -1080,6 +1095,13 @@ can’t find that profile in its auth store.
 If your model config includes Google Gemini as a fallback (or you switched to a Gemini shorthand), Clawdbot will try it during model fallback. If you haven’t configured Google credentials, you’ll see `No API key found for provider "google"`.
 
 Fix: either provide Google auth, or remove/avoid Google models in `agents.defaults.model.fallbacks` / aliases so fallback doesn’t route there.
+
+### “LLM request rejected: messages.*.thinking.signature required (google‑antigravity)”
+
+Cause: the session history contains **thinking blocks without signatures** (often from
+an aborted/partial stream). Google Antigravity requires signatures for thinking blocks.
+
+Fix: start a **new session** or set `/thinking off` for that agent.
 
 ## Auth profiles: what they are and how to manage them
 

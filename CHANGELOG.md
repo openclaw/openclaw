@@ -3,6 +3,8 @@
 ## 2026.1.14 (unreleased)
 
 ### Changes
+- Docs: clarify per-agent auth stores, sandboxed skill binaries, and elevated semantics.
+- Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
 - Security: add `clawdbot security audit` (`--deep`, `--fix`) and surface it in `status --all` and `doctor`.
 - Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
 - Docs: expand gateway security hardening guidance and incident response checklist.

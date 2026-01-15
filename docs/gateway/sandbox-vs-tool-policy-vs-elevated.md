@@ -93,6 +93,7 @@ Available groups:
 Elevated does **not** grant extra tools; it only affects `exec`.
 - If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs on the host.
 - If you’re already running direct, elevated is effectively a no-op (still gated).
+- Elevated is **not** skill-scoped and does **not** override tool allow/deny.
 
 Gates:
 - Enablement: `tools.elevated.enabled` (and optionally `agents.list[].tools.elevated.enabled`)
