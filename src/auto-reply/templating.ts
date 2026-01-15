@@ -1,5 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
+import type { CommandArgs } from "./commands-registry.types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
@@ -15,6 +16,7 @@ export type MsgContext = {
    * Prefer for command detection; RawBody is treated as legacy alias.
    */
   CommandBody?: string;
+  CommandArgs?: CommandArgs;
   From?: string;
   To?: string;
   SessionKey?: string;
