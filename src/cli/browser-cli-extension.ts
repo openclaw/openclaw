@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 
 import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
-import { danger } from "../globals.js";
+import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { movePathToTrash } from "../browser/trash.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 function bundledExtensionRootDir() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -73,8 +75,20 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.log(JSON.stringify({ ok: true, path: installed.path }, null, 2));
         return;
       }
-      defaultRuntime.log(installed.path);
-    });
+        defaultRuntime.log(installed.path);
+        defaultRuntime.error(
+          info(
+            [
+              "Next:",
+              `- Chrome → chrome://extensions → enable “Developer mode”`,
+              `- “Load unpacked” → select: ${installed.path}`,
+              `- Pin “Clawdbot Browser Relay”, then click it on the tab (badge shows ON)`,
+              "",
+              `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.clawd.bot/tools/chrome-extension")}`,
+            ].join("\n"),
+          ),
+        );
+      });
 
   ext
     .command("path")
@@ -84,7 +98,12 @@ export function registerBrowserExtensionCommands(
       const dir = installedExtensionRootDir();
       if (!hasManifest(dir)) {
         defaultRuntime.error(
-          danger('Chrome extension is not installed. Run: "clawdbot browser extension install"'),
+          danger(
+            [
+              'Chrome extension is not installed. Run: "clawdbot browser extension install"',
+              `Docs: ${formatDocsLink("/tools/chrome-extension", "docs.clawd.bot/tools/chrome-extension")}`,
+            ].join("\n"),
+          ),
         );
         defaultRuntime.exit(1);
       }
