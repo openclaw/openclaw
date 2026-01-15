@@ -36,7 +36,6 @@
 - Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
 
 ### Fixes
-
 #### Agents
 - Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.
 - Agents: strip downgraded tool call text without eating adjacent replies and filter thinking-tag leaks. (#905) — thanks @erikpr1994.
@@ -48,6 +47,7 @@
 #### Browser
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
 - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
+- UI: move Docs link into the left navigation menu.
 
 #### macOS
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
