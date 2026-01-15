@@ -1,9 +1,9 @@
 const DEFAULT_PORT = 18792
 
 const BADGE = {
-  on: { text: 'ON', color: '#0B6E4F' },
+  on: { text: 'ON', color: '#FF5A36' },
   off: { text: '', color: '#000000' },
-  connecting: { text: '…', color: '#B45309' },
+  connecting: { text: '…', color: '#F59E0B' },
   error: { text: '!', color: '#B91C1C' },
 }
 
@@ -46,6 +46,7 @@ function setBadge(tabId, kind) {
   const cfg = BADGE[kind]
   void chrome.action.setBadgeText({ tabId, text: cfg.text })
   void chrome.action.setBadgeBackgroundColor({ tabId, color: cfg.color })
+  void chrome.action.setBadgeTextColor({ tabId, color: '#FFFFFF' }).catch(() => {})
 }
 
 async function ensureRelayConnection() {
@@ -111,6 +112,10 @@ function onRelayClosed(reason) {
   for (const tabId of tabs.keys()) {
     void chrome.debugger.detach({ tabId }).catch(() => {})
     setBadge(tabId, 'connecting')
+    void chrome.action.setTitle({
+      tabId,
+      title: 'Clawdbot Browser Relay: disconnected (click to re-attach)',
+    })
   }
   tabs.clear()
   tabBySession.clear()
@@ -123,6 +128,17 @@ function sendToRelay(payload) {
     throw new Error('Relay not connected')
   }
   ws.send(JSON.stringify(payload))
+}
+
+async function maybeOpenHelpOnce() {
+  try {
+    const stored = await chrome.storage.local.get(['helpOnErrorShown'])
+    if (stored.helpOnErrorShown === true) return
+    await chrome.storage.local.set({ helpOnErrorShown: true })
+    await chrome.runtime.openOptionsPage()
+  } catch {
+    // ignore
+  }
 }
 
 function requestFromRelay(command) {
@@ -207,6 +223,10 @@ async function attachTab(tabId, opts = {}) {
 
   tabs.set(tabId, { state: 'connected', sessionId, targetId, attachOrder })
   tabBySession.set(sessionId, tabId)
+  void chrome.action.setTitle({
+    tabId,
+    title: 'Clawdbot Browser Relay: attached (click to detach)',
+  })
 
   if (!opts.skipAttachedEvent) {
     sendToRelay({
@@ -256,6 +276,10 @@ async function detachTab(tabId, reason) {
   }
 
   setBadge(tabId, 'off')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'Clawdbot Browser Relay (click to attach/detach)',
+  })
 }
 
 async function connectOrToggleForActiveTab() {
@@ -271,6 +295,10 @@ async function connectOrToggleForActiveTab() {
 
   tabs.set(tabId, { state: 'connecting' })
   setBadge(tabId, 'connecting')
+  void chrome.action.setTitle({
+    tabId,
+    title: 'Clawdbot Browser Relay: connecting to local relay…',
+  })
 
   try {
     await ensureRelayConnection()
@@ -278,10 +306,13 @@ async function connectOrToggleForActiveTab() {
   } catch (err) {
     tabs.delete(tabId)
     setBadge(tabId, 'error')
-    const message = err instanceof Error ? err.message : String(err)
-    // Service worker: best-effort surface via title.
-    void chrome.action.setTitle({ tabId, title: `Clawdbot: ${message}` })
+    void chrome.action.setTitle({
+      tabId,
+      title: 'Clawdbot Browser Relay: relay not running (open options for setup)',
+    })
+    void maybeOpenHelpOnce()
     // Extra breadcrumbs in chrome://extensions service worker logs.
+    const message = err instanceof Error ? err.message : String(err)
     console.warn('attach failed', message, nowStack())
   }
 }

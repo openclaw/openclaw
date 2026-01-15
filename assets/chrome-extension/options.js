@@ -7,10 +7,17 @@ function clampPort(value) {
   return n
 }
 
+function updateRelayUrl(port) {
+  const el = document.getElementById('relay-url')
+  if (!el) return
+  el.textContent = `http://127.0.0.1:${port}/`
+}
+
 async function load() {
   const stored = await chrome.storage.local.get(['relayPort'])
   const port = clampPort(stored.relayPort)
   document.getElementById('port').value = String(port)
+  updateRelayUrl(port)
 }
 
 async function save() {
@@ -18,6 +25,7 @@ async function save() {
   const port = clampPort(input.value)
   await chrome.storage.local.set({ relayPort: port })
   input.value = String(port)
+  updateRelayUrl(port)
   const status = document.getElementById('status')
   status.textContent = `Saved. Using http://127.0.0.1:${port}/`
   setTimeout(() => {
@@ -27,4 +35,3 @@ async function save() {
 
 document.getElementById('save').addEventListener('click', () => void save())
 void load()
-
