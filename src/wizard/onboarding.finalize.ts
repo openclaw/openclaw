@@ -134,8 +134,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
 
     if (
       !loaded ||
-      (loaded &&
-        (await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE })) === false)
+      (loaded && (await service.isLoaded({ profile: process.env.CLAWDBOT_PROFILE })) === false)
     ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) && process.argv[1]?.endsWith(".ts");
