@@ -28,6 +28,11 @@
 - CLI/Docs: add per-command CLI doc pages and link them from `clawdbot <command> --help`.
 - Browser: copy the installed Chrome extension path to clipboard after `clawdbot browser extension install/path`.
 - WhatsApp: add `channels.whatsapp.sendReadReceipts` to disable auto read receipts. (#882) — thanks @chrisrodz.
+- Usage: add MiniMax coding plan usage tracking.
+- Auth: label Claude Code CLI auth options. (#915) — thanks @SeanZoR.
+- Docs: standardize Claude Code CLI naming across docs and prompts. (follow-up to #915)
+- Telegram: add message delete action in the message tool. (#903) — thanks @sleontenko.
+- Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
 
 ### Fixes
 - Slack: isolate thread history and avoid inheriting channel transcripts for new threads by default. (#758)
@@ -55,29 +60,18 @@
 - Telegram: let control commands bypass per-chat sequentialization; always allow abort triggers.
 - Auto-reply: treat trailing `NO_REPLY` tokens as silent replies.
 - Config: prevent partial config writes from clobbering unrelated settings (base hash guard + merge patch for connection saves).
-
-## 2026.1.14
-
-### Changes
-- Usage: add MiniMax coding plan usage tracking.
-- Auth: label Claude Code CLI auth options. (#915) — thanks @SeanZoR.
-- Docs: standardize Claude Code CLI naming across docs and prompts. (follow-up to #915)
-- Telegram: add message delete action in the message tool. (#903) — thanks @sleontenko.
-- Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
-
-### Fixes
 - Sessions: return deep clones (`structuredClone`) so cached session entries can't be mutated. (#934) — thanks @ronak-guliani.
 - Heartbeat: keep `updatedAt` monotonic when restoring heartbeat sessions. (#934) — thanks @ronak-guliani.
 - Agent: clear run context after CLI runs (`clearAgentRunContext`) to avoid runaway contexts. (#934) — thanks @ronak-guliani.
- - Mac: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
- - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
+- macOS: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
+- UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
 - TUI: render picker overlays via the overlay stack so /models and /settings display. (#921) — thanks @grizzdank.
 - TUI: add a bright spinner + elapsed time in the status line for send/stream/run states.
 - TUI: show LLM error messages (rate limits, auth, etc.) instead of `(no output)`.
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
 - macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
-- Telegram: split long captions into media + follow-up text messages. (#907) - thanks @jalehman.
+- Telegram: split long captions into media + follow-up text messages. (#907) — thanks @jalehman.
 - Telegram: migrate group config when supergroups change chat IDs. (#906) — thanks @sleontenko.
 - Messaging: unify markdown formatting + format-first chunking for Slack/Telegram/Signal. (#920) — thanks @TheSethRose.
 - Slack: drop Socket Mode events with mismatched `api_app_id`/`team_id`. (#889) — thanks @roshanasingh4.
