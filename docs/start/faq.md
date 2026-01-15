@@ -239,6 +239,10 @@ It also warns if your configured model is unknown or missing auth.
 
 The wizard can run `claude setup-token` on the gateway host (or you run it yourself), then stores the token as an auth profile for the **anthropic** provider. That profile is used for model calls the same way an API key or OAuth profile would be. If you already ran `claude setup-token`, pick **Anthropic token (paste setup-token)** and paste it. More detail: [OAuth](/concepts/oauth).
 
+Clawdbot keeps `auth.profiles["anthropic:claude-cli"].mode` set to `"oauth"` so
+the profile accepts both OAuth and setup-token credentials; older `"token"` mode
+entries auto-migrate.
+
 ### Do you support Claude subscription auth (Claude Code OAuth)?
 
 Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also supports **setup-token**. If you have a Claude subscription, we recommend **setup-token** on the gateway host for the most reliable long‑running setup (requires Claude Pro/Max + the `claude` CLI). OAuth reuse is supported, but avoid logging in separately via Clawdbot and Claude Code to prevent token conflicts. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).

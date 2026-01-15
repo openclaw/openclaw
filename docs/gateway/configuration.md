@@ -306,6 +306,10 @@ rotation order used for failover.
 }
 ```
 
+Note: `anthropic:claude-cli` should use `mode: "oauth"` even when the stored
+credential is a setup-token. Clawdbot auto-migrates older configs that used
+`mode: "token"`.
+
 ### `agents.list[].identity`
 
 Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
