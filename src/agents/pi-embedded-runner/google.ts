@@ -13,6 +13,7 @@ import {
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
+import { isAntigravityClaude } from "../pi-embedded-helpers/google.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
@@ -152,19 +153,23 @@ export function applyGoogleTurnOrderingFix(params: {
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
+  modelId?: string;
   sessionManager: SessionManager;
   sessionId: string;
 }): Promise<AgentMessage[]> {
   const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
     sanitizeToolCallIds: shouldSanitizeToolCallIds(params.modelApi),
     enforceToolCallLast: params.modelApi === "anthropic-messages",
+    preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaude(params.modelId),
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
+  const shouldDowngradeGemini =
+    isGoogleModelApi(params.modelApi) && !isAntigravityClaude(params.modelId);
   // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
-  const downgradedThinking = isGoogleModelApi(params.modelApi)
+  const downgradedThinking = shouldDowngradeGemini
     ? downgradeGeminiThinkingBlocks(repairedTools)
     : repairedTools;
-  const downgraded = isGoogleModelApi(params.modelApi)
+  const downgraded = shouldDowngradeGemini
     ? downgradeGeminiHistory(downgradedThinking)
     : downgradedThinking;
 
