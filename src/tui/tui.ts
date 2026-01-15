@@ -1,11 +1,4 @@
-import {
-  CombinedAutocompleteProvider,
-  type Component,
-  Container,
-  ProcessTerminal,
-  Text,
-  TUI,
-} from "@mariozechner/pi-tui";
+import { CombinedAutocompleteProvider, Container, ProcessTerminal, Text, TUI } from "@mariozechner/pi-tui";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -22,6 +15,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
+import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
   AgentSummary,
@@ -188,10 +182,8 @@ export async function runTui(opts: TuiOptions) {
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
   const editor = new CustomEditor(editorTheme);
-  const overlay = new Container();
   const root = new Container();
   root.addChild(header);
-  root.addChild(overlay);
   root.addChild(chatLog);
   root.addChild(status);
   root.addChild(footer);
@@ -300,16 +292,7 @@ export async function runTui(opts: TuiOptions) {
     );
   };
 
-  const closeOverlay = () => {
-    overlay.clear();
-    tui.setFocus(editor);
-  };
-
-  const openOverlay = (component: Component) => {
-    overlay.clear();
-    overlay.addChild(component);
-    tui.setFocus(component);
-  };
+  const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
 
   const initialSessionAgentId = (() => {
     if (!initialSessionInput) return null;
