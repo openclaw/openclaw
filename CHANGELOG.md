@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.14
+## 2026.1.14 (unreleased)
 
 ### Highlights
 - Web search: add `web_search`/`web_fetch` tools (Brave API) plus onboarding/config docs.
