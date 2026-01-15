@@ -70,6 +70,22 @@ Then target it:
   - Badge shows `ON` when attached.
 - Click again to detach.
 
+## Which tab does it control?
+
+- It does **not** automatically control “whatever tab you’re looking at”.
+- It controls **only the tab(s) you explicitly attached** by clicking the toolbar button.
+- To switch: open the other tab and click the extension icon there.
+
+## Badge + common errors
+
+- `ON`: attached; Clawdbot can drive that tab.
+- `…`: connecting to the local relay.
+- `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
+
+If you see `!`:
+- Make sure the Gateway is running locally (default setup), or run `clawdbot browser serve` on this machine (remote gateway setup).
+- Open the extension Options page; it shows whether the relay is reachable.
+
 ## Do I need `clawdbot browser serve`?
 
 ### Local Gateway (same machine as Chrome) — usually **no**
