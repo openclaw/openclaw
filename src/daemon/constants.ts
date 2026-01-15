@@ -4,9 +4,7 @@ export const GATEWAY_SYSTEMD_SERVICE_NAME = "clawdbot-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "Clawdbot Gateway";
 export const GATEWAY_SERVICE_MARKER = "clawdbot";
 export const GATEWAY_SERVICE_KIND = "gateway";
-export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS = [
-  "com.steipete.clawdbot.gateway",
-];
+export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS = ["com.steipete.clawdbot.gateway"];
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [];
 export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 

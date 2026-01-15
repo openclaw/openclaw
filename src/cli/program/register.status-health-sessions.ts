@@ -33,7 +33,8 @@ Examples:
     )
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.clawd.bot/cli/status")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.clawd.bot/cli/status")}\n`,
     )
     .action(async (opts) => {
       const verbose = Boolean(opts.verbose || opts.debug);
@@ -71,7 +72,8 @@ Examples:
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.clawd.bot/cli/health")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.clawd.bot/cli/health")}\n`,
     )
     .action(async (opts) => {
       const verbose = Boolean(opts.verbose || opts.debug);

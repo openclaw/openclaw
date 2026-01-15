@@ -69,7 +69,10 @@ export function getTelegramSequentialKey(ctx: {
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = (ctx as { me?: { username?: string } }).me?.username;
-  if (rawText && isControlCommandMessage(rawText, undefined, botUsername ? { botUsername } : undefined)) {
+  if (
+    rawText &&
+    isControlCommandMessage(rawText, undefined, botUsername ? { botUsername } : undefined)
+  ) {
     if (typeof chatId === "number") return `telegram:${chatId}:control`;
     return "telegram:control";
   }

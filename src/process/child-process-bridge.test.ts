@@ -76,40 +76,36 @@ describe("attachChildProcessBridge", () => {
     children.length = 0;
   });
 
-  it(
-    "forwards SIGTERM to the wrapped child",
-    async () => {
-      const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
+  it("forwards SIGTERM to the wrapped child", async () => {
+    const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
 
-      const child = spawn(process.execPath, [childPath], {
-        stdio: ["ignore", "pipe", "inherit"],
-        env: process.env,
+    const child = spawn(process.execPath, [childPath], {
+      stdio: ["ignore", "pipe", "inherit"],
+      env: process.env,
+    });
+    const { detach } = attachChildProcessBridge(child);
+    detachments.push(detach);
+    children.push(child);
+
+    if (!child.stdout) throw new Error("expected stdout");
+    const portLine = await waitForLine(child.stdout);
+    const port = Number(portLine);
+    expect(Number.isFinite(port)).toBe(true);
+
+    expect(await canConnect(port)).toBe(true);
+
+    // Simulate systemd sending SIGTERM to the parent process.
+    process.emit("SIGTERM");
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);
+      child.once("exit", () => {
+        clearTimeout(timeout);
+        resolve();
       });
-      const { detach } = attachChildProcessBridge(child);
-      detachments.push(detach);
-      children.push(child);
+    });
 
-      if (!child.stdout) throw new Error("expected stdout");
-      const portLine = await waitForLine(child.stdout);
-      const port = Number(portLine);
-      expect(Number.isFinite(port)).toBe(true);
-
-      expect(await canConnect(port)).toBe(true);
-
-      // Simulate systemd sending SIGTERM to the parent process.
-      process.emit("SIGTERM");
-
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);
-        child.once("exit", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-
-      await new Promise((r) => setTimeout(r, 250));
-      expect(await canConnect(port)).toBe(false);
-    },
-    20_000,
-  );
+    await new Promise((r) => setTimeout(r, 250));
+    expect(await canConnect(port)).toBe(false);
+  }, 20_000);
 });

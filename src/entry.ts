@@ -25,14 +25,10 @@ function ensureExperimentalWarningSuppressed(): boolean {
   process.env.CLAWDBOT_NODE_OPTIONS_READY = "1";
   process.env.NODE_OPTIONS = `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
 
-  const child = spawn(
-    process.execPath,
-    [...process.execArgv, ...process.argv.slice(1)],
-    {
-      stdio: "inherit",
-      env: process.env,
-    },
-  );
+  const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: process.env,
+  });
 
   attachChildProcessBridge(child);
 

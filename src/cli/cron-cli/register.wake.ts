@@ -18,19 +18,20 @@ export function registerWakeCommand(program: Command) {
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/wake", "docs.clawd.bot/cli/wake")}\n`,
-  ).action(async (opts: GatewayRpcOpts & { text?: string; mode?: string }) => {
-    try {
-      const result = await callGatewayFromCli(
-        "wake",
-        opts,
-        { mode: opts.mode, text: opts.text },
-        { expectFinal: false },
-      );
-      if (opts.json) defaultRuntime.log(JSON.stringify(result, null, 2));
-      else defaultRuntime.log("ok");
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
-  });
+    )
+    .action(async (opts: GatewayRpcOpts & { text?: string; mode?: string }) => {
+      try {
+        const result = await callGatewayFromCli(
+          "wake",
+          opts,
+          { mode: opts.mode, text: opts.text },
+          { expectFinal: false },
+        );
+        if (opts.json) defaultRuntime.log(JSON.stringify(result, null, 2));
+        else defaultRuntime.log("ok");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
 }

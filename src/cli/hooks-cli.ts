@@ -27,7 +27,8 @@ export function registerHooksCli(program: Command) {
     .description("Webhook helpers and hook-based integrations")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
     );
 
   const gmail = hooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");

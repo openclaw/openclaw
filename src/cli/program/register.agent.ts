@@ -68,7 +68,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .description("Manage isolated agents (workspaces + auth + routing)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.clawd.bot/cli/agents")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agents", "docs.clawd.bot/cli/agents")}\n`,
     );
 
   agents

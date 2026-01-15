@@ -21,7 +21,7 @@ type PackageJson = {
 };
 
 function runPackDry(): PackResult[] {
-  const raw = execSync("npm pack --dry-run --json", {
+  const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });

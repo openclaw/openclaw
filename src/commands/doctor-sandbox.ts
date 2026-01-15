@@ -163,7 +163,6 @@ async function handleMissingSandboxImage(
   }
 
   if (built) return;
-
 }
 
 export async function maybeRepairSandboxImages(

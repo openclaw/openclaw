@@ -28,7 +28,6 @@ function resolveTaskScriptPath(env: Record<string, string | undefined>): string 
   return path.join(home, `.clawdbot${suffix}`, "gateway.cmd");
 }
 
-
 function quoteCmdArg(value: string): string {
   if (!/[ \t"]/g.test(value)) return value;
   return `"${value.replace(/"/g, '\\"')}"`;

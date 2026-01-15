@@ -54,7 +54,10 @@ describe("browser extension install", () => {
 
       const program = new Command();
       const browser = program.command("browser").option("--json", false);
-      registerBrowserExtensionCommands(browser, (cmd) => cmd.parent?.opts?.() as { json?: boolean });
+      registerBrowserExtensionCommands(
+        browser,
+        (cmd) => cmd.parent?.opts?.() as { json?: boolean },
+      );
 
       await program.parseAsync(["browser", "extension", "path"], { from: "user" });
 

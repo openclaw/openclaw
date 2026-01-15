@@ -13,7 +13,8 @@ export function registerMaintenanceCommands(program: Command) {
     .description("Health checks + quick fixes for the gateway and channels")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.clawd.bot/cli/doctor")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.clawd.bot/cli/doctor")}\n`,
     )
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", false)
     .option("--yes", "Accept defaults without prompting", false)
@@ -64,7 +65,8 @@ export function registerMaintenanceCommands(program: Command) {
     .description("Reset local config/state (keeps the CLI installed)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.clawd.bot/cli/reset")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.clawd.bot/cli/reset")}\n`,
     )
     .option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)")
     .option("--yes", "Skip confirmation prompts", false)
