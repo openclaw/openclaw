@@ -73,6 +73,34 @@ export type ToolsConfig = {
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
+  web?: {
+    search?: {
+      /** Enable web search tool (default: true when API key is present). */
+      enabled?: boolean;
+      /** Search provider (currently "brave"). */
+      provider?: "brave";
+      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
+      apiKey?: string;
+      /** Default search results count (1-10). */
+      maxResults?: number;
+      /** Timeout in seconds for search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for search results. */
+      cacheTtlMinutes?: number;
+    };
+    fetch?: {
+      /** Enable web fetch tool (default: false). */
+      enabled?: boolean;
+      /** Max characters to return from fetched content. */
+      maxChars?: number;
+      /** Timeout in seconds for fetch requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for fetched content. */
+      cacheTtlMinutes?: number;
+      /** Override User-Agent header for fetch requests. */
+      userAgent?: string;
+    };
+  };
   audio?: {
     transcription?: {
       /** CLI args (template-enabled). */
