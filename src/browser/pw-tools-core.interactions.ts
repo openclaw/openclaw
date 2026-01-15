@@ -265,6 +265,7 @@ export async function scrollIntoViewViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
   const ref = requireRef(opts.ref);
@@ -340,6 +341,7 @@ export async function takeScreenshotViaPlaywright(opts: {
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
   if (opts.ref) {
     if (opts.fullPage) throw new Error("fullPage is not supported for element screenshots");
@@ -369,6 +371,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const type = opts.type ?? "png";
   const maxLabels =
     typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
@@ -495,6 +498,7 @@ export async function setInputFilesViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (!opts.paths.length) throw new Error("paths are required");
   const inputRef = typeof opts.inputRef === "string" ? opts.inputRef.trim() : "";
   const element = typeof opts.element === "string" ? opts.element.trim() : "";

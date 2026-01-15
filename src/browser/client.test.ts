@@ -118,6 +118,36 @@ describe("browser client", () => {
     expect(parsed.searchParams.get("mode")).toBe("efficient");
   });
 
+  it("adds refs=aria to snapshots when requested", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            format: "ai",
+            targetId: "t1",
+            url: "https://x",
+            snapshot: "ok",
+          }),
+        } as unknown as Response;
+      }),
+    );
+
+    await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      refs: "aria",
+    });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("refs")).toBe("aria");
+  });
+
   it("uses the expected endpoints + methods for common calls", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
 

@@ -169,6 +169,8 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
     const interactiveRaw = toBoolean(req.query.interactive);
     const compactRaw = toBoolean(req.query.compact);
     const depthRaw = toNumber(req.query.depth);
+    const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
+    const refsMode = refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
     const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
     const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
     const depth =
@@ -199,6 +201,7 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
               targetId: tab.targetId,
               selector: selector.trim() || undefined,
               frameSelector: frameSelector.trim() || undefined,
+              refsMode,
               options: {
                 interactive: interactive ?? undefined,
                 compact: compact ?? undefined,
@@ -219,6 +222,7 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
                     targetId: tab.targetId,
                     selector: selector.trim() || undefined,
                     frameSelector: frameSelector.trim() || undefined,
+                    refsMode,
                     options: {
                       interactive: interactive ?? undefined,
                       compact: compact ?? undefined,

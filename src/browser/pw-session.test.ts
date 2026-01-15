@@ -62,6 +62,16 @@ describe("pw-session refLocator", () => {
 
     expect(mocks.getByRole).toHaveBeenCalled();
   });
+
+  it("uses aria-ref locators when refs mode is aria", () => {
+    const { page, mocks } = fakePage();
+    const state = ensurePageState(page);
+    state.roleRefsMode = "aria";
+
+    refLocator(page, "e1");
+
+    expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
+  });
 });
 
 describe("pw-session role refs cache", () => {

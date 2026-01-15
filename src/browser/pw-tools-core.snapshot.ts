@@ -2,6 +2,7 @@ import type { Page } from "playwright-core";
 
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
+  buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   getRoleSnapshotStats,
   type RoleSnapshotOptions,
@@ -76,6 +77,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   targetId?: string;
   selector?: string;
   frameSelector?: string;
+  refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
 }): Promise<{
   snapshot: string;
@@ -87,6 +89,37 @@ export async function snapshotRoleViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   const state = ensurePageState(page);
+
+  if (opts.refsMode === "aria") {
+    if (opts.selector?.trim() || opts.frameSelector?.trim()) {
+      throw new Error("refs=aria does not support selector/frame snapshots yet.");
+    }
+    const maybe = page as unknown as WithSnapshotForAI;
+    if (!maybe._snapshotForAI) {
+      throw new Error("refs=aria requires Playwright _snapshotForAI support.");
+    }
+    const result = await maybe._snapshotForAI({
+      timeout: 5000,
+      track: "response",
+    });
+    const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);
+    state.roleRefs = built.refs;
+    state.roleRefsFrameSelector = undefined;
+    state.roleRefsMode = "aria";
+    if (opts.targetId) {
+      rememberRoleRefsForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        refs: built.refs,
+        mode: "aria",
+      });
+    }
+    return {
+      snapshot: built.snapshot,
+      refs: built.refs,
+      stats: getRoleSnapshotStats(built.snapshot, built.refs),
+    };
+  }
 
   const frameSelector = opts.frameSelector?.trim() || "";
   const selector = opts.selector?.trim() || "";
@@ -102,12 +135,14 @@ export async function snapshotRoleViaPlaywright(opts: {
   const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
   state.roleRefs = built.refs;
   state.roleRefsFrameSelector = frameSelector || undefined;
+  state.roleRefsMode = "role";
   if (opts.targetId) {
     rememberRoleRefsForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
       refs: built.refs,
       frameSelector: frameSelector || undefined,
+      mode: "role",
     });
   }
   return {

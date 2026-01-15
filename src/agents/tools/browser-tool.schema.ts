@@ -39,6 +39,7 @@ const BROWSER_TARGETS = ["sandbox", "host", "custom"] as const;
 
 const BROWSER_SNAPSHOT_FORMATS = ["aria", "ai"] as const;
 const BROWSER_SNAPSHOT_MODES = ["efficient"] as const;
+const BROWSER_SNAPSHOT_REFS = ["role", "aria"] as const;
 
 const BROWSER_IMAGE_TYPES = ["png", "jpeg"] as const;
 
@@ -91,6 +92,7 @@ export const BrowserToolSchema = Type.Object({
   maxChars: Type.Optional(Type.Number()),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
   format: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
+  refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
   interactive: Type.Optional(Type.Boolean()),
   compact: Type.Optional(Type.Boolean()),
   depth: Type.Optional(Type.Number()),

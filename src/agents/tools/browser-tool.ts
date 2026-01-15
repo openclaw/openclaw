@@ -128,6 +128,7 @@ export function createBrowserTool(opts?: {
       'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="clawd" for the isolated clawd-managed browser.',
       "Chrome extension relay needs an attached tab: user must click the Clawdbot Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
+      'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|custom). Default: ${targetDefault}.`,
       "controlUrl implies target=custom (remote control server).",
@@ -190,6 +191,7 @@ export function createBrowserTool(opts?: {
               : "ai";
           const mode = params.mode === "efficient" ? "efficient" : undefined;
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
+          const refs = params.refs === "aria" || params.refs === "role" ? params.refs : undefined;
           const hasMaxChars = Object.hasOwn(params, "maxChars");
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const limit =
@@ -224,6 +226,7 @@ export function createBrowserTool(opts?: {
             targetId,
             limit,
             ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+            refs,
             interactive,
             compact,
             depth,

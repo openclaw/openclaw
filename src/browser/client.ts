@@ -270,6 +270,7 @@ export async function browserSnapshot(
     targetId?: string;
     limit?: number;
     maxChars?: number;
+    refs?: "role" | "aria";
     interactive?: boolean;
     compact?: boolean;
     depth?: number;
@@ -287,6 +288,7 @@ export async function browserSnapshot(
   if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
     q.set("maxChars", String(opts.maxChars));
   }
+  if (opts.refs === "aria" || opts.refs === "role") q.set("refs", opts.refs);
   if (typeof opts.interactive === "boolean") q.set("interactive", String(opts.interactive));
   if (typeof opts.compact === "boolean") q.set("compact", String(opts.compact));
   if (typeof opts.depth === "number" && Number.isFinite(opts.depth))

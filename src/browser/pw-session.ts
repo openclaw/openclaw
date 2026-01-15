@@ -64,9 +64,11 @@ type PageState = {
   armIdDownload: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
-   * These refs are NOT Playwright's `aria-ref` values.
+   * Mode "role" refs are generated from ariaSnapshot and resolved via getByRole.
+   * Mode "aria" refs are Playwright aria-ref ids and resolved via `aria-ref=...`.
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
 };
 
@@ -74,6 +76,7 @@ type RoleRefs = NonNullable<PageState["roleRefs"]>;
 type RoleRefsCacheEntry = {
   refs: RoleRefs;
   frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
 };
 
 type ContextState = {
@@ -110,12 +113,14 @@ export function rememberRoleRefsForTarget(opts: {
   targetId: string;
   refs: RoleRefs;
   frameSelector?: string;
+  mode?: NonNullable<PageState["roleRefsMode"]>;
 }): void {
   const targetId = opts.targetId.trim();
   if (!targetId) return;
   roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
     refs: opts.refs,
     ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
+    ...(opts.mode ? { mode: opts.mode } : {}),
   });
   while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
     const first = roleRefsByTarget.keys().next();
@@ -137,6 +142,7 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) return;
   state.roleRefs = cached.refs;
   state.roleRefsFrameSelector = cached.frameSelector;
+  state.roleRefsMode = cached.mode;
 }
 
 export function ensurePageState(page: Page): PageState {
@@ -339,6 +345,12 @@ export function refLocator(page: Page, ref: string) {
 
   if (/^e\d+$/.test(normalized)) {
     const state = pageStates.get(page);
+    if (state?.roleRefsMode === "aria") {
+      const scope = state.roleRefsFrameSelector
+        ? page.frameLocator(state.roleRefsFrameSelector)
+        : page;
+      return scope.locator(`aria-ref=${normalized}`);
+    }
     const info = state?.roleRefs?.[normalized];
     if (!info) {
       throw new Error(
