@@ -10,6 +10,7 @@ const BASE_METHODS = [
   "config.get",
   "config.set",
   "config.apply",
+  "config.patch",
   "config.schema",
   "wizard.start",
   "wizard.next",

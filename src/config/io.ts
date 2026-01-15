@@ -51,6 +51,10 @@ const SHELL_ENV_EXPECTED_KEYS = [
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
+function hashConfigRaw(raw: string | null): string {
+  return crypto.createHash("sha256").update(raw ?? "").digest("hex");
+}
+
 export type ConfigIoDeps = {
   fs?: typeof fs;
   json5?: typeof JSON5;
@@ -263,6 +267,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
+      const hash = hashConfigRaw(null);
       const config = applyTalkApiKey(
         applyModelDefaults(
           applyContextPruningDefaults(applySessionDefaults(applyMessageDefaults({}))),
@@ -276,6 +281,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parsed: {},
         valid: true,
         config,
+        hash,
         issues: [],
         legacyIssues,
       };
@@ -283,6 +289,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     try {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
+      const hash = hashConfigRaw(raw);
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return {
@@ -292,6 +299,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: {},
           valid: false,
           config: {},
+          hash,
           issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
           legacyIssues: [],
         };
@@ -316,6 +324,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: parsedRes.parsed,
           valid: false,
           config: {},
+          hash,
           issues: [{ path: "", message }],
           legacyIssues: [],
         };
@@ -338,6 +347,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           parsed: parsedRes.parsed,
           valid: false,
           config: resolvedConfig,
+          hash,
           issues: validated.issues,
           legacyIssues,
         };
@@ -363,6 +373,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             ),
           ),
         ),
+        hash,
         issues: [],
         legacyIssues,
       };
@@ -374,6 +385,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parsed: {},
         valid: false,
         config: {},
+        hash: hashConfigRaw(null),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
         legacyIssues: [],
       };

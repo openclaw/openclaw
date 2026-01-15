@@ -22,6 +22,7 @@
 - Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
 - Telegram: aggregate split inbound messages into one prompt (reduces “one reply per fragment”).
 - Auto-reply: treat trailing `NO_REPLY` tokens as silent replies.
+- Config: prevent partial config writes from clobbering unrelated settings (base hash guard + merge patch for connection saves).
 
 ## 2026.1.14
 
