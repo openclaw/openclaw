@@ -4,8 +4,14 @@ export type CommandArgsFormatter = (values: CommandArgValues) => string | undefi
 
 function normalizeArgValue(value: unknown): string | undefined {
   if (value == null) return undefined;
-  const text = typeof value === "string" ? value.trim() : String(value).trim();
-  return text ? text : undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
 }
 
 const formatConfigArgs: CommandArgsFormatter = (values) => {
