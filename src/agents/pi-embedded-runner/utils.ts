@@ -17,45 +17,6 @@ export function resolveExecToolDefaults(config?: ClawdbotConfig): ExecToolDefaul
   return { ...tools.bash, ...tools.exec };
 }
 
-export function resolveUserTimezone(configured?: string): string {
-  const trimmed = configured?.trim();
-  if (trimmed) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-      return trimmed;
-    } catch {
-      // ignore invalid timezone
-    }
-  }
-  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return host?.trim() || "UTC";
-}
-
-export function formatUserTime(date: Date, timeZone: string): string | undefined {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      weekday: "long",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(date);
-    const map: Record<string, string> = {};
-    for (const part of parts) {
-      if (part.type !== "literal") map[part.type] = part.value;
-    }
-    if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute) {
-      return undefined;
-    }
-    return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
-  } catch {
-    return undefined;
-  }
-}
-
 export function describeUnknownError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;

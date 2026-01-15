@@ -53,12 +53,11 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "./system-prompt.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import {
   describeUnknownError,
-  formatUserTime,
   mapThinkingLevel,
   resolveExecToolDefaults,
-  resolveUserTimezone,
 } from "./utils.js";
 
 export async function compactEmbeddedPiSession(params: {
@@ -228,7 +227,10 @@ export async function compactEmbeddedPiSession(params: {
         const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
         const reasoningTagHint = isReasoningTagProvider(provider);
         const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-        const userTime = formatUserTime(new Date(), userTimezone);
+        const userTimeFormat = resolveUserTimeFormat(
+          params.config?.agents?.defaults?.timeFormat,
+        );
+        const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
         const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,
@@ -251,6 +253,7 @@ export async function compactEmbeddedPiSession(params: {
           modelAliasLines: buildModelAliasLines(params.config),
           userTimezone,
           userTime,
+          userTimeFormat,
           contextFiles,
         });
         const systemPrompt = createSystemPromptOverride(appendPrompt);

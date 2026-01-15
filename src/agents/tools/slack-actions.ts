@@ -17,6 +17,7 @@ import {
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
+import { withNormalizedTimestamp } from "../date-time.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
 
 const messagingActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
@@ -197,7 +198,13 @@ export async function handleSlackAction(
           before: before ?? undefined,
           after: after ?? undefined,
         });
-        return jsonResult({ ok: true, ...result });
+        const messages = result.messages.map((message) =>
+          withNormalizedTimestamp(
+            message as Record<string, unknown>,
+            (message as { ts?: unknown }).ts,
+          ),
+        );
+        return jsonResult({ ok: true, messages, hasMore: result.hasMore });
       }
       default:
         break;
@@ -234,7 +241,16 @@ export async function handleSlackAction(
     const pins = accountOpts
       ? await listSlackPins(channelId, accountOpts)
       : await listSlackPins(channelId);
-    return jsonResult({ ok: true, pins });
+    const normalizedPins = pins.map((pin) => {
+      const message = pin.message
+        ? withNormalizedTimestamp(
+            pin.message as Record<string, unknown>,
+            (pin.message as { ts?: unknown }).ts,
+          )
+        : pin.message;
+      return message ? { ...pin, message } : pin;
+    });
+    return jsonResult({ ok: true, pins: normalizedPins });
   }
 
   if (action === "memberInfo") {

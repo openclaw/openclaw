@@ -1,4 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import { buildToolSummaryMap } from "../tool-summaries.js";
@@ -33,6 +34,7 @@ export function buildEmbeddedSystemPrompt(params: {
   modelAliasLines: string[];
   userTimezone: string;
   userTime?: string;
+  userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
 }): string {
   return buildAgentSystemPrompt({
@@ -52,6 +54,7 @@ export function buildEmbeddedSystemPrompt(params: {
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
+    userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
   });
 }

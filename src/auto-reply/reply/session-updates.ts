@@ -25,16 +25,17 @@ export async function prependSystemEvents(params: {
     return trimmed;
   };
 
-  const formatSystemEventTimestamp = (ts: number) =>
-    new Date(ts).toLocaleString("en-US", {
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
+  const formatSystemEventTimestamp = (ts: number) => {
+    const date = new Date(ts);
+    if (Number.isNaN(date.getTime())) return "unknown-time";
+    const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
+    const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(date.getUTCDate()).padStart(2, "0");
+    const hh = String(date.getUTCHours()).padStart(2, "0");
+    const min = String(date.getUTCMinutes()).padStart(2, "0");
+    const sec = String(date.getUTCSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}Z`;
+  };
 
   const systemLines: string[] = [];
   const queued = drainSystemEventEntries(params.sessionKey);

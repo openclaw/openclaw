@@ -325,4 +325,38 @@ describe("handleSlackAction", () => {
       threadTs: "1111111111.111111",
     });
   });
+
+  it("adds normalized timestamps to readMessages payloads", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
+    readSlackMessages.mockResolvedValueOnce({
+      messages: [{ ts: "1735689600.456", text: "hi" }],
+      hasMore: false,
+    });
+
+    const result = await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
+    const payload = result.details as { messages: Array<{ timestampMs?: number; timestampUtc?: string }> };
+
+    const expectedMs = Math.round(1735689600.456 * 1000);
+    expect(payload.messages[0].timestampMs).toBe(expectedMs);
+    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to pin payloads", async () => {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ClawdbotConfig;
+    listSlackPins.mockResolvedValueOnce([
+      {
+        type: "message",
+        message: { ts: "1735689600.789", text: "pinned" },
+      },
+    ]);
+
+    const result = await handleSlackAction({ action: "listPins", channelId: "C1" }, cfg);
+    const payload = result.details as {
+      pins: Array<{ message?: { timestampMs?: number; timestampUtc?: string } }>;
+    };
+
+    const expectedMs = Math.round(1735689600.789 * 1000);
+    expect(payload.pins[0].message?.timestampMs).toBe(expectedMs);
+    expect(payload.pins[0].message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
 });

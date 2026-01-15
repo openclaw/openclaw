@@ -58,12 +58,8 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
-import {
-  formatUserTime,
-  mapThinkingLevel,
-  resolveExecToolDefaults,
-  resolveUserTimezone,
-} from "../utils.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
+import { mapThinkingLevel, resolveExecToolDefaults } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -186,7 +182,8 @@ export async function runEmbeddedAttempt(
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTime = formatUserTime(new Date(), userTimezone);
+    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+    const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
@@ -211,6 +208,7 @@ export async function runEmbeddedAttempt(
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
       userTime,
+      userTimeFormat,
       contextFiles,
     });
     const systemPromptReport = buildSystemPromptReport({

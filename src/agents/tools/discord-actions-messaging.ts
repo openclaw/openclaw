@@ -27,32 +27,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
-
-function formatDiscordTimestamp(ts?: string | null): string | undefined {
-  if (!ts) return undefined;
-  const date = new Date(ts);
-  if (Number.isNaN(date.getTime())) return undefined;
-
-  const yyyy = String(date.getFullYear()).padStart(4, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-
-  // getTimezoneOffset() is minutes *behind* UTC. Flip sign to get ISO offset.
-  const offsetMinutes = -date.getTimezoneOffset();
-  const sign = offsetMinutes >= 0 ? "+" : "-";
-  const absOffsetMinutes = Math.abs(offsetMinutes);
-  const offsetH = String(Math.floor(absOffsetMinutes / 60)).padStart(2, "0");
-  const offsetM = String(absOffsetMinutes % 60).padStart(2, "0");
-
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const tzSuffix = tz ? `{${tz}}` : "";
-
-  // Compact ISO-like *local* timestamp with minutes precision.
-  // Example: 2025-01-02T03:04-08:00{America/Los_Angeles}
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}${sign}${offsetH}:${offsetM}${tzSuffix}`;
-}
+import { withNormalizedTimestamp } from "../date-time.js";
 
 function parseDiscordMessageLink(link: string) {
   const normalized = link.trim();
@@ -76,6 +51,13 @@ export async function handleDiscordMessagingAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
+  const normalizeMessage = (message: unknown) => {
+    if (!message || typeof message !== "object") return message;
+    return withNormalizedTimestamp(
+      message as Record<string, unknown>,
+      (message as { timestamp?: unknown }).timestamp,
+    );
+  };
   switch (action) {
     case "react": {
       if (!isActionEnabled("reactions")) {
@@ -189,7 +171,13 @@ export async function handleDiscordMessagingAction(
         );
       }
       const message = await fetchMessageDiscord(channelId, messageId);
-      return jsonResult({ ok: true, message, guildId, channelId, messageId });
+      return jsonResult({
+        ok: true,
+        message: normalizeMessage(message),
+        guildId,
+        channelId,
+        messageId,
+      });
     }
     case "readMessages": {
       if (!isActionEnabled("messages")) {
@@ -207,11 +195,10 @@ export async function handleDiscordMessagingAction(
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
       });
-      const formattedMessages = messages.map((message) => ({
-        ...message,
-        timestamp: formatDiscordTimestamp(message.timestamp) ?? message.timestamp,
-      }));
-      return jsonResult({ ok: true, messages: formattedMessages });
+      return jsonResult({
+        ok: true,
+        messages: messages.map((message) => normalizeMessage(message)),
+      });
     }
     case "sendMessage": {
       if (!isActionEnabled("messages")) {
@@ -357,7 +344,7 @@ export async function handleDiscordMessagingAction(
         required: true,
       });
       const pins = await listPinsDiscord(channelId);
-      return jsonResult({ ok: true, pins });
+      return jsonResult({ ok: true, pins: pins.map((pin) => normalizeMessage(pin)) });
     }
     case "searchMessages": {
       if (!isActionEnabled("search")) {
@@ -386,7 +373,23 @@ export async function handleDiscordMessagingAction(
         authorIds: authorIdList.length ? authorIdList : undefined,
         limit,
       });
-      return jsonResult({ ok: true, results });
+      if (!results || typeof results !== "object") {
+        return jsonResult({ ok: true, results });
+      }
+      const resultsRecord = results as Record<string, unknown>;
+      const messages = resultsRecord.messages;
+      const normalizedMessages = Array.isArray(messages)
+        ? messages.map((group) =>
+            Array.isArray(group) ? group.map((msg) => normalizeMessage(msg)) : group,
+          )
+        : messages;
+      return jsonResult({
+        ok: true,
+        results: {
+          ...resultsRecord,
+          messages: normalizedMessages,
+        },
+      });
     }
     default:
       throw new Error(`Unknown action: ${action}`);

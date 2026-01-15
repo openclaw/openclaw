@@ -17,6 +17,7 @@ const editChannelDiscord = vi.fn(async () => ({
   name: "edited",
 }));
 const editMessageDiscord = vi.fn(async () => ({}));
+const fetchMessageDiscord = vi.fn(async () => ({}));
 const fetchChannelPermissionsDiscord = vi.fn(async () => ({}));
 const fetchReactionsDiscord = vi.fn(async () => ({}));
 const listPinsDiscord = vi.fn(async () => ({}));
@@ -42,6 +43,7 @@ vi.mock("../../discord/send.js", () => ({
   deleteMessageDiscord: (...args: unknown[]) => deleteMessageDiscord(...args),
   editChannelDiscord: (...args: unknown[]) => editChannelDiscord(...args),
   editMessageDiscord: (...args: unknown[]) => editMessageDiscord(...args),
+  fetchMessageDiscord: (...args: unknown[]) => fetchMessageDiscord(...args),
   fetchChannelPermissionsDiscord: (...args: unknown[]) => fetchChannelPermissionsDiscord(...args),
   fetchReactionsDiscord: (...args: unknown[]) => fetchReactionsDiscord(...args),
   listPinsDiscord: (...args: unknown[]) => listPinsDiscord(...args),
@@ -133,6 +135,80 @@ describe("handleDiscordMessagingAction", () => {
         disabledActions,
       ),
     ).rejects.toThrow(/Discord reactions are disabled/);
+  });
+
+  it("adds normalized timestamps to readMessages payloads", async () => {
+    readMessagesDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+    ]);
+
+    const result = await handleDiscordMessagingAction(
+      "readMessages",
+      { channelId: "C1" },
+      enableAllActions,
+    );
+    const payload = result.details as { messages: Array<{ timestampMs?: number; timestampUtc?: string }> };
+
+    const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
+    expect(payload.messages[0].timestampMs).toBe(expectedMs);
+    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to fetchMessage payloads", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({
+      id: "1",
+      timestamp: "2026-01-15T11:00:00.000Z",
+    });
+
+    const result = await handleDiscordMessagingAction(
+      "fetchMessage",
+      { guildId: "G1", channelId: "C1", messageId: "M1" },
+      enableAllActions,
+    );
+    const payload = result.details as { message?: { timestampMs?: number; timestampUtc?: string } };
+
+    const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
+    expect(payload.message?.timestampMs).toBe(expectedMs);
+    expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to listPins payloads", async () => {
+    listPinsDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T12:00:00.000Z" },
+    ]);
+
+    const result = await handleDiscordMessagingAction(
+      "listPins",
+      { channelId: "C1" },
+      enableAllActions,
+    );
+    const payload = result.details as { pins: Array<{ timestampMs?: number; timestampUtc?: string }> };
+
+    const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
+    expect(payload.pins[0].timestampMs).toBe(expectedMs);
+    expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+  });
+
+  it("adds normalized timestamps to searchMessages payloads", async () => {
+    searchMessagesDiscord.mockResolvedValueOnce({
+      total_results: 1,
+      messages: [[{ id: "1", timestamp: "2026-01-15T13:00:00.000Z" }]],
+    });
+
+    const result = await handleDiscordMessagingAction(
+      "searchMessages",
+      { guildId: "G1", content: "hi" },
+      enableAllActions,
+    );
+    const payload = result.details as {
+      results?: { messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>> };
+    };
+
+    const expectedMs = Date.parse("2026-01-15T13:00:00.000Z");
+    expect(payload.results?.messages?.[0]?.[0]?.timestampMs).toBe(expectedMs);
+    expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
+      new Date(expectedMs).toISOString(),
+    );
   });
 });
 

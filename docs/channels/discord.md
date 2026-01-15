@@ -363,6 +363,7 @@ The agent can call `discord` with actions like:
 - `react` / `reactions` (add or list reactions)
 - `sticker`, `poll`, `permissions`
 - `readMessages`, `sendMessage`, `editMessage`, `deleteMessage`
+- Read/search/pin tool payloads include normalized `timestampMs` (UTC epoch ms) and `timestampUtc` alongside raw Discord `timestamp`.
 - `threadCreate`, `threadList`, `threadReply`
 - `pinMessage`, `unpinMessage`, `listPins`
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`

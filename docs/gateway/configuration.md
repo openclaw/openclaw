@@ -1211,6 +1211,17 @@ message envelopes). If unset, Clawdbot uses the host timezone at runtime.
 }
 ```
 
+### `agents.defaults.timeFormat`
+
+Controls the **time format** shown in the system prompt’s Current Date & Time section.
+Default: `auto` (OS preference).
+
+```json5
+{
+  agents: { defaults: { timeFormat: "auto" } } // auto | 12 | 24
+}
+```
+
 ### `messages`
 
 Controls inbound/outbound prefixes and optional ack reactions.

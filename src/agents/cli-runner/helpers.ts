@@ -9,6 +9,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { runExec } from "../../process/exec.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 
@@ -69,44 +70,6 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
-function resolveUserTimezone(configured?: string): string {
-  const trimmed = configured?.trim();
-  if (trimmed) {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
-      return trimmed;
-    } catch {
-      // ignore invalid timezone
-    }
-  }
-  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return host?.trim() || "UTC";
-}
-
-function formatUserTime(date: Date, timeZone: string): string | undefined {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      weekday: "long",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(date);
-    const map: Record<string, string> = {};
-    for (const part of parts) {
-      if (part.type !== "literal") map[part.type] = part.value;
-    }
-    if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute)
-      return undefined;
-    return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
-  } catch {
-    return undefined;
-  }
-}
-
 function buildModelAliasLines(cfg?: ClawdbotConfig) {
   const models = cfg?.agents?.defaults?.models ?? {};
   const entries: Array<{ alias: string; model: string }> = [];
@@ -134,7 +97,8 @@ export function buildSystemPrompt(params: {
   modelDisplay: string;
 }) {
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTime = formatUserTime(new Date(), userTimezone);
+  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -153,6 +117,7 @@ export function buildSystemPrompt(params: {
     modelAliasLines: buildModelAliasLines(params.config),
     userTimezone,
     userTime,
+    userTimeFormat,
     contextFiles: params.contextFiles,
   });
 }

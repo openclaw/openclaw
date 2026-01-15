@@ -327,4 +327,5 @@ Slack tool actions can be gated with `channels.slack.actions.*`:
 - Bot-authored messages are ignored by default; enable via `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
 - Warning: If you allow replies to other bots (`channels.slack.allowBots=true` or `channels.slack.channels.<id>.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.slack.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 - For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).
+- Read/pin tool payloads include normalized `timestampMs` (UTC epoch ms) and `timestampUtc` alongside raw Slack `ts`.
 - Attachments are downloaded to the media store when permitted and under the size limit.
