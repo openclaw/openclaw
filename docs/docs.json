@@ -760,6 +760,7 @@
         "group": "CLI",
         "pages": [
           "cli/index",
+          "cli/browser",
           "cli/message",
           "cli/gateway",
           "cli/update",
