@@ -73,6 +73,11 @@ describe("createClawdbotCodingTools", () => {
     expect(schema.type).toBe("object");
     expect(schema.anyOf).toBeUndefined();
   });
+  it("mentions Chrome extension relay in browser tool description", () => {
+    const browser = createBrowserTool();
+    expect(browser.description).toMatch(/Chrome extension/i);
+    expect(browser.description).toMatch(/profile="chrome"/i);
+  });
   it("keeps browser tool schema properties after normalization", () => {
     const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
