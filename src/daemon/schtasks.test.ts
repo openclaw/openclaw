@@ -58,6 +58,15 @@ describe("resolveTaskScriptPath", () => {
     );
   });
 
+  it("prefers CLAWDBOT_STATE_DIR over profile-derived defaults", () => {
+    const env = {
+      USERPROFILE: "C:\\Users\\test",
+      CLAWDBOT_PROFILE: "rescue",
+      CLAWDBOT_STATE_DIR: "C:\\State\\clawdbot",
+    };
+    expect(resolveTaskScriptPath(env)).toBe(path.join("C:\\State\\clawdbot", "gateway.cmd"));
+  });
+
   it("handles case-insensitive 'Default' profile", () => {
     const env = { USERPROFILE: "C:\\Users\\test", CLAWDBOT_PROFILE: "Default" };
     expect(resolveTaskScriptPath(env)).toBe(

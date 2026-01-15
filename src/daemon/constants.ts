@@ -8,34 +8,35 @@ export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS = ["com.steipete.clawdbot.gatewa
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [];
 export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 
-export function resolveGatewayLaunchAgentLabel(profile?: string): string {
-  const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return GATEWAY_LAUNCH_AGENT_LABEL;
-  }
-  return `com.clawdbot.${trimmed}`;
-}
-
-function normalizeGatewayProfile(profile?: string): string | null {
+export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
   if (!trimmed || trimmed.toLowerCase() === "default") return null;
   return trimmed;
 }
 
-export function resolveGatewaySystemdServiceName(profile?: string): string {
-  const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return GATEWAY_SYSTEMD_SERVICE_NAME;
+export function resolveGatewayProfileSuffix(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  return normalized ? `-${normalized}` : "";
+}
+
+export function resolveGatewayLaunchAgentLabel(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
+    return GATEWAY_LAUNCH_AGENT_LABEL;
   }
-  return `clawdbot-gateway-${trimmed}`;
+  return `com.clawdbot.${normalized}`;
+}
+
+export function resolveGatewaySystemdServiceName(profile?: string): string {
+  const suffix = resolveGatewayProfileSuffix(profile);
+  if (!suffix) return GATEWAY_SYSTEMD_SERVICE_NAME;
+  return `clawdbot-gateway${suffix}`;
 }
 
 export function resolveGatewayWindowsTaskName(profile?: string): string {
-  const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
-    return GATEWAY_WINDOWS_TASK_NAME;
-  }
-  return `Clawdbot Gateway (${trimmed})`;
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) return GATEWAY_WINDOWS_TASK_NAME;
+  return `Clawdbot Gateway (${normalized})`;
 }
 
 export function formatGatewayServiceDescription(params?: {

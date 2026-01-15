@@ -5,6 +5,7 @@ import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   GATEWAY_WINDOWS_TASK_NAME,
   resolveGatewayLaunchAgentLabel,
+  resolveGatewayProfileSuffix,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
@@ -150,6 +151,25 @@ describe("resolveGatewayWindowsTaskName", () => {
   it("returns default task name for whitespace-only profile", () => {
     const result = resolveGatewayWindowsTaskName("   ");
     expect(result).toBe(GATEWAY_WINDOWS_TASK_NAME);
+  });
+});
+
+describe("resolveGatewayProfileSuffix", () => {
+  it("returns empty string when no profile is set", () => {
+    expect(resolveGatewayProfileSuffix()).toBe("");
+  });
+
+  it("returns empty string for default profiles", () => {
+    expect(resolveGatewayProfileSuffix("default")).toBe("");
+    expect(resolveGatewayProfileSuffix(" Default ")).toBe("");
+  });
+
+  it("returns a hyphenated suffix for custom profiles", () => {
+    expect(resolveGatewayProfileSuffix("dev")).toBe("-dev");
+  });
+
+  it("trims whitespace from profiles", () => {
+    expect(resolveGatewayProfileSuffix("  staging  ")).toBe("-staging");
   });
 });
 
