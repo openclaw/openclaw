@@ -182,6 +182,8 @@ export function createBrowserTool(opts?: {
             params.format === "ai" || params.format === "aria"
               ? (params.format as "ai" | "aria")
               : "ai";
+          const mode = params.mode === "efficient" ? "efficient" : undefined;
+          const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const hasMaxChars = Object.hasOwn(params, "maxChars");
           const targetId = typeof params.targetId === "string" ? params.targetId.trim() : undefined;
           const limit =
@@ -195,7 +197,13 @@ export function createBrowserTool(opts?: {
               ? Math.floor(params.maxChars)
               : undefined;
           const resolvedMaxChars =
-            format === "ai" ? (hasMaxChars ? maxChars : DEFAULT_AI_SNAPSHOT_MAX_CHARS) : undefined;
+            format === "ai"
+              ? hasMaxChars
+                ? maxChars
+                : mode === "efficient"
+                  ? undefined
+                  : DEFAULT_AI_SNAPSHOT_MAX_CHARS
+              : undefined;
           const interactive =
             typeof params.interactive === "boolean" ? params.interactive : undefined;
           const compact = typeof params.compact === "boolean" ? params.compact : undefined;
@@ -215,9 +223,19 @@ export function createBrowserTool(opts?: {
             depth,
             selector,
             frame,
+            labels,
+            mode,
             profile,
           });
           if (snapshot.format === "ai") {
+            if (labels && snapshot.imagePath) {
+              return await imageResultFromFile({
+                label: "browser:snapshot",
+                path: snapshot.imagePath,
+                extraText: snapshot.snapshot,
+                details: snapshot,
+              });
+            }
             return {
               content: [{ type: "text", text: snapshot.snapshot }],
               details: snapshot,
