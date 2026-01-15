@@ -296,7 +296,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
     }
 
-    const imessageTo = chatTarget || `imessage:${sender}`;
+    const imessageTo = (isGroup ? chatTarget : undefined) || `imessage:${sender}`;
     const ctxPayload = {
       Body: combinedBody,
       RawBody: bodyText,
@@ -329,7 +329,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const storePath = resolveStorePath(sessionCfg?.store, {
         agentId: route.agentId,
       });
-      const to = chatTarget || sender;
+      const to = (isGroup ? chatTarget : undefined) || sender;
       if (to) {
         await updateLastRoute({
           storePath,

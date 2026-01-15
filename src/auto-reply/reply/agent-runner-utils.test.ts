@@ -53,4 +53,38 @@ describe("buildThreadingToolContext", () => {
 
     expect(result.currentChannelId).toBe("chat:99");
   });
+
+  it("uses the sender handle for iMessage direct chats", () => {
+    const sessionCtx = {
+      Provider: "imessage",
+      ChatType: "direct",
+      From: "imessage:+15550001",
+      To: "chat_id:12",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("imessage:+15550001");
+  });
+
+  it("uses chat_id for iMessage groups", () => {
+    const sessionCtx = {
+      Provider: "imessage",
+      ChatType: "group",
+      From: "group:7",
+      To: "chat_id:7",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("chat_id:7");
+  });
 });
