@@ -28,6 +28,8 @@ type TelegramSendOpts = {
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
+  textMode?: "markdown" | "html";
+  plainText?: string;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   asVoice?: boolean;
   /** Message ID to reply to (for threading) */
@@ -308,7 +310,8 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
-  const htmlText = markdownToTelegramHtml(text);
+  const textMode = opts.textMode ?? "markdown";
+  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const textParams = hasThreadParams
     ? {
         parse_mode: "HTML" as const,
@@ -335,11 +338,12 @@ export async function sendMessageTelegram(
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
               }
             : undefined;
+        const fallbackText = opts.plainText ?? text;
         return await request(
           () =>
             plainParams
-              ? api.sendMessage(chatId, text, plainParams)
-              : api.sendMessage(chatId, text),
+              ? api.sendMessage(chatId, fallbackText, plainParams)
+              : api.sendMessage(chatId, fallbackText),
           "message-plain",
         ).catch((err2) => {
           throw wrapChatNotFound(err2);
