@@ -136,6 +136,7 @@ export function registerSlackMonitorSlashCommands(params: {
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: ctx.channelsConfig,
+          defaultRequireMention: ctx.defaultRequireMention,
         });
         if (ctx.useAccessGroups) {
           const channelAllowlistConfigured =

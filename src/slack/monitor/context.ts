@@ -34,6 +34,7 @@ export type SlackMonitorContext = {
   allowFrom: string[];
   groupDmEnabled: boolean;
   groupDmChannels: string[];
+  defaultRequireMention: boolean;
   channelsConfig?: Record<
     string,
     {
@@ -103,6 +104,7 @@ export function createSlackMonitorContext(params: {
   allowFrom: Array<string | number> | undefined;
   groupDmEnabled: boolean;
   groupDmChannels: Array<string | number> | undefined;
+  defaultRequireMention?: boolean;
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
   useAccessGroups: boolean;
@@ -132,6 +134,7 @@ export function createSlackMonitorContext(params: {
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
+  const defaultRequireMention = params.defaultRequireMention ?? true;
 
   const markMessageSeen = (channelId: string | undefined, ts?: string) => {
     if (!channelId || !ts) return false;
@@ -274,6 +277,7 @@ export function createSlackMonitorContext(params: {
         channelId: p.channelId,
         channelName: p.channelName,
         channels: params.channelsConfig,
+        defaultRequireMention,
       });
       const channelAllowed = channelConfig?.allowed !== false;
       const channelAllowlistConfigured =
@@ -330,6 +334,7 @@ export function createSlackMonitorContext(params: {
     allowFrom,
     groupDmEnabled: params.groupDmEnabled,
     groupDmChannels,
+    defaultRequireMention,
     channelsConfig: params.channelsConfig,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,

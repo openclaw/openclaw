@@ -56,6 +56,7 @@ export async function prepareSlackMessage(params: {
         channelId: message.channel,
         channelName,
         channels: ctx.channelsConfig,
+        defaultRequireMention: ctx.defaultRequireMention,
       })
     : null;
 
@@ -200,7 +201,9 @@ export async function prepareSlackMessage(params: {
     cfg,
     surface: "slack",
   });
-  const shouldRequireMention = isRoom ? (channelConfig?.requireMention ?? true) : false;
+  const shouldRequireMention = isRoom
+    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
+    : false;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const shouldBypassMention =

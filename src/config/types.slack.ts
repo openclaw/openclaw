@@ -75,6 +75,8 @@ export type SlackAccountConfig = {
   appToken?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /** Default mention requirement for channel messages (default: true). */
+  requireMention?: boolean;
   /**
    * Controls how channel messages are handled:
    * - "open": channels bypass allowlists; mention-gating applies
