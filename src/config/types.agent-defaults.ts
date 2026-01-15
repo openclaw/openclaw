@@ -103,6 +103,8 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
+  /** Use 24-hour time format in system prompt (default: false, uses 12-hour with AM/PM). */
+  use24HourTime?: boolean;
   /** Optional display-only context window override (used for % in status UIs). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */

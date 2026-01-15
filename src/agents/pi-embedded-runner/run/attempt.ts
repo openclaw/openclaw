@@ -59,6 +59,7 @@ import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import {
+  detectUse24Hour,
   formatUserTime,
   mapThinkingLevel,
   resolveExecToolDefaults,
@@ -175,7 +176,8 @@ export async function runEmbeddedAttempt(
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTime = formatUserTime(new Date(), userTimezone);
+    const use24Hour = params.config?.agents?.defaults?.use24HourTime ?? detectUse24Hour();
+    const userTime = formatUserTime(new Date(), userTimezone, use24Hour);
     const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
@@ -201,6 +203,7 @@ export async function runEmbeddedAttempt(
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
       userTime,
+      use24HourTime: use24Hour,
       contextFiles,
     });
     const systemPromptReport = buildSystemPromptReport({

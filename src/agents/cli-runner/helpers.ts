@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -83,17 +84,68 @@ function resolveUserTimezone(configured?: string): string {
   return host?.trim() || "UTC";
 }
 
-function formatUserTime(date: Date, timeZone: string): string | undefined {
+/** Auto-detect if system uses 24-hour time. Checks OS-specific prefs, then falls back to locale. */
+function detectUse24Hour(): boolean {
+  if (process.platform === "darwin") {
+    try {
+      const result = execSync("defaults read -g AppleICUForce24HourTime 2>/dev/null", {
+        encoding: "utf8",
+        timeout: 500,
+      }).trim();
+      if (result === "1") return true;
+      if (result === "0") return false;
+    } catch {
+      // Not set, fall through
+    }
+  }
+
+  if (process.platform === "win32") {
+    try {
+      const result = execSync(
+        'powershell -Command "(Get-Culture).DateTimeFormat.ShortTimePattern"',
+        { encoding: "utf8", timeout: 1000 },
+      ).trim();
+      if (result.startsWith("H")) return true;
+      if (result.startsWith("h")) return false;
+    } catch {
+      // Fall through
+    }
+  }
+
   try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
+    const sample = new Date(2000, 0, 1, 13, 0);
+    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
+    return formatted.includes("13");
+  } catch {
+    return false;
+  }
+}
+
+function ordinalSuffix(day: number): string {
+  if (day >= 11 && day <= 13) return "th";
+  switch (day % 10) {
+    case 1:
+      return "st";
+    case 2:
+      return "nd";
+    case 3:
+      return "rd";
+    default:
+      return "th";
+  }
+}
+
+function formatUserTime(date: Date, timeZone: string, use24Hour = false): string | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
       weekday: "long",
       year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
+      month: "long",
+      day: "numeric",
+      hour: use24Hour ? "2-digit" : "numeric",
       minute: "2-digit",
-      hourCycle: "h23",
+      hourCycle: use24Hour ? "h23" : "h12",
     }).formatToParts(date);
     const map: Record<string, string> = {};
     for (const part of parts) {
@@ -101,7 +153,13 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
     }
     if (!map.weekday || !map.year || !map.month || !map.day || !map.hour || !map.minute)
       return undefined;
-    return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
+    const dayNum = parseInt(map.day, 10);
+    const suffix = ordinalSuffix(dayNum);
+    const timePart = use24Hour
+      ? `${map.hour}:${map.minute}`
+      : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
+    // "Thursday, January 15th, 2026 — 14:38" or "Thursday, January 15th, 2026 — 2:38 PM"
+    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} — ${timePart}`;
   } catch {
     return undefined;
   }
@@ -134,7 +192,8 @@ export function buildSystemPrompt(params: {
   modelDisplay: string;
 }) {
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTime = formatUserTime(new Date(), userTimezone);
+  const use24Hour = params.config?.agents?.defaults?.use24HourTime ?? detectUse24Hour();
+  const userTime = formatUserTime(new Date(), userTimezone, use24Hour);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,

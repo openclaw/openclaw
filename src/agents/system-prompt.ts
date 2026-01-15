@@ -23,6 +23,7 @@ export function buildAgentSystemPrompt(params: {
   modelAliasLines?: string[];
   userTimezone?: string;
   userTime?: string;
+  use24HourTime?: boolean;
   contextFiles?: EmbeddedContextFile[];
   skillsPrompt?: string;
   heartbeatPrompt?: string;
@@ -323,17 +324,20 @@ export function buildAgentSystemPrompt(params: {
     ownerLine && !isMinimal ? "## User Identity" : "",
     ownerLine && !isMinimal ? ownerLine : "",
     ownerLine && !isMinimal ? "" : "",
+    // Date/time context - prominent section so model reliably knows current date
+    ...(userTimezone || userTime
+      ? [
+          "## Current Date & Time",
+          userTime
+            ? `${userTime} (${userTimezone ?? "unknown"})`
+            : `Time zone: ${userTimezone}. Current time unknown; assume UTC for date/time references.`,
+          `User prefers ${params.use24HourTime ? "24-hour" : "12-hour"} time format.`,
+          "",
+        ]
+      : []),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Clawdbot and included below in Project Context.",
     "",
-    userTimezone || userTime
-      ? `Time: assume UTC unless stated. User time zone: ${
-          userTimezone ?? "unknown"
-        }. Current user time (local, 24-hour): ${userTime ?? "unknown"} (${
-          userTimezone ?? "unknown"
-        }).`
-      : "",
-    userTimezone || userTime ? "" : "",
     // Skip reply tags for subagent/none modes
     ...(isMinimal
       ? []
