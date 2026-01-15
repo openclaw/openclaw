@@ -68,6 +68,17 @@ const hoisted = vi.hoisted(() => ({
   },
 }));
 
+const testConfigRoot = {
+  value: path.join(
+    os.tmpdir(),
+    `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`,
+  ),
+};
+
+export const setTestConfigRoot = (root: string) => {
+  testConfigRoot.value = root;
+};
+
 export const bridgeStartCalls = hoisted.bridgeStartCalls;
 export const bridgeInvoke = hoisted.bridgeInvoke;
 export const bridgeListConnected = hoisted.bridgeListConnected;
@@ -157,7 +168,7 @@ vi.mock("../config/sessions.js", async () => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const resolveConfigPath = () => path.join(os.homedir(), ".clawdbot", "clawdbot.json");
+  const resolveConfigPath = () => path.join(testConfigRoot.value, "clawdbot.json");
   const hashConfigRaw = (raw: string | null) =>
     crypto.createHash("sha256").update(raw ?? "").digest("hex");
 
@@ -233,8 +244,12 @@ vi.mock("../config/config.js", async () => {
 
   return {
     ...actual,
-    CONFIG_PATH_CLAWDBOT: resolveConfigPath(),
-    STATE_DIR_CLAWDBOT: path.dirname(resolveConfigPath()),
+    get CONFIG_PATH_CLAWDBOT() {
+      return resolveConfigPath();
+    },
+    get STATE_DIR_CLAWDBOT() {
+      return path.dirname(resolveConfigPath());
+    },
     get isNixMode() {
       return testIsNixMode.value;
     },

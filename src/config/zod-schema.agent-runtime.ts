@@ -146,10 +146,10 @@ export const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
-const ByProviderPolicySchema = z.object({
-  profile: ToolProfileSchema,
+export const ToolPolicyWithProfileSchema = z.object({
   allow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
+  profile: ToolProfileSchema,
 });
 
 // Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
@@ -176,7 +176,7 @@ export const AgentToolsSchema = z
     profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
-    byProvider: z.record(z.string(), ByProviderPolicySchema).optional(),
+    byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -280,7 +280,7 @@ export const ToolsSchema = z
     profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
-    byProvider: z.record(z.string(), ByProviderPolicySchema).optional(),
+    byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
     web: ToolsWebSchema,
     audio: z
       .object({

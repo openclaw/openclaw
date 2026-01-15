@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { connectOk, installGatewayTestHooks, onceMessage, startServerWithClient } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  onceMessage,
+  startServerWithClient,
+} from "./test-helpers.js";
 
 installGatewayTestHooks();
 

@@ -59,7 +59,7 @@ export async function resolveMessageChannelSelection(params: {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
     if (!isKnownChannel(normalized)) {
-      throw new Error(`Unknown channel: ${normalized}`);
+      throw new Error(`Unknown channel: ${String(normalized)}`);
     }
     return {
       channel: normalized as MessageChannelId,
