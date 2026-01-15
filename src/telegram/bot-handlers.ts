@@ -91,11 +91,7 @@ export const registerTelegramHandlers = ({
       const newChatId = String(msg.migrate_to_chat_id);
       const chatTitle = (msg.chat as { title?: string }).title ?? "Unknown";
 
-      runtime.log?.(
-        warn(
-          `[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`,
-        ),
-      );
+      runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
 
       // Check if old chat ID has config and migrate it
       const currentConfig = loadConfig();
@@ -107,11 +103,7 @@ export const registerTelegramHandlers = ({
       });
 
       if (migration.migrated) {
-        runtime.log?.(
-          warn(
-            `[telegram] Migrating group config from ${oldChatId} to ${newChatId}`,
-          ),
-        );
+        runtime.log?.(warn(`[telegram] Migrating group config from ${oldChatId} to ${newChatId}`));
         migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
         await writeConfigFile(currentConfig);
         runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
@@ -123,15 +115,11 @@ export const registerTelegramHandlers = ({
         );
       } else {
         runtime.log?.(
-          warn(
-            `[telegram] No config found for old group ID ${oldChatId}, migration logged only`,
-          ),
+          warn(`[telegram] No config found for old group ID ${oldChatId}, migration logged only`),
         );
       }
     } catch (err) {
-      runtime.error?.(
-        danger(`[telegram] Group migration handler failed: ${String(err)}`),
-      );
+      runtime.error?.(danger(`[telegram] Group migration handler failed: ${String(err)}`));
     }
   });
 

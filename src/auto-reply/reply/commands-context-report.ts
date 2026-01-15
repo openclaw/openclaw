@@ -1,4 +1,7 @@
-import { buildBootstrapContextFiles, resolveBootstrapMaxChars } from "../../agents/pi-embedded-helpers.js";
+import {
+  buildBootstrapContextFiles,
+  resolveBootstrapMaxChars,
+} from "../../agents/pi-embedded-helpers.js";
 import { createClawdbotCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
@@ -197,7 +200,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const skillNames = Array.from(skillNameSet);
   const toolNames = report.tools.entries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
-    names.length <= cap ? names.join(", ") : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
+    names.length <= cap
+      ? names.join(", ")
+      : `${names.slice(0, cap).join(", ")}, … (+${names.length - cap} more)`;
   const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNameSet.size} skills)`;
   const skillsNamesLine = skillNameSet.size
     ? `Skills: ${formatNameList(skillNames, 20)}`
@@ -208,7 +213,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const bootstrapMaxLabel =
-    typeof report.bootstrapMaxChars === "number" ? `${formatInt(report.bootstrapMaxChars)} chars` : "? chars";
+    typeof report.bootstrapMaxChars === "number"
+      ? `${formatInt(report.bootstrapMaxChars)} chars`
+      : "? chars";
 
   const totalsLine =
     session.totalTokens != null

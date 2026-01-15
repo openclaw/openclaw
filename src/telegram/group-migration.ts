@@ -54,11 +54,7 @@ export function migrateTelegramGroupConfig(params: {
 
   const accountGroups = resolveAccountGroups(params.cfg, params.accountId).groups;
   if (accountGroups) {
-    const result = migrateTelegramGroupsInPlace(
-      accountGroups,
-      params.oldChatId,
-      params.newChatId,
-    );
+    const result = migrateTelegramGroupsInPlace(accountGroups, params.oldChatId, params.newChatId);
     if (result.migrated) {
       migrated = true;
       scopes.push("account");
@@ -68,11 +64,7 @@ export function migrateTelegramGroupConfig(params: {
 
   const globalGroups = params.cfg.channels?.telegram?.groups;
   if (globalGroups) {
-    const result = migrateTelegramGroupsInPlace(
-      globalGroups,
-      params.oldChatId,
-      params.newChatId,
-    );
+    const result = migrateTelegramGroupsInPlace(globalGroups, params.oldChatId, params.newChatId);
     if (result.migrated) {
       migrated = true;
       scopes.push("global");

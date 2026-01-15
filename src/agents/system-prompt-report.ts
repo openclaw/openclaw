@@ -24,8 +24,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   );
   return blocks
     .map((block) => {
-      const name =
-        block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
+      const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
       return { name, blockChars: block.length };
     })
     .filter((b) => b.blockChars > 0);
@@ -81,7 +80,8 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
 
 function extractToolListText(systemPrompt: string): string {
   const markerA = "Tool names are case-sensitive. Call tools exactly as listed.\n";
-  const markerB = "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
+  const markerB =
+    "\nTOOLS.md does not control tool availability; it is user guidance for how to use external tools.";
   const extracted = extractBetween(systemPrompt, markerA, markerB);
   if (!extracted.found) return "";
   return extracted.text.replace(markerA, "").trim();
@@ -147,4 +147,3 @@ export function buildSystemPromptReport(params: {
     },
   };
 }
-
