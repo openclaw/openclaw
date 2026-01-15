@@ -9,7 +9,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { resolveUserPath, sleep } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
@@ -41,6 +41,7 @@ import {
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
+  waitForGatewayReachable,
 } from "./onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
@@ -354,7 +355,22 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("health")) {
-        await sleep(1000);
+        const localLinks = resolveControlUiLinks({
+          bind: nextConfig.gateway?.bind ?? "loopback",
+          port: gatewayPort,
+          customBindHost: nextConfig.gateway?.customBindHost,
+          basePath: undefined,
+        });
+        const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
+        const wsUrl = nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+        const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+        const password = nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+        await waitForGatewayReachable({
+          url: wsUrl,
+          token,
+          password,
+          deadlineMs: 15_000,
+        });
         try {
           await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
         } catch (err) {
@@ -459,7 +475,24 @@ export async function runConfigureWizard(
         }
 
         if (choice === "health") {
-          await sleep(1000);
+          const localLinks = resolveControlUiLinks({
+            bind: nextConfig.gateway?.bind ?? "loopback",
+            port: gatewayPort,
+            customBindHost: nextConfig.gateway?.customBindHost,
+            basePath: undefined,
+          });
+          const remoteUrl = nextConfig.gateway?.remote?.url?.trim();
+          const wsUrl =
+            nextConfig.gateway?.mode === "remote" && remoteUrl ? remoteUrl : localLinks.wsUrl;
+          const token = nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+          const password =
+            nextConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+          await waitForGatewayReachable({
+            url: wsUrl,
+            token,
+            password,
+            deadlineMs: 15_000,
+          });
           try {
             await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
           } catch (err) {

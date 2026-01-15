@@ -14,6 +14,7 @@ import {
   formatControlUiSshHint,
   openUrl,
   probeGatewayReachable,
+  waitForGatewayReachable,
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -31,7 +32,7 @@ import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
-import { resolveUserPath, sleep } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import type { GatewayWizardSettings, WizardFlow } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -209,7 +210,18 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
   }
 
   if (!opts.skipHealth) {
-    await sleep(1500);
+    const probeLinks = resolveControlUiLinks({
+      bind: nextConfig.gateway?.bind ?? "loopback",
+      port: settings.port,
+      customBindHost: nextConfig.gateway?.customBindHost,
+      basePath: undefined,
+    });
+    // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
+    await waitForGatewayReachable({
+      url: probeLinks.wsUrl,
+      token: settings.gatewayToken,
+      deadlineMs: 15_000,
+    });
     try {
       await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
     } catch (err) {
