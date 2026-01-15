@@ -672,41 +672,13 @@ export class CallManager {
 
     if (!initialMessage) return;
 
-    // For outbound notify mode, we already use inline TwiML (provider-specific) to
-    // deliver the message and hang up; do not double-speak.
-    const mode = call.metadata?.mode as CallMode | undefined;
-    if (call.direction === "outbound" && mode === "notify") return;
-
     if (!this.provider || !call.providerCallId) return;
 
     // Twilio has provider-specific state for speaking (<Say> fallback) and can
     // fail for inbound calls; keep existing Twilio behavior unchanged.
     if (this.provider.name === "twilio") return;
 
-    // Clear the initial message so it only plays once.
-    if (call.metadata) {
-      delete call.metadata.initialMessage;
-    }
-    this.persistCallRecord(call);
-
-    void this.provider
-      .playTts({
-        callId: call.callId,
-        providerCallId: call.providerCallId,
-        text: initialMessage,
-        voice: this.config.tts.voice,
-      })
-      .then(() => {
-        this.addTranscriptEntry(call, "bot", initialMessage);
-        this.persistCallRecord(call);
-      })
-      .catch((err) => {
-        console.warn(
-          `[voice-call] Failed to speak initial message on answered: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
-      });
+    void this.speakInitialMessage(call.providerCallId);
   }
 
   /**
