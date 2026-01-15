@@ -8,6 +8,7 @@ export {
 export {
   classifyFailoverReason,
   formatAssistantErrorText,
+  getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
   isBillingAssistantError,
@@ -18,6 +19,7 @@ export {
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isOverloadedErrorMessage,
+  isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
