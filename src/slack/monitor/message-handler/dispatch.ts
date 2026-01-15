@@ -117,13 +117,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ? !account.config.blockStreaming
           : undefined,
       onModelSelected: (ctx) => {
-        prefixContext = {
-          ...prefixContext,
-          provider: ctx.provider,
-          model: extractShortModelName(ctx.model),
-          modelFull: `${ctx.provider}/${ctx.model}`,
-          thinkingLevel: ctx.thinkLevel ?? "off",
-        };
+        // Mutate the object directly instead of reassigning to ensure the closure sees updates
+        prefixContext.provider = ctx.provider;
+        prefixContext.model = extractShortModelName(ctx.model);
+        prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
+        prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
       },
     },
   });
