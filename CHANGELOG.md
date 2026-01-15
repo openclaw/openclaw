@@ -35,6 +35,7 @@
 - Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
 
 ### Fixes
+- Control UI: load cron run history on job selection and clarify empty-state messaging. (#866)
 - Slack: isolate thread history and avoid inheriting channel transcripts for new threads by default. (#758)
 - Gateway: forward termination signals to respawned CLI child processes to avoid orphaned systemd runs. (#933) — thanks @roshanasingh4.
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
