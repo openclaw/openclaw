@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Command } from "commander";
 
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -58,6 +59,11 @@ export type ClawdbotPluginGatewayMethod = {
   handler: GatewayRequestHandler;
 };
 
+export type ClawdbotPluginHttpHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<boolean> | boolean;
+
 export type ClawdbotPluginCliContext = {
   program: Command;
   config: ClawdbotConfig;
@@ -112,6 +118,7 @@ export type ClawdbotPluginApi = {
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
     opts?: { name?: string; names?: string[] },
   ) => void;
+  registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
   registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;
   registerCli: (registrar: ClawdbotPluginCliRegistrar, opts?: { commands?: string[] }) => void;

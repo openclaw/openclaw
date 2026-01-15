@@ -190,6 +190,7 @@ export function createGatewayHttpServer(opts: {
   controlUiBasePath: string;
   openAiChatCompletionsEnabled: boolean;
   handleHooksRequest: HooksRequestHandler;
+  handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
 }): HttpServer {
   const {
@@ -198,6 +199,7 @@ export function createGatewayHttpServer(opts: {
     controlUiBasePath,
     openAiChatCompletionsEnabled,
     handleHooksRequest,
+    handlePluginRequest,
     resolvedAuth,
   } = opts;
   const httpServer: HttpServer = createHttpServer((req, res) => {
@@ -206,6 +208,7 @@ export function createGatewayHttpServer(opts: {
 
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
+      if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
       if (openAiChatCompletionsEnabled) {
         if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth })) return;
       }

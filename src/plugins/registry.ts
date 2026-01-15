@@ -10,6 +10,7 @@ import type {
   ClawdbotPluginApi,
   ClawdbotPluginChannelRegistration,
   ClawdbotPluginCliRegistrar,
+  ClawdbotPluginHttpHandler,
   ClawdbotPluginService,
   ClawdbotPluginToolContext,
   ClawdbotPluginToolFactory,
@@ -30,6 +31,12 @@ export type PluginCliRegistration = {
   pluginId: string;
   register: ClawdbotPluginCliRegistrar;
   commands: string[];
+  source: string;
+};
+
+export type PluginHttpRegistration = {
+  pluginId: string;
+  handler: ClawdbotPluginHttpHandler;
   source: string;
 };
 
@@ -62,6 +69,7 @@ export type PluginRecord = {
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
+  httpHandlers: number;
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
 };
@@ -71,6 +79,7 @@ export type PluginRegistry = {
   tools: PluginToolRegistration[];
   channels: PluginChannelRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
+  httpHandlers: PluginHttpRegistration[];
   cliRegistrars: PluginCliRegistration[];
   services: PluginServiceRegistration[];
   diagnostics: PluginDiagnostic[];
@@ -87,6 +96,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     tools: [],
     channels: [],
     gatewayHandlers: {},
+    httpHandlers: [],
     cliRegistrars: [],
     services: [],
     diagnostics: [],
@@ -140,6 +150,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     registry.gatewayHandlers[trimmed] = handler;
     record.gatewayMethods.push(trimmed);
+  };
+
+  const registerHttpHandler = (
+    record: PluginRecord,
+    handler: ClawdbotPluginHttpHandler,
+  ) => {
+    record.httpHandlers += 1;
+    registry.httpHandlers.push({
+      pluginId: record.id,
+      handler,
+      source: record.source,
+    });
   };
 
   const registerChannel = (
@@ -220,6 +242,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig: params.pluginConfig,
       logger: normalizeLogger(registryParams.logger),
       registerTool: (tool, opts) => registerTool(record, tool, opts),
+      registerHttpHandler: (handler) => registerHttpHandler(record, handler),
       registerChannel: (registration) => registerChannel(record, registration),
       registerGatewayMethod: (method, handler) => registerGatewayMethod(record, method, handler),
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),

@@ -142,4 +142,28 @@ describe("loadClawdbotPlugins", () => {
     expect(registry.channels.length).toBe(1);
     expect(registry.channels[0]?.plugin.id).toBe("demo");
   });
+
+  it("registers http handlers", () => {
+    const plugin = writePlugin({
+      id: "http-demo",
+      body: `export default function (api) {
+  api.registerHttpHandler(async () => false);
+};`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["http-demo"],
+        },
+      },
+    });
+
+    expect(registry.httpHandlers.length).toBe(1);
+    expect(registry.httpHandlers[0]?.pluginId).toBe("http-demo");
+    expect(registry.plugins[0]?.httpHandlers).toBe(1);
+  });
 });

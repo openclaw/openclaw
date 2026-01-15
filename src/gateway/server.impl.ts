@@ -67,6 +67,7 @@ const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
+const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const canvasRuntime = runtimeForLogger(logCanvas);
 
@@ -222,12 +223,14 @@ export async function startGatewayServer(
     openAiChatCompletionsEnabled,
     resolvedAuth,
     hooksConfig: () => hooksConfig,
+    pluginRegistry,
     deps,
     canvasRuntime,
     canvasHostEnabled,
     allowCanvasHostInTests: opts.allowCanvasHostInTests,
     logCanvas,
     logHooks,
+    logPlugins,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: import("../infra/bridge/server.js").NodeBridgeServer | null = null;

@@ -37,6 +37,7 @@ Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
 
 - Gateway RPC methods
+- Gateway HTTP handlers
 - Agent tools
 - CLI commands
 - Background services
