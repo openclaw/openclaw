@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+
+import JSON5 from "json5";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 
 export type SecurityFixChmodAction = {
@@ -186,6 +192,122 @@ function applyConfigFixes(params: { cfg: ClawdbotConfig; env: NodeJS.ProcessEnv 
   return { cfg: next, changes, policyFlips };
 }
 
+function listDirectIncludes(parsed: unknown): string[] {
+  const out: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== "object") return;
+    const rec = value as Record<string, unknown>;
+    const includeVal = rec[INCLUDE_KEY];
+    if (typeof includeVal === "string") out.push(includeVal);
+    else if (Array.isArray(includeVal)) {
+      for (const item of includeVal) {
+        if (typeof item === "string") out.push(item);
+      }
+    }
+    for (const v of Object.values(rec)) visit(v);
+  };
+  visit(parsed);
+  return out;
+}
+
+function resolveIncludePath(baseConfigPath: string, includePath: string): string {
+  return path.normalize(
+    path.isAbsolute(includePath)
+      ? includePath
+      : path.resolve(path.dirname(baseConfigPath), includePath),
+  );
+}
+
+async function collectIncludePathsRecursive(params: {
+  configPath: string;
+  parsed: unknown;
+}): Promise<string[]> {
+  const visited = new Set<string>();
+  const result: string[] = [];
+
+  const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
+    if (depth > MAX_INCLUDE_DEPTH) return;
+    for (const raw of listDirectIncludes(parsed)) {
+      const resolved = resolveIncludePath(basePath, raw);
+      if (visited.has(resolved)) continue;
+      visited.add(resolved);
+      result.push(resolved);
+      const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
+      if (!rawText) continue;
+      const nestedParsed = (() => {
+        try {
+          return JSON5.parse(rawText) as unknown;
+        } catch {
+          return null;
+        }
+      })();
+      if (nestedParsed) {
+        // eslint-disable-next-line no-await-in-loop
+        await walk(resolved, nestedParsed, depth + 1);
+      }
+    }
+  };
+
+  await walk(params.configPath, params.parsed, 0);
+  return result;
+}
+
+async function chmodCredentialsAndAgentState(params: {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  cfg: ClawdbotConfig;
+  actions: SecurityFixChmodAction[];
+}): Promise<void> {
+  const credsDir = resolveOAuthDir(params.env, params.stateDir);
+  params.actions.push(await safeChmod({ path: credsDir, mode: 0o700, require: "dir" }));
+
+  const credsEntries = await fs.readdir(credsDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of credsEntries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".json")) continue;
+    const p = path.join(credsDir, entry.name);
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: p, mode: 0o600, require: "file" }));
+  }
+
+  const ids = new Set<string>();
+  ids.add(resolveDefaultAgentId(params.cfg));
+  const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents?.list : [];
+  for (const agent of list ?? []) {
+    if (!agent || typeof agent !== "object") continue;
+    const id = typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id.trim() : "";
+    if (id) ids.add(id);
+  }
+
+  for (const agentId of ids) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const agentRoot = path.join(params.stateDir, "agents", normalizedAgentId);
+    const agentDir = path.join(agentRoot, "agent");
+    const sessionsDir = path.join(agentRoot, "sessions");
+
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: agentRoot, mode: 0o700, require: "dir" }));
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: agentDir, mode: 0o700, require: "dir" }));
+
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: authPath, mode: 0o600, require: "file" }));
+
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: sessionsDir, mode: 0o700, require: "dir" }));
+
+    const storePath = path.join(sessionsDir, "sessions.json");
+    // eslint-disable-next-line no-await-in-loop
+    params.actions.push(await safeChmod({ path: storePath, mode: 0o600, require: "file" }));
+  }
+}
+
 export async function fixSecurityFootguns(opts?: {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
@@ -231,6 +353,21 @@ export async function fixSecurityFootguns(opts?: {
 
   actions.push(await safeChmod({ path: stateDir, mode: 0o700, require: "dir" }));
   actions.push(await safeChmod({ path: configPath, mode: 0o600, require: "file" }));
+
+  if (snap.exists) {
+    const includePaths = await collectIncludePathsRecursive({
+      configPath: snap.path,
+      parsed: snap.parsed,
+    }).catch(() => []);
+    for (const p of includePaths) {
+      // eslint-disable-next-line no-await-in-loop
+      actions.push(await safeChmod({ path: p, mode: 0o600, require: "file" }));
+    }
+  }
+
+  await chmodCredentialsAndAgentState({ env, stateDir, cfg: snap.config ?? {}, actions }).catch((err) => {
+    errors.push(`chmodCredentialsAndAgentState failed: ${String(err)}`);
+  });
 
   return {
     ok: errors.length === 0,

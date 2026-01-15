@@ -7,8 +7,8 @@
 - Daemon: support profile-aware service names for multi-gateway setups. (#671) — thanks @bjesuiter.
 - Docs: add FAQ entries for missing provider auth after adding agents and Gemini thinking signature errors.
 - Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
-- Security: add `clawdbot security audit` (`--deep`, `--fix`) and surface it in `status --all` and `doctor`.
-- Security: add `clawdbot security audit` (`--deep`, `--fix`) and surface it in `status --all` and `doctor` (includes browser control exposure checks).
+- Security: expand `clawdbot security audit` checks (model hygiene, config includes, plugin allowlists, exposure matrix) and extend `--fix` to tighten more sensitive state paths.
+- Security: add `SECURITY.md` reporting policy.
 - Plugins: add Zalo channel plugin with gateway HTTP hooks and onboarding install prompt. (#854) — thanks @longmaba.
 - Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
 - Docs: expand gateway security hardening guidance and incident response checklist.
