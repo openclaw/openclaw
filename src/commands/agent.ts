@@ -38,7 +38,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
+import { clearAgentRunContext, emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -123,18 +123,19 @@ export async function agentCommand(
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
 
-  if (opts.deliver === true) {
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: sessionEntry,
-      sessionKey,
-      channel: sessionEntry?.channel,
-      chatType: sessionEntry?.chatType,
-    });
-    if (sendPolicy === "deny") {
-      throw new Error("send blocked by session policy");
+  try {
+    if (opts.deliver === true) {
+      const sendPolicy = resolveSendPolicy({
+        cfg,
+        entry: sessionEntry,
+        sessionKey,
+        channel: sessionEntry?.channel,
+        chatType: sessionEntry?.chatType,
+      });
+      if (sendPolicy === "deny") {
+        throw new Error("send blocked by session policy");
+      }
     }
-  }
 
   let resolvedThinkLevel =
     thinkOnce ??
@@ -368,7 +369,7 @@ export async function agentCommand(
             ) {
               lifecycleEnded = true;
             }
-            emitAgentEvent({
+    emitAgentEvent({
               runId,
               stream: evt.stream,
               data: evt.data,
@@ -435,4 +436,7 @@ export async function agentCommand(
     result,
     payloads,
   });
+  } finally {
+    clearAgentRunContext(runId);
+  }
 }

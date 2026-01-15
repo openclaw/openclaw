@@ -58,6 +58,9 @@
 - Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
 
 ### Fixes
+- Sessions: return deep clones (`structuredClone`) so cached session entries can't be mutated. (#934) — thanks @ronak-guliani.
+- Heartbeat: keep `updatedAt` monotonic when restoring heartbeat sessions. (#934) — thanks @ronak-guliani.
+- Agent: clear run context after CLI runs (`clearAgentRunContext`) to avoid runaway contexts. (#934) — thanks @ronak-guliani.
  - Mac: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
  - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
 - TUI: render picker overlays via the overlay stack so /models and /settings display. (#921) — thanks @grizzdank.
