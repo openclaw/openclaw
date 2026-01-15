@@ -23,6 +23,7 @@
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
 - Telegram: register dock native commands with underscores to avoid `BOT_COMMAND_INVALID` (#929, fixes #901) — thanks @grp06.
 - Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
+- Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.
 - Agents: strip downgraded tool call text without eating adjacent replies and filter thinking-tag leaks. (#905) — thanks @erikpr1994.
 - Agents: cap tool call IDs for OpenAI/OpenRouter to avoid request rejections. (#875) — thanks @j1philli.
 - Doctor: avoid re-adding WhatsApp config when only legacy ack reactions are set. (#927, fixes #900) — thanks @grp06.
