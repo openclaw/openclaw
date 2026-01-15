@@ -62,8 +62,7 @@ export function registerBrowserInspectCommands(
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
-      const mode =
-        opts.efficient === true || opts.mode === "efficient" ? "efficient" : undefined;
+      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : undefined;
       try {
         const result = await browserSnapshot(baseUrl, {
           format,

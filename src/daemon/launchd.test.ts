@@ -44,7 +44,7 @@ describe("launchd install", () => {
           'import fs from "node:fs";',
           "const logPath = process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;",
           "if (logPath) {",
-          "  fs.appendFileSync(logPath, JSON.stringify(process.argv.slice(2)) + \"\\n\", \"utf8\");",
+          '  fs.appendFileSync(logPath, JSON.stringify(process.argv.slice(2)) + "\\n", "utf8");',
           "}",
           "process.exit(0);",
           "",
@@ -60,11 +60,7 @@ describe("launchd install", () => {
         );
       } else {
         const shPath = path.join(binDir, "launchctl");
-        await fs.writeFile(
-          shPath,
-          `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`,
-          "utf8",
-        );
+        await fs.writeFile(shPath, `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`, "utf8");
         await fs.chmod(shPath, 0o755);
       }
 

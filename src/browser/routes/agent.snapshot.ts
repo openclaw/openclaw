@@ -146,8 +146,7 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
     const labels = toBoolean(req.query.labels) ?? undefined;
     const explicitFormat =
       req.query.format === "aria" ? "aria" : req.query.format === "ai" ? "ai" : undefined;
-    const format =
-      explicitFormat ?? (mode ? "ai" : (await getPwAiModule()) ? "ai" : "aria");
+    const format = explicitFormat ?? (mode ? "ai" : (await getPwAiModule()) ? "ai" : "aria");
     const limitRaw = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const hasMaxChars = Object.hasOwn(req.query, "maxChars");
     const maxCharsRaw =
