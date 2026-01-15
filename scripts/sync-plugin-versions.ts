@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 type PackageJson = {
@@ -19,7 +19,23 @@ const extensionsDir = resolve("extensions");
 const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
 
 const updated: string[] = [];
+const changelogged: string[] = [];
 const skipped: string[] = [];
+
+function ensureChangelogEntry(changelogPath: string, version: string): boolean {
+  if (!existsSync(changelogPath)) return false;
+  const content = readFileSync(changelogPath, "utf8");
+  if (content.includes(`## ${version}`)) return false;
+  const entry = `## ${version}\n\n### Changes\n- Version alignment with core Clawdbot release numbers.\n\n`;
+  if (content.startsWith("# Changelog\n\n")) {
+    const next = content.replace("# Changelog\n\n", `# Changelog\n\n${entry}`);
+    writeFileSync(changelogPath, next);
+    return true;
+  }
+  const next = `# Changelog\n\n${entry}${content.trimStart()}`;
+  writeFileSync(changelogPath, `${next}\n`);
+  return true;
+}
 
 for (const dir of dirs) {
   const packagePath = join(extensionsDir, dir.name, "package.json");
@@ -35,6 +51,11 @@ for (const dir of dirs) {
     continue;
   }
 
+  const changelogPath = join(extensionsDir, dir.name, "CHANGELOG.md");
+  if (ensureChangelogEntry(changelogPath, targetVersion)) {
+    changelogged.push(pkg.name);
+  }
+
   if (pkg.version === targetVersion) {
     skipped.push(pkg.name);
     continue;
@@ -46,5 +67,5 @@ for (const dir of dirs) {
 }
 
 console.log(
-  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Skipped: ${skipped.length}.`
+  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Changelogged: ${changelogged.length}. Skipped: ${skipped.length}.`
 );
