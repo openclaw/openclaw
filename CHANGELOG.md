@@ -3,7 +3,7 @@
 ## 2026.1.14 (unreleased)
 
 ### Changes
-- Security: add `clawdbot security audit` (`--deep`) and surface it in `status --all` and `doctor`.
+- Security: add `clawdbot security audit` (`--deep`, `--fix`) and surface it in `status --all` and `doctor`.
 - Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
 - Docs: expand gateway security hardening guidance and incident response checklist.
 - Docs: document DM history limits for channel DMs. (#883) — thanks @pkrmf.
