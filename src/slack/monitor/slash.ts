@@ -1,5 +1,4 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
-import type { Block, KnownBlock } from "@slack/types";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import {
@@ -32,6 +31,8 @@ import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from ".
 import type { SlackMonitorContext } from "./context.js";
 import { isSlackRoomAllowedByPolicy } from "./policy.js";
 import { deliverSlackSlashReplies } from "./replies.js";
+
+type SlackBlock = { type: string; [key: string]: unknown };
 
 const SLACK_COMMAND_ARG_ACTION_ID = "clawdbot_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
@@ -68,7 +69,7 @@ function parseSlackCommandArgValue(raw?: string | null): {
 } | null {
   if (!raw) return null;
   const parts = raw.split("|");
-  if (parts.length < 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) return null;
+  if (parts.length !== 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) return null;
   const [, command, arg, value, userId] = parts;
   if (!command || !arg || !value || !userId) return null;
   return {
@@ -116,6 +117,9 @@ export function registerSlackMonitorSlashCommands(params: {
   const { ctx, account } = params;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  const supportsInteractiveArgMenus =
+    typeof (ctx.app as { action?: unknown }).action === "function";
 
   const slashCommand = resolveSlackSlashCommandConfig(
     ctx.slashCommand ?? account.config.slashCommand,
@@ -266,7 +270,7 @@ export function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      if (commandDefinition) {
+      if (commandDefinition && supportsInteractiveArgMenus) {
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
@@ -432,19 +436,20 @@ export function registerSlackMonitorSlashCommands(params: {
     logVerbose("slack: slash commands disabled");
   }
 
-  ctx.app.action(SLACK_COMMAND_ARG_ACTION_ID, async (args: SlackActionMiddlewareArgs) => {
+  if (nativeCommands.length === 0 || !supportsInteractiveArgMenus) return;
+
+  (
+    ctx.app as unknown as { action: NonNullable<(typeof ctx.app & { action?: unknown })["action"]> }
+  ).action(SLACK_COMMAND_ARG_ACTION_ID, async (args: SlackActionMiddlewareArgs) => {
     const { ack, body, respond } = args;
     const action = args.action as { value?: string };
     await ack();
     const respondFn =
       respond ??
-      (async (payload: {
-        text: string;
-        blocks?: (Block | KnownBlock)[];
-        response_type?: string;
-      }) => {
+      (async (payload: { text: string; blocks?: SlackBlock[]; response_type?: string }) => {
         if (!body.channel?.id || !body.user?.id) return;
         await ctx.app.client.chat.postEphemeral({
+          token: ctx.botToken,
           channel: body.channel.id,
           user: body.user.id,
           text: payload.text,

@@ -81,7 +81,9 @@ describe("ensureOnboardingPluginInstalled", () => {
     const cfg: ClawdbotConfig = {};
     vi.mocked(fs.existsSync).mockImplementation((value) => {
       const raw = String(value);
-      return raw.endsWith(`${path.sep}.git`) || raw.endsWith(`${path.sep}extensions${path.sep}zalo`);
+      return (
+        raw.endsWith(`${path.sep}.git`) || raw.endsWith(`${path.sep}extensions${path.sep}zalo`)
+      );
     });
 
     const result = await ensureOnboardingPluginInstalled({
@@ -109,7 +111,9 @@ describe("ensureOnboardingPluginInstalled", () => {
     const cfg: ClawdbotConfig = {};
     vi.mocked(fs.existsSync).mockImplementation((value) => {
       const raw = String(value);
-      return raw.endsWith(`${path.sep}.git`) || raw.endsWith(`${path.sep}extensions${path.sep}zalo`);
+      return (
+        raw.endsWith(`${path.sep}.git`) || raw.endsWith(`${path.sep}extensions${path.sep}zalo`)
+      );
     });
     installPluginFromNpmSpec.mockResolvedValue({
       ok: false,
