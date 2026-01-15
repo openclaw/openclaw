@@ -33,6 +33,28 @@ stay consistent across channels.
    - **Telegram:** HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`).
    - **Signal:** plain text + `text-style` ranges; links become `label (url)` when label differs.
 
+## IR example
+
+Input Markdown:
+
+```markdown
+Hello **world** — see [docs](https://docs.clawd.bot).
+```
+
+IR (schematic):
+
+```json
+{
+  "text": "Hello world — see docs.",
+  "styles": [
+    { "start": 6, "end": 11, "style": "bold" }
+  ],
+  "links": [
+    { "start": 19, "end": 23, "href": "https://docs.clawd.bot" }
+  ]
+}
+```
+
 ## Where it is used
 
 - Slack, Telegram, and Signal outbound adapters render from the IR.
