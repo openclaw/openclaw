@@ -119,8 +119,8 @@ function resolveFallbackCandidates(params: {
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
 }): ModelCandidate[] {
-  const provider = params.provider.trim() || DEFAULT_PROVIDER;
-  const model = params.model.trim() || DEFAULT_MODEL;
+  const provider = String(params.provider ?? "").trim() || DEFAULT_PROVIDER;
+  const model = String(params.model ?? "").trim() || DEFAULT_MODEL;
   const primary = params.cfg
     ? resolveConfiguredModelRef({
         cfg: params.cfg,
