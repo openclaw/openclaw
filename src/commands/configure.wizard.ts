@@ -98,9 +98,18 @@ async function promptWebToolsConfig(
   const existingFetch = nextConfig.tools?.web?.fetch;
   const hasSearchKey = Boolean(existingSearch?.apiKey);
 
+  note(
+    [
+      "Web search lets your agent look things up online using the `web_search` tool.",
+      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Docs: https://docs.clawd.bot/tools/web",
+    ].join("\n"),
+    "Web search",
+  );
+
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search API)?",
+      message: "Enable web_search (Brave Search)?",
       initialValue: existingSearch?.enabled ?? hasSearchKey,
     }),
     runtime,
@@ -116,7 +125,7 @@ async function promptWebToolsConfig(
       await text({
         message: hasSearchKey
           ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-          : "Brave Search API key (leave blank to use BRAVE_API_KEY)",
+          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
         placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
       }),
       runtime,
@@ -127,7 +136,8 @@ async function promptWebToolsConfig(
     } else if (!hasSearchKey) {
       note(
         [
-          "No key stored. web_search needs BRAVE_API_KEY or tools.web.search.apiKey.",
+          "No key stored yet, so web_search will stay unavailable.",
+          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
           "Docs: https://docs.clawd.bot/tools/web",
         ].join("\n"),
         "Web search",
