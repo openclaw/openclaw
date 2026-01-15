@@ -52,6 +52,17 @@ vi.mock("../../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
 
+const toolCommonMocks = vi.hoisted(() => ({
+  imageResultFromFile: vi.fn(),
+}));
+vi.mock("./common.js", async () => {
+  const actual = await vi.importActual<typeof import("./common.js")>("./common.js");
+  return {
+    ...actual,
+    imageResultFromFile: toolCommonMocks.imageResultFromFile,
+  };
+});
+
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { createBrowserTool } from "./browser-tool.js";
 
@@ -101,5 +112,49 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
     const [, opts] = browserClientMocks.browserSnapshot.mock.calls.at(-1) ?? [];
     expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+  });
+});
+
+describe("browser tool snapshot labels", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns image + text when labels are requested", async () => {
+    const tool = createBrowserTool();
+    const imageResult = {
+      content: [
+        { type: "text", text: "label text" },
+        { type: "image", data: "base64", mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/snap.png" },
+    };
+
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce(imageResult);
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      url: "https://example.com",
+      snapshot: "label text",
+      imagePath: "/tmp/snap.png",
+    });
+
+    const result = await tool.execute?.(null, {
+      action: "snapshot",
+      format: "ai",
+      labels: true,
+    });
+
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/tmp/snap.png",
+        extraText: "label text",
+      }),
+    );
+    expect(result).toEqual(imageResult);
+    expect(result?.content).toHaveLength(2);
+    expect(result?.content?.[0]).toMatchObject({ type: "text", text: "label text" });
+    expect(result?.content?.[1]).toMatchObject({ type: "image" });
   });
 });

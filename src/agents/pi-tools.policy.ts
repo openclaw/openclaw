@@ -80,14 +80,9 @@ function resolveProviderToolPolicy(params: {
   const normalizedProvider = normalizeProviderKey(provider);
   const rawModelId = params.modelId?.trim().toLowerCase();
   const fullModelId =
-    rawModelId && !rawModelId.includes("/")
-      ? `${normalizedProvider}/${rawModelId}`
-      : rawModelId;
+    rawModelId && !rawModelId.includes("/") ? `${normalizedProvider}/${rawModelId}` : rawModelId;
 
-  const candidates = [
-    ...(fullModelId ? [fullModelId] : []),
-    normalizedProvider,
-  ];
+  const candidates = [...(fullModelId ? [fullModelId] : []), normalizedProvider];
 
   for (const key of candidates) {
     const match = lookup.get(key);
