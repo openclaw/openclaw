@@ -152,10 +152,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.gatewayMethods.push(trimmed);
   };
 
-  const registerHttpHandler = (
-    record: PluginRecord,
-    handler: ClawdbotPluginHttpHandler,
-  ) => {
+  const registerHttpHandler = (record: PluginRecord, handler: ClawdbotPluginHttpHandler) => {
     record.httpHandlers += 1;
     registry.httpHandlers.push({
       pluginId: record.id,

@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
@@ -223,9 +227,12 @@ export async function agentsAddCommand(
       const sourceAuthPath = resolveAuthStorePath(resolveAgentDir(cfg, defaultAgentId));
       const destAuthPath = resolveAuthStorePath(agentDir);
       const sameAuthPath =
-        path.resolve(sourceAuthPath).toLowerCase() ===
-        path.resolve(destAuthPath).toLowerCase();
-      if (!sameAuthPath && (await fileExists(sourceAuthPath)) && !(await fileExists(destAuthPath))) {
+        path.resolve(sourceAuthPath).toLowerCase() === path.resolve(destAuthPath).toLowerCase();
+      if (
+        !sameAuthPath &&
+        (await fileExists(sourceAuthPath)) &&
+        !(await fileExists(destAuthPath))
+      ) {
         const shouldCopy = await prompter.confirm({
           message: `Copy auth profiles from "${defaultAgentId}"?`,
           initialValue: false,

@@ -28,7 +28,10 @@ describe("gateway config.patch", () => {
         },
       }),
     );
-    const setRes = await onceMessage<{ ok: boolean }>(ws, (o) => o.type === "res" && o.id === setId);
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
     expect(setRes.ok).toBe(true);
 
     const getId = "req-get";
@@ -85,7 +88,9 @@ describe("gateway config.patch", () => {
     );
     const get2Res = await onceMessage<{
       ok: boolean;
-      payload?: { config?: { gateway?: { mode?: string }; channels?: { telegram?: { botToken?: string } } } };
+      payload?: {
+        config?: { gateway?: { mode?: string }; channels?: { telegram?: { botToken?: string } } };
+      };
     }>(ws, (o) => o.type === "res" && o.id === get2Id);
     expect(get2Res.ok).toBe(true);
     expect(get2Res.payload?.config?.gateway?.mode).toBe("local");
@@ -112,7 +117,10 @@ describe("gateway config.patch", () => {
         },
       }),
     );
-    const setRes = await onceMessage<{ ok: boolean }>(ws, (o) => o.type === "res" && o.id === setId);
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
     expect(setRes.ok).toBe(true);
 
     const patchId = "req-patch-2";
@@ -154,7 +162,10 @@ describe("gateway config.patch", () => {
         },
       }),
     );
-    const setRes = await onceMessage<{ ok: boolean }>(ws, (o) => o.type === "res" && o.id === setId);
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
     expect(setRes.ok).toBe(true);
 
     const set2Id = "req-set-4";

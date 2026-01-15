@@ -170,7 +170,10 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const resolveConfigPath = () => path.join(testConfigRoot.value, "clawdbot.json");
   const hashConfigRaw = (raw: string | null) =>
-    crypto.createHash("sha256").update(raw ?? "").digest("hex");
+    crypto
+      .createHash("sha256")
+      .update(raw ?? "")
+      .digest("hex");
 
   const readConfigFileSnapshot = async () => {
     if (testState.legacyIssues.length > 0) {

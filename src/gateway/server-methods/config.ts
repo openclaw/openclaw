@@ -227,7 +227,11 @@ export const configHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
       return;
     }
-    if (!parsedRes.parsed || typeof parsedRes.parsed !== "object" || Array.isArray(parsedRes.parsed)) {
+    if (
+      !parsedRes.parsed ||
+      typeof parsedRes.parsed !== "object" ||
+      Array.isArray(parsedRes.parsed)
+    ) {
       respond(
         false,
         undefined,

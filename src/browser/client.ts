@@ -159,20 +159,17 @@ export async function browserCreateProfile(
     driver?: "clawd" | "extension";
   },
 ): Promise<BrowserCreateProfileResult> {
-  return await fetchBrowserJson<BrowserCreateProfileResult>(
-    `${baseUrl}/profiles/create`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: opts.name,
-        color: opts.color,
-        cdpUrl: opts.cdpUrl,
-        driver: opts.driver,
-      }),
-      timeoutMs: 10000,
-    },
-  );
+  return await fetchBrowserJson<BrowserCreateProfileResult>(`${baseUrl}/profiles/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: opts.name,
+      color: opts.color,
+      cdpUrl: opts.cdpUrl,
+      driver: opts.driver,
+    }),
+    timeoutMs: 10000,
+  });
 }
 
 export type BrowserDeleteProfileResult = {

@@ -140,9 +140,7 @@ export async function setupChannels(
     quickstartScore: 0,
   }));
   const combinedStatuses = [...statusEntries, ...catalogStatuses];
-  const statusByChannel = new Map(
-    combinedStatuses.map((entry) => [entry.channel, entry]),
-  );
+  const statusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   if (statusLines.length > 0) {
     await prompter.note(statusLines.join("\n"), "Channel status");
@@ -216,9 +214,7 @@ export async function setupChannels(
     })) as ChannelChoice[];
   }
 
-  const catalogById = new Map(
-    catalogEntries.map((entry) => [entry.id as ChannelChoice, entry]),
-  );
+  const catalogById = new Map(catalogEntries.map((entry) => [entry.id as ChannelChoice, entry]));
   if (selection.some((channel) => catalogById.has(channel))) {
     const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
     for (const channel of selection) {
@@ -248,16 +244,10 @@ export async function setupChannels(
 
   const selectionNotes = new Map<string, string>();
   for (const plugin of installedPlugins) {
-    selectionNotes.set(
-      plugin.id,
-      formatChannelSelectionLine(plugin.meta, formatDocsLink),
-    );
+    selectionNotes.set(plugin.id, formatChannelSelectionLine(plugin.meta, formatDocsLink));
   }
   for (const entry of catalogEntries) {
-    selectionNotes.set(
-      entry.id,
-      formatChannelSelectionLine(entry.meta, formatDocsLink),
-    );
+    selectionNotes.set(entry.id, formatChannelSelectionLine(entry.meta, formatDocsLink));
   }
   const selectedLines = selection
     .map((channel) => selectionNotes.get(channel))

@@ -138,10 +138,7 @@ export function createGatewayTool(opts?: {
             } else {
               const rawSnapshot = (snapshot as { raw?: unknown }).raw;
               if (typeof rawSnapshot === "string") {
-                baseHash = crypto
-                  .createHash("sha256")
-                  .update(rawSnapshot)
-                  .digest("hex");
+                baseHash = crypto.createHash("sha256").update(rawSnapshot).digest("hex");
               }
             }
           }

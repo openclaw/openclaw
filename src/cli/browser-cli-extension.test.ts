@@ -17,4 +17,3 @@ describe("browser extension install", () => {
     expect(result.path.includes("node_modules")).toBe(false);
   });
 });
-

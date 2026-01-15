@@ -114,21 +114,13 @@ function parseBaseUrl(raw: string): {
 } {
   const parsed = new URL(raw.trim().replace(/\/$/, ""));
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(
-      `extension relay cdpUrl must be http(s), got ${parsed.protocol}`,
-    );
+    throw new Error(`extension relay cdpUrl must be http(s), got ${parsed.protocol}`);
   }
   const host = parsed.hostname;
   const port =
-    parsed.port?.trim() !== ""
-      ? Number(parsed.port)
-      : parsed.protocol === "https:"
-        ? 443
-        : 80;
+    parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
-    throw new Error(
-      `extension relay cdpUrl has invalid port: ${parsed.port || "(empty)"}`,
-    );
+    throw new Error(`extension relay cdpUrl has invalid port: ${parsed.port || "(empty)"}`);
   }
   return { host, port, baseUrl: parsed.toString().replace(/\/$/, "") };
 }
@@ -162,9 +154,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 }): Promise<ChromeExtensionRelayServer> {
   const info = parseBaseUrl(opts.cdpUrl);
   if (!isLoopbackHost(info.host)) {
-    throw new Error(
-      `extension relay requires loopback cdpUrl host (got ${info.host})`,
-    );
+    throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
   const existing = serversByPort.get(info.port);
@@ -184,9 +174,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
   >();
   let nextExtensionId = 1;
 
-  const sendToExtension = async (
-    payload: ExtensionForwardCommandMessage,
-  ): Promise<unknown> => {
+  const sendToExtension = async (payload: ExtensionForwardCommandMessage): Promise<unknown> => {
     const ws = extensionWs;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new Error("Chrome extension not connected");
@@ -195,9 +183,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     return await new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
         pendingExtension.delete(payload.id);
-        reject(
-          new Error(`extension request timeout: ${payload.params.method}`),
-        );
+        reject(new Error(`extension request timeout: ${payload.params.method}`));
       }, 30_000);
       pendingExtension.set(payload.id, { resolve, reject, timer });
     });
@@ -216,10 +202,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     ws.send(JSON.stringify(res));
   };
 
-  const ensureTargetEventsForClient = (
-    ws: WebSocket,
-    mode: "autoAttach" | "discover",
-  ) => {
+  const ensureTargetEventsForClient = (ws: WebSocket, mode: "autoAttach" | "discover") => {
     for (const target of connectedTargets.values()) {
       if (mode === "autoAttach") {
         ws.send(
@@ -267,8 +250,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         };
       case "Target.getTargetInfo": {
         const params = (cmd.params ?? {}) as { targetId?: string };
-        const targetId =
-          typeof params.targetId === "string" ? params.targetId : undefined;
+        const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
         if (targetId) {
           for (const t of connectedTargets.values()) {
             if (t.targetId === targetId) return { targetInfo: t.targetInfo };
@@ -283,8 +265,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
       }
       case "Target.attachToTarget": {
         const params = (cmd.params ?? {}) as { targetId?: string };
-        const targetId =
-          typeof params.targetId === "string" ? params.targetId : undefined;
+        const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
         if (!targetId) throw new Error("targetId required");
         for (const t of connectedTargets.values()) {
           if (t.targetId === targetId) return { sessionId: t.sessionId };
@@ -458,9 +439,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     const ping = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
-      ws.send(
-        JSON.stringify({ method: "ping" } satisfies ExtensionPingMessage),
-      );
+      ws.send(JSON.stringify({ method: "ping" } satisfies ExtensionPingMessage));
     }, 5000);
 
     ws.on("message", (data) => {
@@ -471,21 +450,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return;
       }
 
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        "id" in parsed &&
-        typeof parsed.id === "number"
-      ) {
+      if (parsed && typeof parsed === "object" && "id" in parsed && typeof parsed.id === "number") {
         const pending = pendingExtension.get(parsed.id);
         if (!pending) return;
         pendingExtension.delete(parsed.id);
         clearTimeout(pending.timer);
-        if (
-          "error" in parsed &&
-          typeof parsed.error === "string" &&
-          parsed.error.trim()
-        ) {
+        if ("error" in parsed && typeof parsed.error === "string" && parsed.error.trim()) {
           pending.reject(new Error(parsed.error));
         } else {
           pending.resolve((parsed as ExtensionResponseMessage).result);
@@ -495,10 +465,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
       if (parsed && typeof parsed === "object" && "method" in parsed) {
         if ((parsed as ExtensionPongMessage).method === "pong") return;
-        if (
-          (parsed as ExtensionForwardEventMessage).method !== "forwardCDPEvent"
-        )
-          return;
+        if ((parsed as ExtensionForwardEventMessage).method !== "forwardCDPEvent") return;
         const evt = parsed as ExtensionForwardEventMessage;
         const method = evt.params?.method;
         const params = evt.params?.params;
@@ -591,8 +558,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         }
         if (cmd.method === "Target.attachToTarget") {
           const params = (cmd.params ?? {}) as { targetId?: string };
-          const targetId =
-            typeof params.targetId === "string" ? params.targetId : undefined;
+          const targetId = typeof params.targetId === "string" ? params.targetId : undefined;
           if (targetId) {
             const target = Array.from(connectedTargets.values()).find(
               (t) => t.targetId === targetId,
@@ -669,9 +635,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
   return relay;
 }
 
-export async function stopChromeExtensionRelayServer(opts: {
-  cdpUrl: string;
-}): Promise<boolean> {
+export async function stopChromeExtensionRelayServer(opts: { cdpUrl: string }): Promise<boolean> {
   const info = parseBaseUrl(opts.cdpUrl);
   const existing = serversByPort.get(info.port);
   if (!existing) return false;

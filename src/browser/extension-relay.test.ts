@@ -105,9 +105,7 @@ describe("chrome extension relay server", () => {
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
-    const v1 = (await fetch(`${cdpUrl}/json/version`).then((r) =>
-      r.json(),
-    )) as {
+    const v1 = (await fetch(`${cdpUrl}/json/version`).then((r) => r.json())) as {
       webSocketDebuggerUrl?: string;
     };
     expect(v1.webSocketDebuggerUrl).toBeUndefined();
@@ -115,9 +113,7 @@ describe("chrome extension relay server", () => {
     const ext = new WebSocket(`ws://127.0.0.1:${port}/extension`);
     await waitForOpen(ext);
 
-    const v2 = (await fetch(`${cdpUrl}/json/version`).then((r) =>
-      r.json(),
-    )) as {
+    const v2 = (await fetch(`${cdpUrl}/json/version`).then((r) => r.json())) as {
       webSocketDebuggerUrl?: string;
     };
     expect(String(v2.webSocketDebuggerUrl ?? "")).toContain(`/cdp`);
@@ -153,15 +149,11 @@ describe("chrome extension relay server", () => {
       }),
     );
 
-    const list = (await fetch(`${cdpUrl}/json/list`).then((r) =>
-      r.json(),
-    )) as Array<{
+    const list = (await fetch(`${cdpUrl}/json/list`).then((r) => r.json())) as Array<{
       id?: string;
       url?: string;
     }>;
-    expect(
-      list.some((t) => t.id === "t1" && t.url === "https://example.com"),
-    ).toBe(true);
+    expect(list.some((t) => t.id === "t1" && t.url === "https://example.com")).toBe(true);
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`);
     await waitForOpen(cdp);

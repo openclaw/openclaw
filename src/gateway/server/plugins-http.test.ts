@@ -44,7 +44,9 @@ describe("createGatewayPluginRequestHandler", () => {
           { pluginId: "second", handler: second, source: "second" },
         ],
       }),
-      log: { warn: vi.fn() } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
+      log: { warn: vi.fn() } as unknown as Parameters<
+        typeof createGatewayPluginRequestHandler
+      >[0]["log"],
     });
 
     const { res } = makeResponse();
@@ -78,10 +80,7 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(handled).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
     expect(res.statusCode).toBe(500);
-    expect(setHeader).toHaveBeenCalledWith(
-      "Content-Type",
-      "text/plain; charset=utf-8",
-    );
+    expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
   });
 });

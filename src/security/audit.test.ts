@@ -84,7 +84,10 @@ describe("security audit", () => {
 
       expect(res.findings).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ checkId: "browser.control_remote_no_token", severity: "critical" }),
+          expect.objectContaining({
+            checkId: "browser.control_remote_no_token",
+            severity: "critical",
+          }),
         ]),
       );
     } finally {

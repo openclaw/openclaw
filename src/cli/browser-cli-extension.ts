@@ -75,20 +75,20 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.log(JSON.stringify({ ok: true, path: installed.path }, null, 2));
         return;
       }
-        defaultRuntime.log(installed.path);
-        defaultRuntime.error(
-          info(
-            [
-              "Next:",
-              `- Chrome → chrome://extensions → enable “Developer mode”`,
-              `- “Load unpacked” → select: ${installed.path}`,
-              `- Pin “Clawdbot Browser Relay”, then click it on the tab (badge shows ON)`,
-              "",
-              `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.clawd.bot/tools/chrome-extension")}`,
-            ].join("\n"),
-          ),
-        );
-      });
+      defaultRuntime.log(installed.path);
+      defaultRuntime.error(
+        info(
+          [
+            "Next:",
+            `- Chrome → chrome://extensions → enable “Developer mode”`,
+            `- “Load unpacked” → select: ${installed.path}`,
+            `- Pin “Clawdbot Browser Relay”, then click it on the tab (badge shows ON)`,
+            "",
+            `${theme.muted("Docs:")} ${formatDocsLink("/tools/chrome-extension", "docs.clawd.bot/tools/chrome-extension")}`,
+          ].join("\n"),
+        ),
+      );
+    });
 
   ext
     .command("path")

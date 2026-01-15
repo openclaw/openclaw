@@ -170,8 +170,7 @@ export function reloadOnboardingPluginRegistry(params: {
   workspaceDir?: string;
 }): void {
   const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   const log = createSubsystemLogger("plugins");
   loadClawdbotPlugins({
     config: params.cfg,

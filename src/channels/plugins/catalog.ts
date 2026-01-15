@@ -34,9 +34,7 @@ export function listChannelPluginCatalogEntries(): ChannelPluginCatalogEntry[] {
   return [...CATALOG];
 }
 
-export function getChannelPluginCatalogEntry(
-  id: string,
-): ChannelPluginCatalogEntry | undefined {
+export function getChannelPluginCatalogEntry(id: string): ChannelPluginCatalogEntry | undefined {
   const trimmed = id.trim();
   if (!trimmed) return undefined;
   return CATALOG.find((entry) => entry.id === trimmed);

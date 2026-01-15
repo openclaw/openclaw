@@ -384,10 +384,7 @@ export function registerBrowserManageCommands(
     .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
     .option("--driver <driver>", "Profile driver (clawd|extension). Default: clawd")
     .action(
-      async (
-        opts: { name: string; color?: string; cdpUrl?: string; driver?: string },
-        cmd,
-      ) => {
+      async (opts: { name: string; color?: string; cdpUrl?: string; driver?: string }, cmd) => {
         const parent = parentOpts(cmd);
         const baseUrl = resolveBrowserControlUrl(parent?.url);
         try {
@@ -401,9 +398,7 @@ export function registerBrowserManageCommands(
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
-          const loc = result.isRemote
-            ? `  cdpUrl: ${result.cdpUrl}`
-            : `  port: ${result.cdpPort}`;
+          const loc = result.isRemote ? `  cdpUrl: ${result.cdpUrl}` : `  port: ${result.cdpPort}`;
           defaultRuntime.log(
             info(
               `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}${

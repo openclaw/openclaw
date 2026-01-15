@@ -157,10 +157,11 @@ function setWhatsAppGroupAllowFromFromStore(params: {
   }
 }
 
-function applyConfigFixes(params: {
+function applyConfigFixes(params: { cfg: ClawdbotConfig; env: NodeJS.ProcessEnv }): {
   cfg: ClawdbotConfig;
-  env: NodeJS.ProcessEnv;
-}): { cfg: ClawdbotConfig; changes: string[]; policyFlips: Set<string> } {
+  changes: string[];
+  policyFlips: Set<string>;
+} {
   const next = structuredClone(params.cfg ?? {});
   const changes: string[] = [];
   const policyFlips = new Set<string>();
@@ -170,7 +171,15 @@ function applyConfigFixes(params: {
     changes.push('logging.redactSensitive=off -> "tools"');
   }
 
-  for (const channel of ["telegram", "whatsapp", "discord", "signal", "imessage", "slack", "msteams"]) {
+  for (const channel of [
+    "telegram",
+    "whatsapp",
+    "discord",
+    "signal",
+    "imessage",
+    "slack",
+    "msteams",
+  ]) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes, policyFlips });
   }
 

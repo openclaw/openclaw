@@ -299,9 +299,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       mutated = true;
     }
     entry.outcome =
-      wait.status === "error"
-        ? { status: "error", error: wait.error }
-        : { status: "ok" };
+      wait.status === "error" ? { status: "error", error: wait.error } : { status: "ok" };
     mutated = true;
     if (mutated) persistSubagentRuns();
     if (!beginSubagentAnnounce(runId)) return;

@@ -105,9 +105,7 @@ function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boole
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
-    search && "apiKey" in search && typeof search.apiKey === "string"
-      ? search.apiKey.trim()
-      : "";
+    search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
   const fromEnv = (process.env.BRAVE_API_KEY ?? "").trim();
   return fromConfig || fromEnv || undefined;
 }
@@ -160,12 +158,7 @@ function readCache<T>(
   return { value: entry.value, cached: true };
 }
 
-function writeCache<T>(
-  cache: Map<string, CacheEntry<T>>,
-  key: string,
-  value: T,
-  ttlMs: number,
-) {
+function writeCache<T>(cache: Map<string, CacheEntry<T>>, key: string, value: T, ttlMs: number) {
   if (ttlMs <= 0) return;
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
@@ -319,7 +312,7 @@ async function runWebSearch(params: {
   }
 
   const data = (await res.json()) as BraveSearchResponse;
-  const results = Array.isArray(data.web?.results) ? data.web?.results ?? [] : [];
+  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
   const mapped = results.map((entry) => ({
     title: entry.title ?? "",
     url: entry.url ?? "",
@@ -463,8 +456,7 @@ export function createWebFetchTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
-      const extractMode =
-        readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
+      const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const result = await runWebFetch({
         url,

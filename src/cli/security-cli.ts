@@ -80,8 +80,10 @@ export function registerSecurityCli(program: Command) {
           for (const action of fixResult.actions) {
             const mode = action.mode.toString(8).padStart(3, "0");
             if (action.ok) lines.push(muted(`  chmod ${mode} ${action.path}`));
-            else if (action.skipped) lines.push(muted(`  skip chmod ${mode} ${action.path} (${action.skipped})`));
-            else if (action.error) lines.push(muted(`  chmod ${mode} ${action.path} failed: ${action.error}`));
+            else if (action.skipped)
+              lines.push(muted(`  skip chmod ${mode} ${action.path} (${action.skipped})`));
+            else if (action.error)
+              lines.push(muted(`  chmod ${mode} ${action.path} failed: ${action.error}`));
           }
           if (fixResult.errors.length > 0) {
             for (const err of fixResult.errors) lines.push(muted(`  error: ${err}`));

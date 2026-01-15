@@ -72,14 +72,11 @@ export async function fetchBrowserJson<T>(
       }
       return h;
     })();
-    res = await fetch(
-      url,
-      {
-        ...init,
-        ...(mergedHeaders ? { headers: mergedHeaders } : {}),
-        signal: ctrl.signal,
-      } as RequestInit,
-    );
+    res = await fetch(url, {
+      ...init,
+      ...(mergedHeaders ? { headers: mergedHeaders } : {}),
+      signal: ctrl.signal,
+    } as RequestInit);
   } catch (err) {
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   } finally {

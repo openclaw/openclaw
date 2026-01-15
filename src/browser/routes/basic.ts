@@ -111,9 +111,10 @@ export function registerBrowserBasicRoutes(app: express.Express, ctx: BrowserRou
     const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
     const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
-    const driver = toStringOrEmpty(
-      (req.body as { driver?: unknown })?.driver,
-    ) as "clawd" | "extension" | "";
+    const driver = toStringOrEmpty((req.body as { driver?: unknown })?.driver) as
+      | "clawd"
+      | "extension"
+      | "";
 
     if (!name) return jsonError(res, 400, "name is required");
 

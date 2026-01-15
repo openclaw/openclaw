@@ -351,7 +351,9 @@ function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFindin
     const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
     const gatewayAuth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
     const gatewayToken =
-      gatewayAuth.mode === "token" && typeof gatewayAuth.token === "string" && gatewayAuth.token.trim()
+      gatewayAuth.mode === "token" &&
+      typeof gatewayAuth.token === "string" &&
+      gatewayAuth.token.trim()
         ? gatewayAuth.token.trim()
         : null;
 
