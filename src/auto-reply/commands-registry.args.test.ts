@@ -94,4 +94,63 @@ describe("commands registry args", () => {
     });
     expect(menu).toBeNull();
   });
+
+  it("resolves function-based choices with a default provider/model context", () => {
+    let seen: { provider: string; model: string; commandKey: string; argName: string } | null =
+      null;
+
+    const command: ChatCommandDefinition = {
+      key: "think",
+      description: "think",
+      textAliases: [],
+      scope: "both",
+      argsMenu: "auto",
+      argsParsing: "positional",
+      args: [
+        {
+          name: "level",
+          description: "level",
+          type: "string",
+          choices: ({ provider, model, command, arg }) => {
+            seen = { provider, model, commandKey: command.key, argName: arg.name };
+            return ["low", "high"];
+          },
+        },
+      ],
+    };
+
+    const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
+    expect(menu?.arg.name).toBe("level");
+    expect(menu?.choices).toEqual(["low", "high"]);
+    expect(seen?.commandKey).toBe("think");
+    expect(seen?.argName).toBe("level");
+    expect(seen?.provider).toBeTruthy();
+    expect(seen?.model).toBeTruthy();
+  });
+
+  it("does not show menus when args were provided as raw text only", () => {
+    const command: ChatCommandDefinition = {
+      key: "cost",
+      description: "cost",
+      textAliases: [],
+      scope: "both",
+      argsMenu: "auto",
+      argsParsing: "none",
+      args: [
+        {
+          name: "mode",
+          description: "on or off",
+          type: "string",
+          choices: ["on", "off"],
+        },
+      ],
+    };
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: { raw: "on" },
+      cfg: {} as never,
+    });
+    expect(menu).toBeNull();
+  });
 });
