@@ -64,7 +64,6 @@ export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMe
       const trimmed = thinking.trim();
       hasDowngraded = true;
       if (!trimmed) return [];
-<<<<<<< HEAD
       return [{ type: "text" as const, text: thinking }];
     });
 
