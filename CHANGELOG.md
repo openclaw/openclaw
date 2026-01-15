@@ -21,6 +21,7 @@
 - Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
 - CLI/Docs: add per-command CLI doc pages and link them from `clawdbot <command> --help`.
 - Browser: copy the installed Chrome extension path to clipboard after `clawdbot browser extension install/path`.
+- WhatsApp: add `channels.whatsapp.sendReadReceipts` to disable auto read receipts. (#882) — thanks @chrisrodz.
 
 ### Fixes
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
