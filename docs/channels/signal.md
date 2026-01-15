@@ -124,6 +124,7 @@ Provider options:
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group sender allowlist.
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
+- `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap (MB).
 

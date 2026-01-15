@@ -189,6 +189,7 @@ Provider options:
 - `channels.imessage.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.imessage.groupAllowFrom`: group sender allowlist.
 - `channels.imessage.historyLimit` / `channels.imessage.accounts.*.historyLimit`: max group messages to include as context (0 disables).
+- `channels.imessage.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.imessage.dms["<handle>"].historyLimit`.
 - `channels.imessage.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
 - `channels.imessage.includeAttachments`: ingest attachments into context.
 - `channels.imessage.mediaMaxMb`: inbound/outbound media cap (MB).
