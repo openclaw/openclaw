@@ -280,8 +280,16 @@ function cleanSchemaForGeminiWithDefs(
           cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
         ]),
       );
-    } else if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
+    } else if (key === "items" && value) {
+      if (Array.isArray(value)) {
+        cleaned[key] = value.map((entry) =>
+          cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack),
+        );
+      } else if (typeof value === "object") {
+        cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
+      } else {
+        cleaned[key] = value;
+      }
     } else if (key === "anyOf" && Array.isArray(value)) {
       cleaned[key] =
         cleanedAnyOf ??
