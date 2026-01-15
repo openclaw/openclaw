@@ -282,13 +282,16 @@ function createProfileContext(
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
       if (profile.driver === "extension") {
-        throw new Error("tab not found");
+        throw new Error(
+          `tab not found (no attached Chrome tabs for profile "${profile.name}"). ` +
+            "Click the Clawdbot Browser Relay toolbar icon on the tab you want to control (badge ON).",
+        );
       }
       await openTab("about:blank");
     }
 
     const tabs = await listTabs();
-    const candidates = tabs.filter((t) => Boolean(t.wsUrl));
+    const candidates = profile.driver === "extension" ? tabs : tabs.filter((t) => Boolean(t.wsUrl));
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -308,12 +311,17 @@ function createProfileContext(
       return page ?? candidates.at(0) ?? null;
     };
 
-    const chosen = targetId ? resolveById(targetId) : pickDefault();
+    let chosen = targetId ? resolveById(targetId) : pickDefault();
+    if (!chosen && profile.driver === "extension" && candidates.length === 1) {
+      // If an agent passes a stale/foreign targetId but we only have a single attached tab,
+      // recover by using that tab instead of failing hard.
+      chosen = candidates[0] ?? null;
+    }
 
     if (chosen === "AMBIGUOUS") {
       throw new Error("ambiguous target id prefix");
     }
-    if (!chosen?.wsUrl) throw new Error("tab not found");
+    if (!chosen) throw new Error("tab not found");
     profileState.lastTargetId = chosen.targetId;
     return chosen;
   };
@@ -496,7 +504,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       return { status: 409, message: "ambiguous target id prefix" };
     }
     if (msg.includes("tab not found")) {
-      return { status: 404, message: "tab not found" };
+      return { status: 404, message: msg };
     }
     if (msg.includes("not found")) {
       return { status: 404, message: msg };

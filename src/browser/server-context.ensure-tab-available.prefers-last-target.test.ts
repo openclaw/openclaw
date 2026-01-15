@@ -96,4 +96,106 @@ describe("browser server-context ensureTabAvailable", () => {
     const second = await chrome.ensureTabAvailable();
     expect(second.targetId).toBe("A");
   });
+
+  it("falls back to the only attached tab when an invalid targetId is provided (extension)", async () => {
+    const fetchMock = vi.fn();
+    const responses = [
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+    ];
+
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) throw new Error(`unexpected fetch: ${u}`);
+      const next = responses.shift();
+      if (!next) throw new Error("no more responses");
+      return { ok: true, json: async () => next } as unknown as Response;
+    });
+
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const state: BrowserServerState = {
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+      server: null as any,
+      port: 0,
+      resolved: {
+        enabled: true,
+        controlUrl: "http://127.0.0.1:18791",
+        controlHost: "127.0.0.1",
+        controlPort: 18791,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        attachOnly: false,
+        defaultProfile: "chrome",
+        profiles: {
+          chrome: {
+            driver: "extension",
+            cdpUrl: "http://127.0.0.1:18792",
+            cdpPort: 18792,
+            color: "#00AA00",
+          },
+          clawd: { cdpPort: 18800, color: "#FF4500" },
+        },
+      },
+      profiles: new Map(),
+    };
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    const chosen = await chrome.ensureTabAvailable("NOT_A_TAB");
+    expect(chosen.targetId).toBe("A");
+  });
+
+  it("returns a descriptive message when no extension tabs are attached", async () => {
+    const fetchMock = vi.fn();
+    const responses = [[]];
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) throw new Error(`unexpected fetch: ${u}`);
+      const next = responses.shift();
+      if (!next) throw new Error("no more responses");
+      return { ok: true, json: async () => next } as unknown as Response;
+    });
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const state: BrowserServerState = {
+      // biome-ignore lint/suspicious/noExplicitAny: test stub
+      server: null as any,
+      port: 0,
+      resolved: {
+        enabled: true,
+        controlUrl: "http://127.0.0.1:18791",
+        controlHost: "127.0.0.1",
+        controlPort: 18791,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        attachOnly: false,
+        defaultProfile: "chrome",
+        profiles: {
+          chrome: {
+            driver: "extension",
+            cdpUrl: "http://127.0.0.1:18792",
+            cdpPort: 18792,
+            color: "#00AA00",
+          },
+          clawd: { cdpPort: 18800, color: "#FF4500" },
+        },
+      },
+      profiles: new Map(),
+    };
+
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+    await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
+  });
 });
