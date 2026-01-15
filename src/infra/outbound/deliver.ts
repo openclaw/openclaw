@@ -241,7 +241,6 @@ export async function deliverOutboundPayloads(params: {
       })),
     };
   };
-
   const normalizedPayloads = normalizeOutboundPayloads(payloads);
   for (const payload of normalizedPayloads) {
     try {
