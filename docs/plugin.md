@@ -33,6 +33,12 @@ clawdbot plugins install @clawdbot/voice-call
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 
+## Available plugins (official)
+
+- [Voice Call](/plugins/voice-call) — `@clawdbot/voice-call`
+- [Matrix](/channels/matrix) — `@clawdbot/matrix`
+- [Zalo](/channels/zalo) — `@clawdbot/zalo`
+
 Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
 

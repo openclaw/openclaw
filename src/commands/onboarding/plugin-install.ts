@@ -16,7 +16,24 @@ type InstallResult = {
   installed: boolean;
 };
 
-function resolveLocalPath(entry: ChannelPluginCatalogEntry, workspaceDir?: string): string | null {
+function hasGitWorkspace(workspaceDir?: string): boolean {
+  const candidates = new Set<string>();
+  candidates.add(path.join(process.cwd(), ".git"));
+  if (workspaceDir && workspaceDir !== process.cwd()) {
+    candidates.add(path.join(workspaceDir, ".git"));
+  }
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return true;
+  }
+  return false;
+}
+
+function resolveLocalPath(
+  entry: ChannelPluginCatalogEntry,
+  workspaceDir: string | undefined,
+  allowLocal: boolean,
+): string | null {
+  if (!allowLocal) return null;
   const raw = entry.install.localPath?.trim();
   if (!raw) return null;
   const candidates = new Set<string>();
@@ -113,7 +130,8 @@ export async function ensureOnboardingPluginInstalled(params: {
 }): Promise<InstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
-  const localPath = resolveLocalPath(entry, workspaceDir);
+  const allowLocal = hasGitWorkspace(workspaceDir);
+  const localPath = resolveLocalPath(entry, workspaceDir, allowLocal);
   const choice = await promptInstallChoice({
     entry,
     localPath,

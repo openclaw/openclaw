@@ -9,15 +9,26 @@ Status: supported via plugin (matrix-js-sdk). Direct messages, rooms, threads, m
 
 ## Plugin required
 Matrix ships as a plugin and is not bundled with the core install.
-- Install via CLI: `clawdbot plugins install @clawdbot/matrix`
-- Or select **Matrix** during onboarding and confirm the install prompt
-- Details: [Plugins](/plugin)
+
+Install via CLI (npm registry):
+```bash
+clawdbot plugins install @clawdbot/matrix
+```
+
+Local checkout (when running from a git repo):
+```bash
+clawdbot plugins install ./extensions/matrix
+```
+
+If you choose Matrix during configure/onboarding and a git checkout is detected,
+Clawdbot will offer the local install path automatically.
+
+Details: [Plugins](/plugin)
 
 ## Quick setup (beginner)
 1) Install the Matrix plugin:
-   - From a source checkout: `clawdbot plugins install ./extensions/matrix`
-   - From npm (if published): `clawdbot plugins install @clawdbot/matrix`
-   - Or pick **Matrix** in onboarding and confirm the install prompt
+   - From npm: `clawdbot plugins install @clawdbot/matrix`
+   - From a local checkout: `clawdbot plugins install ./extensions/matrix`
 2) Configure credentials:
    - Env: `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` (or `MATRIX_PASSWORD`)
    - Or config: `channels.matrix.*`
