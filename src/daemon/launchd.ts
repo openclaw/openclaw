@@ -415,6 +415,8 @@ export async function installLaunchAgent({
   }
   await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed LaunchAgent", plistPath)}\n`);
   stdout.write(`${formatLine("Logs", stdoutPath)}\n`);
   return { plistPath };

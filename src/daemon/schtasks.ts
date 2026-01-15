@@ -240,6 +240,8 @@ export async function installScheduledTask({
   }
 
   await execSchtasks(["/Run", "/TN", taskName]);
+  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
+  stdout.write("\n");
   stdout.write(`${formatLine("Installed Scheduled Task", taskName)}\n`);
   stdout.write(`${formatLine("Task script", scriptPath)}\n`);
   return { scriptPath };
