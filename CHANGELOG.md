@@ -2,6 +2,7 @@
 
 ## 2026.1.15 (unreleased)
 
+- Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
 - Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.

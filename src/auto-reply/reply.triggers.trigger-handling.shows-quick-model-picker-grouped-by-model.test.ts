@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
@@ -96,7 +95,7 @@ afterEach(() => {
 });
 
 describe("trigger handling", () => {
-  it("shows a quick /model picker grouped by model with providers", async () => {
+  it("shows a quick /model picker listing provider/model pairs", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
       const res = await getReplyFromConfig(
@@ -116,8 +115,11 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       const normalized = normalizeTestText(text ?? "");
       expect(normalized).toContain("Pick: /model <#> or /model <provider/model>");
-      expect(normalized).toContain("1) claude-opus-4-5 — anthropic, openrouter");
-      expect(normalized).toContain("3) gpt-5.2 — openai, openai-codex");
+      // Each provider/model combo is listed separately for clear selection
+      expect(normalized).toContain("anthropic/claude-opus-4-5");
+      expect(normalized).toContain("openrouter/anthropic/claude-opus-4-5");
+      expect(normalized).toContain("openai/gpt-5.2");
+      expect(normalized).toContain("openai-codex/gpt-5.2");
       expect(normalized).toContain("More: /model status");
       expect(normalized).not.toContain("reasoning");
       expect(normalized).not.toContain("image");
@@ -152,27 +154,12 @@ describe("trigger handling", () => {
       expect(store[sessionKey]?.modelOverride).toBeUndefined();
     });
   });
-  it("prefers the current provider when selecting /model <#>", async () => {
+  it("selects exact provider/model combo by index via /model <#>", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
       const sessionKey = "telegram:slash:111";
 
-      await fs.writeFile(
-        cfg.session.store,
-        JSON.stringify(
-          {
-            [sessionKey]: {
-              sessionId: "session-openrouter",
-              updatedAt: Date.now(),
-              providerOverride: "openrouter",
-              modelOverride: "anthropic/claude-opus-4-5",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
+      // /model 1 should select the first item (anthropic/claude-opus-4-5)
       const res = await getReplyFromConfig(
         {
           Body: "/model 1",
@@ -188,13 +175,15 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      // Selecting the default model shows "reset to default" instead of "set to"
       expect(normalizeTestText(text ?? "")).toContain(
-        "Model set to openrouter/anthropic/claude-opus-4-5",
+        "anthropic/claude-opus-4-5",
       );
 
       const store = loadSessionStore(cfg.session.store);
-      expect(store[sessionKey]?.providerOverride).toBe("openrouter");
-      expect(store[sessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
+      // When selecting the default, overrides are cleared
+      expect(store[sessionKey]?.providerOverride).toBeUndefined();
+      expect(store[sessionKey]?.modelOverride).toBeUndefined();
     });
   });
   it("selects a model by index via /model <#>", async () => {
