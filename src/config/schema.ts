@@ -202,6 +202,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",
+  "channels.slack.thread.historyScope": "Slack Thread History Scope",
+  "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "plugins.enabled": "Enable Plugins",
@@ -243,6 +245,10 @@ const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
+  "channels.slack.thread.historyScope":
+    'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
+  "channels.slack.thread.inheritParent":
+    "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order": "Ordered auth profile IDs per provider (used for automatic failover).",
   "auth.cooldowns.billingBackoffHours":
