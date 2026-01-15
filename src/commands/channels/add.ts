@@ -94,9 +94,9 @@ export async function channelsAddCommand(
     }
 
     await writeConfigFile(nextConfig);
-      await prompter.outro("Channels updated.");
-      return;
-    }
+    await prompter.outro("Channels updated.");
+    return;
+  }
 
   const channel = normalizeChannelId(opts.channel);
   if (!channel) {

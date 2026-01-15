@@ -28,4 +28,3 @@ describe("extractTextFromMessage", () => {
     expect(text).toContain("unknown error");
   });
 });
-
