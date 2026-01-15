@@ -332,7 +332,13 @@ export async function getPageForTargetId(opts: {
   const first = pages[0];
   if (!opts.targetId) return first;
   const found = await findPageByTargetId(browser, opts.targetId);
-  if (!found) throw new Error("tab not found");
+  if (!found) {
+    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
+    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
+    // only exposes a single Page, use it as a best-effort fallback.
+    if (pages.length === 1) return first;
+    throw new Error("tab not found");
+  }
   return found;
 }
 

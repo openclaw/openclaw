@@ -22,6 +22,7 @@
 - Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
 - Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
 - Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
+- Browser: fix `tab not found` for extension relay snapshots/actions when Playwright blocks `newCDPSession` (use the single available Page).
 - Control UI: show raw any-map entries in config views; move Docs link into the left nav.
 
 #### Plugins
