@@ -1541,7 +1541,7 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
 #### `agents.defaults.compaction` (reserve headroom + memory flush)
 
-`agents.defaults.compaction.mode` selects the compaction summarization strategy. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/compaction](/compaction).
+`agents.defaults.compaction.mode` selects the compaction summarization strategy. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/concepts/compaction](/concepts/compaction).
 
 `agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
 value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.

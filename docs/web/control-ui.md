@@ -62,7 +62,7 @@ Notes:
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or `stop|esc|abort|wait|exit`) to abort out-of-band
+  - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 
 ## Tailnet access (recommended)

@@ -1412,6 +1412,7 @@ abort
 esc
 wait
 exit
+interrupt
 ```
 
 These are abort triggers (not slash commands).
