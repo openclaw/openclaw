@@ -45,6 +45,7 @@
 - Sandbox: preserve configured PATH for `docker exec` so custom tools remain available. (#873) — thanks @akonyer.
 - Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
 - Telegram: aggregate split inbound messages into one prompt (reduces “one reply per fragment”).
+- Telegram: let control commands bypass per-chat sequentialization; always allow abort triggers.
 - Auto-reply: treat trailing `NO_REPLY` tokens as silent replies.
 - Config: prevent partial config writes from clobbering unrelated settings (base hash guard + merge patch for connection saves).
 
