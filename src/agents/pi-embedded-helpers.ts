@@ -7,11 +7,13 @@ export {
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
   classifyFailoverReason,
+  formatRawAssistantErrorForUi,
   formatAssistantErrorText,
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
   isBillingAssistantError,
+  parseApiErrorInfo,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
