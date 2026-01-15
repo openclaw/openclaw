@@ -230,6 +230,14 @@
       "destination": "/cli/sandbox"
     },
     {
+      "source": "/sandboxing",
+      "destination": "/gateway/sandboxing"
+    },
+    {
+      "source": "/sandboxing/",
+      "destination": "/gateway/sandboxing"
+    },
+    {
       "source": "/AGENTS.default",
       "destination": "/reference/AGENTS.default"
     },
