@@ -312,11 +312,12 @@ The agent sees reactions as **system notifications** in the conversation history
 **Configuration:**
 - `channels.telegram.reactionNotifications`: Controls which reactions trigger notifications
   - `"off"` — ignore all reactions (default when not set)
+  - `"own"` — notify when users react to bot messages (best-effort; in-memory)
   - `"all"` — notify for all reactions
 
 - `channels.telegram.reactionLevel`: Controls agent's reaction capability
   - `"off"` — agent cannot react to messages
-  - `"ack"` — bot sends acknowledgment reactions (👀 while processing)
+  - `"ack"` — bot sends acknowledgment reactions (👀 while processing) (default)
   - `"minimal"` — agent can react sparingly (guideline: 1 per 5-10 exchanges)
   - `"extensive"` — agent can react liberally when appropriate
 
@@ -402,8 +403,8 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
-- `channels.telegram.reactionNotifications`: `off | all` — control which reactions trigger system events (default: `off` when not set).
-- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `off` when not set).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `ack` when not set).
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).

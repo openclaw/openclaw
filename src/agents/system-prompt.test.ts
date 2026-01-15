@@ -208,4 +208,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("User can toggle with /elevated on|off.");
     expect(prompt).toContain("Current elevated level: on");
   });
+
+  it("includes reaction guidance when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      reactionGuidance: {
+        level: "minimal",
+        channel: "Telegram",
+      },
+    });
+
+    expect(prompt).toContain("## Reactions");
+    expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
 });

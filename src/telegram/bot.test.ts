@@ -151,6 +151,7 @@ describe("createTelegramBot", () => {
     setMessageReactionSpy.mockReset();
     answerCallbackQuerySpy.mockReset();
     setMyCommandsSpy.mockReset();
+    wasSentByBot.mockReset();
     middlewareUseSpy.mockReset();
     sequentializeSpy.mockReset();
     botCtorSpy.mockReset();
@@ -2130,6 +2131,99 @@ describe("createTelegramBot", () => {
       "Telegram reaction added: 🎉 by Ada on msg 99",
       expect.any(Object),
     );
+  });
+
+  it("skips reaction in own mode when message is not sent by bot", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+    wasSentByBot.mockReturnValue(false);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 503 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 99,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("allows reaction in own mode when message is sent by bot", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+    wasSentByBot.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 503 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 99,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips reaction from bot users", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+    wasSentByBot.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 503 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 99,
+        user: { id: 9, first_name: "Bot", is_bot: true },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🎉" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("skips reaction removal (only processes added reactions)", async () => {
