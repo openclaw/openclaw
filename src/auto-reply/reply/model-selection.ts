@@ -10,7 +10,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
@@ -189,7 +189,9 @@ export async function createModelSelectionState(params: {
         sessionEntry.updatedAt = Date.now();
         sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
-          await saveSessionStore(storePath, sessionStore);
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
         }
         resetModelOverride = true;
       }
@@ -218,7 +220,9 @@ export async function createModelSelectionState(params: {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await saveSessionStore(storePath, sessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
       }
     }
   }

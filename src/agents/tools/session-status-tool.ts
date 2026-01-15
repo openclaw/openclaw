@@ -25,7 +25,7 @@ import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import {
   formatUsageSummaryLine,
@@ -263,7 +263,9 @@ export function createSessionStatusTool(opts?: {
           delete nextEntry.authProfileOverride;
         }
         store[resolved.key] = nextEntry;
-        await saveSessionStore(storePath, store);
+        await updateSessionStore(storePath, (nextStore) => {
+          nextStore[resolved.key] = nextEntry;
+        });
         resolved.entry = nextEntry;
         changedModel = true;
       }

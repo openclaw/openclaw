@@ -5,7 +5,7 @@ import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -90,7 +90,13 @@ export async function tryFastAbortFromMessage(params: {
       entry.abortedLastRun = true;
       entry.updatedAt = Date.now();
       store[key] = entry;
-      await saveSessionStore(storePath, store);
+      await updateSessionStore(storePath, (nextStore) => {
+        const nextEntry = nextStore[key] ?? entry;
+        if (!nextEntry) return;
+        nextEntry.abortedLastRun = true;
+        nextEntry.updatedAt = Date.now();
+        nextStore[key] = nextEntry;
+      });
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }

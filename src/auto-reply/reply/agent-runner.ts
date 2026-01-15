@@ -10,7 +10,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -156,7 +156,9 @@ export async function runReplyAgent(params: {
         activeSessionEntry.updatedAt = Date.now();
         activeSessionStore[sessionKey] = activeSessionEntry;
         if (storePath) {
-          await saveSessionStore(storePath, activeSessionStore);
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = activeSessionEntry as SessionEntry;
+          });
         }
       }
       typing.cleanup();
@@ -170,7 +172,9 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = Date.now();
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await saveSessionStore(storePath, activeSessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = activeSessionEntry as SessionEntry;
+        });
       }
     }
     typing.cleanup();
@@ -224,7 +228,9 @@ export async function runReplyAgent(params: {
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
     try {
-      await saveSessionStore(storePath, activeSessionStore);
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = nextEntry;
+      });
     } catch (err) {
       defaultRuntime.error(
         `Failed to persist session reset after compaction failure (${sessionKey}): ${String(err)}`,
@@ -280,7 +286,9 @@ export async function runReplyAgent(params: {
       activeSessionEntry.updatedAt = Date.now();
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await saveSessionStore(storePath, activeSessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = activeSessionEntry as SessionEntry;
+        });
       }
     }
 

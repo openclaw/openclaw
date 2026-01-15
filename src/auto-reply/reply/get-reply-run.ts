@@ -9,7 +9,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
@@ -276,7 +276,9 @@ export async function runPreparedReply(
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await saveSessionStore(storePath, sessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
       }
     }
   }

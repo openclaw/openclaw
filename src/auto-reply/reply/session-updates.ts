@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
@@ -111,7 +111,9 @@ export async function ensureSkillSnapshot(params: {
     };
     sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
     if (storePath) {
-      await saveSessionStore(storePath, sessionStore);
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
+      });
     }
     systemSent = true;
   }
@@ -143,7 +145,9 @@ export async function ensureSkillSnapshot(params: {
     };
     sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...nextEntry };
     if (storePath) {
-      await saveSessionStore(storePath, sessionStore);
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = { ...store[sessionKey], ...nextEntry };
+      });
     }
   }
 
@@ -168,7 +172,13 @@ export async function incrementCompactionCount(params: {
     updatedAt: now,
   };
   if (storePath) {
-    await saveSessionStore(storePath, sessionStore);
+    await updateSessionStore(storePath, (store) => {
+      store[sessionKey] = {
+        ...store[sessionKey],
+        compactionCount: nextCount,
+        updatedAt: now,
+      };
+    });
   }
   return nextCount;
 }

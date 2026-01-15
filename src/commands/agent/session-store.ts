@@ -4,7 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
@@ -68,5 +68,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.totalTokens = promptTokens > 0 ? promptTokens : (usage.total ?? input);
   }
   sessionStore[sessionKey] = next;
-  await saveSessionStore(storePath, sessionStore);
+  await updateSessionStore(storePath, (store) => {
+    store[sessionKey] = next;
+  });
 }

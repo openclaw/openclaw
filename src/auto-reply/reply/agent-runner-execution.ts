@@ -14,7 +14,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionTranscriptPath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -383,6 +383,7 @@ export async function runAgentTurnWithFallback(params: {
         params.activeSessionStore &&
         params.storePath
       ) {
+        const sessionKey = params.sessionKey;
         const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
         defaultRuntime.error(
           `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
@@ -399,9 +400,10 @@ export async function runAgentTurnWithFallback(params: {
             }
           }
 
-          // Remove session entry from store
-          delete params.activeSessionStore[params.sessionKey];
-          await saveSessionStore(params.storePath, params.activeSessionStore);
+          // Remove session entry from store using a fresh, locked snapshot.
+          await updateSessionStore(params.storePath, (store) => {
+            delete store[sessionKey];
+          });
         } catch (cleanupErr) {
           defaultRuntime.error(
             `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,

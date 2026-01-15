@@ -14,7 +14,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
@@ -184,7 +184,9 @@ export async function persistInlineDirectives(params: {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
-        await saveSessionStore(storePath, sessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
       }
       if (elevatedChanged) {
         const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;

@@ -1,5 +1,5 @@
 import type { SessionEntry } from "../../config/sessions.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { setAbortMemory } from "./abort.js";
 
 export async function applySessionHints(params: {
@@ -23,7 +23,16 @@ export async function applySessionHints(params: {
       params.sessionEntry.updatedAt = Date.now();
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
-        await saveSessionStore(params.storePath, params.sessionStore);
+        const sessionKey = params.sessionKey;
+        await updateSessionStore(params.storePath, (store) => {
+          const entry = store[sessionKey] ?? params.sessionEntry;
+          if (!entry) return;
+          store[sessionKey] = {
+            ...entry,
+            abortedLastRun: false,
+            updatedAt: Date.now(),
+          };
+        });
       }
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);

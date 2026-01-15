@@ -36,7 +36,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../config/sessions.js";
 import {
   clearAgentRunContext,
@@ -173,7 +173,9 @@ export async function agentCommand(
         skillsSnapshot,
       };
       sessionStore[sessionKey] = next;
-      await saveSessionStore(storePath, sessionStore);
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = next;
+      });
       sessionEntry = next;
     }
 
@@ -188,7 +190,9 @@ export async function agentCommand(
       }
       applyVerboseOverride(next, verboseOverride);
       sessionStore[sessionKey] = next;
-      await saveSessionStore(storePath, sessionStore);
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = next;
+      });
     }
 
     const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
@@ -252,7 +256,9 @@ export async function agentCommand(
           delete sessionEntry.modelOverride;
           sessionEntry.updatedAt = Date.now();
           sessionStore[sessionKey] = sessionEntry;
-          await saveSessionStore(storePath, sessionStore);
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
         }
       }
     }
@@ -279,7 +285,9 @@ export async function agentCommand(
         sessionEntry.updatedAt = Date.now();
         if (sessionStore && sessionKey) {
           sessionStore[sessionKey] = sessionEntry;
-          await saveSessionStore(storePath, sessionStore);
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
         }
       }
     }
@@ -307,7 +315,9 @@ export async function agentCommand(
         sessionEntry.thinkingLevel = "high";
         sessionEntry.updatedAt = Date.now();
         sessionStore[sessionKey] = sessionEntry;
-        await saveSessionStore(storePath, sessionStore);
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
       }
     }
     const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {

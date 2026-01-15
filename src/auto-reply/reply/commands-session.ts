@@ -1,6 +1,6 @@
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { saveSessionStore } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -71,7 +71,9 @@ export const handleActivationCommand: CommandHandler = async (params, allowTextC
     params.sessionEntry.updatedAt = Date.now();
     params.sessionStore[params.sessionKey] = params.sessionEntry;
     if (params.storePath) {
-      await saveSessionStore(params.storePath, params.sessionStore);
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      });
     }
   }
   return {
@@ -107,7 +109,9 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
     params.sessionEntry.updatedAt = Date.now();
     params.sessionStore[params.sessionKey] = params.sessionEntry;
     if (params.storePath) {
-      await saveSessionStore(params.storePath, params.sessionStore);
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      });
     }
   }
   const label =
@@ -190,7 +194,9 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     abortTarget.entry.updatedAt = Date.now();
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
-      await saveSessionStore(params.storePath, params.sessionStore);
+      await updateSessionStore(params.storePath, (store) => {
+        store[abortTarget.key] = abortTarget.entry as SessionEntry;
+      });
     }
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
@@ -215,7 +221,9 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     abortTarget.entry.updatedAt = Date.now();
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
-      await saveSessionStore(params.storePath, params.sessionStore);
+      await updateSessionStore(params.storePath, (store) => {
+        store[abortTarget.key] = abortTarget.entry as SessionEntry;
+      });
     }
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);

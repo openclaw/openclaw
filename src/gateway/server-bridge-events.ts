@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
-import { saveSessionStore } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BridgeEvent, BridgeHandlersContext } from "./server-bridge-types.js";
@@ -32,22 +32,23 @@ export const handleBridgeEvent = async (
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      store[canonicalKey] = {
-        sessionId,
-        updatedAt: now,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        systemSent: entry?.systemSent,
-        sendPolicy: entry?.sendPolicy,
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-      };
       if (storePath) {
-        await saveSessionStore(storePath, store);
+        await updateSessionStore(storePath, (store) => {
+          store[canonicalKey] = {
+            sessionId,
+            updatedAt: now,
+            thinkingLevel: entry?.thinkingLevel,
+            verboseLevel: entry?.verboseLevel,
+            reasoningLevel: entry?.reasoningLevel,
+            systemSent: entry?.systemSent,
+            sendPolicy: entry?.sendPolicy,
+            lastChannel: entry?.lastChannel,
+            lastTo: entry?.lastTo,
+          };
+        });
       }
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
@@ -102,22 +103,23 @@ export const handleBridgeEvent = async (
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const { storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      store[canonicalKey] = {
-        sessionId,
-        updatedAt: now,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        systemSent: entry?.systemSent,
-        sendPolicy: entry?.sendPolicy,
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-      };
       if (storePath) {
-        await saveSessionStore(storePath, store);
+        await updateSessionStore(storePath, (store) => {
+          store[canonicalKey] = {
+            sessionId,
+            updatedAt: now,
+            thinkingLevel: entry?.thinkingLevel,
+            verboseLevel: entry?.verboseLevel,
+            reasoningLevel: entry?.reasoningLevel,
+            systemSent: entry?.systemSent,
+            sendPolicy: entry?.sendPolicy,
+            lastChannel: entry?.lastChannel,
+            lastTo: entry?.lastTo,
+          };
+        });
       }
 
       void agentCommand(

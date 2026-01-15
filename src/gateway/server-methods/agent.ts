@@ -6,7 +6,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -136,7 +136,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
 
     if (requestedSessionKey) {
-      const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
+      const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
@@ -178,11 +178,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       const canonicalSessionKey = canonicalKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      if (store) {
-        store[canonicalSessionKey] = nextEntry;
-        if (storePath) {
-          await saveSessionStore(storePath, store);
-        }
+      if (storePath) {
+        await updateSessionStore(storePath, (store) => {
+          store[canonicalSessionKey] = nextEntry;
+        });
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {

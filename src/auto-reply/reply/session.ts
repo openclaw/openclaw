@@ -20,7 +20,7 @@ import {
   resolveStorePath,
   type SessionEntry,
   type SessionScope,
-  saveSessionStore,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -188,6 +188,11 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  // Track the originating channel/to for announce routing (subagent announce-back).
+  const lastChannel =
+    (ctx.OriginatingChannel as string | undefined)?.trim() || baseEntry?.lastChannel;
+  const lastTo = ctx.OriginatingTo?.trim() || ctx.To?.trim() || baseEntry?.lastTo;
+  const lastAccountId = ctx.AccountId?.trim() || baseEntry?.lastAccountId;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -212,6 +217,10 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     room: baseEntry?.room,
     space: baseEntry?.space,
+    // Track originating channel for subagent announce routing.
+    lastChannel,
+    lastTo,
+    lastAccountId,
   };
   if (groupResolution?.channel) {
     const channel = groupResolution.channel;
@@ -270,7 +279,15 @@ export async function initSessionState(params: {
     );
   }
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await saveSessionStore(storePath, sessionStore);
+  await updateSessionStore(storePath, (store) => {
+    if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
+      if (store[groupResolution.legacyKey] && !store[sessionKey]) {
+        store[sessionKey] = store[groupResolution.legacyKey];
+      }
+      delete store[groupResolution.legacyKey];
+    }
+    store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+  });
 
   const sessionCtx: TemplateContext = {
     ...ctx,

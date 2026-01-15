@@ -17,7 +17,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
-  saveSessionStore,
+  updateSessionStore,
 } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -150,8 +150,13 @@ async function restoreHeartbeatUpdatedAt(params: {
   if (!entry) return;
   const nextUpdatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
   if (entry.updatedAt === nextUpdatedAt) return;
-  store[sessionKey] = { ...entry, updatedAt: nextUpdatedAt };
-  await saveSessionStore(storePath, store);
+  await updateSessionStore(storePath, (nextStore) => {
+    const nextEntry = nextStore[sessionKey] ?? entry;
+    if (!nextEntry) return;
+    const resolvedUpdatedAt = Math.max(nextEntry.updatedAt ?? 0, updatedAt);
+    if (nextEntry.updatedAt === resolvedUpdatedAt) return;
+    nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+  });
 }
 
 function normalizeHeartbeatReply(

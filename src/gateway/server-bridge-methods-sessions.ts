@@ -8,10 +8,9 @@ import {
 } from "../agents/pi-embedded.js";
 import { loadConfig } from "../config/config.js";
 import {
-  loadSessionStore,
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
-  saveSessionStore,
+  updateSessionStore,
 } from "../config/sessions.js";
 import { clearCommandLane } from "../process/command-queue.js";
 import {
@@ -126,19 +125,20 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
       const cfg = loadConfig();
       const target = resolveGatewaySessionStoreTarget({ cfg, key });
       const storePath = target.storePath;
-      const store = loadSessionStore(storePath);
-      const primaryKey = target.storeKeys[0] ?? key;
-      const existingKey = target.storeKeys.find((candidate) => store[candidate]);
-      if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
-        store[primaryKey] = store[existingKey];
-        delete store[existingKey];
-      }
-      const applied = await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        patch: p,
-        loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+      const applied = await updateSessionStore(storePath, async (store) => {
+        const primaryKey = target.storeKeys[0] ?? key;
+        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+        if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+          store[primaryKey] = store[existingKey];
+          delete store[existingKey];
+        }
+        return await applySessionsPatchToStore({
+          cfg,
+          store,
+          storeKey: primaryKey,
+          patch: p,
+          loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+        });
       });
       if (!applied.ok) {
         return {
@@ -150,7 +150,6 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           },
         };
       }
-      await saveSessionStore(storePath, store);
       const payload: SessionsPatchResult = {
         ok: true,
         path: storePath,
@@ -182,32 +181,43 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
         };
       }
 
-      const { storePath, store, entry } = loadSessionEntry(key);
-      const now = Date.now();
-      const next: SessionEntry = {
-        sessionId: randomUUID(),
-        updatedAt: now,
-        systemSent: false,
-        abortedLastRun: false,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        model: entry?.model,
-        contextTokens: entry?.contextTokens,
-        sendPolicy: entry?.sendPolicy,
-        label: entry?.label,
-        displayName: entry?.displayName,
-        chatType: entry?.chatType,
-        channel: entry?.channel,
-        subject: entry?.subject,
-        room: entry?.room,
-        space: entry?.space,
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        skillsSnapshot: entry?.skillsSnapshot,
-      };
-      store[key] = next;
-      await saveSessionStore(storePath, store);
+      const cfg = loadConfig();
+      const target = resolveGatewaySessionStoreTarget({ cfg, key });
+      const storePath = target.storePath;
+      const next = await updateSessionStore(storePath, (store) => {
+        const primaryKey = target.storeKeys[0] ?? key;
+        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+        if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+          store[primaryKey] = store[existingKey];
+          delete store[existingKey];
+        }
+        const entry = store[primaryKey];
+        const now = Date.now();
+        const nextEntry: SessionEntry = {
+          sessionId: randomUUID(),
+          updatedAt: now,
+          systemSent: false,
+          abortedLastRun: false,
+          thinkingLevel: entry?.thinkingLevel,
+          verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
+          model: entry?.model,
+          contextTokens: entry?.contextTokens,
+          sendPolicy: entry?.sendPolicy,
+          label: entry?.label,
+          displayName: entry?.displayName,
+          chatType: entry?.chatType,
+          channel: entry?.channel,
+          subject: entry?.subject,
+          room: entry?.room,
+          space: entry?.space,
+          lastChannel: entry?.lastChannel,
+          lastTo: entry?.lastTo,
+          skillsSnapshot: entry?.skillsSnapshot,
+        };
+        store[primaryKey] = nextEntry;
+        return nextEntry;
+      });
       return {
         ok: true,
         payloadJSON: JSON.stringify({ ok: true, key, entry: next }),
@@ -249,9 +259,11 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
 
       const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
-      const { storePath, store, entry } = loadSessionEntry(key);
+      const cfg = loadConfig();
+      const target = resolveGatewaySessionStoreTarget({ cfg, key });
+      const storePath = target.storePath;
+      const { entry } = loadSessionEntry(key);
       const sessionId = entry?.sessionId;
-      const existed = Boolean(store[key]);
       clearCommandLane(resolveEmbeddedSessionLane(key));
       if (sessionId && isEmbeddedPiRunActive(sessionId)) {
         abortEmbeddedPiRun(sessionId);
@@ -266,8 +278,19 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           };
         }
       }
-      if (existed) delete store[key];
-      await saveSessionStore(storePath, store);
+      const deletion = await updateSessionStore(storePath, (store) => {
+        const primaryKey = target.storeKeys[0] ?? key;
+        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+        if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+          store[primaryKey] = store[existingKey];
+          delete store[existingKey];
+        }
+        const entryToDelete = store[primaryKey];
+        const existed = Boolean(entryToDelete);
+        if (existed) delete store[primaryKey];
+        return { existed, entry: entryToDelete };
+      });
+      const existed = deletion.existed;
 
       const archived: string[] = [];
       if (deleteTranscript && sessionId) {
@@ -323,7 +346,20 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           ? Math.max(1, Math.floor(p.maxLines))
           : 400;
 
-      const { storePath, store, entry } = loadSessionEntry(key);
+      const cfg = loadConfig();
+      const target = resolveGatewaySessionStoreTarget({ cfg, key });
+      const storePath = target.storePath;
+      // Resolve entry inside the lock, but compact outside to avoid holding it.
+      const compactTarget = await updateSessionStore(storePath, (store) => {
+        const primaryKey = target.storeKeys[0] ?? key;
+        const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+        if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+          store[primaryKey] = store[existingKey];
+          delete store[existingKey];
+        }
+        return { entry: store[primaryKey], primaryKey };
+      });
+      const entry = compactTarget.entry;
       const sessionId = entry?.sessionId;
       if (!sessionId) {
         return {
@@ -373,13 +409,14 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
       fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
 
       // Token counts no longer match; clear so status + UI reflect reality after the next turn.
-      if (store[key]) {
-        delete store[key].inputTokens;
-        delete store[key].outputTokens;
-        delete store[key].totalTokens;
-        store[key].updatedAt = Date.now();
-        await saveSessionStore(storePath, store);
-      }
+      await updateSessionStore(storePath, (store) => {
+        const entryToUpdate = store[compactTarget.primaryKey];
+        if (!entryToUpdate) return;
+        delete entryToUpdate.inputTokens;
+        delete entryToUpdate.outputTokens;
+        delete entryToUpdate.totalTokens;
+        entryToUpdate.updatedAt = Date.now();
+      });
 
       return {
         ok: true,
