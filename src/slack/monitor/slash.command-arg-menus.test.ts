@@ -197,4 +197,27 @@ describe("Slack native command argument menus", () => {
       }),
     );
   });
+
+  it("treats malformed percent-encoding as an invalid button (no throw)", async () => {
+    const { actions, postEphemeral, ctx, account } = createHarness();
+    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+
+    const handler = actions.get("clawdbot_cmdarg");
+    if (!handler) throw new Error("Missing arg-menu action handler");
+
+    await handler({
+      ack: vi.fn().mockResolvedValue(undefined),
+      action: { value: "cmdarg|%E0%A4%A|mode|on|U1" },
+      body: { user: { id: "U1" }, channel: { id: "C1" } },
+    });
+
+    expect(postEphemeral).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: "bot-token",
+        channel: "C1",
+        user: "U1",
+        text: "Sorry, that button is no longer valid.",
+      }),
+    );
+  });
 });

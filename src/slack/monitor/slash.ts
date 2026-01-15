@@ -72,11 +72,23 @@ function parseSlackCommandArgValue(raw?: string | null): {
   if (parts.length !== 5 || parts[0] !== SLACK_COMMAND_ARG_VALUE_PREFIX) return null;
   const [, command, arg, value, userId] = parts;
   if (!command || !arg || !value || !userId) return null;
+  const decode = (text: string) => {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return null;
+    }
+  };
+  const decodedCommand = decode(command);
+  const decodedArg = decode(arg);
+  const decodedValue = decode(value);
+  const decodedUserId = decode(userId);
+  if (!decodedCommand || !decodedArg || !decodedValue || !decodedUserId) return null;
   return {
-    command: decodeURIComponent(command),
-    arg: decodeURIComponent(arg),
-    value: decodeURIComponent(value),
-    userId: decodeURIComponent(userId),
+    command: decodedCommand,
+    arg: decodedArg,
+    value: decodedValue,
+    userId: decodedUserId,
   };
 }
 
