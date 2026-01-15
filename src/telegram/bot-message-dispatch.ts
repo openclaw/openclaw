@@ -163,14 +163,16 @@ export const dispatchTelegramMessage = async ({
       disableBlockStreaming,
       onModelSelected: (ctx) => {
         // Mutate the object directly instead of reassigning to ensure the closure sees updates
-        logVerbose(
+        // eslint-disable-next-line no-console
+        console.log(
           `[responsePrefix] telegram onModelSelected fired: provider=${ctx.provider}, model=${ctx.model}, thinkLevel=${ctx.thinkLevel}`,
         );
         prefixContext.provider = ctx.provider;
         prefixContext.model = extractShortModelName(ctx.model);
         prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
         prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-        logVerbose(`[responsePrefix] telegram prefixContext updated: ${JSON.stringify(prefixContext)}`);
+        // eslint-disable-next-line no-console
+        console.log(`[responsePrefix] telegram prefixContext updated: ${JSON.stringify(prefixContext)}`);
       },
     },
   });
