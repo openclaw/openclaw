@@ -270,7 +270,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "token",
+      mode: "oauth",
     });
   }
 

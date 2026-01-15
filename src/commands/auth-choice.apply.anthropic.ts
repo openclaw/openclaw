@@ -84,7 +84,7 @@ export async function applyAuthChoiceAnthropic(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "token",
+      mode: "oauth",
     });
     return { config: nextConfig };
   }
@@ -146,7 +146,7 @@ export async function applyAuthChoiceAnthropic(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "token",
+      mode: "oauth",
     });
     return { config: nextConfig };
   }
