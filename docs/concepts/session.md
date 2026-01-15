@@ -7,6 +7,11 @@ read_when:
 
 Clawdbot treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
 
+Use `session.dmScope` to control how **direct messages** are grouped:
+- `main` (default): all DMs share the main session for continuity.
+- `per-peer`: isolate by sender id across channels.
+- `per-channel-peer`: isolate by channel + sender (recommended for multi-user inboxes).
+
 ## Gateway is the source of truth
 All session state is **owned by the gateway** (the “master” Clawdbot). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
 
@@ -32,8 +37,11 @@ the workspace is writable. See [Memory](/concepts/memory) and
 [Compaction](/concepts/compaction).
 
 ## Mapping transports → session keys
-- Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
-  - Multiple phone numbers and channels can map to the same agent main key; they act as transports into one conversation.
+- Direct chats follow `session.dmScope` (default `main`).
+  - `main`: `agent:<agentId>:<mainKey>` (continuity across devices/channels).
+    - Multiple phone numbers and channels can map to the same agent main key; they act as transports into one conversation.
+  - `per-peer`: `agent:<agentId>:dm:<peerId>`.
+  - `per-channel-peer`: `agent:<agentId>:<channel>:dm:<peerId>`.
 - Group chats isolate state: `agent:<agentId>:<channel>:group:<id>` (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.
@@ -77,6 +85,7 @@ Send these as standalone messages so they register.
 {
   session: {
     scope: "per-sender",      // keep group keys separate
+    dmScope: "main",          // DM continuity (set per-channel-peer for shared inboxes)
     idleMinutes: 120,
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdbot/agents/{agentId}/sessions/sessions.json",

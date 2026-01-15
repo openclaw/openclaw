@@ -20,3 +20,4 @@ clawdbot security audit --deep
 clawdbot security audit --fix
 ```
 
+The audit warns when multiple DM senders share the main session and recommends `session.dmScope="per-channel-peer"` for shared inboxes.

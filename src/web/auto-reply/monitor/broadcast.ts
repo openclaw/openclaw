@@ -58,6 +58,7 @@ export async function maybeBroadcastMessage(params: {
           kind: params.msg.chatType === "group" ? "group" : "dm",
           id: params.peerId,
         },
+        dmScope: params.cfg.session?.dmScope,
       }),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: normalizedAgentId,

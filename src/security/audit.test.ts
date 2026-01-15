@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { runSecurityAudit } from "./audit.js";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -171,6 +172,54 @@ describe("security audit", () => {
       if (prev === undefined) delete process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
       else process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN = prev;
     }
+  });
+
+  it("warns when multiple DM senders share the main session", async () => {
+    const cfg: ClawdbotConfig = { session: { dmScope: "main" } };
+    const plugins: ChannelPlugin[] = [
+      {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => ({
+            policy: "allowlist",
+            allowFrom: ["user-a", "user-b"],
+            policyPath: "channels.whatsapp.dmPolicy",
+            allowFromPath: "channels.whatsapp.",
+            approveHint: "approve",
+          }),
+        },
+      },
+    ];
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "channels.whatsapp.dm.scope_main_multiuser",
+          severity: "warn",
+        }),
+      ]),
+    );
   });
 
   it("adds a warning when deep probe fails", async () => {

@@ -123,6 +123,18 @@ clawdbot pairing approve <channel> <code>
 
 Details + files on disk: [Pairing](/start/pairing)
 
+## DM session isolation (multi-user mode)
+
+By default, Clawdbot routes **all DMs into the main session** so your assistant has continuity across devices and channels. If **multiple people** can DM the bot (open DMs or a multi-person allowlist), consider isolating DM sessions:
+
+```json5
+{
+  session: { dmScope: "per-channel-peer" }
+}
+```
+
+This prevents cross-user context leakage while keeping group chats isolated. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
+
 ## Allowlists (DM + groups) — terminology
 
 Clawdbot has two separate “who can trigger me?” layers:

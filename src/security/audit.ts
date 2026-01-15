@@ -19,6 +19,7 @@ import {
   collectSyncedFolderFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
   formatOctal,
   isGroupReadable,
@@ -386,10 +387,25 @@ async function collectChannelSecurityFindings(params: {
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
     allowFromPath: string;
+    normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
     const configAllowFrom = normalizeAllowFromList(input.allowFrom);
     const hasWildcard = configAllowFrom.includes("*");
+    const dmScope = params.cfg.session?.dmScope ?? "main";
+    const storeAllowFrom = await readChannelAllowFromStore(input.provider).catch(() => []);
+    const normalizeEntry = input.normalizeEntry ?? ((value: string) => value);
+    const normalizedCfg = configAllowFrom
+      .filter((value) => value !== "*")
+      .map((value) => normalizeEntry(value))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const normalizedStore = storeAllowFrom
+      .map((value) => normalizeEntry(value))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (input.dmPolicy === "open") {
       const allowFromKey = `${input.allowFromPath}allowFrom`;
@@ -408,7 +424,6 @@ async function collectChannelSecurityFindings(params: {
           detail: `"open" requires ${allowFromKey} to include "*".`,
         });
       }
-      return;
     }
 
     if (input.dmPolicy === "disabled") {
@@ -417,6 +432,18 @@ async function collectChannelSecurityFindings(params: {
         severity: "info",
         title: `${input.label} DMs are disabled`,
         detail: `${policyPath}="disabled" ignores inbound DMs.`,
+      });
+      return;
+    }
+
+    if (dmScope === "main" && isMultiUserDm) {
+      findings.push({
+        checkId: `channels.${input.provider}.dm.scope_main_multiuser`,
+        severity: "warn",
+        title: `${input.label} DMs share the main session`,
+        detail:
+          "Multiple DM senders currently share the main session, which can leak context across users.",
+        remediation: 'Set session.dmScope="per-channel-peer" to isolate DM sessions per sender.',
       });
     }
   };
@@ -450,6 +477,7 @@ async function collectChannelSecurityFindings(params: {
         allowFrom: dmPolicy.allowFrom,
         policyPath: dmPolicy.policyPath,
         allowFromPath: dmPolicy.allowFromPath,
+        normalizeEntry: dmPolicy.normalizeEntry,
       });
     }
 

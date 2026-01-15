@@ -18,6 +18,32 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("default");
   });
 
+  test("dmScope=per-peer isolates DM sessions by sender id", () => {
+    const cfg: ClawdbotConfig = {
+      session: { dmScope: "per-peer" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "dm", id: "+15551234567" },
+    });
+    expect(route.sessionKey).toBe("agent:main:dm:+15551234567");
+  });
+
+  test("dmScope=per-channel-peer isolates DM sessions per channel and sender", () => {
+    const cfg: ClawdbotConfig = {
+      session: { dmScope: "per-channel-peer" },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "dm", id: "+15551234567" },
+    });
+    expect(route.sessionKey).toBe("agent:main:whatsapp:dm:+15551234567");
+  });
+
   test("peer binding wins over account binding", () => {
     const cfg: ClawdbotConfig = {
       bindings: [
