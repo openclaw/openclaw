@@ -1,5 +1,10 @@
 import type { BrowserFormField } from "./client-actions-core.js";
-import { ensurePageState, getPageForTargetId, refLocator } from "./pw-session.js";
+import {
+  ensurePageState,
+  getPageForTargetId,
+  refLocator,
+  restoreRoleRefsForTarget,
+} from "./pw-session.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export async function highlightViaPlaywright(opts: {
@@ -9,6 +14,7 @@ export async function highlightViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const ref = requireRef(opts.ref);
   try {
     await refLocator(page, ref).highlight();
@@ -31,6 +37,7 @@ export async function clickViaPlaywright(opts: {
     targetId: opts.targetId,
   });
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const ref = requireRef(opts.ref);
   const locator = refLocator(page, ref);
   const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
@@ -62,6 +69,7 @@ export async function hoverViaPlaywright(opts: {
   const ref = requireRef(opts.ref);
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   try {
     await refLocator(page, ref).hover({
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -83,6 +91,7 @@ export async function dragViaPlaywright(opts: {
   if (!startRef || !endRef) throw new Error("startRef and endRef are required");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   try {
     await refLocator(page, startRef).dragTo(refLocator(page, endRef), {
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -103,6 +112,7 @@ export async function selectOptionViaPlaywright(opts: {
   if (!opts.values?.length) throw new Error("values are required");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   try {
     await refLocator(page, ref).selectOption(opts.values, {
       timeout: Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000)),
@@ -139,6 +149,7 @@ export async function typeViaPlaywright(opts: {
   const text = String(opts.text ?? "");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const ref = requireRef(opts.ref);
   const locator = refLocator(page, ref);
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
@@ -165,6 +176,7 @@ export async function fillFormViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
   for (const field of opts.fields) {
     const ref = field.ref.trim();
@@ -206,6 +218,7 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) throw new Error("function is required");
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   if (opts.ref) {
     const locator = refLocator(page, opts.ref);
     // Use Function constructor at runtime to avoid esbuild adding __name helper

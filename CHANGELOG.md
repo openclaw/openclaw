@@ -63,6 +63,7 @@
 - Gateway/UI: ship session defaults in the hello snapshot so the Control UI canonicalizes main session keys (no bare `main` alias).
 - Agents: skip thinking/final tag stripping inside Markdown code spans. (#939) — thanks @ngutman.
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
+- Browser: persist role snapshot refs per CDP target so `snapshot` → `act` clicks work even if Playwright returns a different Page instance.
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
 - macOS: format ConnectionsStore config to satisfy SwiftFormat lint. (#852) — thanks @mneves75.
 - Packaging: run `pnpm build` on `prepack` so npm publishes include fresh `dist/` output.

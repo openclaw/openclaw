@@ -70,6 +70,12 @@ type PageState = {
   roleRefsFrameSelector?: string;
 };
 
+type RoleRefs = NonNullable<PageState["roleRefs"]>;
+type RoleRefsCacheEntry = {
+  refs: RoleRefs;
+  frameSelector?: string;
+};
+
 type ContextState = {
   traceActive: boolean;
 };
@@ -78,6 +84,11 @@ const pageStates = new WeakMap<Page, PageState>();
 const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
+
+// Best-effort cache to make role refs stable even if Playwright returns a different Page object
+// for the same CDP target across requests.
+const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
+const MAX_ROLE_REFS_CACHE = 50;
 
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
@@ -88,6 +99,44 @@ let connecting: Promise<ConnectedBrowser> | null = null;
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function roleRefsKey(cdpUrl: string, targetId: string) {
+  return `${normalizeCdpUrl(cdpUrl)}::${targetId}`;
+}
+
+export function rememberRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+}): void {
+  const targetId = opts.targetId.trim();
+  if (!targetId) return;
+  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+    refs: opts.refs,
+    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
+  });
+  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
+    const first = roleRefsByTarget.keys().next();
+    if (first.done) break;
+    roleRefsByTarget.delete(first.value);
+  }
+}
+
+export function restoreRoleRefsForTarget(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  page: Page;
+}): void {
+  const targetId = opts.targetId?.trim() || "";
+  if (!targetId) return;
+  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  if (!cached) return;
+  const state = ensurePageState(opts.page);
+  if (state.roleRefs) return;
+  state.roleRefs = cached.refs;
+  state.roleRefsFrameSelector = cached.frameSelector;
 }
 
 export function ensurePageState(page: Page): PageState {

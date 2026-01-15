@@ -6,7 +6,12 @@ import {
   getRoleSnapshotStats,
   type RoleSnapshotOptions,
 } from "./pw-role-snapshot.js";
-import { ensurePageState, getPageForTargetId, type WithSnapshotForAI } from "./pw-session.js";
+import {
+  ensurePageState,
+  getPageForTargetId,
+  rememberRoleRefsForTarget,
+  type WithSnapshotForAI,
+} from "./pw-session.js";
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -97,6 +102,14 @@ export async function snapshotRoleViaPlaywright(opts: {
   const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
   state.roleRefs = built.refs;
   state.roleRefsFrameSelector = frameSelector || undefined;
+  if (opts.targetId) {
+    rememberRoleRefsForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      refs: built.refs,
+      frameSelector: frameSelector || undefined,
+    });
+  }
   return {
     snapshot: built.snapshot,
     refs: built.refs,
