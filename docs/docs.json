@@ -1022,16 +1022,6 @@
           "reference/templates/TOOLS",
           "reference/templates/USER"
         ]
-      },
-      {
-        "group": "Experiments & Proposals",
-        "pages": [
-          "experiments/onboarding-config-protocol",
-          "experiments/plans/cron-add-hardening",
-          "experiments/plans/group-policy-hardening",
-          "experiments/proposals/model-config",
-          "experiments/research/memory"
-        ]
       }
     ]
   }
