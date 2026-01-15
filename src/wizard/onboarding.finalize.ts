@@ -347,6 +347,27 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     );
   }
 
+  const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
+  const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
+  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
+  await prompter.note(
+    hasWebSearchKey
+      ? [
+          "Web search is ready.",
+          webSearchKey
+            ? "Brave API key: stored in config (tools.web.search.apiKey)."
+            : "Brave API key: provided via BRAVE_API_KEY env var.",
+          "Docs: https://docs.clawd.bot/tools/web",
+        ].join("\n")
+      : [
+          "Recommended: set up a Brave Search API key for web_search.",
+          "Easiest: clawdbot configure --section web (stores tools.web.search.apiKey).",
+          "Env alternative: BRAVE_API_KEY (gateway environment).",
+          "Docs: https://docs.clawd.bot/tools/web",
+        ].join("\n"),
+    "Web search (optional)",
+  );
+
   await prompter.outro(
     controlUiOpened
       ? "Onboarding complete. Dashboard opened with your token; keep that tab to control Clawdbot."

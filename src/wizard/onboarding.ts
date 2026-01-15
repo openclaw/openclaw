@@ -75,15 +75,6 @@ export async function runOnboardingWizard(
 ) {
   printWizardHeader(runtime);
   await prompter.intro("Clawdbot onboarding");
-  await prompter.note(
-    [
-      "Recommended: set up a Brave Search API key for web_search.",
-      "Easiest: clawdbot configure --section web (stores tools.web.search.apiKey).",
-      "Env alternative: BRAVE_API_KEY (gateway environment).",
-      "Docs: https://docs.clawd.bot/tools/web",
-    ].join("\n"),
-    "Web search (optional)",
-  );
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();

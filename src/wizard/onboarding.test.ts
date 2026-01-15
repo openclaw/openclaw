@@ -226,4 +226,55 @@ describe("runOnboardingWizard", () => {
 
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
+
+  it("shows the web search hint at the end of onboarding", async () => {
+    const prevBraveKey = process.env.BRAVE_API_KEY;
+    delete process.env.BRAVE_API_KEY;
+
+    try {
+      const note: WizardPrompter["note"] = vi.fn(async () => {});
+      const prompter: WizardPrompter = {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note,
+        select: vi.fn(async () => "quickstart"),
+        multiselect: vi.fn(async () => []),
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => false),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      };
+
+      const runtime: RuntimeEnv = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+
+      await runOnboardingWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+
+      const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall?.[1]).toBe("Web search (optional)");
+    } finally {
+      if (prevBraveKey === undefined) {
+        delete process.env.BRAVE_API_KEY;
+      } else {
+        process.env.BRAVE_API_KEY = prevBraveKey;
+      }
+    }
+  });
 });
