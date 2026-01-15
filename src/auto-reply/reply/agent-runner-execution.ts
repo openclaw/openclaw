@@ -400,6 +400,9 @@ export async function runAgentTurnWithFallback(params: {
             }
           }
 
+          // Keep the in-memory snapshot consistent with the on-disk store reset.
+          delete params.activeSessionStore[sessionKey];
+
           // Remove session entry from store using a fresh, locked snapshot.
           await updateSessionStore(params.storePath, (store) => {
             delete store[sessionKey];

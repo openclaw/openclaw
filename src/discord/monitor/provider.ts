@@ -136,11 +136,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
-      eventQueue: {
-        // Auto-threading (create thread + generate reply + post) can exceed the default
-        // 30s listener timeout in some environments.
-        listenerTimeout: 120_000,
-      },
     },
     {
       commands,
