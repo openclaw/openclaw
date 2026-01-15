@@ -67,6 +67,10 @@ clawdbot doctor
 This should create (or refresh) an auth profile like `anthropic:claude-cli` in
 the agent auth store.
 
+Clawdbot config sets `auth.profiles["anthropic:claude-cli"].mode` to `"oauth"` so
+the profile accepts both OAuth and setup-token credentials. Older configs that
+used `"token"` are auto-migrated on load.
+
 If you see an Anthropic error like:
 
 ```
