@@ -52,8 +52,9 @@ export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMe
 
     // Gemini rejects thinking blocks that lack a signature; downgrade to text for safety.
     let hasDowngraded = false;
-    const nextContent = assistantMsg.content.flatMap((block) => {
-      if (!block || typeof block !== "object") return [block];
+    type AssistantContentBlock = (typeof assistantMsg.content)[number];
+    const nextContent = assistantMsg.content.flatMap((block): AssistantContentBlock[] => {
+      if (!block || typeof block !== "object") return [block as AssistantContentBlock];
       const record = block as GeminiThinkingBlock;
       if (record.type !== "thinking") return [block];
       const signature =
@@ -63,6 +64,7 @@ export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMe
       const trimmed = thinking.trim();
       hasDowngraded = true;
       if (!trimmed) return [];
+<<<<<<< HEAD
       return [{ type: "text" as const, text: thinking }];
     });
 

@@ -37,6 +37,17 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
+const OPENAI_TOOL_CALL_ID_APIS = new Set([
+  "openai",
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+]);
+
+function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
+  if (!modelApi) return false;
+  return isGoogleModelApi(modelApi) || OPENAI_TOOL_CALL_ID_APIS.has(modelApi);
+}
 
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") return [];
@@ -145,7 +156,7 @@ export async function sanitizeSessionHistory(params: {
   sessionId: string;
 }): Promise<AgentMessage[]> {
   const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
-    sanitizeToolCallIds: isGoogleModelApi(params.modelApi),
+    sanitizeToolCallIds: shouldSanitizeToolCallIds(params.modelApi),
     enforceToolCallLast: params.modelApi === "anthropic-messages",
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
