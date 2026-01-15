@@ -33,9 +33,30 @@ describe("handleTelegramAction", () => {
     }
   });
 
-  it("adds reactions", async () => {
+  it("adds reactions when reactionLevel is minimal", async () => {
     const cfg = {
-      channels: { telegram: { botToken: "tok" } },
+      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
+  });
+
+  it("adds reactions when reactionLevel is extensive", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
     } as ClawdbotConfig;
     await handleTelegramAction(
       {
@@ -56,7 +77,7 @@ describe("handleTelegramAction", () => {
 
   it("removes reactions on empty emoji", async () => {
     const cfg = {
-      channels: { telegram: { botToken: "tok" } },
+      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
     } as ClawdbotConfig;
     await handleTelegramAction(
       {
@@ -77,7 +98,7 @@ describe("handleTelegramAction", () => {
 
   it("removes reactions when remove flag set", async () => {
     const cfg = {
-      channels: { telegram: { botToken: "tok" } },
+      channels: { telegram: { botToken: "tok", reactionLevel: "extensive" } },
     } as ClawdbotConfig;
     await handleTelegramAction(
       {
@@ -97,10 +118,48 @@ describe("handleTelegramAction", () => {
     );
   });
 
-  it("respects reaction gating", async () => {
+  it("blocks reactions when reactionLevel is off", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "off" } },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "react",
+          chatId: "123",
+          messageId: "456",
+          emoji: "✅",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="off"/);
+  });
+
+  it("blocks reactions when reactionLevel is ack (default)", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "ack" } },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "react",
+          chatId: "123",
+          messageId: "456",
+          emoji: "✅",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="ack"/);
+  });
+
+  it("also respects legacy actions.reactions gating", async () => {
     const cfg = {
       channels: {
-        telegram: { botToken: "tok", actions: { reactions: false } },
+        telegram: {
+          botToken: "tok",
+          reactionLevel: "minimal",
+          actions: { reactions: false },
+        },
       },
     } as ClawdbotConfig;
     await expect(
@@ -113,7 +172,7 @@ describe("handleTelegramAction", () => {
         },
         cfg,
       ),
-    ).rejects.toThrow(/Telegram reactions are disabled/);
+    ).rejects.toThrow(/Telegram reactions are disabled via actions.reactions/);
   });
 
   it("sends a text message", async () => {

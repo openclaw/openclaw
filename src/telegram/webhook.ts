@@ -5,6 +5,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 
 export async function startTelegramWebhook(opts: {
@@ -63,6 +64,7 @@ export async function startTelegramWebhook(opts: {
 
   await bot.api.setWebhook(publicUrl, {
     secret_token: opts.secret,
+    allowed_updates: resolveTelegramAllowedUpdates(),
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));

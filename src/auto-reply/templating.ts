@@ -84,6 +84,9 @@ function formatTemplateValue(value: unknown): string {
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
+  if (typeof value === "symbol" || typeof value === "function") {
+    return value.toString();
+  }
   if (Array.isArray(value)) {
     return value
       .flatMap((entry) => {
@@ -95,6 +98,9 @@ function formatTemplateValue(value: unknown): string {
         return [];
       })
       .join(",");
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
   }
   return "";
 }

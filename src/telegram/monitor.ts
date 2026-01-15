@@ -5,6 +5,7 @@ import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatDurationMs } from "../infra/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
@@ -33,6 +34,8 @@ export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unk
       fetch: {
         // Match grammY defaults
         timeout: 30,
+        // Request reactions without dropping default update types.
+        allowed_updates: resolveTelegramAllowedUpdates(),
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
