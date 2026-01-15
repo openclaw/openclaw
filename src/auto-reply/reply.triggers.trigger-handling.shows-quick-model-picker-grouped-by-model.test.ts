@@ -125,6 +125,93 @@ describe("trigger handling", () => {
       expect(normalized).not.toContain("image");
     });
   });
+  it("orders provider/model pairs by provider preference", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const normalized = normalizeTestText(text ?? "");
+      const anthropicIndex = normalized.indexOf("anthropic/claude-opus-4-5");
+      const openrouterIndex = normalized.indexOf("openrouter/anthropic/claude-opus-4-5");
+      const openaiIndex = normalized.indexOf("openai/gpt-4.1-mini");
+      const codexIndex = normalized.indexOf("openai-codex/gpt-5.2");
+      expect(anthropicIndex).toBeGreaterThanOrEqual(0);
+      expect(openrouterIndex).toBeGreaterThanOrEqual(0);
+      expect(openaiIndex).toBeGreaterThanOrEqual(0);
+      expect(codexIndex).toBeGreaterThanOrEqual(0);
+      expect(anthropicIndex).toBeLessThan(openrouterIndex);
+      expect(openaiIndex).toBeLessThan(codexIndex);
+    });
+  });
+  it("selects the exact provider/model pair for openrouter by index", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const sessionKey = "telegram:slash:111";
+      const list = await getReplyFromConfig(
+        {
+          Body: "/model",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      const listText = Array.isArray(list) ? list[0]?.text : list?.text;
+      const lines = normalizeTestText(listText ?? "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const targetLine = lines.find((line) =>
+        line.includes("openrouter/anthropic/claude-opus-4-5"),
+      );
+      expect(targetLine).toBeDefined();
+      const match = targetLine?.match(/^(\d+)\)/);
+      expect(match?.[1]).toBeDefined();
+      const index = Number.parseInt(match?.[1] ?? "", 10);
+      expect(Number.isFinite(index)).toBe(true);
+
+      const res = await getReplyFromConfig(
+        {
+          Body: `/model ${index}`,
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain(
+        "Model set to openrouter/anthropic/claude-opus-4-5",
+      );
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[sessionKey]?.providerOverride).toBe("openrouter");
+      expect(store[sessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
+    });
+  });
   it("rejects invalid /model <#> selections", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
