@@ -13,11 +13,37 @@ function updateRelayUrl(port) {
   el.textContent = `http://127.0.0.1:${port}/`
 }
 
+function setStatus(kind, message) {
+  const status = document.getElementById('status')
+  if (!status) return
+  status.dataset.kind = kind || ''
+  status.textContent = message || ''
+}
+
+async function checkRelayReachable(port) {
+  const url = `http://127.0.0.1:${port}/`
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 900)
+  try {
+    const res = await fetch(url, { method: 'HEAD', signal: ctrl.signal })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    setStatus('ok', `Relay reachable at ${url}`)
+  } catch {
+    setStatus(
+      'error',
+      `Relay not reachable at ${url}. Start Clawdbot’s browser relay on this machine, then click the toolbar button again.`,
+    )
+  } finally {
+    clearTimeout(t)
+  }
+}
+
 async function load() {
   const stored = await chrome.storage.local.get(['relayPort'])
   const port = clampPort(stored.relayPort)
   document.getElementById('port').value = String(port)
   updateRelayUrl(port)
+  await checkRelayReachable(port)
 }
 
 async function save() {
@@ -26,11 +52,7 @@ async function save() {
   await chrome.storage.local.set({ relayPort: port })
   input.value = String(port)
   updateRelayUrl(port)
-  const status = document.getElementById('status')
-  status.textContent = `Saved. Using http://127.0.0.1:${port}/`
-  setTimeout(() => {
-    status.textContent = ''
-  }, 2000)
+  await checkRelayReachable(port)
 }
 
 document.getElementById('save').addEventListener('click', () => void save())

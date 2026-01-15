@@ -143,6 +143,12 @@
         color: color-mix(in oklab, var(--accent) 70%, canvasText 30%);
         min-height: 16px;
       }
+      .status[data-kind='ok'] {
+        color: color-mix(in oklab, #16a34a 75%, canvasText 25%);
+      }
+      .status[data-kind='error'] {
+        color: color-mix(in oklab, #ef4444 75%, canvasText 25%);
+      }
     </style>
   </head>
   <body>
