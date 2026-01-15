@@ -118,10 +118,11 @@ export async function statusAllCommand(
 
     const localFallbackAuth = resolveProbeAuth("local");
     const remoteAuth = resolveProbeAuth("remote");
+    const probeAuth = isRemoteMode && !remoteUrlMissing ? remoteAuth : localFallbackAuth;
 
     const gatewayProbe = await probeGateway({
       url: connection.url,
-      auth: remoteUrlMissing ? localFallbackAuth : remoteAuth,
+      auth: probeAuth,
       timeoutMs: Math.min(5000, opts?.timeoutMs ?? 10_000),
     }).catch(() => null);
     const gatewayReachable = gatewayProbe?.ok === true;
@@ -289,7 +290,7 @@ export async function statusAllCommand(
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
     const gatewayAuth = gatewayReachable
-      ? ` · auth ${formatGatewayAuthUsed(remoteUrlMissing ? localFallbackAuth : remoteAuth)}`
+      ? ` · auth ${formatGatewayAuthUsed(probeAuth)}`
       : "";
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
