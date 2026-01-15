@@ -38,6 +38,8 @@ Minimal config:
 ```
 
 ## What it is
+Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
+It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 - A Zalo Bot API channel owned by the Gateway.
 - Deterministic routing: replies go back to Zalo; the model never chooses channels.
 - DMs share the agent's main session.
