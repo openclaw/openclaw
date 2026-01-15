@@ -34,6 +34,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
+  it("includes a CLI quick reference section", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+    });
+
+    expect(prompt).toContain("## Clawdbot CLI Quick Reference");
+    expect(prompt).toContain("clawdbot daemon restart");
+    expect(prompt).toContain("Do not invent commands");
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
