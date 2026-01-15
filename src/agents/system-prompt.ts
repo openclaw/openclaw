@@ -185,9 +185,9 @@ export function buildAgentSystemPrompt(params: {
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
-  // Skip skills section for subagent/none modes
+  // Include skills for full and minimal modes, skip for none
   const skillsSection =
-    skillsPrompt && !isMinimal
+    skillsPrompt && promptMode !== "none"
       ? [
           "## Skills",
           `Skills provide task-specific instructions. Use \`${readToolName}\` to load the SKILL.md at the location listed for that skill.`,

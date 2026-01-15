@@ -15,12 +15,6 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "agents_list",
   // Interactive setup - not a task
   "whatsapp_login",
-  // Status/scheduling - main agent coordinates
-  "session_status",
-  "cron",
-  // Memory - pass relevant info in spawn prompt instead
-  "memory_search",
-  "memory_get",
 ];
 
 export function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
