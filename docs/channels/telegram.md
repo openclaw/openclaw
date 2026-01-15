@@ -324,6 +324,11 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - Make sure your Telegram user ID is authorized (via pairing or `channels.telegram.allowFrom`)
 - Commands require authorization even in groups with `groupPolicy: "open"`
 
+**Bot starts, then silently stops responding (or logs `HttpError: Network request ... failed`):**
+- Some hosts resolve `api.telegram.org` to IPv6 first. If your server does not have working IPv6 egress, grammY can get stuck on IPv6-only requests.
+- Fix by enabling IPv6 egress **or** forcing IPv4 resolution for `api.telegram.org` (for example, add an `/etc/hosts` entry using the IPv4 A record, or prefer IPv4 in your OS DNS stack), then restart the gateway.
+- Quick check: `dig +short api.telegram.org A` and `dig +short api.telegram.org AAAA` to confirm what DNS returns.
+
 ## Configuration reference (Telegram)
 Full configuration: [Configuration](/gateway/configuration)
 
