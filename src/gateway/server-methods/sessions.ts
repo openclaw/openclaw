@@ -112,7 +112,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const existingKey = target.storeKeys.find((candidate) => store[candidate]);
     if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
       store[primaryKey] = store[existingKey];
-      delete store[existingKey];
+      // Use undefined to signal deletion for merge-safe save
+      (store as Record<string, unknown>)[existingKey] = undefined;
     }
     const applied = await applySessionsPatchToStore({
       cfg,
@@ -161,7 +162,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const existingKey = target.storeKeys.find((candidate) => store[candidate]);
     if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
       store[primaryKey] = store[existingKey];
-      delete store[existingKey];
+      // Use undefined to signal deletion for merge-safe save
+      (store as Record<string, unknown>)[existingKey] = undefined;
     }
     const entry = store[primaryKey];
     const now = Date.now();
@@ -225,7 +227,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const existingKey = target.storeKeys.find((candidate) => store[candidate]);
     if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
       store[primaryKey] = store[existingKey];
-      delete store[existingKey];
+      // Use undefined to signal deletion for merge-safe save
+      (store as Record<string, unknown>)[existingKey] = undefined;
     }
     const entry = store[primaryKey];
     const sessionId = entry?.sessionId;
@@ -301,7 +304,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const existingKey = target.storeKeys.find((candidate) => store[candidate]);
     if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
       store[primaryKey] = store[existingKey];
-      delete store[existingKey];
+      // Use undefined to signal deletion for merge-safe save
+      (store as Record<string, unknown>)[existingKey] = undefined;
     }
     const entry = store[primaryKey];
     const sessionId = entry?.sessionId;

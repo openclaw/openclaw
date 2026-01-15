@@ -131,7 +131,8 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
       const existingKey = target.storeKeys.find((candidate) => store[candidate]);
       if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
         store[primaryKey] = store[existingKey];
-        delete store[existingKey];
+        // Use undefined to signal deletion for merge-safe save
+        (store as Record<string, unknown>)[existingKey] = undefined;
       }
       const applied = await applySessionsPatchToStore({
         cfg,
@@ -266,7 +267,8 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           };
         }
       }
-      if (existed) delete store[key];
+      // Use undefined to signal deletion for merge-safe save
+      if (existed) (store as Record<string, unknown>)[key] = undefined;
       await saveSessionStore(storePath, store);
 
       const archived: string[] = [];
