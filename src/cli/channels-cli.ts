@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { listChatChannels } from "../channels/registry.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   channelsAddCommand,
   channelsListCommand,
@@ -36,11 +36,10 @@ const optionNamesAdd = [
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
-const channelNames = listChatChannels()
-  .map((meta) => meta.id)
-  .join("|");
-
 export function registerChannelsCli(program: Command) {
+  const channelNames = listChannelPlugins()
+    .map((plugin) => plugin.id)
+    .join("|");
   const channels = program
     .command("channels")
     .description("Manage chat channel accounts")

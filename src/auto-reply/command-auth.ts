@@ -1,7 +1,7 @@
 import type { ChannelDock } from "../channels/dock.js";
 import { getChannelDock, listChannelDocks } from "../channels/dock.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import { normalizeChannelId } from "../channels/registry.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { MsgContext } from "./templating.js";
 

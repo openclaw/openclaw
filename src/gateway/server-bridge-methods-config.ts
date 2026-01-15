@@ -67,6 +67,11 @@ export const handleConfigBridgeMethods: BridgeMethodHandler = async (
           description: plugin.description,
           configUiHints: plugin.configUiHints,
         })),
+        channels: pluginRegistry.channels.map((entry) => ({
+          id: entry.plugin.id,
+          label: entry.plugin.meta.label,
+          description: entry.plugin.meta.blurb,
+        })),
       });
       return { ok: true, payloadJSON: JSON.stringify(schema) };
     }

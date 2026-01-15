@@ -11,7 +11,7 @@ import type { createSubsystemLogger } from "../logging.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
-  HOOK_CHANNEL_ERROR,
+  getHookChannelError,
   type HookMessageChannel,
   type HooksConfigResolved,
   normalizeAgentPayload,
@@ -152,7 +152,7 @@ export function createHooksRequestHandler(
           }
           const channel = resolveHookChannel(mapped.action.channel);
           if (!channel) {
-            sendJson(res, 400, { ok: false, error: HOOK_CHANNEL_ERROR });
+            sendJson(res, 400, { ok: false, error: getHookChannelError() });
             return true;
           }
           const runId = dispatchAgentHook({

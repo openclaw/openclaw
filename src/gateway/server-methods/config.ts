@@ -73,6 +73,11 @@ export const configHandlers: GatewayRequestHandlers = {
         description: plugin.description,
         configUiHints: plugin.configUiHints,
       })),
+      channels: pluginRegistry.channels.map((entry) => ({
+        id: entry.plugin.id,
+        label: entry.plugin.meta.label,
+        description: entry.plugin.meta.blurb,
+      })),
     });
     respond(true, schema, undefined);
   },

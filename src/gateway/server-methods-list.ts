@@ -59,9 +59,10 @@ const BASE_METHODS = [
   "chat.send",
 ];
 
-const CHANNEL_METHODS = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-
-export const GATEWAY_METHODS = Array.from(new Set([...BASE_METHODS, ...CHANNEL_METHODS]));
+export function listGatewayMethods(): string[] {
+  const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
+  return Array.from(new Set([...BASE_METHODS, ...channelMethods]));
+}
 
 export const GATEWAY_EVENTS = [
   "agent",
