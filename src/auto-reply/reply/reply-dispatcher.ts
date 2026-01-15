@@ -75,6 +75,14 @@ function normalizeReplyPayloadInternal(
   // Prefer dynamic context provider over static context
   const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
 
+  // Debug logging for prefix template resolution
+  if (opts.responsePrefix?.includes("{")) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[prefix-debug] normalizing with context: ${JSON.stringify(prefixContext)} prefix: ${opts.responsePrefix}`,
+    );
+  }
+
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
