@@ -6,6 +6,16 @@ import { describe, expect, it } from "vitest";
 
 import { fixSecurityFootguns } from "./fix.js";
 
+const isWindows = process.platform === "win32";
+
+const expectPerms = (actual: number, expected: number) => {
+  if (isWindows) {
+    expect([expected, 0o666, 0o777]).toContain(actual);
+    return;
+  }
+  expect(actual).toBe(expected);
+};
+
 describe("security fix", () => {
   it("tightens groupPolicy + filesystem perms", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-fix-"));
@@ -63,10 +73,10 @@ describe("security fix", () => {
     );
 
     const stateMode = (await fs.stat(stateDir)).mode & 0o777;
-    expect(stateMode).toBe(0o700);
+    expectPerms(stateMode, 0o700);
 
     const configMode = (await fs.stat(configPath)).mode & 0o777;
-    expect(configMode).toBe(0o600);
+    expectPerms(configMode, 0o600);
 
     const parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = parsed.channels as Record<string, Record<string, unknown>>;
@@ -192,9 +202,9 @@ describe("security fix", () => {
     expect(res.ok).toBe(false);
 
     const stateMode = (await fs.stat(stateDir)).mode & 0o777;
-    expect(stateMode).toBe(0o700);
+    expectPerms(stateMode, 0o700);
 
     const configMode = (await fs.stat(configPath)).mode & 0o777;
-    expect(configMode).toBe(0o600);
+    expectPerms(configMode, 0o600);
   });
 });
