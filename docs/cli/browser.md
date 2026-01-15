@@ -23,11 +23,10 @@ Related:
 ## Quick start (local)
 
 ```bash
-clawdbot browser status
-clawdbot browser start
-clawdbot browser tabs
-clawdbot browser open https://example.com
-clawdbot browser snapshot
+clawdbot browser --browser-profile chrome tabs
+clawdbot browser --browser-profile clawd start
+clawdbot browser --browser-profile clawd open https://example.com
+clawdbot browser --browser-profile clawd snapshot
 ```
 
 ## Profiles

@@ -7,6 +7,7 @@ import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_CONTROL_URL,
   DEFAULT_CLAWD_BROWSER_ENABLED,
+  DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
 } from "./constants.js";
 import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
@@ -182,7 +183,7 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
-  const defaultProfile = cfg?.defaultProfile ?? DEFAULT_CLAWD_BROWSER_PROFILE_NAME;
+  const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
   // Use legacy cdpUrl port for backward compatibility when no profiles configured
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const profiles = ensureDefaultChromeExtensionProfile(
@@ -190,6 +191,11 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
     controlPort,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
+  const defaultProfile =
+    defaultProfileFromConfig ??
+    (profiles[DEFAULT_BROWSER_DEFAULT_PROFILE_NAME]
+      ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
+      : DEFAULT_CLAWD_BROWSER_PROFILE_NAME);
 
   return {
     enabled,

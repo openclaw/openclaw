@@ -239,7 +239,7 @@ Notes:
 - Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
 - All actions accept optional `profile` parameter for multi-instance support.
-- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "chrome").
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).

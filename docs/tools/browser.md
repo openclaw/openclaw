@@ -30,10 +30,10 @@ agent automation and verification.
 ## Quick start
 
 ```bash
-clawdbot browser status
-clawdbot browser start
-clawdbot browser open https://example.com
-clawdbot browser snapshot
+clawdbot browser --browser-profile clawd status
+clawdbot browser --browser-profile clawd start
+clawdbot browser --browser-profile clawd open https://example.com
+clawdbot browser --browser-profile clawd snapshot
 ```
 
 If you get “Browser disabled”, enable it in config (see below) and restart the
@@ -49,7 +49,7 @@ Browser settings live in `~/.clawdbot/clawdbot.json`.
     enabled: true,                    // default: true
     controlUrl: "http://127.0.0.1:18791",
     cdpUrl: "http://127.0.0.1:18792", // defaults to controlUrl + 1
-    defaultProfile: "clawd",
+    defaultProfile: "chrome",
     color: "#FF4500",
     headless: false,
     noSandbox: false,

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { BrowserProfileConfig, ClawdbotConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
 import { resolveClawdUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import {
@@ -134,7 +135,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new Error(`profile "${name}" not found`);
     }
 
-    const defaultProfile = cfg.browser?.defaultProfile ?? "clawd";
+    const defaultProfile = cfg.browser?.defaultProfile ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
     if (name === defaultProfile) {
       throw new Error(
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,

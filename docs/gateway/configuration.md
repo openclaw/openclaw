@@ -2357,7 +2357,7 @@ Defaults:
     enabled: true,
     controlUrl: "http://127.0.0.1:18791",
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    defaultProfile: "clawd",
+    defaultProfile: "chrome",
     profiles: {
       clawd: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
