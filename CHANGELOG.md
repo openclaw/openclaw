@@ -10,7 +10,7 @@
 
 ### Fixes
 - Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
-- Slack: respect `channels.slack.requireMention` default when resolving channel mention gating. (#850) — thanks @evalexpr.
+- Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.
 
 ## 2026.1.14
 
