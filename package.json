@@ -29,6 +29,7 @@
     "dist/msteams/**",
     "dist/process/**",
     "dist/plugins/**",
+    "dist/security/**",
     "dist/sessions/**",
     "dist/providers/**",
     "dist/signal/**",
