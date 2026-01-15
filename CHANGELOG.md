@@ -36,6 +36,7 @@
 - Config: add `channels.<provider>.configWrites` gating for channel-initiated config writes; migrate Slack channel IDs.
 
 ### Fixes
+
 #### Agents
 - Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.
 - Agents: strip downgraded tool call text without eating adjacent replies and filter thinking-tag leaks. (#905) — thanks @erikpr1994.
@@ -72,6 +73,7 @@
 - WhatsApp: normalize user JIDs with device suffix for allowlist checks in groups. (#838) — thanks @peschee.
 
 #### Gateway / Daemon / Sessions
+- Gateway/UI: ship session defaults in the hello snapshot so the Control UI canonicalizes main session keys (no bare `main` alias).
 - Gateway: forward termination signals to respawned CLI child processes to avoid orphaned systemd runs. (#933) — thanks @roshanasingh4.
 - Sessions: return deep clones (`structuredClone`) so cached session entries can't be mutated. (#934) — thanks @ronak-guliani.
 - Heartbeat: keep `updatedAt` monotonic when restoring heartbeat sessions. (#934) — thanks @ronak-guliani.
