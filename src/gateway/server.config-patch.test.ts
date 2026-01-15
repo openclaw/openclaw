@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { connectOk, onceMessage, startServerWithClient } from "./test-helpers.js";
+import { connectOk, installGatewayTestHooks, onceMessage, startServerWithClient } from "./test-helpers.js";
+
+installGatewayTestHooks();
 
 describe("gateway config.patch", () => {
   it("merges patches without clobbering unrelated config", async () => {

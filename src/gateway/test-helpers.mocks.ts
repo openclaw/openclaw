@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -157,16 +158,20 @@ vi.mock("../config/sessions.js", async () => {
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const resolveConfigPath = () => path.join(os.homedir(), ".clawdbot", "clawdbot.json");
+  const hashConfigRaw = (raw: string | null) =>
+    crypto.createHash("sha256").update(raw ?? "").digest("hex");
 
   const readConfigFileSnapshot = async () => {
     if (testState.legacyIssues.length > 0) {
+      const raw = JSON.stringify(testState.legacyParsed ?? {});
       return {
         path: resolveConfigPath(),
         exists: true,
-        raw: JSON.stringify(testState.legacyParsed ?? {}),
+        raw,
         parsed: testState.legacyParsed ?? {},
         valid: false,
         config: {},
+        hash: hashConfigRaw(raw),
         issues: testState.legacyIssues.map((issue) => ({
           path: issue.path,
           message: issue.message,
@@ -185,6 +190,7 @@ vi.mock("../config/config.js", async () => {
         parsed: {},
         valid: true,
         config: {},
+        hash: hashConfigRaw(null),
         issues: [],
         legacyIssues: [],
       };
@@ -199,6 +205,7 @@ vi.mock("../config/config.js", async () => {
         parsed,
         valid: true,
         config: parsed,
+        hash: hashConfigRaw(raw),
         issues: [],
         legacyIssues: [],
       };
@@ -210,6 +217,7 @@ vi.mock("../config/config.js", async () => {
         parsed: {},
         valid: false,
         config: {},
+        hash: hashConfigRaw(null),
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
         legacyIssues: [],
       };
