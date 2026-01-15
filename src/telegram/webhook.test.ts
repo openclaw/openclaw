@@ -16,9 +16,10 @@ const createTelegramBotSpy = vi.fn(() => ({
   stop: stopSpy,
 }));
 
-vi.mock("grammy", () => ({
-  webhookCallback: () => handlerSpy,
-}));
+vi.mock("grammy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("grammy")>();
+  return { ...actual, webhookCallback: () => handlerSpy };
+});
 
 vi.mock("./bot.js", () => ({
   createTelegramBot: (...args: unknown[]) => createTelegramBotSpy(...args),

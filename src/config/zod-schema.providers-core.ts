@@ -67,7 +67,7 @@ export const TelegramAccountSchemaBase = z.object({
       deleteMessage: z.boolean().optional(),
     })
     .optional(),
-  reactionNotifications: z.enum(["off", "all"]).optional(),
+  reactionNotifications: z.enum(["off", "own", "all"]).optional(),
   reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
 });
 

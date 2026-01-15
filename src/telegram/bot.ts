@@ -40,6 +40,7 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -317,6 +318,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       // Resolve reaction notification mode (default: "off")
       const reactionMode = telegramCfg.reactionNotifications ?? "off";
       if (reactionMode === "off") return;
+      if (user?.is_bot) return;
+      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) return;
 
       // Detect added reactions
       const oldEmojis = new Set(

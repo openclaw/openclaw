@@ -79,9 +79,10 @@ export type TelegramAccountConfig = {
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions
+   * - "own": notify when users react to bot messages
    * - "all": notify agent of all reactions
    */
-  reactionNotifications?: "off" | "all";
+  reactionNotifications?: "off" | "own" | "all";
   /**
    * Controls agent's reaction capability:
    * - "off": agent cannot react

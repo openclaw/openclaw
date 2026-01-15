@@ -14,6 +14,10 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
+  reactionGuidance?: {
+    level: "minimal" | "extensive";
+    channel: string;
+  };
   runtimeInfo: {
     host: string;
     os: string;
@@ -40,6 +44,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
+    reactionGuidance: params.reactionGuidance,
     runtimeInfo: params.runtimeInfo,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
