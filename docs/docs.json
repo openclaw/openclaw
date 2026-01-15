@@ -851,6 +851,7 @@
           "gateway/gateway-lock",
           "environment",
           "gateway/configuration",
+          "gateway/multiple-gateways",
           "gateway/configuration-examples",
           "gateway/authentication",
           "gateway/openai-http-api",
