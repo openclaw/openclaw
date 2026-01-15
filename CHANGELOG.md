@@ -61,6 +61,22 @@
 #### Gateway / Daemon / Sessions
 - Gateway: forward termination signals to respawned CLI child processes to avoid orphaned systemd runs. (#933) — thanks @roshanasingh4.
 - Gateway/UI: ship session defaults in the hello snapshot so the Control UI canonicalizes main session keys (no bare `main` alias).
+- Agents: skip thinking/final tag stripping inside Markdown code spans. (#939) — thanks @ngutman.
+- Browser: add tests for snapshot labels/efficient query params and labeled image responses.
+- macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
+- macOS: format ConnectionsStore config to satisfy SwiftFormat lint. (#852) — thanks @mneves75.
+- Packaging: run `pnpm build` on `prepack` so npm publishes include fresh `dist/` output.
+- Telegram: register dock native commands with underscores to avoid `BOT_COMMAND_INVALID` (#929, fixes #901) — thanks @grp06.
+- Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
+- Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.
+- Agents: strip downgraded tool call text without eating adjacent replies and filter thinking-tag leaks. (#905) — thanks @erikpr1994.
+- Agents: cap tool call IDs for OpenAI/OpenRouter to avoid request rejections. (#875) — thanks @j1philli.
+- Doctor: avoid re-adding WhatsApp config when only legacy ack reactions are set. (#927, fixes #900) — thanks @grp06.
+- Agents: scrub tuple `items` schemas for Gemini tool calls. (#926, fixes #746) — thanks @grp06.
+- Agents: stabilize sub-agent announce status from runtime outcomes and normalize Result/Notes. (#835) — thanks @roshanasingh4.
+- Apps: use canonical main session keys from gateway defaults across macOS/iOS/Android to avoid creating bare `main` sessions.
+- Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
+- Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.
 - Daemon: clear persisted launchd disabled state before bootstrap (fixes `daemon install` after uninstall). (#849) — thanks @ndraiman.
 - Sessions: return deep clones (`structuredClone`) so cached session entries can't be mutated. (#934) — thanks @ronak-guliani.
 - Heartbeat: keep `updatedAt` monotonic when restoring heartbeat sessions. (#934) — thanks @ronak-guliani.
