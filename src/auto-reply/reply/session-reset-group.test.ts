@@ -9,9 +9,7 @@ import { initSessionState } from "./session.js";
 
 describe("initSessionState reset triggers in WhatsApp groups", () => {
   async function createStorePath(prefix: string): Promise<string> {
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), prefix),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     return path.join(root, "sessions.json");
   }
 

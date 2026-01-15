@@ -1,11 +1,11 @@
-import { chunkMarkdownIR, markdownToIR, type MarkdownIR, type MarkdownStyle } from "../markdown/ir.js";
+import {
+  chunkMarkdownIR,
+  markdownToIR,
+  type MarkdownIR,
+  type MarkdownStyle,
+} from "../markdown/ir.js";
 
-type SignalTextStyle =
-  | "BOLD"
-  | "ITALIC"
-  | "STRIKETHROUGH"
-  | "MONOSPACE"
-  | "SPOILER";
+type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 
 export type SignalTextStyleRange = {
   start: number;
@@ -57,11 +57,7 @@ function mergeStyles(styles: SignalTextStyleRange[]): SignalTextStyleRange[] {
   const merged: SignalTextStyleRange[] = [];
   for (const style of sorted) {
     const prev = merged[merged.length - 1];
-    if (
-      prev &&
-      prev.style === style.style &&
-      style.start <= prev.start + prev.length
-    ) {
+    if (prev && prev.style === style.style && style.start <= prev.start + prev.length) {
       const prevEnd = prev.start + prev.length;
       const nextEnd = Math.max(prevEnd, style.start + style.length);
       prev.length = nextEnd - prev.start;
@@ -73,10 +69,7 @@ function mergeStyles(styles: SignalTextStyleRange[]): SignalTextStyleRange[] {
   return merged;
 }
 
-function clampStyles(
-  styles: SignalTextStyleRange[],
-  maxLength: number,
-): SignalTextStyleRange[] {
+function clampStyles(styles: SignalTextStyleRange[], maxLength: number): SignalTextStyleRange[] {
   const clamped: SignalTextStyleRange[] = [];
   for (const style of styles) {
     const start = Math.max(0, Math.min(style.start, maxLength));
@@ -205,10 +198,7 @@ export function markdownToSignalText(markdown: string): SignalFormattedText {
   return renderSignalText(ir);
 }
 
-export function markdownToSignalTextChunks(
-  markdown: string,
-  limit: number,
-): SignalFormattedText[] {
+export function markdownToSignalTextChunks(markdown: string, limit: number): SignalFormattedText[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     enableSpoilers: true,

@@ -1,4 +1,9 @@
-import { chunkMarkdownIR, markdownToIR, type MarkdownLinkSpan, type MarkdownIR } from "../markdown/ir.js";
+import {
+  chunkMarkdownIR,
+  markdownToIR,
+  type MarkdownLinkSpan,
+  type MarkdownIR,
+} from "../markdown/ir.js";
 import { renderMarkdownWithMarkers } from "../markdown/render.js";
 
 export type TelegramFormattedChunk = {
@@ -50,7 +55,10 @@ export function markdownToTelegramHtml(markdown: string): string {
   return renderTelegramHtml(ir);
 }
 
-export function markdownToTelegramChunks(markdown: string, limit: number): TelegramFormattedChunk[] {
+export function markdownToTelegramChunks(
+  markdown: string,
+  limit: number,
+): TelegramFormattedChunk[] {
   const ir = markdownToIR(markdown ?? "", {
     linkify: true,
     headingStyle: "none",

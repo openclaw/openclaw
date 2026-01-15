@@ -93,9 +93,14 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     } as unknown as Client;
     const plan = await resolveDiscordAutoThreadReplyPlan({
       client,
-      message: { id: "m1", channelId: "parent" } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      message: {
+        id: "m1",
+        channelId: "parent",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
-      channelConfig: { autoThread: true } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
+      channelConfig: {
+        autoThread: true,
+      } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
@@ -118,9 +123,14 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     const client = { rest: { post: async () => ({ id: "thread" }) } } as unknown as Client;
     const plan = await resolveDiscordAutoThreadReplyPlan({
       client,
-      message: { id: "m1", channelId: "parent" } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      message: {
+        id: "m1",
+        channelId: "parent",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
       isGuildMessage: true,
-      channelConfig: { autoThread: false } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
+      channelConfig: {
+        autoThread: false,
+      } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",

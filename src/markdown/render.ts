@@ -46,9 +46,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
   if (!text) return "";
 
   const styleMarkers = options.styleMarkers;
-  const styled = sortStyleSpans(
-    ir.styles.filter((span) => Boolean(styleMarkers[span.style])),
-  );
+  const styled = sortStyleSpans(ir.styles.filter((span) => Boolean(styleMarkers[span.style])));
 
   const boundaries = new Set<number>();
   boundaries.add(0);
