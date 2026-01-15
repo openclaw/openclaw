@@ -114,6 +114,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     },
   });
 
+  const log = opts.runtime?.log ?? console.log;
+
   // When using polling mode, ensure no webhook is active
   if (!opts.useWebhook) {
     try {
@@ -146,7 +148,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   }
 
   // Use grammyjs/runner for concurrent update processing
-  const log = opts.runtime?.log ?? console.log;
   let restartAttempts = 0;
 
   while (!opts.abortSignal?.aborted) {
