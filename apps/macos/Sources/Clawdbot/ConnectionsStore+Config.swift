@@ -37,7 +37,8 @@ extension ConnectionsStore {
 
     private func resolveChannelConfig(_ snap: ConfigSnapshot, key: String) -> [String: AnyCodable]? {
         if let channels = snap.config?["channels"]?.dictionaryValue,
-           let entry = channels[key]?.dictionaryValue {
+           let entry = channels[key]?.dictionaryValue
+        {
             return entry
         }
         return snap.config?[key]?.dictionaryValue
