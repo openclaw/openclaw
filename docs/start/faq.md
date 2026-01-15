@@ -665,7 +665,7 @@ Nodes don’t see inbound provider traffic; they only receive bridge RPC calls.
 
 ### Do nodes run a gateway daemon?
 
-No. Only **one gateway** should run per host. Nodes are peripherals that connect
+No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
 to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
 
 A full restart is required for `gateway`, `bridge`, `discovery`, and `canvasHost` changes.

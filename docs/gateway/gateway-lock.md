@@ -9,7 +9,7 @@ read_when:
 Last updated: 2025-12-11
 
 ## Why
-- Ensure only one gateway instance runs per host.
+- Ensure only one gateway instance runs per base port on the same host; additional gateways must use isolated profiles and unique ports.
 - Survive crashes/SIGKILL without leaving stale lock files.
 - Fail fast with a clear error when the control port is already occupied.
 

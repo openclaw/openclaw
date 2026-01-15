@@ -282,7 +282,7 @@ export async function maybeScanExtraGatewayServices(options: DoctorOptions) {
     [
       "Recommendation: run a single gateway per machine for most setups.",
       "One gateway supports multiple agents.",
-      "If you need multiple gateways (e.g., a recovery bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
+      "If you need multiple gateways (e.g., a rescue bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
     ].join("\n"),
     "Gateway recommendation",
   );

@@ -267,7 +267,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
     defaultRuntime.error(
       errorText(
-        "If you need multiple gateways (e.g., a recovery bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
+        "If you need multiple gateways (e.g., a rescue bot on the same host), isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );
     spacer();
