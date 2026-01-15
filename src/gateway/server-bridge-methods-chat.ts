@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { agentCommand } from "../commands/agent.js";
-import { mergeSessionEntry, saveSessionStore } from "../config/sessions.js";
+import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -17,6 +19,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateChatAbortParams,
+  validateChatInjectParams,
   validateChatHistoryParams,
   validateChatSendParams,
 } from "./protocol/index.js";
@@ -31,6 +34,84 @@ import {
 
 export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, method, params) => {
   switch (method) {
+    case "chat.inject": {
+      if (!validateChatInjectParams(params)) {
+        return {
+          ok: false,
+          error: {
+            code: ErrorCodes.INVALID_REQUEST,
+            message: `invalid chat.inject params: ${formatValidationErrors(validateChatInjectParams.errors)}`,
+          },
+        };
+      }
+      const p = params as {
+        sessionKey: string;
+        message: string;
+        label?: string;
+      };
+
+      const { storePath, entry } = loadSessionEntry(p.sessionKey);
+      const sessionId = entry?.sessionId;
+      if (!sessionId || !storePath) {
+        return {
+          ok: false,
+          error: { code: ErrorCodes.INVALID_REQUEST, message: "session not found" },
+        };
+      }
+
+      const transcriptPath = entry?.sessionFile
+        ? entry.sessionFile
+        : path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+      if (!fs.existsSync(transcriptPath)) {
+        return {
+          ok: false,
+          error: { code: ErrorCodes.INVALID_REQUEST, message: "transcript file not found" },
+        };
+      }
+
+      const now = Date.now();
+      const messageId = randomUUID().slice(0, 8);
+      const labelPrefix = p.label ? `[${p.label}]\n\n` : "";
+      const messageBody: Record<string, unknown> = {
+        role: "assistant",
+        content: [{ type: "text", text: `${labelPrefix}${p.message}` }],
+        timestamp: now,
+        stopReason: "injected",
+        usage: { input: 0, output: 0, totalTokens: 0 },
+      };
+      const transcriptEntry = {
+        type: "message",
+        id: messageId,
+        timestamp: new Date(now).toISOString(),
+        message: messageBody,
+      };
+
+      try {
+        fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      } catch (err) {
+        const errMessage = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          error: {
+            code: ErrorCodes.UNAVAILABLE,
+            message: `failed to write transcript: ${errMessage}`,
+          },
+        };
+      }
+
+      const chatPayload = {
+        runId: `inject-${messageId}`,
+        sessionKey: p.sessionKey,
+        seq: 0,
+        state: "final" as const,
+        message: transcriptEntry.message,
+      };
+      ctx.broadcast("chat", chatPayload);
+      ctx.bridgeSendToSession(p.sessionKey, "chat", chatPayload);
+
+      return { ok: true, payloadJSON: JSON.stringify({ ok: true, messageId }) };
+    }
     case "chat.history": {
       if (!validateChatHistoryParams(params)) {
         return {
@@ -217,7 +298,7 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, 
         }
       }
 
-      const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
+      const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(p.sessionKey);
       const timeoutMs = resolveAgentTimeoutMs({
         cfg,
         overrideMs: p.timeoutMs,
@@ -294,11 +375,10 @@ export const handleChatBridgeMethods: BridgeMethodHandler = async (ctx, nodeId, 
           clientRunId,
         });
 
-        if (store) {
-          store[canonicalKey] = sessionEntry;
-          if (storePath) {
-            await saveSessionStore(storePath, store);
-          }
+        if (storePath) {
+          await updateSessionStore(storePath, (store) => {
+            store[canonicalKey] = sessionEntry;
+          });
         }
 
         const ackPayload = {

@@ -13,7 +13,9 @@ type PersistedSubagentRegistry = {
 
 const REGISTRY_VERSION = 1 as const;
 
-type PersistedSubagentRunRecord = Omit<SubagentRunRecord, "announceHandled">;
+type PersistedSubagentRunRecord = Omit<SubagentRunRecord, "announceHandled"> & {
+  announceHandled?: boolean;
+};
 
 export function resolveSubagentRegistryPath(): string {
   return path.join(STATE_DIR_CLAWDBOT, "subagents", "runs.json");
@@ -32,12 +34,27 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     if (!entry || typeof entry !== "object") continue;
     const typed = entry as PersistedSubagentRunRecord;
     if (!typed.runId || typeof typed.runId !== "string") continue;
+    // Back-compat: map legacy announce fields into cleanup fields.
     const announceCompletedAt =
       typeof typed.announceCompletedAt === "number" ? typed.announceCompletedAt : undefined;
+    const cleanupCompletedAt =
+      typeof typed.cleanupCompletedAt === "number"
+        ? typed.cleanupCompletedAt
+        : announceCompletedAt;
+    const cleanupHandled =
+      typeof typed.cleanupHandled === "boolean"
+        ? typed.cleanupHandled
+        : Boolean(typed.announceHandled ?? announceCompletedAt ?? cleanupCompletedAt);
+    const announceHandled =
+      typeof typed.announceHandled === "boolean"
+        ? typed.announceHandled
+        : Boolean(announceCompletedAt);
     out.set(runId, {
       ...typed,
       announceCompletedAt,
-      announceHandled: Boolean(announceCompletedAt),
+      announceHandled,
+      cleanupCompletedAt,
+      cleanupHandled,
     });
   }
   return out;

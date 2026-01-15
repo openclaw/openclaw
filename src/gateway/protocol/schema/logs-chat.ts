@@ -53,6 +53,15 @@ export const ChatAbortParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChatInjectParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    message: NonEmptyString,
+    label: Type.Optional(Type.String({ maxLength: 100 })),
+  },
+  { additionalProperties: false },
+);
+
 export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,

@@ -5,10 +5,22 @@ import type { SandboxToolPolicy } from "./sandbox.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
 const DEFAULT_SUBAGENT_TOOL_DENY = [
+  // Session management - main agent orchestrates
   "sessions_list",
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
+  // System admin - dangerous from subagent
+  "gateway",
+  "agents_list",
+  // Interactive setup - not a task
+  "whatsapp_login",
+  // Status/scheduling - main agent coordinates
+  "session_status",
+  "cron",
+  // Memory - pass relevant info in spawn prompt instead
+  "memory_search",
+  "memory_get",
 ];
 
 export function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {

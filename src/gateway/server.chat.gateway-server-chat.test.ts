@@ -381,6 +381,60 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
+  test("chat.inject appends to the session transcript", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    const transcriptPath = path.join(dir, "sess-main.jsonl");
+
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "m1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [{ type: "text", text: "seed" }], timestamp: Date.now() },
+      })}\n`,
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ messageId?: string }>(ws, "chat.inject", {
+      sessionKey: "main",
+      message: "injected text",
+      label: "note",
+    });
+    expect(res.ok).toBe(true);
+
+    const raw = await fs.readFile(transcriptPath, "utf-8");
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    expect(lines.length).toBe(2);
+    const last = JSON.parse(lines[1]) as {
+      message?: { role?: string; content?: Array<{ text?: string }> };
+    };
+    expect(last.message?.role).toBe("assistant");
+    expect(last.message?.content?.[0]?.text).toContain("injected text");
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.history defaults thinking to low for reasoning-capable models", async () => {
     piSdkMock.enabled = true;
     piSdkMock.models = [

@@ -59,6 +59,7 @@ import type {
 import type {
   ChatAbortParamsSchema,
   ChatEventSchema,
+  ChatInjectParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
@@ -163,6 +164,7 @@ export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;
