@@ -126,7 +126,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const current = `${params.provider}/${params.model}`;
     const lines: string[] = [`Current: ${current}`, "Pick: /model <#> or /model <provider/model>"];
     for (const [idx, item] of items.entries()) {
-      lines.push(`${idx + 1}) ${item.model} — ${item.providers.join(", ")}`);
+      lines.push(`${idx + 1}) ${item.provider}/${item.model}`);
     }
     lines.push("", "More: /model status");
     return { text: lines.join("\n") };
