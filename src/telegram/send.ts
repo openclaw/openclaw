@@ -101,12 +101,12 @@ function normalizeMessageId(raw: string | number): number {
   if (typeof raw === "string") {
     const value = raw.trim();
     if (!value) {
-      throw new Error("Message id is required for Telegram reactions");
+      throw new Error("Message id is required for Telegram actions");
     }
     const parsed = Number.parseInt(value, 10);
     if (Number.isFinite(parsed)) return parsed;
   }
-  throw new Error("Message id is required for Telegram reactions");
+  throw new Error("Message id is required for Telegram actions");
 }
 
 export function buildInlineKeyboard(

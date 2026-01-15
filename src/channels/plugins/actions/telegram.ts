@@ -1,4 +1,8 @@
-import { createActionGate, readStringParam } from "../../../agents/tools/common.js";
+import {
+  createActionGate,
+  readStringOrNumberParam,
+  readStringParam,
+} from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
@@ -94,7 +98,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "delete") {
-      const chatId = readStringParam(params, "chatId", { required: true });
+      const chatId =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "to", { required: true });
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });

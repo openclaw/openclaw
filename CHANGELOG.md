@@ -6,6 +6,7 @@
 - Usage: add MiniMax coding plan usage tracking.
 - Auth: label Claude Code CLI auth options. (#915) — thanks @SeanZoR.
 - Docs: standardize Claude Code CLI naming across docs and prompts. (follow-up to #915)
+- Telegram: add message delete action in the message tool. (#903) — thanks @sleontenko.
 
 ### Fixes
  - Mac: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
