@@ -167,7 +167,7 @@ Forward any message from the group to `@userinfobot` or `@getidsbot` on Telegram
 
 **Tip:** For your own user ID, DM the bot and it will reply with your user ID (pairing message), or use `/whoami` once commands are enabled.
 
-**Privacy note:** `@userinfobot` is a third-party bot. If you prefer, use gateway logs (`clawdbot logs`) or Telegram developer tools to find user/chat IDs.
+**Privacy note:** `@userinfobot` is a third-party bot. If you prefer, add the bot to the group, send a message, and use `clawdbot logs --follow` to read `chat.id`, or use the Bot API `getUpdates`.
 
 ## Config writes
 By default, Telegram is allowed to write config updates triggered by channel events or `/config set|unset`.
@@ -200,7 +200,22 @@ Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps
   - `clawdbot pairing list telegram`
   - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
-- `channels.telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries. It is **not** the bot username; use the human sender’s ID (get it from `@userinfobot` or the `from.id` field in the gateway log).
+- `channels.telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries. It is **not** the bot username; use the human sender’s ID.
+
+#### Finding your Telegram user ID
+Safer (no third-party bot):
+1) Start the gateway and DM your bot.
+2) Run `clawdbot logs --follow` and look for `from.id`.
+
+Alternate (official Bot API):
+1) DM your bot.
+2) Fetch updates with your bot token and read `message.from.id`:
+   ```bash
+   curl "https://api.telegram.org/bot<bot_token>/getUpdates"
+   ```
+
+Third-party (less private):
+- DM `@userinfobot` or `@getidsbot` and use the returned user id.
 
 ### Group access
 
