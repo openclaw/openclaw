@@ -1605,6 +1605,18 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 Note: `applyPatch` is only under `tools.exec` (no `tools.bash` alias).
 Legacy: `tools.bash` is still accepted as an alias.
 
+`tools.web` configures web search + fetch tools:
+- `tools.web.search.enabled` (default: true when key is present)
+- `tools.web.search.apiKey` (or `BRAVE_API_KEY` env var)
+- `tools.web.search.maxResults` (1–10, default 5)
+- `tools.web.search.timeoutSeconds` (default 30)
+- `tools.web.search.cacheTtlMinutes` (default 15)
+- `tools.web.fetch.enabled` (default false; sandboxed sessions auto-enable unless set to false)
+- `tools.web.fetch.maxChars` (default 50000)
+- `tools.web.fetch.timeoutSeconds` (default 30)
+- `tools.web.fetch.cacheTtlMinutes` (default 15)
+- `tools.web.fetch.userAgent` (optional override)
+
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
 - `maxConcurrent`: max concurrent sub-agent runs (default 1)
@@ -1685,6 +1697,7 @@ Tool groups (shorthands) work in **global** and **per-agent** tool policies:
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
@@ -2210,7 +2223,7 @@ Example:
 ```json5
 {
   skills: {
-    allowBundled: ["brave-search", "gemini"],
+    allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: [
         "~/Projects/agent-scripts/skills",

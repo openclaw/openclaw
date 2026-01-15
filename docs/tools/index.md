@@ -131,6 +131,7 @@ Available groups:
 - `group:fs`: `read`, `write`, `edit`, `apply_patch`
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
+- `group:web`: `web_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
@@ -187,6 +188,33 @@ Notes:
 - `poll` returns new output and exit status when complete.
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 - `process` is scoped per agent; sessions from other agents are not visible.
+
+### `web_search`
+Search the web using Brave Search API.
+
+Core parameters:
+- `query` (required)
+- `count` (1–10; default from `tools.web.search.maxResults`)
+
+Notes:
+- Requires `BRAVE_API_KEY` or `tools.web.search.apiKey`.
+- Enable via `tools.web.search.enabled`.
+- Responses are cached (default 15 min).
+- See [Web tools](/tools/web) for setup.
+
+### `web_fetch`
+Fetch and extract readable content from a URL (HTML → markdown/text).
+
+Core parameters:
+- `url` (required)
+- `extractMode` (`markdown` | `text`)
+- `maxChars` (truncate long pages)
+
+Notes:
+- Enable via `tools.web.fetch.enabled`.
+- Responses are cached (default 15 min).
+- For JS-heavy sites, prefer the browser tool.
+- See [Web tools](/tools/web) for setup.
 
 ### `browser`
 Control the dedicated clawd browser.

@@ -114,6 +114,34 @@ export const ToolPolicySchema = z
   })
   .optional();
 
+export const ToolsWebSearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    provider: z.union([z.literal("brave")]).optional(),
+    apiKey: z.string().optional(),
+    maxResults: z.number().int().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
+  })
+  .optional();
+
+export const ToolsWebFetchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxChars: z.number().int().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
+    userAgent: z.string().optional(),
+  })
+  .optional();
+
+export const ToolsWebSchema = z
+  .object({
+    search: ToolsWebSearchSchema,
+    fetch: ToolsWebFetchSchema,
+  })
+  .optional();
+
 export const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
@@ -245,6 +273,7 @@ export const ToolsSchema = z
     profile: ToolProfileSchema,
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
+    web: ToolsWebSchema,
     audio: z
       .object({
         transcription: ToolsAudioTranscriptionSchema,

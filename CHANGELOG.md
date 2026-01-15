@@ -8,6 +8,7 @@
 - Docs: expand gateway security hardening guidance and incident response checklist.
 - Docs: document DM history limits for channel DMs. (#883) — thanks @pkrmf.
 - Security: add detect-secrets CI scan and baseline guidance. (#227) — thanks @Hyaxia.
+- Tools: add `web_search`/`web_fetch` (Brave API), auto-enable `web_fetch` for sandboxed sessions, and remove the `brave-search` skill.
 
 ### Fixes
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.

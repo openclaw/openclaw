@@ -889,6 +889,7 @@
           "tools",
           "plugin",
           "tools/exec",
+          "tools/web",
           "tools/apply-patch",
           "tools/elevated",
           "tools/browser",
