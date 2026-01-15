@@ -18,6 +18,7 @@
 - CLI/Docs: add a web tools configure section for storing Brave API keys and update onboarding tips.
 - Tools: return a setup hint (docs link) when web_search runs without a Brave API key.
 - Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
+- CLI/Docs: add per-command CLI doc pages and link them from `clawdbot <command> --help`.
 
 ### Fixes
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
