@@ -67,6 +67,7 @@
 - Agent: clear run context after CLI runs (`clearAgentRunContext`) to avoid runaway contexts. (#934) — thanks @ronak-guliani.
 - macOS: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
 - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
+- macOS: reuse launchd gateway auth and skip wizard when gateway config already exists. (#917)
 - TUI: render picker overlays via the overlay stack so /models and /settings display. (#921) — thanks @grizzdank.
 - TUI: add a bright spinner + elapsed time in the status line for send/stream/run states.
 - TUI: show LLM error messages (rate limits, auth, etc.) instead of `(no output)`.
