@@ -117,6 +117,7 @@
 - Logging: tolerate `EIO` from console writes to avoid gateway crashes. (#925, fixes #878) — thanks @grp06.
 - Sandbox: restore `docker.binds` config validation and preserve configured PATH for `docker exec`. (#873) — thanks @akonyer.
 - Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
+- Agents: preserve Antigravity Claude signatures and skip Gemini downgrades. (#959) — thanks @rdev.
 
 #### macOS / Apps
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
