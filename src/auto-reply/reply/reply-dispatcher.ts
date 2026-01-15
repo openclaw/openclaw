@@ -69,7 +69,10 @@ function normalizeReplyPayloadInternal(
   payload: ReplyPayload,
   opts: Pick<
     ReplyDispatcherOptions,
-    "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+    | "responsePrefix"
+    | "responsePrefixContext"
+    | "responsePrefixContextProvider"
+    | "onHeartbeatStrip"
   >,
 ): ReplyPayload | null {
   // Prefer dynamic context provider over static context
