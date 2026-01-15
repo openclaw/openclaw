@@ -86,7 +86,7 @@ function createProfileContext(
     const current = state();
     let profileState = current.profiles.get(profile.name);
     if (!profileState) {
-      profileState = { profile, running: null };
+      profileState = { profile, running: null, lastTargetId: null };
       current.profiles.set(profile.name, profileState);
     }
     return profileState;
@@ -158,6 +158,8 @@ function createProfileContext(
     });
 
     if (!created.id) throw new Error("Failed to open tab (missing id)");
+    const profileState = getProfileState();
+    profileState.lastTargetId = created.id;
     return {
       targetId: created.id,
       title: created.title ?? "",
@@ -276,27 +278,43 @@ function createProfileContext(
 
   const ensureTabAvailable = async (targetId?: string): Promise<BrowserTab> => {
     await ensureBrowserAvailable();
+    const profileState = getProfileState();
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
+      if (profile.driver === "extension") {
+        throw new Error("tab not found");
+      }
       await openTab("about:blank");
     }
 
     const tabs = await listTabs();
-    const chosen = targetId
-      ? (() => {
-          const resolved = resolveTargetIdFromTabs(targetId, tabs);
-          if (!resolved.ok) {
-            if (resolved.reason === "ambiguous") return "AMBIGUOUS" as const;
-            return null;
-          }
-          return tabs.find((t) => t.targetId === resolved.targetId) ?? null;
-        })()
-      : (tabs.at(0) ?? null);
+    const candidates = tabs.filter((t) => Boolean(t.wsUrl));
+
+    const resolveById = (raw: string) => {
+      const resolved = resolveTargetIdFromTabs(raw, candidates);
+      if (!resolved.ok) {
+        if (resolved.reason === "ambiguous") return "AMBIGUOUS" as const;
+        return null;
+      }
+      return candidates.find((t) => t.targetId === resolved.targetId) ?? null;
+    };
+
+    const pickDefault = () => {
+      const last = profileState.lastTargetId?.trim() || "";
+      const lastResolved = last ? resolveById(last) : null;
+      if (lastResolved && lastResolved !== "AMBIGUOUS") return lastResolved;
+      // Prefer a real page tab first (avoid service workers/background targets).
+      const page = candidates.find((t) => (t.type ?? "page") === "page");
+      return page ?? (candidates.at(0) ?? null);
+    };
+
+    const chosen = targetId ? resolveById(targetId) : pickDefault();
 
     if (chosen === "AMBIGUOUS") {
       throw new Error("ambiguous target id prefix");
     }
     if (!chosen?.wsUrl) throw new Error("tab not found");
+    profileState.lastTargetId = chosen.targetId;
     return chosen;
   };
 
@@ -311,6 +329,8 @@ function createProfileContext(
       throw new Error("tab not found");
     }
     await fetchOk(`${base}/json/activate/${resolved.targetId}`);
+    const profileState = getProfileState();
+    profileState.lastTargetId = resolved.targetId;
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
