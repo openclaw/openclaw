@@ -93,7 +93,7 @@ Fetch a URL and extract readable content.
         maxChars: 50000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
-        userAgent: "clawdbot/2026.1.14-1"
+        userAgent: "clawdbot/2026.1.15"
       }
     }
   }
