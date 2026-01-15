@@ -28,10 +28,19 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 1) Create a Brave Search API account at https://brave.com/search/api/
 2) Generate an API key in the dashboard.
-3) Set `BRAVE_API_KEY` in your environment or paste it into `tools.web.search.apiKey`.
+3) Run `clawdbot configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
 Brave provides a free tier plus paid plans; check the Brave API portal for the
 current limits and pricing.
+
+### Where to set the key (recommended)
+
+**Recommended:** run `clawdbot configure --section web`. It stores the key in
+`~/.clawdbot/clawdbot.json` under `tools.web.search.apiKey`.
+
+**Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
+environment. For a daemon install, put it in `~/.clawdbot/.env` (or your
+service environment). See [Env vars](/start/faq#how-does-clawdbot-load-environment-variables).
 
 ## web_search
 
@@ -40,7 +49,7 @@ Search the web with Brave’s API.
 ### Requirements
 
 - `tools.web.search.enabled: true`
-- Brave API key via `BRAVE_API_KEY` **or** `tools.web.search.apiKey`
+- Brave API key (recommended: `clawdbot configure --section web`, or set `BRAVE_API_KEY`)
 
 ### Config
 

@@ -113,7 +113,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   if (!opts.json) {
     runtime.log(
-      "Tip: set BRAVE_API_KEY (or tools.web.search.apiKey) to enable web_search. Docs: https://docs.clawd.bot/tools/web",
+      "Tip: run `clawdbot configure --section web` to store your Brave API key for web_search. Docs: https://docs.clawd.bot/tools/web",
     );
   }
 }

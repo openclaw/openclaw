@@ -1607,7 +1607,7 @@ Legacy: `tools.bash` is still accepted as an alias.
 
 `tools.web` configures web search + fetch tools:
 - `tools.web.search.enabled` (default: true when key is present)
-- `tools.web.search.apiKey` (or `BRAVE_API_KEY` env var)
+- `tools.web.search.apiKey` (recommended: set via `clawdbot configure --section web`, or use `BRAVE_API_KEY` env var)
 - `tools.web.search.maxResults` (1–10, default 5)
 - `tools.web.search.timeoutSeconds` (default 30)
 - `tools.web.search.cacheTtlMinutes` (default 15)

@@ -576,7 +576,9 @@ The Gateway watches the config and supports hot‑reload:
 ### How do I enable web search (and web fetch)?
 
 `web_fetch` works without an API key. `web_search` requires a Brave Search API
-key (`BRAVE_API_KEY` or `tools.web.search.apiKey`).
+key. **Recommended:** run `clawdbot configure --section web` to store it in
+`tools.web.search.apiKey`. Environment alternative: set `BRAVE_API_KEY` for the
+Gateway process.
 
 ```json5
 {
@@ -584,7 +586,7 @@ key (`BRAVE_API_KEY` or `tools.web.search.apiKey`).
     web: {
       search: {
         enabled: true,
-        apiKey: "BRAVE_API_KEY_HERE", // or set BRAVE_API_KEY
+        apiKey: "BRAVE_API_KEY_HERE",
         maxResults: 5
       },
       fetch: {
@@ -598,6 +600,7 @@ key (`BRAVE_API_KEY` or `tools.web.search.apiKey`).
 Notes:
 - If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
 - In sandboxed sessions, `web_fetch` auto-enables unless explicitly disabled.
+- Daemons read env vars from `~/.clawdbot/.env` (or the service environment).
 
 Docs: [Web tools](/tools/web).
 
