@@ -6,6 +6,7 @@ import { resolveOAuthDir } from "../config/paths.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import { hasWebCredsSync } from "./auth-store.js";
 
 export type ResolvedWhatsAppAccount = {
   accountId: string;
@@ -30,6 +31,33 @@ function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = cfg.channels?.whatsapp?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
   return Object.keys(accounts).filter(Boolean);
+}
+
+export function listWhatsAppAuthDirs(cfg: ClawdbotConfig): string[] {
+  const oauthDir = resolveOAuthDir();
+  const whatsappDir = path.join(oauthDir, "whatsapp");
+  const authDirs = new Set<string>([oauthDir, path.join(whatsappDir, DEFAULT_ACCOUNT_ID)]);
+
+  const accountIds = listConfiguredAccountIds(cfg);
+  for (const accountId of accountIds) {
+    authDirs.add(resolveWhatsAppAuthDir({ cfg, accountId }).authDir);
+  }
+
+  try {
+    const entries = fs.readdirSync(whatsappDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      authDirs.add(path.join(whatsappDir, entry.name));
+    }
+  } catch {
+    // ignore missing dirs
+  }
+
+  return Array.from(authDirs);
+}
+
+export function hasAnyWhatsAppAuth(cfg: ClawdbotConfig): boolean {
+  return listWhatsAppAuthDirs(cfg).some((authDir) => hasWebCredsSync(authDir));
 }
 
 export function listWhatsAppAccountIds(cfg: ClawdbotConfig): string[] {
