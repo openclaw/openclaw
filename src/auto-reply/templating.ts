@@ -100,7 +100,7 @@ function formatTemplateValue(value: unknown): string {
       .join(",");
   }
   if (typeof value === "object") {
-    return JSON.stringify(value);
+    return "";
   }
   return "";
 }

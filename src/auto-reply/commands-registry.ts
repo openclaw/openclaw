@@ -140,19 +140,8 @@ function formatPositionalArgs(
     let rendered: string;
     if (typeof value === "string") {
       rendered = value.trim();
-    } else if (
-      typeof value === "number" ||
-      typeof value === "boolean" ||
-      typeof value === "bigint"
-    ) {
-      rendered = String(value);
-    } else if (typeof value === "symbol") {
-      rendered = value.toString();
-    } else if (typeof value === "function") {
-      rendered = value.toString();
     } else {
-      // Objects and arrays
-      rendered = JSON.stringify(value);
+      rendered = String(value);
     }
     if (!rendered) continue;
     parts.push(rendered);

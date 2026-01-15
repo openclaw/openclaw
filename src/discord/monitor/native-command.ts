@@ -118,7 +118,7 @@ function readDiscordCommandArgs(
   if (!definitions || definitions.length === 0) return undefined;
   const values: CommandArgValues = {};
   for (const definition of definitions) {
-    let value: string | number | boolean | null;
+    let value: string | number | boolean | null | undefined;
     if (definition.type === "number") {
       value = interaction.options.getNumber(definition.name);
     } else if (definition.type === "boolean") {

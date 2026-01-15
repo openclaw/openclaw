@@ -13,7 +13,6 @@ export function isAntigravityClaude(api?: string | null, modelId?: string): bool
   return modelId?.toLowerCase().includes("claude") ?? false;
 }
 
-
 export { sanitizeGoogleTurnOrdering };
 
 /**
