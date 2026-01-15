@@ -102,11 +102,14 @@ struct MenuContent: View {
             }
             if self.state.canvasEnabled {
                 Button {
-                    if self.state.canvasPanelVisible {
-                        CanvasManager.shared.hideAll()
-                    } else {
-                        // Don't force a navigation on re-open: preserve the current web view state.
-                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
+                    Task { @MainActor in
+                        if self.state.canvasPanelVisible {
+                            CanvasManager.shared.hideAll()
+                        } else {
+                            let sessionKey = await GatewayConnection.shared.mainSessionKey()
+                            // Don't force a navigation on re-open: preserve the current web view state.
+                            _ = try? CanvasManager.shared.show(sessionKey: sessionKey, path: nil)
+                        }
                     }
                 } label: {
                     Label(
