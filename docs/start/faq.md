@@ -50,6 +50,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized](#i-set-gatewaybind-lan-or-tailnet-and-now-nothing-listens-the-ui-says-unauthorized)
   - [Why do I need a token on localhost now?](#why-do-i-need-a-token-on-localhost-now)
   - [Do I have to restart after changing config?](#do-i-have-to-restart-after-changing-config)
+  - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
   - [Can the Clawdbot browser run headless?](#can-the-clawdbot-browser-run-headless)
 - [Remote gateways + nodes](#remote-gateways-nodes)
@@ -557,6 +558,34 @@ The Gateway watches the config and supports hot‑reload:
 
 - `gateway.reload.mode: "hybrid"` (default): hot‑apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
+
+### How do I enable web search (and web fetch)?
+
+`web_fetch` works without an API key. `web_search` requires a Brave Search API
+key (`BRAVE_API_KEY` or `tools.web.search.apiKey`).
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        enabled: true,
+        apiKey: "BRAVE_API_KEY_HERE", // or set BRAVE_API_KEY
+        maxResults: 5
+      },
+      fetch: {
+        enabled: true
+      }
+    }
+  }
+}
+```
+
+Notes:
+- If you use allowlists, add `web_search`/`web_fetch` or `group:web`.
+- In sandboxed sessions, `web_fetch` auto-enables unless explicitly disabled.
+
+Docs: [Web tools](/tools/web).
 
 ### How do I run a central Gateway with specialized workers across devices?
 
