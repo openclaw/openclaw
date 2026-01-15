@@ -110,6 +110,7 @@ describe("runOnboardingWizard", () => {
     await expect(
       runOnboardingWizard(
         {
+          acceptRisk: true,
           flow: "quickstart",
           authChoice: "skip",
           installDaemon: false,
@@ -150,6 +151,7 @@ describe("runOnboardingWizard", () => {
 
     await runOnboardingWizard(
       {
+        acceptRisk: true,
         flow: "quickstart",
         authChoice: "skip",
         installDaemon: false,
@@ -201,6 +203,7 @@ describe("runOnboardingWizard", () => {
 
     await runOnboardingWizard(
       {
+        acceptRisk: true,
         flow: "quickstart",
         mode: "local",
         workspace: workspaceDir,

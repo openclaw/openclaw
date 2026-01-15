@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.1.15
+
+### Changes
+- Security: add `clawdbot security audit` (`--deep`) and surface it in `status --all` and `doctor`.
+- Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
+- Docs: expand gateway security hardening guidance and incident response checklist.
+
 ## 2026.1.14
 
 ### Changes

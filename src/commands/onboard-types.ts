@@ -40,6 +40,8 @@ export type OnboardOptions = {
   flow?: "quickstart" | "advanced";
   workspace?: string;
   nonInteractive?: boolean;
+  /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
+  acceptRisk?: boolean;
   reset?: boolean;
   authChoice?: AuthChoice;
   /** Used when `authChoice=token` in non-interactive mode. */
