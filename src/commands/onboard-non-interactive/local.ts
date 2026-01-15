@@ -110,4 +110,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
     skipSkills: Boolean(opts.skipSkills),
     skipHealth: Boolean(opts.skipHealth),
   });
+
+  if (!opts.json) {
+    runtime.log(
+      "Tip: set BRAVE_API_KEY (or tools.web.search.apiKey) to enable web_search. Docs: https://docs.clawd.bot/tools/web",
+    );
+  }
 }
