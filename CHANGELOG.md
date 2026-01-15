@@ -73,6 +73,7 @@
  - UI: use application-defined WebSocket close code (browser compatibility). (#918) — thanks @rahthakor.
 - TUI: render picker overlays via the overlay stack so /models and /settings display. (#921) — thanks @grizzdank.
 - TUI: add a bright spinner + elapsed time in the status line for send/stream/run states.
+- TUI: show LLM error messages (rate limits, auth, etc.) instead of `(no output)`.
 - Gateway/Dev: ensure `pnpm gateway:dev` always uses the dev profile config + state (`~/.clawdbot-dev`).
 - macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.

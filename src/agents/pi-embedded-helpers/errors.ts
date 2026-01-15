@@ -100,6 +100,72 @@ export function isRawApiErrorPayload(raw?: string): boolean {
   return getApiErrorPayloadFingerprint(raw) !== null;
 }
 
+export type ApiErrorInfo = {
+  httpCode?: string;
+  type?: string;
+  message?: string;
+  requestId?: string;
+};
+
+export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  let httpCode: string | undefined;
+  let candidate = trimmed;
+
+  const httpPrefixMatch = candidate.match(/^(\d{3})\s+(.+)$/s);
+  if (httpPrefixMatch) {
+    httpCode = httpPrefixMatch[1];
+    candidate = httpPrefixMatch[2].trim();
+  }
+
+  const payload = parseApiErrorPayload(candidate);
+  if (!payload) return null;
+
+  const requestId =
+    typeof payload.request_id === "string"
+      ? payload.request_id
+      : typeof payload.requestId === "string"
+        ? payload.requestId
+        : undefined;
+
+  const topType = typeof payload.type === "string" ? payload.type : undefined;
+  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
+
+  let errType: string | undefined;
+  let errMessage: string | undefined;
+  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
+    const err = payload.error as Record<string, unknown>;
+    if (typeof err.type === "string") errType = err.type;
+    if (typeof err.code === "string" && !errType) errType = err.code;
+    if (typeof err.message === "string") errMessage = err.message;
+  }
+
+  return {
+    httpCode,
+    type: errType ?? topType,
+    message: errMessage ?? topMessage,
+    requestId,
+  };
+}
+
+export function formatRawAssistantErrorForUi(raw?: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return "LLM request failed with an unknown error.";
+
+  const info = parseApiErrorInfo(trimmed);
+  if (info?.message) {
+    const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
+    const type = info.type ? ` ${info.type}` : "";
+    const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
+    return `${prefix}${type}: ${info.message}${requestId}`;
+  }
+
+  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: ClawdbotConfig; sessionKey?: string },

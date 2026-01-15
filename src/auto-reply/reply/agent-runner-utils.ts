@@ -1,7 +1,7 @@
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
