@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearSentMessageCache,
-  recordSentMessage,
-  wasSentByBot,
-} from "./sent-message-cache.js";
+import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 
 describe("sent-message-cache", () => {
   afterEach(() => {

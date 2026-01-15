@@ -17,15 +17,8 @@ import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../config/group-policy.js";
-import {
-  loadSessionStore,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
-import { recordChannelActivity } from "../infra/channel-activity.js";
-import { createDedupeCache } from "../infra/dedupe.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -47,12 +40,6 @@ import {
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import {
-  readTelegramAllowFromStore,
-  upsertTelegramPairingRequest,
-} from "./pairing-store.js";
-import { wasSentByBot } from "./sent-message-cache.js";
-import { resolveTelegramVoiceSend } from "./voice.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -334,23 +321,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       // Detect added reactions
       const oldEmojis = new Set(
         reaction.old_reaction
-          .filter(
-            (r): r is { type: "emoji"; emoji: string } => r.type === "emoji",
-          )
+          .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
           .map((r) => r.emoji),
       );
       const addedReactions = reaction.new_reaction
-        .filter(
-          (r): r is { type: "emoji"; emoji: string } => r.type === "emoji",
-        )
+        .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
         .filter((r) => !oldEmojis.has(r.emoji));
 
       if (addedReactions.length === 0) return;
 
       // Build sender label
       const senderName = user
-        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() ||
-          user.username
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
         : undefined;
       const senderUsername = user?.username ? `@${user.username}` : undefined;
       let senderLabel = senderName;
@@ -373,11 +355,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       });
 
       // Resolve agent route for session
-      const isGroup =
-        reaction.chat.type === "group" || reaction.chat.type === "supergroup";
-      const peerId = isGroup
-        ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
-        : String(chatId);
+      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
       const route = resolveAgentRoute({
         cfg,
         channel: "telegram",
@@ -396,9 +375,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         logVerbose(`telegram: reaction event enqueued: ${text}`);
       }
     } catch (err) {
-      runtime.error?.(
-        danger(`telegram reaction handler failed: ${String(err)}`),
-      );
+      runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
     }
   });
 

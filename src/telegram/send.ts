@@ -18,10 +18,7 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { recordSentMessage } from "./sent-message-cache.js";
-import {
-  parseTelegramTarget,
-  stripTelegramInternalPrefixes,
-} from "./targets.js";
+import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramSendOpts = {

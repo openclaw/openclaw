@@ -34,10 +34,7 @@ export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unk
         // Match grammY defaults
         timeout: 30,
         // Request reaction updates from Telegram
-        allowed_updates: [
-          "message",
-          "message_reaction",
-        ],
+        allowed_updates: ["message", "message_reaction"],
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,

@@ -29,10 +29,7 @@ function cleanupExpired(entry: CacheEntry): void {
 /**
  * Record a message ID as sent by the bot.
  */
-export function recordSentMessage(
-  chatId: number | string,
-  messageId: number,
-): void {
+export function recordSentMessage(chatId: number | string, messageId: number): void {
   const key = getChatKey(chatId);
   let entry = sentMessages.get(key);
   if (!entry) {
@@ -50,10 +47,7 @@ export function recordSentMessage(
 /**
  * Check if a message was sent by the bot.
  */
-export function wasSentByBot(
-  chatId: number | string,
-  messageId: number,
-): boolean {
+export function wasSentByBot(chatId: number | string, messageId: number): boolean {
   const key = getChatKey(chatId);
   const entry = sentMessages.get(key);
   if (!entry) return false;

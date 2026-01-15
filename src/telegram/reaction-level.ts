@@ -24,8 +24,7 @@ export function resolveTelegramReactionLevel(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const level = (account.config.reactionLevel ??
-    "ack") as TelegramReactionLevel;
+  const level = (account.config.reactionLevel ?? "ack") as TelegramReactionLevel;
 
   switch (level) {
     case "off":
