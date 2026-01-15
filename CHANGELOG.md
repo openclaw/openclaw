@@ -55,6 +55,7 @@
 - Telegram: let control commands bypass per-chat sequentialization; always allow abort triggers.
 - Auto-reply: treat trailing `NO_REPLY` tokens as silent replies.
 - Config: prevent partial config writes from clobbering unrelated settings (base hash guard + merge patch for connection saves).
+- WhatsApp: honor SenderE164 for owner command auth when SenderId is LID; let owner control commands bypass group mention gating.
 - Sessions: return deep clones (`structuredClone`) so cached session entries can't be mutated. (#934) — thanks @ronak-guliani.
 - Heartbeat: keep `updatedAt` monotonic when restoring heartbeat sessions. (#934) — thanks @ronak-guliani.
 - Agent: clear run context after CLI runs (`clearAgentRunContext`) to avoid runaway contexts. (#934) — thanks @ronak-guliani.
