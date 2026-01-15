@@ -350,13 +350,9 @@ export function createBrowserTool(opts?: {
             throw new Error("request required");
           }
           try {
-            const result = await browserAct(
-              baseUrl,
-              request as Parameters<typeof browserAct>[1],
-              {
-                profile,
-              },
-            );
+            const result = await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+              profile,
+            });
             return jsonResult(result);
           } catch (err) {
             const msg = String(err);
@@ -364,7 +360,7 @@ export function createBrowserTool(opts?: {
               const tabs = await browserTabs(baseUrl, { profile }).catch(() => []);
               if (!tabs.length) {
                 throw new Error(
-                  'No Chrome tabs are attached via the Clawdbot Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.',
+                  "No Chrome tabs are attached via the Clawdbot Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
                 );
               }
               throw new Error(
