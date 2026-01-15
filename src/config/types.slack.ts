@@ -60,6 +60,13 @@ export type SlackSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+export type SlackThreadConfig = {
+  /** Scope for thread history context (thread|channel). Default: thread. */
+  historyScope?: "thread" | "channel";
+  /** If true, thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -101,6 +108,8 @@ export type SlackAccountConfig = {
   reactionAllowlist?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /** Thread session behavior. */
+  thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   dm?: SlackDmConfig;

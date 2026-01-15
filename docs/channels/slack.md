@@ -269,6 +269,11 @@ By default, Clawdbot replies in the main channel. Use `channels.slack.replyToMod
 
 The mode applies to both auto-replies and agent tool calls (`slack sendMessage`).
 
+### Thread session isolation
+Slack thread sessions are isolated by default. Configure with:
+- `channels.slack.thread.historyScope`: `thread` (default) keeps per-thread history; `channel` shares history across the channel.
+- `channels.slack.thread.inheritParent`: `false` (default) starts a clean thread session; `true` copies the parent channel transcript into the thread session.
+
 ### Manual threading tags
 For fine-grained control, use these tags in agent responses:
 - `[[reply_to_current]]` — reply to the triggering message (start/continue thread).

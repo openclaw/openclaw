@@ -263,7 +263,6 @@ export async function prepareSlackMessage(params: {
       : null;
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
-  const historyKey = message.channel;
   const historyEntry =
     isRoomish && ctx.historyLimit > 0
       ? {
@@ -291,9 +290,11 @@ export async function prepareSlackMessage(params: {
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply ? baseSessionKey : undefined,
+    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
+  const historyKey =
+    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
   enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
