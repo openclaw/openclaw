@@ -32,6 +32,7 @@ export async function resolveAnnounceTarget(params: {
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
+
     const channel = typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
     const to = typeof match?.lastTo === "string" ? match.lastTo : undefined;
     const accountId = typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined;

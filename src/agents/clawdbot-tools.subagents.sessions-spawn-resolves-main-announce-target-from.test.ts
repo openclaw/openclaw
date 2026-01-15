@@ -35,16 +35,15 @@ describe("clawdbot-tools: subagents", () => {
     };
   });
 
-  it("sessions_spawn resolves main announce target from sessions.list", async () => {
+  it("sessions_spawn runs cleanup flow after subagent completion", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
     let childRunId: string | undefined;
     let childSessionKey: string | undefined;
     const waitCalls: Array<{ runId?: string; timeoutMs?: number }> = [];
-    const sessionLastAssistantText = new Map<string, string>();
+    let patchParams: { key?: string; label?: string } = {};
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
@@ -66,15 +65,12 @@ describe("clawdbot-tools: subagents", () => {
         const params = request.params as {
           message?: string;
           sessionKey?: string;
+          lane?: string;
         };
-        const message = params?.message ?? "";
-        const sessionKey = params?.sessionKey ?? "";
-        if (message === "Sub-agent announce step.") {
-          sessionLastAssistantText.set(sessionKey, "hello from sub");
-        } else {
+        // Only capture the first agent call (subagent spawn, not main agent trigger)
+        if (params?.lane === "subagent") {
           childRunId = runId;
-          childSessionKey = sessionKey;
-          sessionLastAssistantText.set(sessionKey, "done");
+          childSessionKey = params?.sessionKey ?? "";
         }
         return {
           runId,
@@ -85,26 +81,12 @@ describe("clawdbot-tools: subagents", () => {
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
         waitCalls.push(params ?? {});
-        const status = params?.runId === childRunId ? "timeout" : "ok";
-        return { runId: params?.runId ?? "run-1", status };
+        return { runId: params?.runId ?? "run-1", status: "ok", startedAt: 1000, endedAt: 2000 };
       }
-      if (request.method === "chat.history") {
-        const params = request.params as { sessionKey?: string } | undefined;
-        const text = sessionLastAssistantText.get(params?.sessionKey ?? "") ?? "";
-        return {
-          messages: [{ role: "assistant", content: [{ type: "text", text }] }],
-        };
-      }
-      if (request.method === "send") {
-        const params = request.params as
-          | { to?: string; channel?: string; message?: string }
-          | undefined;
-        sendParams = {
-          to: params?.to,
-          channel: params?.channel,
-          message: params?.message,
-        };
-        return { messageId: "m1" };
+      if (request.method === "sessions.patch") {
+        const params = request.params as { key?: string; label?: string } | undefined;
+        patchParams = { key: params?.key, label: params?.label };
+        return { ok: true };
       }
       if (request.method === "sessions.delete") {
         return { ok: true };
@@ -121,6 +103,7 @@ describe("clawdbot-tools: subagents", () => {
     const result = await tool.execute("call2", {
       task: "do thing",
       runTimeoutSeconds: 1,
+      label: "my-task",
     });
     expect(result.details).toMatchObject({
       status: "accepted",
@@ -144,12 +127,29 @@ describe("clawdbot-tools: subagents", () => {
 
     const childWait = waitCalls.find((call) => call.runId === childRunId);
     expect(childWait?.timeoutMs).toBe(1000);
-    expect(sendParams.channel).toBe("whatsapp");
-    expect(sendParams.to).toBe("+123");
-    expect(sendParams.message ?? "").toContain("hello from sub");
-    expect(sendParams.message ?? "").toContain("Stats:");
+    // Cleanup should patch the label
+    expect(patchParams.key).toBe(childSessionKey);
+    expect(patchParams.label).toBe("my-task");
+
+    // Two agent calls: subagent spawn + main agent trigger
+    const agentCalls = calls.filter((c) => c.method === "agent");
+    expect(agentCalls).toHaveLength(2);
+
+    // First call: subagent spawn
+    const first = agentCalls[0]?.params as { lane?: string } | undefined;
+    expect(first?.lane).toBe("subagent");
+
+    // Second call: main agent trigger (not "Sub-agent announce step." anymore)
+    const second = agentCalls[1]?.params as { sessionKey?: string; message?: string } | undefined;
+    expect(second?.sessionKey).toBe("main");
+    expect(second?.message).toContain("background task");
+
+    // No direct send to external channel (main agent handles delivery)
+    const sendCalls = calls.filter((c) => c.method === "send");
+    expect(sendCalls.length).toBe(0);
     expect(childSessionKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
+
   it("sessions_spawn only allows same-agent by default", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

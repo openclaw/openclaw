@@ -1,7 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
 import { buildToolSummaryMap } from "../tool-summaries.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
@@ -19,6 +19,8 @@ export function buildEmbeddedSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  /** Controls which hardcoded sections to include. Defaults to "full". */
+  promptMode?: PromptMode;
   runtimeInfo: {
     host: string;
     os: string;
@@ -47,6 +49,7 @@ export function buildEmbeddedSystemPrompt(params: {
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
+    promptMode: params.promptMode,
     runtimeInfo: params.runtimeInfo,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
