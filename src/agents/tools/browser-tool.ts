@@ -141,8 +141,12 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const controlUrl = readStringParam(params, "controlUrl");
-      const target = readStringParam(params, "target") as "sandbox" | "host" | "custom" | undefined;
       const profile = readStringParam(params, "profile");
+      let target = readStringParam(params, "target") as "sandbox" | "host" | "custom" | undefined;
+      if (profile === "chrome" && !target && !controlUrl?.trim()) {
+        // Chrome extension relay takeover is a host Chrome feature; default to host even in sandboxed sessions.
+        target = "host";
+      }
       const baseUrl = resolveBrowserBaseUrl({
         target,
         controlUrl,
@@ -345,10 +349,30 @@ export function createBrowserTool(opts?: {
           if (!request || typeof request !== "object") {
             throw new Error("request required");
           }
-          const result = await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
-            profile,
-          });
-          return jsonResult(result);
+          try {
+            const result = await browserAct(
+              baseUrl,
+              request as Parameters<typeof browserAct>[1],
+              {
+                profile,
+              },
+            );
+            return jsonResult(result);
+          } catch (err) {
+            const msg = String(err);
+            if (msg.includes("404:") && msg.includes("tab not found") && profile === "chrome") {
+              const tabs = await browserTabs(baseUrl, { profile }).catch(() => []);
+              if (!tabs.length) {
+                throw new Error(
+                  'No Chrome tabs are attached via the Clawdbot Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.',
+                );
+              }
+              throw new Error(
+                `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+              );
+            }
+            throw err;
+          }
         }
         default:
           throw new Error(`Unknown action: ${action}`);
