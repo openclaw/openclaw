@@ -260,6 +260,7 @@ export async function preflightDiscordMessage(
     isGuildMessage &&
     !isDiscordGroupAllowedByPolicy({
       groupPolicy: params.groupPolicy,
+      guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,
     })

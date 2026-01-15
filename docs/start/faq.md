@@ -1542,10 +1542,11 @@ See [Streaming](/concepts/streaming).
 ### Discord doesn’t reply in my server even with `requireMention: false`. Why?
 
 `requireMention` only controls mention‑gating **after** the channel passes allowlists.
-By default `channels.discord.groupPolicy` is **allowlist**, so guild channels must be explicitly enabled.
+By default `channels.discord.groupPolicy` is **allowlist**, so guilds must be explicitly enabled.
+If you set `channels.discord.guilds.<guildId>.channels`, only the listed channels are allowed; omit it to allow all channels in the guild.
 
 Fix checklist:
-1) Set `channels.discord.groupPolicy: "open"` **or** add the guild/channel allowlist.
+1) Set `channels.discord.groupPolicy: "open"` **or** add a guild allowlist entry (and optionally a channel allowlist).
 2) Use **numeric channel IDs** in `channels.discord.guilds.<guildId>.channels`.
 3) Put `requireMention: false` **under** `channels.discord.guilds` (global or per‑channel).
    Top‑level `channels.discord.requireMention` is not a supported key.

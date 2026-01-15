@@ -448,6 +448,7 @@ async function dispatchDiscordCommandInteraction(params: {
     const channelAllowed = channelConfig?.allowed !== false;
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
       groupPolicy: discordConfig?.groupPolicy ?? "open",
+      guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,
     });

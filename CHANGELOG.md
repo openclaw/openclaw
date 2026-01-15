@@ -8,6 +8,7 @@
 - Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
 - Browser: fix `tab not found` for extension relay snapshots/actions when Playwright blocks `newCDPSession` (use the single available Page).
 - Telegram: add bidirectional reaction support with configurable notifications and agent guidance. (#964) — thanks @bohdanpodvirnyi.
+- Discord: allow allowlisted guilds without channel lists to receive messages when `groupPolicy="allowlist"`. — thanks @thewilloftheshadow.
 
 ## 2026.1.14-1
 

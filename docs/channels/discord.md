@@ -191,7 +191,7 @@ Notes:
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
 - **`requireMention: false` but still no replies**:
-  - `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or explicitly list channels under `channels.discord.guilds.<id>.channels`.
+  - `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or add a guild entry under `channels.discord.guilds` (optionally list channels under `channels.discord.guilds.<id>.channels` to restrict).
   - `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
@@ -352,6 +352,7 @@ Allowlist matching notes:
 - Prefixes like `discord:`/`user:` (users) and `channel:` (group DMs) are supported.
 - Use `*` to allow any sender/channel.
 - When `guilds.<id>.channels` is present, channels not listed are denied by default.
+- When `guilds.<id>.channels` is omitted, all channels in the allowlisted guild are allowed.
 
 Native command notes:
 - The registered commands mirror Clawdbot’s chat commands.

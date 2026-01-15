@@ -197,13 +197,15 @@ export function resolveDiscordShouldRequireMention(params: {
 
 export function isDiscordGroupAllowedByPolicy(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
+  guildAllowlisted: boolean;
   channelAllowlistConfigured: boolean;
   channelAllowed: boolean;
 }): boolean {
-  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  const { groupPolicy, guildAllowlisted, channelAllowlistConfigured, channelAllowed } = params;
   if (groupPolicy === "disabled") return false;
   if (groupPolicy === "open") return true;
-  if (!channelAllowlistConfigured) return false;
+  if (!guildAllowlisted) return false;
+  if (!channelAllowlistConfigured) return true;
   return channelAllowed;
 }
 

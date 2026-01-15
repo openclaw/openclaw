@@ -215,6 +215,7 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "open",
+        guildAllowlisted: false,
         channelAllowlistConfigured: false,
         channelAllowed: false,
       }),
@@ -225,26 +226,40 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "disabled",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: true,
       }),
     ).toBe(false);
   });
 
-  it("blocks allowlist when no channel allowlist configured", () => {
+  it("blocks allowlist when guild is not allowlisted", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: false,
         channelAllowlistConfigured: false,
         channelAllowed: true,
       }),
     ).toBe(false);
   });
 
+  it("allows allowlist when guild allowlisted but no channel allowlist", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        guildAllowlisted: true,
+        channelAllowlistConfigured: false,
+        channelAllowed: true,
+      }),
+    ).toBe(true);
+  });
+
   it("allows allowlist when channel is allowed", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: true,
       }),
@@ -255,6 +270,7 @@ describe("discord groupPolicy gating", () => {
     expect(
       isDiscordGroupAllowedByPolicy({
         groupPolicy: "allowlist",
+        guildAllowlisted: true,
         channelAllowlistConfigured: true,
         channelAllowed: false,
       }),
