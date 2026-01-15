@@ -16,6 +16,7 @@ export type ResolvedBrowserConfig = {
   controlUrl: string;
   controlHost: string;
   controlPort: number;
+  controlToken?: string;
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
@@ -35,6 +36,7 @@ export type ResolvedBrowserProfile = {
   cdpHost: string;
   cdpIsLoopback: boolean;
   color: string;
+  driver: "clawd" | "extension";
 };
 
 function isLoopbackHost(host: string) {
@@ -105,6 +107,7 @@ function ensureDefaultProfile(
 export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_CLAWD_BROWSER_ENABLED;
   const envControlUrl = process.env.CLAWDBOT_BROWSER_CONTROL_URL?.trim();
+  const controlToken = cfg?.controlToken?.trim() || undefined;
   const derivedControlPort = (() => {
     const raw = process.env.CLAWDBOT_GATEWAY_PORT?.trim();
     if (!raw) return null;
@@ -170,6 +173,7 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
     controlUrl: controlInfo.normalized,
     controlHost: controlInfo.parsed.hostname,
     controlPort,
+    ...(controlToken ? { controlToken } : {}),
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
@@ -198,6 +202,7 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
+  const driver = profile.driver === "extension" ? "extension" : "clawd";
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
@@ -217,6 +222,7 @@ export function resolveProfile(
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
     color: profile.color,
+    driver,
   };
 }
 

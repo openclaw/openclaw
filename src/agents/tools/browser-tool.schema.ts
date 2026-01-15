@@ -20,6 +20,7 @@ const BROWSER_TOOL_ACTIONS = [
   "status",
   "start",
   "stop",
+  "profiles",
   "tabs",
   "open",
   "focus",

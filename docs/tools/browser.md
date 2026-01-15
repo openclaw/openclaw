@@ -106,6 +106,95 @@ Example:
 Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
 directly to a Chrome instance without a remote control server.
 
+### Running the control server on the browser machine
+
+Run a standalone browser control server (recommended when your Gateway is remote):
+
+```bash
+# on the machine that runs Chrome
+clawdbot browser serve --bind <browser-host> --port 18791 --token <token>
+```
+
+Then point your Gateway at it:
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://<browser-host>:18791",
+
+    // Option A (recommended): keep token in env on the Gateway
+    // (avoid writing secrets into config files)
+    // controlToken: "<token>"
+  }
+}
+```
+
+And set the auth token in the Gateway environment:
+
+```bash
+export CLAWDBOT_BROWSER_CONTROL_TOKEN="<token>"
+```
+
+Option B: store the token in the Gateway config instead (same shared token):
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://<browser-host>:18791",
+    controlToken: "<token>"
+  }
+}
+```
+
+## Security
+
+This section covers the **browser control server** (`browser.controlUrl`) used for agent browser automation.
+
+Key ideas:
+- Treat the browser control server like an admin API: **private network only**.
+- Use **token auth** always when the server is reachable off-machine.
+- Prefer **Tailnet-only** connectivity over LAN exposure.
+
+### Tokens (what is shared with what?)
+
+- `browser.controlToken` / `CLAWDBOT_BROWSER_CONTROL_TOKEN` is **only** for authenticating browser control HTTP requests to `browser.controlUrl`.
+- It is **not** the Gateway token (`gateway.auth.token`) and **not** a node pairing token.
+- You *can* reuse the same string value, but it’s better to keep them separate to reduce blast radius.
+
+### Binding (don’t expose to your LAN by accident)
+
+Recommended:
+- Keep `clawdbot browser serve` bound to loopback (`127.0.0.1`) and publish it via Tailscale.
+- Or bind to a Tailnet IP only (never `0.0.0.0`) and require a token.
+
+Avoid:
+- `--bind 0.0.0.0` (LAN-visible). Even with token auth, traffic is plain HTTP unless you also add TLS.
+
+### TLS / HTTPS (recommended approach: terminate in front)
+
+Best practice here: keep `clawdbot browser serve` on HTTP and terminate TLS in front.
+
+If you’re already using Tailscale, you have two good options:
+
+1) **Tailnet-only, still HTTP** (transport is encrypted by Tailscale):
+- Keep `controlUrl` as `http://…` but ensure it’s only reachable over your tailnet.
+
+2) **Serve HTTPS via Tailscale** (nice UX: `https://…` URL):
+
+```bash
+# on the browser machine
+clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
+tailscale serve https / http://127.0.0.1:18791
+```
+
+Then set your Gateway config `browser.controlUrl` to the HTTPS URL (MagicDNS/ts.net) and keep using the same token.
+
+Notes:
+- Do **not** use Tailscale Funnel for this unless you explicitly want to make the endpoint public.
+- For Tailnet setup/background, see [Gateway web surfaces](/web/index) and the [Gateway CLI](/cli/gateway).
+
 ## Profiles (multi-browser)
 
 Clawdbot supports multiple named profiles. Each profile has its own:
@@ -119,6 +208,44 @@ Defaults:
 - Deleting a profile moves its local data directory to Trash.
 
 All control endpoints accept `?profile=<name>`; the CLI uses `--browser-profile`.
+
+## Chrome extension relay (use your existing Chrome)
+
+Clawdbot can also drive **your existing Chrome tabs** (no separate “clawd” Chrome instance) via a local CDP relay + a Chrome extension.
+
+Full guide: [Chrome extension](/tools/chrome-extension)
+
+Flow:
+- You run a **browser control server** (Gateway on the same machine, or `clawdbot browser serve`).
+- A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
+- You click the **Clawdbot Browser Relay** extension icon on a tab to attach.
+- The agent controls that tab via the normal `browser` tool, by selecting the right profile.
+
+### Setup
+
+1) Create a profile that uses the extension driver:
+
+```bash
+clawdbot browser create-profile \
+  --name chrome \
+  --driver extension \
+  --cdp-url http://127.0.0.1:18792 \
+  --color "#00AA00"
+```
+
+2) Load the extension (dev/unpacked):
+- Chrome → `chrome://extensions` → enable “Developer mode”
+- `clawdbot browser extension install`
+- “Load unpacked” → select the directory printed by `clawdbot browser extension path`
+- Pin the extension, then click it on the tab you want to control (badge shows `ON`).
+
+3) Use it:
+- CLI: `clawdbot browser --browser-profile chrome tabs`
+- Agent tool: `browser` with `profile="chrome"`
+
+Notes:
+- This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
+- Detach by clicking the extension icon again.
 
 ## Isolation guarantees
 
@@ -164,7 +291,8 @@ All endpoints accept `?profile=<name>`.
 
 Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
 Playwright. If Playwright isn’t installed, those endpoints return a clear 501
-error. ARIA snapshots and basic screenshots still work.
+error. ARIA snapshots and basic screenshots still work for clawd-managed Chrome.
+For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
 
 ## How it works (internal)
 

@@ -20,6 +20,7 @@ export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
+  driver?: "clawd" | "extension";
 };
 
 export type CreateProfileResult = {
@@ -47,6 +48,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
     const rawCdpUrl = params.cdpUrl?.trim() || undefined;
+    const driver = params.driver === "extension" ? "extension" : undefined;
 
     if (!isValidProfileName(name)) {
       throw new Error("invalid profile name: use lowercase letters, numbers, and hyphens only");
@@ -71,7 +73,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     let profileConfig: BrowserProfileConfig;
     if (rawCdpUrl) {
       const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
-      profileConfig = { cdpUrl: parsed.normalized, color: profileColor };
+      profileConfig = {
+        cdpUrl: parsed.normalized,
+        ...(driver ? { driver } : {}),
+        color: profileColor,
+      };
     } else {
       const usedPorts = getUsedPorts(resolvedProfiles);
       const range = deriveDefaultBrowserCdpPortRange(state.resolved.controlPort);
@@ -79,7 +85,11 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       if (cdpPort === null) {
         throw new Error("no available CDP ports in range");
       }
-      profileConfig = { cdpPort, color: profileColor };
+      profileConfig = {
+        cdpPort,
+        ...(driver ? { driver } : {}),
+        color: profileColor,
+      };
     }
 
     const nextConfig: ClawdbotConfig = {

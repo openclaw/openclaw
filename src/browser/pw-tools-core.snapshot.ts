@@ -1,11 +1,36 @@
 import type { Page } from "playwright-core";
 
+import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   buildRoleSnapshotFromAriaSnapshot,
   getRoleSnapshotStats,
   type RoleSnapshotOptions,
 } from "./pw-role-snapshot.js";
 import { ensurePageState, getPageForTargetId, type WithSnapshotForAI } from "./pw-session.js";
+
+export async function snapshotAriaViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  limit?: number;
+}): Promise<{ nodes: AriaSnapshotNode[] }> {
+  const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+  });
+  ensurePageState(page);
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Accessibility.enable").catch(() => {});
+    const res = (await session.send("Accessibility.getFullAXTree")) as {
+      nodes?: RawAXNode[];
+    };
+    const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+    return { nodes: formatAriaSnapshot(nodes, limit) };
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
 
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;

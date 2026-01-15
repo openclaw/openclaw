@@ -66,6 +66,84 @@ describe("security audit", () => {
     );
   });
 
+  it("flags remote browser control without token as critical", async () => {
+    const prev = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+    delete process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+    try {
+      const cfg: ClawdbotConfig = {
+        browser: {
+          controlUrl: "http://example.com:18791",
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "browser.control_remote_no_token", severity: "critical" }),
+        ]),
+      );
+    } finally {
+      if (prev === undefined) delete process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+      else process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN = prev;
+    }
+  });
+
+  it("warns when browser control token matches gateway auth token", async () => {
+    const token = "0123456789abcdef0123456789abcdef";
+    const cfg: ClawdbotConfig = {
+      gateway: { auth: { token } },
+      browser: { controlUrl: "https://browser.example.com", controlToken: token },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "browser.control_token_reuse_gateway_token",
+          severity: "warn",
+        }),
+      ]),
+    );
+  });
+
+  it("warns when remote browser control uses HTTP", async () => {
+    const prev = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+    delete process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+    try {
+      const cfg: ClawdbotConfig = {
+        browser: {
+          controlUrl: "http://example.com:18791",
+          controlToken: "0123456789abcdef01234567",
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "browser.control_remote_http", severity: "warn" }),
+        ]),
+      );
+    } finally {
+      if (prev === undefined) delete process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN;
+      else process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN = prev;
+    }
+  });
+
   it("adds a warning when deep probe fails", async () => {
     const cfg: ClawdbotConfig = { gateway: { mode: "local" } };
 

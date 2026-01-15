@@ -34,6 +34,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
+  - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
 - [Sandboxing and memory](#sandboxing-and-memory)
   - [Is there a dedicated sandboxing doc?](#is-there-a-dedicated-sandboxing-doc)
   - [How do I bind a host folder into the sandbox?](#how-do-i-bind-a-host-folder-into-the-sandbox)
@@ -398,6 +399,19 @@ clawdhub update --all
 ```
 
 ClawdHub installs into `./skills` under your current directory (or falls back to your configured Clawdbot workspace); Clawdbot treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.clawdbot/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawdHub](/tools/clawdhub).
+
+### How do I install the Chrome extension for browser takeover?
+
+Use the built-in installer, then load the unpacked extension in Chrome:
+
+```bash
+clawdbot browser extension install
+clawdbot browser extension path
+```
+
+Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → pick that folder.
+
+Full guide (including remote Gateway via Tailscale + security notes): [Chrome extension](/tools/chrome-extension)
 
 ## Sandboxing and memory
 

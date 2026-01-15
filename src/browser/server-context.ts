@@ -18,6 +18,10 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -187,8 +191,34 @@ function createProfileContext(
   const ensureBrowserAvailable = async (): Promise<void> => {
     const current = state();
     const remoteCdp = !profile.cdpIsLoopback;
+    const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+
+    if (isExtension && remoteCdp) {
+      throw new Error(
+        `Profile "${profile.name}" uses driver=extension but cdpUrl is not loopback (${profile.cdpUrl}).`,
+      );
+    }
+
+    if (isExtension) {
+      if (!httpReachable) {
+        await ensureChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl });
+        if (await isHttpReachable(1200)) {
+          // continue: we still need the extension to connect for CDP websocket.
+        } else {
+          throw new Error(
+            `Chrome extension relay for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`,
+          );
+        }
+      }
+
+      if (await isReachable(600)) return;
+      // Relay server is up, but no attached tab yet. Prompt user to attach.
+      throw new Error(
+        `Chrome extension relay is running, but no tab is connected. Click the Clawdbot Chrome extension icon on a tab to attach it (profile "${profile.name}").`,
+      );
+    }
 
     if (!httpReachable) {
       if ((current.resolved.attachOnly || remoteCdp) && opts.onEnsureAttachTarget) {
@@ -297,6 +327,12 @@ function createProfileContext(
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
+    if (profile.driver === "extension") {
+      const stopped = await stopChromeExtensionRelayServer({
+        cdpUrl: profile.cdpUrl,
+      });
+      return { stopped };
+    }
     const profileState = getProfileState();
     if (!profileState.running) return { stopped: false };
     await stopClawdChrome(profileState.running);
@@ -305,6 +341,12 @@ function createProfileContext(
   };
 
   const resetProfile = async () => {
+    if (profile.driver === "extension") {
+      await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(
+        () => {},
+      );
+      return { moved: false, from: profile.cdpUrl };
+    }
     if (!profile.cdpIsLoopback) {
       throw new Error(
         `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,

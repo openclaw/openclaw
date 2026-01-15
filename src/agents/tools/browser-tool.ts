@@ -2,6 +2,7 @@ import {
   browserCloseTab,
   browserFocusTab,
   browserOpenTab,
+  browserProfiles,
   browserSnapshot,
   browserStart,
   browserStatus,
@@ -123,7 +124,7 @@ export function createBrowserTool(opts?: {
     label: "Browser",
     name: "browser",
     description: [
-      "Control clawd's dedicated browser (status/start/stop/tabs/open/snapshot/screenshot/actions).",
+      "Control clawd's dedicated browser (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
       `target selects browser location (sandbox|host|custom). Default: ${targetDefault}.`,
       "controlUrl implies target=custom (remote control server).",
@@ -156,6 +157,8 @@ export function createBrowserTool(opts?: {
         case "stop":
           await browserStop(baseUrl, { profile });
           return jsonResult(await browserStatus(baseUrl, { profile }));
+        case "profiles":
+          return jsonResult({ profiles: await browserProfiles(baseUrl) });
         case "tabs":
           return jsonResult({ tabs: await browserTabs(baseUrl, { profile }) });
         case "open": {

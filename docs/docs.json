@@ -893,6 +893,7 @@
           "tools/apply-patch",
           "tools/elevated",
           "tools/browser",
+          "tools/chrome-extension",
           "tools/browser-linux-troubleshooting",
           "tools/slash-commands",
           "tools/thinking",

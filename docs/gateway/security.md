@@ -12,6 +12,17 @@ Clawdbot is both a product and an experiment: you’re wiring frontier-model beh
 - where the bot is allowed to act
 - what the bot can touch
 
+## Quick check: `clawdbot security audit`
+
+Run this regularly (especially after changing config or exposing network surfaces):
+
+```bash
+clawdbot security audit
+clawdbot security audit --deep
+```
+
+It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions).
+
 ## The Threat Model
 
 Your AI assistant can:
@@ -190,6 +201,27 @@ you terminate TLS or proxy in front of the gateway, disable
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
+### 0.6.1) Browser control server over Tailscale (recommended)
+
+If your Gateway is remote but the browser runs on another machine, you’ll often run a **separate browser control server**
+on the browser machine (see [Browser tool](/tools/browser)). Treat this like an admin API.
+
+Recommended pattern:
+
+```bash
+# on the machine that runs Chrome
+clawdbot browser serve --bind 127.0.0.1 --port 18791 --token <token>
+tailscale serve https / http://127.0.0.1:18791
+```
+
+Then on the Gateway, set:
+- `browser.controlUrl` to the `https://…` Serve URL (MagicDNS/ts.net)
+- and authenticate with the same token (`CLAWDBOT_BROWSER_CONTROL_TOKEN` env preferred)
+
+Avoid:
+- `--bind 0.0.0.0` (LAN-visible surface)
+- Tailscale Funnel for browser control endpoints (public exposure)
+
 ### 0.7) Secrets on disk (what’s sensitive)
 
 Assume anything under `~/.clawdbot/` (or `$CLAWDBOT_STATE_DIR/`) may contain secrets or private data:
@@ -320,6 +352,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
+- Treat `browser.controlUrl` endpoints as an admin API: tailnet-only + token auth. Prefer Tailscale Serve over LAN binds.
+- Keep `browser.controlToken` separate from `gateway.auth.token` (you can reuse it, but that increases blast radius).
+- Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
 
 ## Per-agent access profiles (multi-agent)
 

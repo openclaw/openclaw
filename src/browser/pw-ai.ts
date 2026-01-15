@@ -41,6 +41,7 @@ export {
   setOfflineViaPlaywright,
   setTimezoneViaPlaywright,
   snapshotAiViaPlaywright,
+  snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,

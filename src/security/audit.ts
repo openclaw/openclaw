@@ -4,6 +4,7 @@ import { listChannelPlugins } from "../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveBrowserConfig } from "../browser/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -45,9 +46,9 @@ export type SecurityAuditOptions = {
   deep?: boolean;
   includeFilesystem?: boolean;
   includeChannelSecurity?: boolean;
-  /** Override where to check state (default: CONFIG_DIR). */
+  /** Override where to check state (default: resolveStateDir()). */
   stateDir?: string;
-  /** Override config path check (default: CONFIG_PATH_CLAWDBOT). */
+  /** Override config path check (default: resolveConfigPath()). */
   configPath?: string;
   /** Time limit for deep gateway probe. */
   deepTimeoutMs?: number;
@@ -287,6 +288,87 @@ function collectGatewayConfigFindings(cfg: ClawdbotConfig): SecurityAuditFinding
   return findings;
 }
 
+function isLoopbackClientHost(hostname: string): boolean {
+  const h = hostname.trim().toLowerCase();
+  return h === "localhost" || h === "127.0.0.1" || h === "::1";
+}
+
+function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+
+  let resolved: ReturnType<typeof resolveBrowserConfig>;
+  try {
+    resolved = resolveBrowserConfig(cfg.browser);
+  } catch (err) {
+    findings.push({
+      checkId: "browser.control_invalid_config",
+      severity: "warn",
+      title: "Browser control config looks invalid",
+      detail: String(err),
+      remediation: `Fix browser.controlUrl/browser.cdpUrl in ${resolveConfigPath()} and re-run "clawdbot security audit --deep".`,
+    });
+    return findings;
+  }
+
+  if (!resolved.enabled) return findings;
+
+  const url = new URL(resolved.controlUrl);
+  const isLoopback = isLoopbackClientHost(url.hostname);
+  const envToken = process.env.CLAWDBOT_BROWSER_CONTROL_TOKEN?.trim();
+  const controlToken = (envToken || resolved.controlToken)?.trim() || null;
+
+  if (!isLoopback) {
+    if (!controlToken) {
+      findings.push({
+        checkId: "browser.control_remote_no_token",
+        severity: "critical",
+        title: "Remote browser control is missing an auth token",
+        detail: `browser.controlUrl is non-loopback (${resolved.controlUrl}) but no browser.controlToken (or CLAWDBOT_BROWSER_CONTROL_TOKEN) is configured.`,
+        remediation:
+          "Set browser.controlToken (or export CLAWDBOT_BROWSER_CONTROL_TOKEN) and prefer serving over Tailscale Serve or HTTPS reverse proxy.",
+      });
+    }
+
+    if (url.protocol === "http:") {
+      findings.push({
+        checkId: "browser.control_remote_http",
+        severity: "warn",
+        title: "Remote browser control uses HTTP",
+        detail: `browser.controlUrl=${resolved.controlUrl} is http; this is OK only if it's tailnet-only (Tailscale) or behind another encrypted tunnel.`,
+        remediation: `Prefer HTTPS termination (Tailscale Serve) and keep the endpoint tailnet-only.`,
+      });
+    }
+
+    if (controlToken && controlToken.length < 24) {
+      findings.push({
+        checkId: "browser.control_token_too_short",
+        severity: "warn",
+        title: "Browser control token looks short",
+        detail: `browser control token is ${controlToken.length} chars; prefer a long random token.`,
+      });
+    }
+
+    const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+    const gatewayAuth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode });
+    const gatewayToken =
+      gatewayAuth.mode === "token" && typeof gatewayAuth.token === "string" && gatewayAuth.token.trim()
+        ? gatewayAuth.token.trim()
+        : null;
+
+    if (controlToken && gatewayToken && controlToken === gatewayToken) {
+      findings.push({
+        checkId: "browser.control_token_reuse_gateway_token",
+        severity: "warn",
+        title: "Browser control token reuses the Gateway token",
+        detail: `browser.controlToken matches gateway.auth token; compromise of browser control expands blast radius to the Gateway API.`,
+        remediation: `Use a separate browser.controlToken dedicated to browser control.`,
+      });
+    }
+  }
+
+  return findings;
+}
+
 function collectLoggingFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
   const redact = cfg.logging?.redactSensitive;
   if (redact !== "off") return [];
@@ -500,6 +582,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const configPath = opts.configPath ?? resolveConfigPath();
 
   findings.push(...collectGatewayConfigFindings(cfg));
+  findings.push(...collectBrowserControlFindings(cfg));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
 

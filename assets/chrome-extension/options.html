@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawdbot Browser Relay</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-monospace, Menlo, Monaco, Consolas, "SF Mono", monospace;
+        line-height: 1.4;
+      }
+      body {
+        margin: 24px;
+        max-width: 720px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 16px 0;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        opacity: 0.9;
+        margin-bottom: 6px;
+      }
+      input {
+        width: 140px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+        background: color-mix(in oklab, currentColor 3%, transparent);
+      }
+      button {
+        margin-left: 8px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid color-mix(in oklab, currentColor 20%, transparent);
+        background: color-mix(in oklab, currentColor 10%, transparent);
+        cursor: pointer;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      code {
+        font-family: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Clawdbot Browser Relay</h1>
+
+    <div>
+      <label for="port">Relay port</label>
+      <div class="row">
+        <input id="port" inputmode="numeric" pattern="[0-9]*" />
+        <button id="save">Save</button>
+      </div>
+      <div class="hint">
+        Default: <code>18792</code>. Relay base URL: <code>http://127.0.0.1:&lt;port&gt;/</code>.
+      </div>
+      <div class="hint" id="status"></div>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
+

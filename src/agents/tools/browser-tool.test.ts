@@ -4,6 +4,7 @@ const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async () => ({})),
   browserFocusTab: vi.fn(async () => ({})),
   browserOpenTab: vi.fn(async () => ({})),
+  browserProfiles: vi.fn(async () => []),
   browserSnapshot: vi.fn(async () => ({
     ok: true,
     format: "ai",
@@ -112,6 +113,13 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
     const [, opts] = browserClientMocks.browserSnapshot.mock.calls.at(-1) ?? [];
     expect(Object.hasOwn(opts ?? {}, "maxChars")).toBe(false);
+  });
+
+  it("lists profiles", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "profiles" });
+
+    expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith("http://127.0.0.1:18791");
   });
 });
 

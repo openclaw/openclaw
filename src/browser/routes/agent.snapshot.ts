@@ -95,8 +95,10 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       let buffer: Buffer;
-      if (ref || element) {
-        const pw = await requirePwAi(res, "element/ref screenshot");
+      const shouldUsePlaywright =
+        profileCtx.profile.driver === "extension" || !tab.wsUrl || Boolean(ref) || Boolean(element);
+      if (shouldUsePlaywright) {
+        const pw = await requirePwAi(res, "screenshot");
         if (!pw) return;
         const snap = await pw.takeScreenshotViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
@@ -268,16 +270,30 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
         });
       }
 
-      const snap = await snapshotAria({
-        wsUrl: tab.wsUrl ?? "",
-        limit,
-      });
+      const snap =
+        profileCtx.profile.driver === "extension" || !tab.wsUrl
+          ? (() => {
+              // Extension relay doesn't expose per-page WS URLs; run AX snapshot via Playwright CDP session.
+              // Also covers cases where wsUrl is missing/unusable.
+              return requirePwAi(res, "aria snapshot").then(async (pw) => {
+                if (!pw) return null;
+                return await pw.snapshotAriaViaPlaywright({
+                  cdpUrl: profileCtx.profile.cdpUrl,
+                  targetId: tab.targetId,
+                  limit,
+                });
+              });
+            })()
+          : snapshotAria({ wsUrl: tab.wsUrl ?? "", limit });
+
+      const resolved = await Promise.resolve(snap);
+      if (!resolved) return;
       return res.json({
         ok: true,
         format,
         targetId: tab.targetId,
         url: tab.url,
-        ...snap,
+        ...resolved,
       });
     } catch (err) {
       handleRouteError(ctx, res, err);

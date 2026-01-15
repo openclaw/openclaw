@@ -40,6 +40,8 @@
     "dist/*.js",
     "dist/*.json",
     "docs/**",
+    "extensions/**",
+    "assets/**",
     "skills/**",
     "README.md",
     "README-header.png",
