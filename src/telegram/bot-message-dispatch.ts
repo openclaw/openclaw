@@ -1,5 +1,9 @@
 // @ts-nocheck
-import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../auto-reply/reply/response-prefix-template.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import { clearHistoryEntries } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -114,12 +118,18 @@ export const dispatchTelegramMessage = async ({
     Boolean(draftStream) ||
     (typeof telegramCfg.blockStreaming === "boolean" ? !telegramCfg.blockStreaming : undefined);
 
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(cfg, route.agentId),
+  };
+
   let didSendReply = false;
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
       responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
@@ -151,6 +161,15 @@ export const dispatchTelegramMessage = async ({
           }
         : undefined,
       disableBlockStreaming,
+      onModelSelected: (ctx) => {
+        prefixContext = {
+          ...prefixContext,
+          provider: ctx.provider,
+          model: extractShortModelName(ctx.model),
+          modelFull: `${ctx.provider}/${ctx.model}`,
+          thinkingLevel: ctx.thinkLevel ?? "off",
+        };
+      },
     },
   });
   draftStream?.stop();

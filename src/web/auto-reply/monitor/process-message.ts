@@ -1,4 +1,8 @@
-import { resolveEffectiveMessagesConfig } from "../../../agents/identity.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
 import { buildHistoryContext } from "../../../auto-reply/reply/history.js";
@@ -173,6 +177,11 @@ export async function processMessage(params: {
     params.route.agentId,
   ).responsePrefix;
 
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(params.cfg, params.route.agentId),
+  };
+
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: {
       Body: combinedBody,
@@ -210,6 +219,7 @@ export async function processMessage(params: {
     replyResolver: params.replyResolver,
     dispatcherOptions: {
       responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
           didLogHeartbeatStrip = true;
@@ -267,6 +277,15 @@ export async function processMessage(params: {
         typeof params.cfg.channels?.whatsapp?.blockStreaming === "boolean"
           ? !params.cfg.channels.whatsapp.blockStreaming
           : undefined,
+      onModelSelected: (ctx) => {
+        prefixContext = {
+          ...prefixContext,
+          provider: ctx.provider,
+          model: extractShortModelName(ctx.model),
+          modelFull: `${ctx.provider}/${ctx.model}`,
+          thinkingLevel: ctx.thinkLevel ?? "off",
+        };
+      },
     },
   });
 

@@ -1,4 +1,12 @@
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
+import {
+  resolveEffectiveMessagesConfig,
+  resolveHumanDelayConfig,
+  resolveIdentityName,
+} from "../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
@@ -341,8 +349,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     let didSendReply = false;
+
+    // Create mutable context for response prefix template interpolation
+    let prefixContext: ResponsePrefixContext = {
+      identityName: resolveIdentityName(cfg, route.agentId),
+    };
+
     const dispatcher = createReplyDispatcher({
       responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+      responsePrefixContextProvider: () => prefixContext,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
         await deliverReplies({
@@ -370,6 +385,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           typeof accountInfo.config.blockStreaming === "boolean"
             ? !accountInfo.config.blockStreaming
             : undefined,
+        onModelSelected: (ctx) => {
+          prefixContext = {
+            ...prefixContext,
+            provider: ctx.provider,
+            model: extractShortModelName(ctx.model),
+            modelFull: `${ctx.provider}/${ctx.model}`,
+            thinkingLevel: ctx.thinkLevel ?? "off",
+          };
+        },
       },
     });
     if (!queuedFinal) {

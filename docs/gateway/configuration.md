@@ -1184,6 +1184,31 @@ streaming, final replies) across channels unless already present.
 If `messages.responsePrefix` is unset, no prefix is applied by default.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
+#### Template variables
+
+The `responsePrefix` string can include template variables that resolve dynamically:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{model}` | Short model name | `claude-opus-4-5`, `gpt-4o` |
+| `{modelFull}` | Full model identifier | `anthropic/claude-opus-4-5` |
+| `{provider}` | Provider name | `anthropic`, `openai` |
+| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off` |
+| `{identity.name}` | Agent identity name | (same as `"auto"` mode) |
+
+Variables are case-insensitive (`{MODEL}` = `{model}`). `{think}` is an alias for `{thinkingLevel}`.
+Unresolved variables remain as literal text.
+
+```json5
+{
+  messages: {
+    responsePrefix: "[{model} | think:{thinkingLevel}]"
+  }
+}
+```
+
+Example output: `[claude-opus-4-5 | think:high] Here's my response...`
+
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[clawdbot]"` when
 `channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using

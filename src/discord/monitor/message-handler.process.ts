@@ -2,7 +2,12 @@ import {
   resolveAckReaction,
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
+  resolveIdentityName,
 } from "../../agents/identity.js";
+import {
+  extractShortModelName,
+  type ResponsePrefixContext,
+} from "../../auto-reply/reply/response-prefix-template.js";
 import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
@@ -280,8 +285,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
+
+  // Create mutable context for response prefix template interpolation
+  let prefixContext: ResponsePrefixContext = {
+    identityName: resolveIdentityName(cfg, route.agentId),
+  };
+
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+    responsePrefixContextProvider: () => prefixContext,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
@@ -316,6 +328,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         typeof discordConfig?.blockStreaming === "boolean"
           ? !discordConfig.blockStreaming
           : undefined,
+      onModelSelected: (ctx) => {
+        prefixContext = {
+          ...prefixContext,
+          provider: ctx.provider,
+          model: extractShortModelName(ctx.model),
+          modelFull: `${ctx.provider}/${ctx.model}`,
+          thinkingLevel: ctx.thinkLevel ?? "off",
+        };
+      },
     },
   });
   markDispatchIdle();
