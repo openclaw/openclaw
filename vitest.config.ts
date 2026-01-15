@@ -12,6 +12,7 @@ export default defineConfig({
       "dist/**",
       "apps/macos/**",
       "apps/macos/.build/**",
+      "**/node_modules/**",
       "**/vendor/**",
       "dist/Clawdbot.app/**",
       "**/*.live.test.ts",
