@@ -48,6 +48,10 @@ export function buildEmbeddedRunPayloads(params: {
         sessionKey: params.sessionKey,
       })
     : undefined;
+  const rawErrorMessage =
+    params.lastAssistant?.stopReason === "error"
+      ? params.lastAssistant.errorMessage?.trim() || undefined
+      : undefined;
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
@@ -83,11 +87,13 @@ export function buildEmbeddedRunPayloads(params: {
   if (reasoningText) replyItems.push({ text: reasoningText });
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
-  const answerTexts = params.assistantTexts.length
-    ? params.assistantTexts
-    : fallbackAnswerText
-      ? [fallbackAnswerText]
-      : [];
+  const answerTexts = (
+    params.assistantTexts.length
+      ? params.assistantTexts
+      : fallbackAnswerText
+        ? [fallbackAnswerText]
+        : []
+  ).filter((text) => (rawErrorMessage ? text.trim() !== rawErrorMessage : true));
 
   for (const text of answerTexts) {
     const {

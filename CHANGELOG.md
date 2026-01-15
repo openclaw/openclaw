@@ -7,6 +7,8 @@
 - Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
 - Docs: expand gateway security hardening guidance and incident response checklist.
 
+### Fixes
+- Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
 ## 2026.1.14
 
 ### Changes
