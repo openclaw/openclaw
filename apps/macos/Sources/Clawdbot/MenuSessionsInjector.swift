@@ -103,6 +103,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
 extension MenuSessionsInjector {
     // MARK: - Injection
+    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
 
     private func inject(into menu: NSMenu) {
         // Remove any previous injected items.
@@ -120,13 +121,15 @@ extension MenuSessionsInjector {
 
         if let snapshot = self.cachedSnapshot {
             let now = Date()
+            let mainKey = self.mainSessionKey
             let rows = snapshot.rows.filter { row in
-                if row.key == "main" { return true }
+                if row.key == "main", mainKey != "main" { return false }
+                if row.key == mainKey { return true }
                 guard let updatedAt = row.updatedAt else { return false }
                 return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
             }.sorted { lhs, rhs in
-                if lhs.key == "main" { return true }
-                if rhs.key == "main" { return false }
+                if lhs.key == mainKey { return true }
+                if rhs.key == mainKey { return false }
                 return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
             }
 
@@ -645,7 +648,7 @@ extension MenuSessionsInjector {
         compact.representedObject = row.key
         menu.addItem(compact)
 
-        if row.key != "main", row.key != "global" {
+        if row.key != self.mainSessionKey, row.key != "global" {
             let del = NSMenuItem(title: "Delete Session", action: #selector(self.deleteSession(_:)), keyEquivalent: "")
             del.target = self
             del.representedObject = row.key
