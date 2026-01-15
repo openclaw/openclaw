@@ -133,6 +133,7 @@ export async function runEmbeddedPiAgent(
           cfg: params.config,
           profileId: candidate,
           store: authStore,
+          agentDir,
         });
       };
 
