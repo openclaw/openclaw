@@ -190,6 +190,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",
+  "channels.slack.userToken": "Slack User Token",
+  "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
   "plugins.enabled": "Enable Plugins",

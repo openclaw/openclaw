@@ -631,6 +631,9 @@ export type SlackAccountConfig = {
   enabled?: boolean;
   botToken?: string;
   appToken?: string;
+  userToken?: string;
+  /** If true, restrict user token to read operations only. Default: true. */
+  userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**

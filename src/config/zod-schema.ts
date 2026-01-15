@@ -453,6 +453,8 @@ const SlackAccountSchema = z.object({
   commands: ProviderCommandsSchema,
   botToken: z.string().optional(),
   appToken: z.string().optional(),
+  userToken: z.string().optional(),
+  userTokenReadOnly: z.boolean().optional().default(true),
   allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
