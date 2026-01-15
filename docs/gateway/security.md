@@ -19,9 +19,15 @@ Run this regularly (especially after changing config or exposing network surface
 ```bash
 clawdbot security audit
 clawdbot security audit --deep
+clawdbot security audit --fix
 ```
 
 It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions).
+
+`--fix` applies safe guardrails:
+- Tighten `groupPolicy="open"` to `groupPolicy="allowlist"` (and per-account variants) for common channels.
+- Turn `logging.redactSensitive="off"` back to `"tools"`.
+- Tighten local perms (`~/.clawdbot` → `700`, config file → `600`).
 
 ## The Threat Model
 
