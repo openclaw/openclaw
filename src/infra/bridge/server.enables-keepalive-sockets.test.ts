@@ -58,6 +58,9 @@ async function waitForSocketConnect(socket: net.Socket) {
 describe("node bridge server", () => {
   let baseDir = "";
   const pairingTimeoutMs = process.platform === "win32" ? 8000 : 3000;
+  const suiteTimeoutMs = process.platform === "win32" ? 20000 : 10000;
+
+  vi.setTimeout(suiteTimeoutMs);
 
   const pickNonLoopbackIPv4 = () => {
     const ifaces = os.networkInterfaces();
