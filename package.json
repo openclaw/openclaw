@@ -169,7 +169,6 @@
     "json5": "^2.2.3",
     "long": "5.3.2",
     "markdown-it": "^14.1.0",
-    "node-llama-cpp": "3.14.5",
     "osc-progress": "^0.2.0",
     "playwright-core": "1.57.0",
     "proper-lockfile": "^4.1.2",
@@ -180,6 +179,9 @@
     "undici": "^7.18.2",
     "ws": "^8.19.0",
     "zod": "^4.3.5"
+  },
+  "optionalDependencies": {
+    "node-llama-cpp": "3.14.5"
   },
   "devDependencies": {
     "@grammyjs/types": "^3.23.0",

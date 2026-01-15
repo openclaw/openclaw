@@ -122,9 +122,6 @@ importers:
       markdown-it:
         specifier: ^14.1.0
         version: 14.1.0
-      node-llama-cpp:
-        specifier: 3.14.5
-        version: 3.14.5(typescript@5.9.3)
       osc-progress:
         specifier: ^0.2.0
         version: 0.2.0
@@ -237,6 +234,10 @@ importers:
       wireit:
         specifier: ^0.14.12
         version: 0.14.12
+    optionalDependencies:
+      node-llama-cpp:
+        specifier: 3.14.5
+        version: 3.14.5(typescript@5.9.3)
 
   extensions/matrix:
     dependencies:
@@ -4942,7 +4943,8 @@ snapshots:
       hono: 4.11.4
     optional: true
 
-  '@huggingface/jinja@0.5.3': {}
+  '@huggingface/jinja@0.5.3':
+    optional: true
 
   '@img/colour@1.0.0': {}
 
@@ -5081,8 +5083,10 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
-  '@kwsites/promise-deferred@1.1.1': {}
+  '@kwsites/promise-deferred@1.1.1':
+    optional: true
 
   '@lit-labs/signals@0.2.0':
     dependencies:
@@ -5338,6 +5342,7 @@ snapshots:
       '@octokit/plugin-paginate-rest': 14.0.0(@octokit/core@7.0.6)
       '@octokit/types': 16.0.0
       '@octokit/webhooks': 14.2.0
+    optional: true
 
   '@octokit/auth-app@8.1.2':
     dependencies:
@@ -5349,6 +5354,7 @@ snapshots:
       toad-cache: 3.7.0
       universal-github-app-jwt: 2.2.2
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/auth-oauth-app@9.0.3':
     dependencies:
@@ -5357,6 +5363,7 @@ snapshots:
       '@octokit/request': 10.0.7
       '@octokit/types': 16.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/auth-oauth-device@8.0.3':
     dependencies:
@@ -5364,6 +5371,7 @@ snapshots:
       '@octokit/request': 10.0.7
       '@octokit/types': 16.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/auth-oauth-user@6.0.2':
     dependencies:
@@ -5372,13 +5380,16 @@ snapshots:
       '@octokit/request': 10.0.7
       '@octokit/types': 16.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
-  '@octokit/auth-token@6.0.0': {}
+  '@octokit/auth-token@6.0.0':
+    optional: true
 
   '@octokit/auth-unauthenticated@7.0.3':
     dependencies:
       '@octokit/request-error': 7.1.0
       '@octokit/types': 16.0.0
+    optional: true
 
   '@octokit/core@7.0.6':
     dependencies:
@@ -5389,17 +5400,20 @@ snapshots:
       '@octokit/types': 16.0.0
       before-after-hook: 4.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/endpoint@11.0.2':
     dependencies:
       '@octokit/types': 16.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/graphql@9.0.3':
     dependencies:
       '@octokit/request': 10.0.7
       '@octokit/types': 16.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/oauth-app@8.0.3':
     dependencies:
@@ -5411,8 +5425,10 @@ snapshots:
       '@octokit/oauth-methods': 6.0.2
       '@types/aws-lambda': 8.10.159
       universal-user-agent: 7.0.3
+    optional: true
 
-  '@octokit/oauth-authorization-url@8.0.0': {}
+  '@octokit/oauth-authorization-url@8.0.0':
+    optional: true
 
   '@octokit/oauth-methods@6.0.2':
     dependencies:
@@ -5420,24 +5436,30 @@ snapshots:
       '@octokit/request': 10.0.7
       '@octokit/request-error': 7.1.0
       '@octokit/types': 16.0.0
+    optional: true
 
-  '@octokit/openapi-types@27.0.0': {}
+  '@octokit/openapi-types@27.0.0':
+    optional: true
 
-  '@octokit/openapi-webhooks-types@12.1.0': {}
+  '@octokit/openapi-webhooks-types@12.1.0':
+    optional: true
 
   '@octokit/plugin-paginate-graphql@6.0.0(@octokit/core@7.0.6)':
     dependencies:
       '@octokit/core': 7.0.6
+    optional: true
 
   '@octokit/plugin-paginate-rest@14.0.0(@octokit/core@7.0.6)':
     dependencies:
       '@octokit/core': 7.0.6
       '@octokit/types': 16.0.0
+    optional: true
 
   '@octokit/plugin-rest-endpoint-methods@17.0.0(@octokit/core@7.0.6)':
     dependencies:
       '@octokit/core': 7.0.6
       '@octokit/types': 16.0.0
+    optional: true
 
   '@octokit/plugin-retry@8.0.3(@octokit/core@7.0.6)':
     dependencies:
@@ -5445,16 +5467,19 @@ snapshots:
       '@octokit/request-error': 7.1.0
       '@octokit/types': 16.0.0
       bottleneck: 2.19.5
+    optional: true
 
   '@octokit/plugin-throttling@11.0.3(@octokit/core@7.0.6)':
     dependencies:
       '@octokit/core': 7.0.6
       '@octokit/types': 16.0.0
       bottleneck: 2.19.5
+    optional: true
 
   '@octokit/request-error@7.1.0':
     dependencies:
       '@octokit/types': 16.0.0
+    optional: true
 
   '@octokit/request@10.0.7':
     dependencies:
@@ -5463,18 +5488,22 @@ snapshots:
       '@octokit/types': 16.0.0
       fast-content-type-parse: 3.0.0
       universal-user-agent: 7.0.3
+    optional: true
 
   '@octokit/types@16.0.0':
     dependencies:
       '@octokit/openapi-types': 27.0.0
+    optional: true
 
-  '@octokit/webhooks-methods@6.0.0': {}
+  '@octokit/webhooks-methods@6.0.0':
+    optional: true
 
   '@octokit/webhooks@14.2.0':
     dependencies:
       '@octokit/openapi-webhooks-types': 12.1.0
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
+    optional: true
 
   '@oxc-project/types@0.107.0': {}
 
@@ -6111,7 +6140,8 @@ snapshots:
   '@thi.ng/errors@2.6.0':
     optional: true
 
-  '@tinyhttp/content-disposition@2.2.2': {}
+  '@tinyhttp/content-disposition@2.2.2':
+    optional: true
 
   '@tokenizer/inflate@0.4.1':
     dependencies:
@@ -6127,7 +6157,8 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@types/aws-lambda@8.10.159': {}
+  '@types/aws-lambda@8.10.159':
+    optional: true
 
   '@types/body-parser@1.19.6':
     dependencies:
@@ -6426,7 +6457,8 @@ snapshots:
 
   another-json@0.2.0: {}
 
-  ansi-escapes@6.2.1: {}
+  ansi-escapes@6.2.1:
+    optional: true
 
   ansi-regex@5.0.1: {}
 
@@ -6445,12 +6477,14 @@ snapshots:
       normalize-path: 3.0.0
       picomatch: 2.3.1
 
-  aproba@2.1.0: {}
+  aproba@2.1.0:
+    optional: true
 
   are-we-there-yet@3.0.1:
     dependencies:
       delegates: 1.0.0
       readable-stream: 3.6.2
+    optional: true
 
   argparse@2.0.1: {}
 
@@ -6469,6 +6503,7 @@ snapshots:
   async-retry@1.3.3:
     dependencies:
       retry: 0.13.1
+    optional: true
 
   asynckit@0.4.0: {}
 
@@ -6508,7 +6543,8 @@ snapshots:
 
   base64-js@1.5.1: {}
 
-  before-after-hook@4.0.0: {}
+  before-after-hook@4.0.0:
+    optional: true
 
   bignumber.js@9.3.1: {}
 
@@ -6593,7 +6629,8 @@ snapshots:
 
   chalk@5.6.2: {}
 
-  chmodrp@1.0.2: {}
+  chmodrp@1.0.2:
+    optional: true
 
   chokidar@3.6.0:
     dependencies:
@@ -6611,7 +6648,8 @@ snapshots:
     dependencies:
       readdirp: 5.0.0
 
-  chownr@2.0.0: {}
+  chownr@2.0.0:
+    optional: true
 
   chownr@3.0.0: {}
 
@@ -6621,7 +6659,8 @@ snapshots:
       mitt: 3.0.1
       zod: 3.25.76
 
-  ci-info@4.3.1: {}
+  ci-info@4.3.1:
+    optional: true
 
   class-variance-authority@0.7.1:
     dependencies:
@@ -6630,6 +6669,7 @@ snapshots:
   cli-cursor@5.0.0:
     dependencies:
       restore-cursor: 5.1.0
+    optional: true
 
   cli-highlight@2.1.11:
     dependencies:
@@ -6640,7 +6680,8 @@ snapshots:
       parse5-htmlparser2-tree-adapter: 6.0.1
       yargs: 16.2.0
 
-  cli-spinners@2.9.2: {}
+  cli-spinners@2.9.2:
+    optional: true
 
   cliui@7.0.4:
     dependencies:
@@ -6653,6 +6694,7 @@ snapshots:
       string-width: 4.2.3
       strip-ansi: 6.0.1
       wrap-ansi: 7.0.0
+    optional: true
 
   clsx@2.1.1: {}
 
@@ -6672,6 +6714,7 @@ snapshots:
       yargs: 17.7.2
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   codec-parser@2.5.0:
     optional: true
@@ -6684,19 +6727,22 @@ snapshots:
 
   color-name@1.1.4: {}
 
-  color-support@1.1.3: {}
+  color-support@1.1.3:
+    optional: true
 
   combined-stream@1.0.8:
     dependencies:
       delayed-stream: 1.0.0
 
-  commander@10.0.1: {}
+  commander@10.0.1:
+    optional: true
 
   commander@14.0.2: {}
 
   commander@8.3.0: {}
 
-  console-control-strings@1.1.0: {}
+  console-control-strings@1.1.0:
+    optional: true
 
   content-disposition@1.0.1: {}
 
@@ -6730,11 +6776,13 @@ snapshots:
     dependencies:
       ms: 2.1.3
 
-  deep-extend@0.6.0: {}
+  deep-extend@0.6.0:
+    optional: true
 
   delayed-stream@1.0.0: {}
 
-  delegates@1.0.0: {}
+  delegates@1.0.0:
+    optional: true
 
   depd@2.0.0: {}
 
@@ -6772,7 +6820,8 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  emoji-regex@10.6.0: {}
+  emoji-regex@10.6.0:
+    optional: true
 
   emoji-regex@8.0.0: {}
 
@@ -6782,7 +6831,8 @@ snapshots:
 
   entities@4.5.0: {}
 
-  env-var@7.5.0: {}
+  env-var@7.5.0:
+    optional: true
 
   es-define-property@1.0.1: {}
 
@@ -6885,7 +6935,8 @@ snapshots:
 
   extend@3.0.2: {}
 
-  fast-content-type-parse@3.0.0: {}
+  fast-content-type-parse@3.0.0:
+    optional: true
 
   fast-deep-equal@3.1.3: {}
 
@@ -6925,11 +6976,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  filename-reserved-regex@3.0.0: {}
+  filename-reserved-regex@3.0.0:
+    optional: true
 
   filenamify@6.0.0:
     dependencies:
       filename-reserved-regex: 3.0.0
+    optional: true
 
   fill-range@7.1.1:
     dependencies:
@@ -6976,10 +7029,12 @@ snapshots:
       graceful-fs: 4.2.11
       jsonfile: 6.2.0
       universalify: 2.0.1
+    optional: true
 
   fs-minipass@2.1.0:
     dependencies:
       minipass: 3.3.6
+    optional: true
 
   fsevents@2.3.2:
     optional: true
@@ -6999,6 +7054,7 @@ snapshots:
       string-width: 4.2.3
       strip-ansi: 6.0.1
       wide-align: 1.1.5
+    optional: true
 
   gaxios@7.1.3:
     dependencies:
@@ -7108,7 +7164,8 @@ snapshots:
     dependencies:
       has-symbols: 1.1.0
 
-  has-unicode@2.0.1: {}
+  has-unicode@2.0.1:
+    optional: true
 
   hashery@1.4.0:
     dependencies:
@@ -7158,13 +7215,15 @@ snapshots:
 
   ieee754@1.2.1: {}
 
-  ignore@7.0.5: {}
+  ignore@7.0.5:
+    optional: true
 
   immediate@3.0.6: {}
 
   inherits@2.0.4: {}
 
-  ini@1.3.8: {}
+  ini@1.3.8:
+    optional: true
 
   ipaddr.js@1.9.1: {}
 
@@ -7191,6 +7250,7 @@ snapshots:
       strip-ansi: 7.1.2
     optionalDependencies:
       '@reflink/reflink': 0.1.19
+    optional: true
 
   is-binary-path@2.1.0:
     dependencies:
@@ -7205,12 +7265,14 @@ snapshots:
   is-fullwidth-code-point@5.1.0:
     dependencies:
       get-east-asian-width: 1.4.0
+    optional: true
 
   is-glob@4.0.3:
     dependencies:
       is-extglob: 2.1.1
 
-  is-interactive@2.0.0: {}
+  is-interactive@2.0.0:
+    optional: true
 
   is-network-error@1.3.0: {}
 
@@ -7220,9 +7282,11 @@ snapshots:
 
   is-stream@2.0.1: {}
 
-  is-unicode-supported@1.3.0: {}
+  is-unicode-supported@1.3.0:
+    optional: true
 
-  is-unicode-supported@2.1.0: {}
+  is-unicode-supported@2.1.0:
+    optional: true
 
   is-url@1.2.4: {}
 
@@ -7230,7 +7294,8 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  isexe@3.1.1: {}
+  isexe@3.1.1:
+    optional: true
 
   istanbul-lib-coverage@3.2.2: {}
 
@@ -7283,6 +7348,7 @@ snapshots:
       universalify: 2.0.1
     optionalDependencies:
       graceful-fs: 4.2.11
+    optional: true
 
   jsonwebtoken@9.0.3:
     dependencies:
@@ -7340,9 +7406,11 @@ snapshots:
     dependencies:
       immediate: 3.0.6
 
-  lifecycle-utils@2.1.0: {}
+  lifecycle-utils@2.1.0:
+    optional: true
 
-  lifecycle-utils@3.0.1: {}
+  lifecycle-utils@3.0.1:
+    optional: true
 
   lightningcss-android-arm64@1.30.2:
     optional: true
@@ -7418,7 +7486,8 @@ snapshots:
 
   lodash.clonedeep@4.5.0: {}
 
-  lodash.debounce@4.0.8: {}
+  lodash.debounce@4.0.8:
+    optional: true
 
   lodash.includes@4.3.0: {}
 
@@ -7440,11 +7509,13 @@ snapshots:
     dependencies:
       chalk: 5.6.2
       is-unicode-supported: 1.3.0
+    optional: true
 
   log-symbols@7.0.1:
     dependencies:
       is-unicode-supported: 2.1.0
       yoctocolors: 2.1.2
+    optional: true
 
   loglevel@1.9.2: {}
 
@@ -7455,6 +7526,7 @@ snapshots:
   lowdb@7.0.1:
     dependencies:
       steno: 4.0.2
+    optional: true
 
   lru-cache@10.4.3: {}
 
@@ -7535,6 +7607,7 @@ snapshots:
   memory-stream@1.0.0:
     dependencies:
       readable-stream: 3.6.2
+    optional: true
 
   merge-descriptors@2.0.0: {}
 
@@ -7557,7 +7630,8 @@ snapshots:
     dependencies:
       mime-db: 1.54.0
 
-  mimic-function@5.0.1: {}
+  mimic-function@5.0.1:
+    optional: true
 
   minimatch@10.1.1:
     dependencies:
@@ -7567,13 +7641,16 @@ snapshots:
     dependencies:
       brace-expansion: 2.0.2
 
-  minimist@1.2.8: {}
+  minimist@1.2.8:
+    optional: true
 
   minipass@3.3.6:
     dependencies:
       yallist: 4.0.0
+    optional: true
 
-  minipass@5.0.0: {}
+  minipass@5.0.0:
+    optional: true
 
   minipass@7.1.2: {}
 
@@ -7581,6 +7658,7 @@ snapshots:
     dependencies:
       minipass: 3.3.6
       yallist: 4.0.0
+    optional: true
 
   minizlib@3.1.0:
     dependencies:
@@ -7588,7 +7666,8 @@ snapshots:
 
   mitt@3.0.1: {}
 
-  mkdirp@1.0.4: {}
+  mkdirp@1.0.4:
+    optional: true
 
   mpg123-decoder@1.0.3:
     dependencies:
@@ -7621,13 +7700,16 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  nanoid@5.1.6: {}
+  nanoid@5.1.6:
+    optional: true
 
   negotiator@1.0.0: {}
 
-  node-addon-api@8.5.0: {}
+  node-addon-api@8.5.0:
+    optional: true
 
-  node-api-headers@1.7.0: {}
+  node-api-headers@1.7.0:
+    optional: true
 
   node-domexception@1.0.0: {}
 
@@ -7689,6 +7771,7 @@ snapshots:
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   node-wav@0.0.2:
     optional: true
@@ -7701,6 +7784,7 @@ snapshots:
       console-control-strings: 1.1.0
       gauge: 4.0.4
       set-blocking: 2.0.0
+    optional: true
 
   object-assign@4.1.1: {}
 
@@ -7723,6 +7807,7 @@ snapshots:
       '@octokit/request-error': 7.1.0
       '@octokit/types': 16.0.0
       '@octokit/webhooks': 14.2.0
+    optional: true
 
   ogg-opus-decoder@1.7.3:
     dependencies:
@@ -7753,6 +7838,7 @@ snapshots:
   onetime@7.0.0:
     dependencies:
       mimic-function: 5.0.1
+    optional: true
 
   openai@6.10.0(ws@8.19.0)(zod@4.3.5):
     optionalDependencies:
@@ -7775,6 +7861,7 @@ snapshots:
       stdin-discarder: 0.2.2
       string-width: 7.2.0
       strip-ansi: 7.1.2
+    optional: true
 
   osc-progress@0.2.0: {}
 
@@ -7845,9 +7932,11 @@ snapshots:
 
   pako@1.0.11: {}
 
-  parse-ms@3.0.0: {}
+  parse-ms@3.0.0:
+    optional: true
 
-  parse-ms@4.0.0: {}
+  parse-ms@4.0.0:
+    optional: true
 
   parse5-htmlparser2-tree-adapter@6.0.1:
     dependencies:
@@ -7925,15 +8014,18 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  pretty-bytes@6.1.1: {}
+  pretty-bytes@6.1.1:
+    optional: true
 
   pretty-ms@8.0.0:
     dependencies:
       parse-ms: 3.0.0
+    optional: true
 
   pretty-ms@9.3.0:
     dependencies:
       parse-ms: 4.0.0
+    optional: true
 
   prism-media@1.3.5:
     optional: true
@@ -8043,6 +8135,7 @@ snapshots:
       ini: 1.3.8
       minimist: 1.2.8
       strip-json-comments: 2.0.1
+    optional: true
 
   readable-stream@2.3.8:
     dependencies:
@@ -8059,6 +8152,7 @@ snapshots:
       inherits: 2.0.4
       string_decoder: 1.3.0
       util-deprecate: 1.0.2
+    optional: true
 
   readable-stream@4.5.2:
     dependencies:
@@ -8086,6 +8180,7 @@ snapshots:
     dependencies:
       onetime: 7.0.0
       signal-exit: 4.1.0
+    optional: true
 
   retry@0.12.0: {}
 
@@ -8198,7 +8293,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  set-blocking@2.0.0: {}
+  set-blocking@2.0.0:
+    optional: true
 
   setimmediate@1.0.5: {}
 
@@ -8288,6 +8384,7 @@ snapshots:
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   simple-yenc@1.0.4:
     optional: true
@@ -8300,12 +8397,14 @@ snapshots:
 
   sisteransi@1.0.5: {}
 
-  sleep-promise@9.1.0: {}
+  sleep-promise@9.1.0:
+    optional: true
 
   slice-ansi@7.1.2:
     dependencies:
       ansi-styles: 6.2.3
       is-fullwidth-code-point: 5.1.0
+    optional: true
 
   sonic-boom@4.2.0:
     dependencies:
@@ -8328,7 +8427,8 @@ snapshots:
 
   std-env@3.10.0: {}
 
-  stdin-discarder@0.2.2: {}
+  stdin-discarder@0.2.2:
+    optional: true
 
   stdout-update@4.0.1:
     dependencies:
@@ -8336,8 +8436,10 @@ snapshots:
       ansi-styles: 6.2.3
       string-width: 7.2.0
       strip-ansi: 7.1.2
+    optional: true
 
-  steno@4.0.2: {}
+  steno@4.0.2:
+    optional: true
 
   string-width@4.2.3:
     dependencies:
@@ -8356,6 +8458,7 @@ snapshots:
       emoji-regex: 10.6.0
       get-east-asian-width: 1.4.0
       strip-ansi: 7.1.2
+    optional: true
 
   string_decoder@1.1.1:
     dependencies:
@@ -8373,7 +8476,8 @@ snapshots:
     dependencies:
       ansi-regex: 6.2.2
 
-  strip-json-comments@2.0.1: {}
+  strip-json-comments@2.0.1:
+    optional: true
 
   strnum@2.1.2: {}
 
@@ -8403,6 +8507,7 @@ snapshots:
       minizlib: 2.1.2
       mkdirp: 1.0.4
       yallist: 4.0.0
+    optional: true
 
   tar@7.5.2:
     dependencies:
@@ -8443,7 +8548,8 @@ snapshots:
     dependencies:
       is-number: 7.0.0
 
-  toad-cache@3.7.0: {}
+  toad-cache@3.7.0:
+    optional: true
 
   toidentifier@1.0.1: {}
 
@@ -8504,17 +8610,21 @@ snapshots:
       pako: 0.2.9
       tiny-inflate: 1.0.3
 
-  universal-github-app-jwt@2.2.2: {}
+  universal-github-app-jwt@2.2.2:
+    optional: true
 
-  universal-user-agent@7.0.3: {}
+  universal-user-agent@7.0.3:
+    optional: true
 
-  universalify@2.0.1: {}
+  universalify@2.0.1:
+    optional: true
 
   unpipe@1.0.0: {}
 
   urijs@1.19.11: {}
 
-  url-join@4.0.1: {}
+  url-join@4.0.1:
+    optional: true
 
   util-deprecate@1.0.2: {}
 
@@ -8524,7 +8634,8 @@ snapshots:
 
   uuid@8.3.2: {}
 
-  validate-npm-package-name@6.0.2: {}
+  validate-npm-package-name@6.0.2:
+    optional: true
 
   vary@1.1.2: {}
 
@@ -8602,6 +8713,7 @@ snapshots:
   which@5.0.0:
     dependencies:
       isexe: 3.1.1
+    optional: true
 
   why-is-node-running@2.3.0:
     dependencies:
@@ -8611,6 +8723,7 @@ snapshots:
   wide-align@1.1.5:
     dependencies:
       string-width: 4.2.3
+    optional: true
 
   wireit@0.14.12:
     dependencies:
@@ -8651,7 +8764,8 @@ snapshots:
 
   yargs-parser@20.2.9: {}
 
-  yargs-parser@21.1.1: {}
+  yargs-parser@21.1.1:
+    optional: true
 
   yargs@16.2.0:
     dependencies:
@@ -8672,6 +8786,7 @@ snapshots:
       string-width: 4.2.3
       y18n: 5.0.8
       yargs-parser: 21.1.1
+    optional: true
 
   yoctocolors@2.1.2: {}
 

@@ -8,9 +8,7 @@ describe("applyTemplate", () => {
     overrides.MessageSid = 42;
     overrides.IsNewSession = true;
 
-    expect(applyTemplate("sid={{MessageSid}} new={{IsNewSession}}", ctx)).toBe(
-      "sid=42 new=true",
-    );
+    expect(applyTemplate("sid={{MessageSid}} new={{IsNewSession}}", ctx)).toBe("sid=42 new=true");
   });
 
   it("renders arrays of primitives", () => {

@@ -3,6 +3,7 @@
 ## 2026.1.15 (unreleased)
 
 - Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.
+- Memory: make `node-llama-cpp` an optional dependency (avoid Node 25 install failures) and improve local-embeddings fallback/errors.
 - Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
 - Browser: `profile="chrome"` now defaults to host control and returns clearer “attach a tab” errors.
 - Browser: extension mode recovers when only one tab is attached (stale targetId fallback).
