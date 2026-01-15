@@ -29,6 +29,7 @@
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
 - macOS: format ConnectionsStore config to satisfy SwiftFormat lint. (#852) — thanks @mneves75.
+- Tools: enable `web_fetch` by default (unless explicitly disabled in config).
 - Packaging: run `pnpm build` on `prepack` so npm publishes include fresh `dist/` output.
 - Telegram: register dock native commands with underscores to avoid `BOT_COMMAND_INVALID` (#929, fixes #901) — thanks @grp06.
 - Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
