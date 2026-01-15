@@ -579,7 +579,11 @@ Subcommands:
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)
+- `config.patch` (merge a partial update without clobbering unrelated keys)
 - `update.run` (run update + restart + wake)
+
+Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
+`config.get` if a config already exists.
 
 ## Models
 

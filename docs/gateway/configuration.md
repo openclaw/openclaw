@@ -32,16 +32,41 @@ It writes a restart sentinel and pings the last active session after the Gateway
 
 Params:
 - `raw` (string) — JSON5 payload for the entire config
+- `baseHash` (optional) — config hash from `config.get` (required when a config already exists)
 - `sessionKey` (optional) — last active session key for the wake-up ping
 - `restartDelayMs` (optional) — delay before restart (default 2000)
 
 Example (via `gateway call`):
 
 ```bash
+clawdbot gateway call config.get --params '{}' # capture payload.hash
 clawdbot gateway call config.apply --params '{
   "raw": "{\\n  agents: { defaults: { workspace: \\"~/clawd\\" } }\\n}\\n",
+  "baseHash": "<hash-from-config.get>",
   "sessionKey": "agent:main:whatsapp:dm:+15555550123",
   "restartDelayMs": 1000
+}'
+```
+
+## Partial updates (RPC)
+
+Use `config.patch` to merge a partial update into the existing config without clobbering
+unrelated keys. It applies JSON merge patch semantics:
+- objects merge recursively
+- `null` deletes a key
+- arrays replace
+
+Params:
+- `raw` (string) — JSON5 payload containing just the keys to change
+- `baseHash` (required) — config hash from `config.get`
+
+Example:
+
+```bash
+clawdbot gateway call config.get --params '{}' # capture payload.hash
+clawdbot gateway call config.patch --params '{
+  "raw": "{\\n  channels: { telegram: { groups: { \\"*\\": { requireMention: false } } } }\\n}\\n",
+  "baseHash": "<hash-from-config.get>"
 }'
 ```
 
