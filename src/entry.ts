@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
-import { spawnWithSignalForwarding } from "./process/spawn-with-signal-forwarding.js";
+import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 if (process.argv.includes("--no-color")) {
   process.env.NO_COLOR = "1";
@@ -24,7 +25,7 @@ function ensureExperimentalWarningSuppressed(): boolean {
   process.env.CLAWDBOT_NODE_OPTIONS_READY = "1";
   process.env.NODE_OPTIONS = `${nodeOptions} ${EXPERIMENTAL_WARNING_FLAG}`.trim();
 
-  const { child } = spawnWithSignalForwarding(
+  const child = spawn(
     process.execPath,
     [...process.execArgv, ...process.argv.slice(1)],
     {
@@ -33,12 +34,22 @@ function ensureExperimentalWarningSuppressed(): boolean {
     },
   );
 
-  child.on("exit", (code, signal) => {
+  attachChildProcessBridge(child);
+
+  child.once("exit", (code, signal) => {
     if (signal) {
       process.exitCode = 1;
       return;
     }
     process.exit(code ?? 1);
+  });
+
+  child.once("error", (error) => {
+    console.error(
+      "[clawdbot] Failed to respawn CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exit(1);
   });
 
   // Parent must not continue running the CLI.
