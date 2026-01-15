@@ -43,19 +43,9 @@ export function normalizeReplyPayload(
   }
 
   // Resolve template variables in responsePrefix if context is provided
-  if (opts.responsePrefix?.includes("{")) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[responsePrefix] normalizing: prefix="${opts.responsePrefix}", context=${JSON.stringify(opts.responsePrefixContext)}`,
-    );
-  }
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;
-  if (opts.responsePrefix?.includes("{")) {
-    // eslint-disable-next-line no-console
-    console.log(`[responsePrefix] resolved to: "${effectivePrefix}"`);
-  }
 
   if (
     effectivePrefix &&

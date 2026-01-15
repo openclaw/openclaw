@@ -127,10 +127,6 @@ export async function runAgentTurnWithFallback(params: {
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
-          // eslint-disable-next-line no-console
-          console.log(
-            `[responsePrefix] onModelSelected callback exists: ${!!params.opts?.onModelSelected}, provider=${provider}, model=${model}`,
-          );
           params.opts?.onModelSelected?.({
             provider,
             model,
