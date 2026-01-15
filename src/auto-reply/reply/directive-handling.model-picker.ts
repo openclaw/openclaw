@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { type ModelRef, normalizeProviderId } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 
 export type ModelPickerCatalogEntry = {
@@ -7,11 +7,7 @@ export type ModelPickerCatalogEntry = {
   name?: string;
 };
 
-export type ModelPickerItem = {
-  model: string;
-  providers: string[];
-  providerModels: Record<string, string>;
-};
+export type ModelPickerItem = ModelRef;
 
 const MODEL_PICK_PROVIDER_PREFERENCE = [
   "anthropic",
@@ -31,68 +27,43 @@ const MODEL_PICK_PROVIDER_PREFERENCE = [
   "lmstudio",
 ] as const;
 
-function normalizeModelFamilyId(id: string): string {
-  const trimmed = id.trim();
-  if (!trimmed) return trimmed;
-  const parts = trimmed.split("/").filter(Boolean);
-  return parts.length > 0 ? (parts[parts.length - 1] ?? trimmed) : trimmed;
-}
+const PROVIDER_RANK = new Map<string, number>(
+  MODEL_PICK_PROVIDER_PREFERENCE.map((provider, idx) => [provider, idx]),
+);
 
-function sortProvidersForPicker(providers: string[]): string[] {
-  const pref = new Map<string, number>(
-    MODEL_PICK_PROVIDER_PREFERENCE.map((provider, idx) => [provider, idx]),
-  );
-  return providers.sort((a, b) => {
-    const pa = pref.get(a);
-    const pb = pref.get(b);
-    if (pa !== undefined && pb !== undefined) return pa - pb;
-    if (pa !== undefined) return -1;
-    if (pb !== undefined) return 1;
-    return a.localeCompare(b);
-  });
+function compareProvidersForPicker(a: string, b: string): number {
+  const pa = PROVIDER_RANK.get(a);
+  const pb = PROVIDER_RANK.get(b);
+  if (pa !== undefined && pb !== undefined) return pa - pb;
+  if (pa !== undefined) return -1;
+  if (pb !== undefined) return 1;
+  return a.localeCompare(b);
 }
 
 export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): ModelPickerItem[] {
-  const byModel = new Map<string, { providerModels: Record<string, string> }>();
+  const seen = new Set<string>();
+  const out: ModelPickerItem[] = [];
+
   for (const entry of catalog) {
     const provider = normalizeProviderId(entry.provider);
-    const model = normalizeModelFamilyId(entry.id);
+    const model = entry.id?.trim();
     if (!provider || !model) continue;
-    const existing = byModel.get(model);
-    if (existing) {
-      existing.providerModels[provider] = entry.id;
-      continue;
-    }
-    byModel.set(model, { providerModels: { [provider]: entry.id } });
-  }
-  const out: ModelPickerItem[] = [];
-  for (const [model, data] of byModel.entries()) {
-    const providers = sortProvidersForPicker(Object.keys(data.providerModels));
-    out.push({ model, providers, providerModels: data.providerModels });
-  }
-  out.sort((a, b) => a.model.toLowerCase().localeCompare(b.model.toLowerCase()));
-  return out;
-}
 
-export function pickProviderForModel(params: {
-  item: ModelPickerItem;
-  preferredProvider?: string;
-}): { provider: string; model: string } | null {
-  const preferred = params.preferredProvider
-    ? normalizeProviderId(params.preferredProvider)
-    : undefined;
-  if (preferred && params.item.providerModels[preferred]) {
-    return {
-      provider: preferred,
-      model: params.item.providerModels[preferred],
-    };
+    const key = `${provider}/${model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({ model, provider });
   }
-  const first = params.item.providers[0];
-  if (!first) return null;
-  return {
-    provider: first,
-    model: params.item.providerModels[first] ?? params.item.model,
-  };
+
+  // Sort by provider preference first, then by model name
+  out.sort((a, b) => {
+    const providerOrder = compareProvidersForPicker(a.provider, b.provider);
+    if (providerOrder !== 0) return providerOrder;
+    return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+  });
+
+  return out;
 }
 
 export function resolveProviderEndpointLabel(
