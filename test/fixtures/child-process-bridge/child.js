@@ -11,7 +11,7 @@ server.listen(0, "127.0.0.1", () => {
   process.stdout.write(`${addr.port}\n`);
 });
 
-const shutdown = (): void => {
+const shutdown = () => {
   server.close(() => process.exit(0));
 };
 

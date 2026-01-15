@@ -1,10 +1,11 @@
+import { spawn } from "node:child_process";
 import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { spawnWithSignalForwarding } from "./spawn-with-signal-forwarding.js";
+import { attachChildProcessBridge } from "./child-process-bridge.js";
 
 function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 10_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -52,10 +53,19 @@ function canConnect(port: number): Promise<boolean> {
   });
 }
 
-describe("spawnWithSignalForwarding", () => {
+describe("attachChildProcessBridge", () => {
   const children: Array<{ kill: (signal?: NodeJS.Signals) => boolean }> = [];
+  const detachments: Array<() => void> = [];
 
   afterEach(() => {
+    for (const detach of detachments) {
+      try {
+        detach();
+      } catch {
+        // ignore
+      }
+    }
+    detachments.length = 0;
     for (const child of children) {
       try {
         child.kill("SIGKILL");
@@ -67,15 +77,16 @@ describe("spawnWithSignalForwarding", () => {
   });
 
   it(
-    "forwards SIGTERM to spawned child",
+    "forwards SIGTERM to the wrapped child",
     async () => {
-      const tsxPath = path.resolve(process.cwd(), "node_modules/.bin/tsx");
-      const childPath = path.resolve(process.cwd(), "test/fixtures/signal-forwarding/child.ts");
+      const childPath = path.resolve(process.cwd(), "test/fixtures/child-process-bridge/child.js");
 
-      const { child } = spawnWithSignalForwarding(tsxPath, [childPath], {
+      const child = spawn(process.execPath, [childPath], {
         stdio: ["ignore", "pipe", "inherit"],
         env: process.env,
       });
+      const { detach } = attachChildProcessBridge(child);
+      detachments.push(detach);
       children.push(child);
 
       if (!child.stdout) throw new Error("expected stdout");

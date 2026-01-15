@@ -24,6 +24,7 @@
 - WhatsApp: add `channels.whatsapp.sendReadReceipts` to disable auto read receipts. (#882) — thanks @chrisrodz.
 
 ### Fixes
+- Gateway: forward termination signals to respawned CLI child processes to avoid orphaned systemd runs. (#933) — thanks @roshanasingh4.
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
 - Packaging: run `pnpm build` on `prepack` so npm publishes include fresh `dist/` output.
