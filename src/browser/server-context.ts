@@ -305,7 +305,7 @@ function createProfileContext(
       if (lastResolved && lastResolved !== "AMBIGUOUS") return lastResolved;
       // Prefer a real page tab first (avoid service workers/background targets).
       const page = candidates.find((t) => (t.type ?? "page") === "page");
-      return page ?? (candidates.at(0) ?? null);
+      return page ?? candidates.at(0) ?? null;
     };
 
     const chosen = targetId ? resolveById(targetId) : pickDefault();
