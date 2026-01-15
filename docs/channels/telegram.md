@@ -297,6 +297,49 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
 - Tool gating: `channels.telegram.actions.reactions`, `channels.telegram.actions.sendMessage`, `channels.telegram.actions.deleteMessage` (default: enabled).
 
+## Reaction notifications
+
+**How reactions work:**
+Telegram reactions arrive as **separate `message_reaction` events**, not as properties in message payloads. When a user adds a reaction, Clawdbot:
+
+1. Receives the `message_reaction` update from Telegram API
+2. Converts it to a **system event** with format: `"Telegram reaction added: {emoji} by {user} on msg {id}"`
+3. Enqueues the system event using the **same session key** as regular messages
+4. When the next message arrives in that conversation, system events are drained and prepended to the agent's context
+
+The agent sees reactions as **system notifications** in the conversation history, not as message metadata.
+
+**Configuration:**
+- `channels.telegram.reactionNotifications`: Controls which reactions trigger notifications
+  - `"off"` — ignore all reactions (default when not set)
+  - `"own"` — notify when users react to bot messages (best-effort; in-memory)
+  - `"all"` — notify for all reactions
+
+- `channels.telegram.reactionLevel`: Controls agent's reaction capability
+  - `"off"` — agent cannot react to messages
+  - `"ack"` — bot sends acknowledgment reactions (👀 while processing) (default)
+  - `"minimal"` — agent can react sparingly (guideline: 1 per 5-10 exchanges)
+  - `"extensive"` — agent can react liberally when appropriate
+
+**Forum groups:** Reactions in forum groups include `message_thread_id` and use session keys like `agent:main:telegram:group:{chatId}:topic:{threadId}`. This ensures reactions and messages in the same topic stay together.
+
+**Example config:**
+```json5
+{
+  channels: {
+    telegram: {
+      reactionNotifications: "all",  // See all reactions
+      reactionLevel: "minimal"        // Agent can react sparingly
+    }
+  }
+}
+```
+
+**Requirements:**
+- Telegram bots must explicitly request `message_reaction` in `allowed_updates` (configured automatically by Clawdbot)
+- For webhook mode, reactions are included in the webhook `allowed_updates`
+- For polling mode, reactions are included in the `getUpdates` `allowed_updates`
+
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
 - Example: `clawdbot message send --channel telegram --to 123456789 --message "hi"`.
@@ -360,6 +403,8 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `ack` when not set).
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).
