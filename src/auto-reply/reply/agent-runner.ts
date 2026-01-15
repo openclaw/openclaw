@@ -216,9 +216,11 @@ export async function runReplyAgent(params: {
       abortedLastRun: false,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const topicId =
-      typeof sessionCtx.MessageThreadId === "number" ? sessionCtx.MessageThreadId : undefined;
-    const nextSessionFile = resolveSessionTranscriptPath(nextSessionId, agentId, topicId);
+    const nextSessionFile = resolveSessionTranscriptPath(
+      nextSessionId,
+      agentId,
+      sessionCtx.MessageThreadId,
+    );
     nextEntry.sessionFile = nextSessionFile;
     activeSessionStore[sessionKey] = nextEntry;
     try {

@@ -6,10 +6,29 @@ export type ChannelPluginCatalogEntry = {
   install: {
     npmSpec: string;
     localPath?: string;
+    defaultChoice?: "npm" | "local";
   };
 };
 
 const CATALOG: ChannelPluginCatalogEntry[] = [
+  {
+    id: "matrix",
+    meta: {
+      id: "matrix",
+      label: "Matrix",
+      selectionLabel: "Matrix (plugin)",
+      docsPath: "/channels/matrix",
+      docsLabel: "matrix",
+      blurb: "open protocol; install the plugin to enable.",
+      order: 70,
+      quickstartAllowFrom: true,
+    },
+    install: {
+      npmSpec: "@clawdbot/matrix",
+      localPath: "extensions/matrix",
+      defaultChoice: "npm",
+    },
+  },
   {
     id: "zalo",
     meta: {

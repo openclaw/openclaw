@@ -32,6 +32,12 @@ const optionNamesAdd = [
   "httpHost",
   "httpPort",
   "useEnv",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceName",
+  "initialSyncLimit",
 ] as const;
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
@@ -115,6 +121,12 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
+    .option("--homeserver <url>", "Matrix homeserver URL")
+    .option("--user-id <id>", "Matrix user ID")
+    .option("--access-token <token>", "Matrix access token")
+    .option("--password <password>", "Matrix password")
+    .option("--device-name <name>", "Matrix device name")
+    .option("--initial-sync-limit <n>", "Matrix initial sync limit")
     .option("--use-env", "Use env token (default account only)", false)
     .action(async (opts, command) => {
       try {

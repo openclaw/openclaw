@@ -41,6 +41,7 @@ export function buildThreadingToolContext(params: {
         To: threadingTo,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
+        MessageThreadId: sessionCtx.MessageThreadId,
       },
       hasRepliedRef,
     }) ?? {}

@@ -18,6 +18,12 @@ import type { OutboundChannel } from "./targets.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 
+type SendMatrixMessage = (
+  to: string,
+  text: string,
+  opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
+) => Promise<{ messageId: string; roomId: string }>;
+
 export type OutboundSendDeps = {
   sendWhatsApp?: typeof sendMessageWhatsApp;
   sendTelegram?: typeof sendMessageTelegram;
@@ -25,6 +31,7 @@ export type OutboundSendDeps = {
   sendSlack?: typeof sendMessageSlack;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
+  sendMatrix?: SendMatrixMessage;
   sendMSTeams?: (
     to: string,
     text: string,
@@ -37,6 +44,7 @@ export type OutboundDeliveryResult = {
   messageId: string;
   chatId?: string;
   channelId?: string;
+  roomId?: string;
   conversationId?: string;
   timestamp?: number;
   toJid?: string;
@@ -67,7 +75,7 @@ async function createChannelHandler(params: {
   to: string;
   accountId?: string;
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: string | number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): Promise<ChannelHandler> {
@@ -99,7 +107,7 @@ function createPluginHandler(params: {
   to: string;
   accountId?: string;
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: string | number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): ChannelHandler | null {
@@ -144,7 +152,7 @@ export async function deliverOutboundPayloads(params: {
   accountId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: string | number | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;

@@ -31,6 +31,12 @@ export type ChannelSetupInput = {
   httpHost?: string;
   httpPort?: string;
   useEnv?: boolean;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
+  deviceName?: string;
+  initialSyncLimit?: number;
 };
 
 export type ChannelStatusIssue = {
@@ -196,6 +202,7 @@ export type ChannelThreadingContext = {
   To?: string;
   ReplyToId?: string;
   ThreadLabel?: string;
+  MessageThreadId?: string | number;
 };
 
 export type ChannelThreadingToolContext = {

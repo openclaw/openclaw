@@ -905,6 +905,7 @@
           "channels/signal",
           "channels/imessage",
           "channels/msteams",
+          "channels/matrix",
           "channels/zalo",
           "broadcast-groups",
           "channels/troubleshooting",
