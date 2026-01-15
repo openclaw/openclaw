@@ -127,6 +127,9 @@ export async function runAgentTurnWithFallback(params: {
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
+          logVerbose(
+            `[prefix-debug] onModelSelected firing: provider=${provider} model=${model} thinkLevel=${params.followupRun.run.thinkLevel}`,
+          );
           params.opts?.onModelSelected?.({
             provider,
             model,
