@@ -33,6 +33,16 @@ Channels can redeliver the same message after reconnects. Clawdbot keeps a
 short-lived cache keyed by channel/account/peer/session/message id so duplicate
 deliveries do not trigger another agent run.
 
+## Inbound debouncing
+
+Rapid consecutive messages from the **same sender** can be batched into a single
+agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation
+and uses the most recent message for reply threading/IDs.
+
+Notes:
+- Debounce applies to **text-only** messages; media/attachments flush immediately.
+- Control commands bypass debouncing so they remain standalone.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.

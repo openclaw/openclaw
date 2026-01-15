@@ -1,5 +1,7 @@
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
+import { hasControlCommand } from "../../auto-reply/command-detection.js";
+import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
 import { waitForever } from "../../cli/wait.js";
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
@@ -169,12 +171,22 @@ export async function monitorWebChannel(
       account,
     });
 
+    const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
+    const shouldDebounce = (msg: WebInboundMsg) => {
+      if (msg.mediaPath || msg.mediaType) return false;
+      if (msg.location) return false;
+      if (msg.replyToId || msg.replyToBody) return false;
+      return !hasControlCommand(msg.body, cfg);
+    };
+
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
       accountId: account.accountId,
       authDir: account.authDir,
       mediaMaxMb: account.mediaMaxMb,
       sendReadReceipts: account.sendReadReceipts,
+      debounceMs: inboundDebounceMs,
+      shouldDebounce,
       onMessage: async (msg: WebInboundMsg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();

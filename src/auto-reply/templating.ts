@@ -24,6 +24,9 @@ export type MsgContext = {
   AccountId?: string;
   ParentSessionKey?: string;
   MessageSid?: string;
+  MessageSids?: string[];
+  MessageSidFirst?: string;
+  MessageSidLast?: string;
   ReplyToId?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;

@@ -46,6 +46,7 @@ export const WhatsAppAccountSchema = z
         group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
       .optional(),
+    debounceMs: z.number().int().nonnegative().optional().default(0),
   })
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
@@ -101,6 +102,7 @@ export const WhatsAppConfigSchema = z
         group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
       .optional(),
+    debounceMs: z.number().int().nonnegative().optional().default(0),
   })
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
