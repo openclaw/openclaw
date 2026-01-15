@@ -7,6 +7,12 @@ read_when:
 
 Status: experimental. Direct messages only; groups coming soon per Zalo docs.
 
+## Plugin required
+Zalo ships as a plugin and is not bundled with the core install.
+- Install via CLI: `clawdbot plugins install @clawdbot/zalo`
+- Or select **Zalo** during onboarding and confirm the install prompt
+- Details: [Plugins](/plugin)
+
 ## Quick setup (beginner)
 1) Install the Zalo plugin:
    - From a source checkout: `clawdbot plugins install ./extensions/zalo`

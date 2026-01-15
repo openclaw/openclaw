@@ -198,6 +198,14 @@
       "destination": "/channels/troubleshooting"
     },
     {
+      "source": "/providers/zalo",
+      "destination": "/channels/zalo"
+    },
+    {
+      "source": "/providers/zalo/",
+      "destination": "/channels/zalo"
+    },
+    {
       "source": "/providers/whatsapp",
       "destination": "/channels/whatsapp"
     },
@@ -854,6 +862,7 @@
           "channels/signal",
           "channels/imessage",
           "channels/msteams",
+          "channels/zalo",
           "broadcast-groups",
           "channels/troubleshooting",
           "channels/location"
