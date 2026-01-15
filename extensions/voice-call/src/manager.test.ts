@@ -20,6 +20,7 @@ import type { VoiceCallProvider } from "./providers/base.js";
 
 class FakeProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
+  readonly playTtsCalls: PlayTtsInput[] = [];
 
   verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
     return { ok: true };
@@ -31,7 +32,9 @@ class FakeProvider implements VoiceCallProvider {
     return { providerCallId: "request-uuid", status: "initiated" };
   }
   async hangupCall(_input: HangupCallInput): Promise<void> {}
-  async playTts(_input: PlayTtsInput): Promise<void> {}
+  async playTts(input: PlayTtsInput): Promise<void> {
+    this.playTtsCalls.push(input);
+  }
   async startListening(_input: StartListeningInput): Promise<void> {}
   async stopListening(_input: StopListeningInput): Promise<void> {}
 }
@@ -69,5 +72,37 @@ describe("CallManager", () => {
     expect(manager.getCallByProviderCallId("call-uuid")?.callId).toBe(callId);
     expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
   });
-});
 
+  it("speaks initial message on answered for notify mode (non-Twilio)", async () => {
+    const config = VoiceCallConfigSchema.parse({
+      enabled: true,
+      provider: "plivo",
+      fromNumber: "+15550000000",
+    });
+
+    const storePath = path.join(os.tmpdir(), `clawdbot-voice-call-test-${Date.now()}`);
+    const provider = new FakeProvider();
+    const manager = new CallManager(config, storePath);
+    manager.initialize(provider, "https://example.com/voice/webhook");
+
+    const { callId, success } = await manager.initiateCall(
+      "+15550000002",
+      undefined,
+      { message: "Hello there", mode: "notify" },
+    );
+    expect(success).toBe(true);
+
+    manager.processEvent({
+      id: "evt-2",
+      type: "call.answered",
+      callId,
+      providerCallId: "call-uuid",
+      timestamp: Date.now(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(provider.playTtsCalls).toHaveLength(1);
+    expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+  });
+});

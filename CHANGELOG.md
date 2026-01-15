@@ -9,6 +9,7 @@
 - Agents: add optional auth-profile copy prompt on `agents add` and improve auth error messaging.
 - Security: expand `clawdbot security audit` checks (model hygiene, config includes, plugin allowlists, exposure matrix) and extend `--fix` to tighten more sensitive state paths.
 - Security: add `SECURITY.md` reporting policy.
+- Voice Call: add Plivo provider for the voice-call plugin. (#846) — thanks @vrknetha.
 - Plugins: add Zalo channel plugin with gateway HTTP hooks and onboarding install prompt. (#854) — thanks @longmaba.
 - Onboarding: add a security checkpoint prompt (docs link + sandboxing hint); require `--accept-risk` for `--non-interactive`.
 - Docs: expand gateway security hardening guidance and incident response checklist.

@@ -404,7 +404,7 @@ export class PlivoProvider implements VoiceCallProvider {
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
     if (trimmed.toLowerCase().startsWith("sip:")) return trimmed;
-    return trimmed.startsWith("+") ? trimmed.slice(1) : trimmed;
+    return trimmed.replace(/[^\d+]/g, "");
   }
 
   private static xmlEmpty(): string {
