@@ -7,9 +7,12 @@ import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
+import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 
 export const registerTelegramHandlers = ({
+  cfg,
+  accountId,
   bot,
   opts,
   runtime,
@@ -82,6 +85,7 @@ export const registerTelegramHandlers = ({
     try {
       const msg = ctx.message;
       if (!msg?.migrate_to_chat_id) return;
+      if (shouldSkipUpdate(ctx)) return;
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
@@ -94,26 +98,28 @@ export const registerTelegramHandlers = ({
       );
 
       // Check if old chat ID has config and migrate it
-      const currentConfig = await loadConfig();
-      const telegramGroups = currentConfig.channels?.telegram?.groups;
+      const currentConfig = loadConfig();
+      const migration = migrateTelegramGroupConfig({
+        cfg: currentConfig,
+        accountId,
+        oldChatId,
+        newChatId,
+      });
 
-      if (telegramGroups && telegramGroups[oldChatId]) {
-        const groupConfig = telegramGroups[oldChatId];
+      if (migration.migrated) {
         runtime.log?.(
           warn(
             `[telegram] Migrating group config from ${oldChatId} to ${newChatId}`,
           ),
         );
-
-        // Copy config to new ID
-        telegramGroups[newChatId] = groupConfig;
-        // Remove old ID
-        delete telegramGroups[oldChatId];
-
-        // Save updated config
+        migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
         await writeConfigFile(currentConfig);
+        runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
+      } else if (migration.skippedExisting) {
         runtime.log?.(
-          warn(`[telegram] Group config migrated and saved successfully`),
+          warn(
+            `[telegram] Group config already exists for ${newChatId}; leaving ${oldChatId} unchanged`,
+          ),
         );
       } else {
         runtime.log?.(
