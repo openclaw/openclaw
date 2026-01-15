@@ -6,6 +6,7 @@ import type { Command } from "commander";
 
 import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
 import { danger, info } from "../globals.js";
+import { copyToClipboard } from "../infra/clipboard.js";
 import { defaultRuntime } from "../runtime.js";
 import { movePathToTrash } from "../browser/trash.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -76,9 +77,11 @@ export function registerBrowserExtensionCommands(
         return;
       }
       defaultRuntime.log(installed.path);
+      const copied = await copyToClipboard(installed.path).catch(() => false);
       defaultRuntime.error(
         info(
           [
+            copied ? "Copied to clipboard." : "Copy to clipboard unavailable.",
             "Next:",
             `- Chrome → chrome://extensions → enable “Developer mode”`,
             `- “Load unpacked” → select: ${installed.path}`,
@@ -93,7 +96,7 @@ export function registerBrowserExtensionCommands(
   ext
     .command("path")
     .description("Print the path to the installed Chrome extension (load unpacked)")
-    .action((_opts, cmd) => {
+    .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const dir = installedExtensionRootDir();
       if (!hasManifest(dir)) {
@@ -112,5 +115,7 @@ export function registerBrowserExtensionCommands(
         return;
       }
       defaultRuntime.log(dir);
+      const copied = await copyToClipboard(dir).catch(() => false);
+      if (copied) defaultRuntime.error(info("Copied to clipboard."));
     });
 }

@@ -20,10 +20,12 @@
 - Config/Doctor: remove legacy Clawdis env fallbacks and config/service migrations (Clawdbot-only).
 - Browser: add Chrome extension relay takeover mode (toolbar button), plus `clawdbot browser extension install/path` and remote browser control via `clawdbot browser serve` + `browser.controlToken`.
 - CLI/Docs: add per-command CLI doc pages and link them from `clawdbot <command> --help`.
+- Browser: copy the installed Chrome extension path to clipboard after `clawdbot browser extension install/path`.
 
 ### Fixes
 - Browser: add tests for snapshot labels/efficient query params and labeled image responses.
 - macOS: ensure launchd log directory exists with a test-only override. (#909) — thanks @roshanasingh4.
+- Packaging: run `pnpm build` on `prepack` so npm publishes include fresh `dist/` output.
 - Telegram: register dock native commands with underscores to avoid `BOT_COMMAND_INVALID` (#929, fixes #901) — thanks @grp06.
 - Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
 - Agents: make user time zone and 24-hour time explicit in the system prompt. (#859) — thanks @CashWilliams.

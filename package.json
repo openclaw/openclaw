@@ -61,6 +61,7 @@
   "scripts": {
     "dev": "tsx src/entry.ts",
     "postinstall": "node scripts/postinstall.js",
+    "prepack": "pnpm build",
     "docs:list": "tsx scripts/docs-list.ts",
     "docs:bin": "bun build scripts/docs-list.ts --compile --outfile bin/docs-list",
     "docs:dev": "cd docs && mint dev",
