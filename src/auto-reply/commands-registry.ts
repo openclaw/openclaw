@@ -137,13 +137,25 @@ function formatPositionalArgs(
   for (const definition of definitions) {
     const value = values[definition.name];
     if (value == null) continue;
+    let rendered: string;
     if (typeof value === "string") {
-      const trimmed = value.trim();
-      if (!trimmed) continue;
-      parts.push(trimmed);
-    } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-      parts.push(String(value));
+      rendered = value.trim();
+    } else if (
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint"
+    ) {
+      rendered = String(value);
+    } else if (typeof value === "symbol") {
+      rendered = value.toString();
+    } else if (typeof value === "function") {
+      rendered = value.toString();
+    } else {
+      // Objects and arrays
+      rendered = JSON.stringify(value);
     }
+    if (!rendered) continue;
+    parts.push(rendered);
     if (definition.captureRemaining) break;
   }
   return parts.length > 0 ? parts.join(" ") : undefined;
