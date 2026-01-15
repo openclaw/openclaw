@@ -39,6 +39,22 @@ Rapid consecutive messages from the **same sender** can be batched into a single
 agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation
 and uses the most recent message for reply threading/IDs.
 
+Config (global default + per-channel overrides):
+```json5
+{
+  messages: {
+    inbound: {
+      debounceMs: 2000,
+      byChannel: {
+        whatsapp: 5000,
+        slack: 1500,
+        discord: 1500
+      }
+    }
+  }
+}
+```
+
 Notes:
 - Debounce applies to **text-only** messages; media/attachments flush immediately.
 - Control commands bypass debouncing so they remain standalone.
