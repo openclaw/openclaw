@@ -63,9 +63,9 @@ Text + native (when enabled):
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
-- `/dock-telegram` (switch replies to Telegram)
-- `/dock-discord` (switch replies to Discord)
-- `/dock-slack` (switch replies to Slack)
+- `/dock-telegram` (alias: `/dock_telegram`) (switch replies to Telegram)
+- `/dock-discord` (alias: `/dock_discord`) (switch replies to Discord)
+- `/dock-slack` (alias: `/dock_slack`) (switch replies to Slack)
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new`

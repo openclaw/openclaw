@@ -27,6 +27,18 @@ function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefiniti
   };
 }
 
+type ChannelDock = ReturnType<typeof listChannelDocks>[number];
+
+function defineDockCommand(dock: ChannelDock): ChatCommandDefinition {
+  return defineChatCommand({
+    key: `dock:${dock.id}`,
+    nativeName: `dock_${dock.id}`,
+    description: `Switch to ${dock.id} for replies.`,
+    textAliases: [`/dock-${dock.id}`, `/dock_${dock.id}`],
+    acceptsArgs: false,
+  });
+}
+
 function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
@@ -238,15 +250,7 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
     }),
     ...listChannelDocks()
       .filter((dock) => dock.capabilities.nativeCommands)
-      .map((dock) =>
-        defineChatCommand({
-          key: `dock:${dock.id}`,
-          nativeName: `dock-${dock.id}`,
-          description: `Switch to ${dock.id} for replies.`,
-          textAlias: `/dock-${dock.id}`,
-          acceptsArgs: false,
-        }),
-      ),
+      .map((dock) => defineDockCommand(dock)),
   ];
 
   registerAlias(commands, "status", "/usage");

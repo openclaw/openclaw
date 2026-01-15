@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { resolveConfigSnapshotHash } from "../config/config.js";
+
 import {
   connectOk,
   installGatewayTestHooks,
@@ -43,12 +45,15 @@ describe("gateway config.patch", () => {
         params: {},
       }),
     );
-    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string } }>(
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
       ws,
       (o) => o.type === "res" && o.id === getId,
     );
     expect(getRes.ok).toBe(true);
-    const baseHash = getRes.payload?.hash;
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
     expect(typeof baseHash).toBe("string");
 
     const patchId = "req-patch";

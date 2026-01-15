@@ -58,6 +58,18 @@ function hashConfigRaw(raw: string | null): string {
     .digest("hex");
 }
 
+export function resolveConfigSnapshotHash(snapshot: {
+  hash?: string;
+  raw?: string | null;
+}): string | null {
+  if (typeof snapshot.hash === "string") {
+    const trimmed = snapshot.hash.trim();
+    if (trimmed) return trimmed;
+  }
+  if (typeof snapshot.raw !== "string") return null;
+  return hashConfigRaw(snapshot.raw);
+}
+
 export type ConfigIoDeps = {
   fs?: typeof fs;
   json5?: typeof JSON5;

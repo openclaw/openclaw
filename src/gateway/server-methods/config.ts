@@ -4,6 +4,7 @@ import {
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  resolveConfigSnapshotHash,
   validateConfigObject,
   writeConfigFile,
 } from "../../config/config.js";
@@ -42,7 +43,8 @@ function requireConfigBaseHash(
   respond: RespondFn,
 ): boolean {
   if (!snapshot.exists) return true;
-  if (typeof snapshot.raw !== "string" || !snapshot.hash) {
+  const snapshotHash = resolveConfigSnapshotHash(snapshot);
+  if (!snapshotHash) {
     respond(
       false,
       undefined,
@@ -65,7 +67,7 @@ function requireConfigBaseHash(
     );
     return false;
   }
-  if (baseHash !== snapshot.hash) {
+  if (baseHash !== snapshotHash) {
     respond(
       false,
       undefined,
