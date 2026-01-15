@@ -71,7 +71,7 @@ describe("pw-role-snapshot", () => {
 
   it("preserves Playwright aria-ref ids in ai snapshots", () => {
     const ai = [
-      '- navigation [ref=e1]:',
+      "- navigation [ref=e1]:",
       '  - link "Home" [ref=e5]',
       '  - heading "Title" [ref=e6]',
       '  - button "Save" [ref=e7] [cursor=pointer]:',
@@ -79,7 +79,7 @@ describe("pw-role-snapshot", () => {
     ].join("\n");
 
     const res = buildRoleSnapshotFromAiSnapshot(ai, { interactive: true });
-    expect(res.snapshot).toContain('[ref=e5]');
+    expect(res.snapshot).toContain("[ref=e5]");
     expect(res.snapshot).toContain('- link "Home"');
     expect(res.snapshot).toContain('- button "Save"');
     expect(res.snapshot).not.toContain("navigation");
