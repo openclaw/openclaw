@@ -31,6 +31,11 @@ See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
 
+### CI Secrets Scan Failed
+
+This means `detect-secrets` found new candidates not yet in the baseline.
+Follow [Secret scanning](/gateway/security#secret-scanning-detect-secrets).
+
 ### Service Installed but Nothing is Running
 
 If the gateway service is installed but the process exits immediately, the daemon

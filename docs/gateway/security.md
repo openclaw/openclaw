@@ -439,6 +439,32 @@ If your AI does something bad:
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 
+## Secret Scanning (detect-secrets)
+
+CI runs `detect-secrets scan --baseline .secrets.baseline` in the `secrets` job.
+If it fails, there are new candidates not yet in the baseline.
+
+### If CI fails
+
+1. Reproduce locally:
+   ```bash
+   detect-secrets scan --baseline .secrets.baseline
+   ```
+2. Understand the tools:
+   - `detect-secrets scan` finds candidates and compares them to the baseline.
+   - `detect-secrets audit` opens an interactive review to mark each baseline
+     item as real or false positive.
+3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
+4. For false positives: run the interactive audit and mark them as false:
+   ```bash
+   detect-secrets audit .secrets.baseline
+   ```
+5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
+   baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
+   file is reference-only; detect-secrets doesn’t read it automatically).
+
+Commit the updated `.secrets.baseline` once it reflects the intended state.
+
 ## The Trust Hierarchy
 
 ```
