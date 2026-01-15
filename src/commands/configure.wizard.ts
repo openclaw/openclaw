@@ -21,7 +21,14 @@ import type {
   ConfigureWizardParams,
   WizardSection,
 } from "./configure.shared.js";
-import { CONFIGURE_SECTION_OPTIONS, intro, outro, select, text } from "./configure.shared.js";
+import {
+  CONFIGURE_SECTION_OPTIONS,
+  confirm,
+  intro,
+  outro,
+  select,
+  text,
+} from "./configure.shared.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -81,6 +88,77 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
     }),
     runtime,
   ) as ChannelsWizardMode;
+}
+
+async function promptWebToolsConfig(
+  nextConfig: ClawdbotConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdbotConfig> {
+  const existingSearch = nextConfig.tools?.web?.search;
+  const existingFetch = nextConfig.tools?.web?.fetch;
+  const hasSearchKey = Boolean(existingSearch?.apiKey);
+
+  const enableSearch = guardCancel(
+    await confirm({
+      message: "Enable web_search (Brave Search API)?",
+      initialValue: existingSearch?.enabled ?? hasSearchKey,
+    }),
+    runtime,
+  );
+
+  let nextSearch = {
+    ...existingSearch,
+    enabled: enableSearch,
+  };
+
+  if (enableSearch) {
+    const keyInput = guardCancel(
+      await text({
+        message: hasSearchKey
+          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
+          : "Brave Search API key (leave blank to use BRAVE_API_KEY)",
+        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
+      }),
+      runtime,
+    );
+    const key = String(keyInput ?? "").trim();
+    if (key) {
+      nextSearch = { ...nextSearch, apiKey: key };
+    } else if (!hasSearchKey) {
+      note(
+        [
+          "No key stored. web_search needs BRAVE_API_KEY or tools.web.search.apiKey.",
+          "Docs: https://docs.clawd.bot/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    }
+  }
+
+  const enableFetch = guardCancel(
+    await confirm({
+      message: "Enable web_fetch (keyless HTTP fetch)?",
+      initialValue: existingFetch?.enabled ?? true,
+    }),
+    runtime,
+  );
+
+  const nextFetch = {
+    ...existingFetch,
+    enabled: enableFetch,
+  };
+
+  return {
+    ...nextConfig,
+    tools: {
+      ...nextConfig.tools,
+      web: {
+        ...nextConfig.tools?.web,
+        search: nextSearch,
+        fetch: nextFetch,
+      },
+    },
+  };
 }
 
 export async function runConfigureWizard(
@@ -219,6 +297,10 @@ export async function runConfigureWizard(
         nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
       }
 
+      if (selected.includes("web")) {
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+      }
+
       if (selected.includes("gateway")) {
         const gateway = await promptGatewayConfig(nextConfig, runtime);
         nextConfig = gateway.config;
@@ -311,6 +393,11 @@ export async function runConfigureWizard(
 
         if (choice === "model") {
           nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+          await persistConfig();
+        }
+
+        if (choice === "web") {
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
           await persistConfig();
         }
 
