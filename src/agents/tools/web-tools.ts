@@ -99,8 +99,7 @@ function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: bo
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
   if (typeof params.fetch?.enabled === "boolean") return params.fetch.enabled;
-  if (params.sandboxed) return true;
-  return false;
+  return true;
 }
 
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
