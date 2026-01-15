@@ -69,10 +69,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 const testConfigRoot = {
-  value: path.join(
-    os.tmpdir(),
-    `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`,
-  ),
+  value: path.join(os.tmpdir(), `clawdbot-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 };
 
 export const setTestConfigRoot = (root: string) => {
