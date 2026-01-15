@@ -70,6 +70,21 @@ Then target it:
   - Badge shows `ON` when attached.
 - Click again to detach.
 
+## Do I need `clawdbot browser serve`?
+
+### Local Gateway (same machine as Chrome) — usually **no**
+
+If the Gateway is running on the same machine as Chrome and your `browser.controlUrl` is loopback (default),
+you typically **do not** need `clawdbot browser serve`.
+
+The Gateway’s built-in browser control server will start on `http://127.0.0.1:18791/` and Clawdbot will
+auto-start the local relay server when you use a profile with `driver="extension"`.
+
+### Remote Gateway (Gateway runs elsewhere) — **yes**
+
+If your Gateway runs on another machine, run `clawdbot browser serve` on the machine that runs Chrome
+(and publish it via Tailscale Serve / TLS). See the section below.
+
 ## Remote Gateway (recommended: Tailscale Serve)
 
 Goal: Gateway runs on one machine, but Chrome runs somewhere else.

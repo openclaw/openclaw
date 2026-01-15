@@ -221,6 +221,9 @@ Flow:
 - You click the **Clawdbot Browser Relay** extension icon on a tab to attach.
 - The agent controls that tab via the normal `browser` tool, by selecting the right profile.
 
+If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+Use `browser serve` only when the Gateway runs elsewhere (remote mode).
+
 ### Setup
 
 1) Create a profile that uses the extension driver:

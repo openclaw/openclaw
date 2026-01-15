@@ -413,6 +413,8 @@ Then Chrome → `chrome://extensions` → enable “Developer mode” → “Loa
 
 Full guide (including remote Gateway via Tailscale + security notes): [Chrome extension](/tools/chrome-extension)
 
+If the Gateway runs on the same machine as Chrome (default setup), you usually **do not** need `clawdbot browser serve`.
+
 ## Sandboxing and memory
 
 ### Is there a dedicated sandboxing doc?
