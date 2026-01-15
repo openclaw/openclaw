@@ -138,16 +138,16 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
-    readMessagesDiscord.mockResolvedValueOnce([
-      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
-    ]);
+    readMessagesDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T10:00:00.000Z" }]);
 
     const result = await handleDiscordMessagingAction(
       "readMessages",
       { channelId: "C1" },
       enableAllActions,
     );
-    const payload = result.details as { messages: Array<{ timestampMs?: number; timestampUtc?: string }> };
+    const payload = result.details as {
+      messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
 
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
     expect(payload.messages[0].timestampMs).toBe(expectedMs);
@@ -173,16 +173,16 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {
-    listPinsDiscord.mockResolvedValueOnce([
-      { id: "1", timestamp: "2026-01-15T12:00:00.000Z" },
-    ]);
+    listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 
     const result = await handleDiscordMessagingAction(
       "listPins",
       { channelId: "C1" },
       enableAllActions,
     );
-    const payload = result.details as { pins: Array<{ timestampMs?: number; timestampUtc?: string }> };
+    const payload = result.details as {
+      pins: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
 
     const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
     expect(payload.pins[0].timestampMs).toBe(expectedMs);

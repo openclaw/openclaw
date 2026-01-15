@@ -26,6 +26,7 @@ export type ResolvedWhatsAppAccount = {
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
+  debounceMs?: number;
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
@@ -153,6 +154,7 @@ export function resolveWhatsAppAccount(params: {
     blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
+    debounceMs: accountCfg?.debounceMs ?? rootCfg?.debounceMs,
   };
 }
 

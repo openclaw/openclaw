@@ -5,6 +5,7 @@ import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../../logging.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
@@ -28,6 +29,10 @@ export async function monitorWebInbox(options: {
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
+  debounceMs?: number;
+  /** Optional debounce gating predicate. */
+  shouldDebounce?: (msg: WebInboundMessage) => boolean;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
@@ -56,6 +61,45 @@ export async function monitorWebInbox(options: {
 
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
+  const debouncer = createInboundDebouncer<WebInboundMessage>({
+    debounceMs: options.debounceMs ?? 0,
+    buildKey: (msg) => {
+      const senderKey =
+        msg.chatType === "group"
+          ? (msg.senderJid ?? msg.senderE164 ?? msg.senderName ?? msg.from)
+          : msg.from;
+      if (!senderKey) return null;
+      const conversationKey = msg.chatType === "group" ? msg.chatId : msg.from;
+      return `${msg.accountId}:${conversationKey}:${senderKey}`;
+    },
+    shouldDebounce: options.shouldDebounce,
+    onFlush: async (entries) => {
+      const last = entries.at(-1);
+      if (!last) return;
+      if (entries.length === 1) {
+        await options.onMessage(last);
+        return;
+      }
+      const mentioned = new Set<string>();
+      for (const entry of entries) {
+        for (const jid of entry.mentionedJids ?? []) mentioned.add(jid);
+      }
+      const combinedBody = entries
+        .map((entry) => entry.body)
+        .filter(Boolean)
+        .join("\n");
+      const combinedMessage: WebInboundMessage = {
+        ...last,
+        body: combinedBody,
+        mentionedJids: mentioned.size > 0 ? Array.from(mentioned) : undefined,
+      };
+      await options.onMessage(combinedMessage);
+    },
+    onError: (err) => {
+      inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
+      inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);
+    },
+  });
   const groupMetaCache = new Map<
     string,
     { subject?: string; participants?: string[]; expires: number }
@@ -217,38 +261,37 @@ export async function monitorWebInbox(options: {
         { from, to: selfE164 ?? "me", body, mediaPath, mediaType, timestamp },
         "inbound message",
       );
+      const inboundMessage: WebInboundMessage = {
+        id,
+        from,
+        conversationId: from,
+        to: selfE164 ?? "me",
+        accountId: access.resolvedAccountId,
+        body,
+        pushName: senderName,
+        timestamp,
+        chatType: group ? "group" : "direct",
+        chatId: remoteJid,
+        senderJid: participantJid,
+        senderE164: senderE164 ?? undefined,
+        senderName,
+        replyToId: replyContext?.id,
+        replyToBody: replyContext?.body,
+        replyToSender: replyContext?.sender,
+        groupSubject,
+        groupParticipants,
+        mentionedJids: mentionedJids ?? undefined,
+        selfJid,
+        selfE164,
+        location: location ?? undefined,
+        sendComposing,
+        reply,
+        sendMedia,
+        mediaPath,
+        mediaType,
+      };
       try {
-        const task = Promise.resolve(
-          options.onMessage({
-            id,
-            from,
-            conversationId: from,
-            to: selfE164 ?? "me",
-            accountId: access.resolvedAccountId,
-            body,
-            pushName: senderName,
-            timestamp,
-            chatType: group ? "group" : "direct",
-            chatId: remoteJid,
-            senderJid: participantJid,
-            senderE164: senderE164 ?? undefined,
-            senderName,
-            replyToId: replyContext?.id,
-            replyToBody: replyContext?.body,
-            replyToSender: replyContext?.sender,
-            groupSubject,
-            groupParticipants,
-            mentionedJids: mentionedJids ?? undefined,
-            selfJid,
-            selfE164,
-            location: location ?? undefined,
-            sendComposing,
-            reply,
-            sendMedia,
-            mediaPath,
-            mediaType,
-          }),
-        );
+        const task = Promise.resolve(debouncer.enqueue(inboundMessage));
         void task.catch((err) => {
           inboundLogger.error({ error: String(err) }, "failed handling inbound web message");
           inboundConsoleLog.error(`Failed handling inbound web message: ${String(err)}`);

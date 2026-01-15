@@ -75,6 +75,8 @@ export type WhatsAppConfig = {
      */
     group?: "always" | "mentions" | "never";
   };
+  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
+  debounceMs?: number;
 };
 
 export type WhatsAppAccountConfig = {
@@ -131,4 +133,6 @@ export type WhatsAppAccountConfig = {
      */
     group?: "always" | "mentions" | "never";
   };
+  /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
+  debounceMs?: number;
 };

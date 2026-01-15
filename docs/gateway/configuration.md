@@ -822,6 +822,31 @@ Controls how inbound messages behave when an agent run is already active.
 }
 ```
 
+### `messages.inbound`
+
+Debounce rapid inbound messages from the **same sender** so multiple back-to-back
+messages become a single agent turn. Debouncing is scoped per channel + conversation
+and uses the most recent message for reply threading/IDs.
+
+```json5
+{
+  messages: {
+    inbound: {
+      debounceMs: 2000, // 0 disables
+      byChannel: {
+        whatsapp: 5000,
+        slack: 1500,
+        discord: 1500
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Debounce batches **text-only** messages; media/attachments flush immediately.
+- Control commands (e.g. `/queue`, `/new`) bypass debouncing so they stay standalone.
+
 ### `commands` (chat command handling)
 
 Controls how chat commands are enabled across connectors.

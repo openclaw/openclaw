@@ -334,7 +334,9 @@ describe("handleSlackAction", () => {
     });
 
     const result = await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
-    const payload = result.details as { messages: Array<{ timestampMs?: number; timestampUtc?: string }> };
+    const payload = result.details as {
+      messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
+    };
 
     const expectedMs = Math.round(1735689600.456 * 1000);
     expect(payload.messages[0].timestampMs).toBe(expectedMs);

@@ -54,11 +54,7 @@ import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "./system-
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
-import {
-  describeUnknownError,
-  mapThinkingLevel,
-  resolveExecToolDefaults,
-} from "./utils.js";
+import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
 
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
@@ -227,9 +223,7 @@ export async function compactEmbeddedPiSession(params: {
         const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
         const reasoningTagHint = isReasoningTagProvider(provider);
         const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-        const userTimeFormat = resolveUserTimeFormat(
-          params.config?.agents?.defaults?.timeFormat,
-        );
+        const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
         const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
         const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,

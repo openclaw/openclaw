@@ -30,4 +30,6 @@ export type WebMonitorTuning = {
   statusSink?: (status: WebChannelStatus) => void;
   /** WhatsApp account id. Default: "default". */
   accountId?: string;
+  /** Debounce window (ms) for batching rapid consecutive messages from the same sender. */
+  debounceMs?: number;
 };

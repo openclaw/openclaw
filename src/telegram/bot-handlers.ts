@@ -1,4 +1,9 @@
 // @ts-nocheck
+import { hasControlCommand } from "../auto-reply/command-detection.js";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../auto-reply/inbound-debounce.js";
 import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { danger, logVerbose, warn } from "../globals.js";
@@ -42,6 +47,61 @@ export const registerTelegramHandlers = ({
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
+
+  const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  type TelegramDebounceEntry = {
+    ctx: unknown;
+    msg: TelegramMessage;
+    allMedia: Array<{ path: string; contentType?: string }>;
+    storeAllowFrom: string[];
+    debounceKey: string | null;
+    botUsername?: string;
+  };
+  const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
+    debounceMs,
+    buildKey: (entry) => entry.debounceKey,
+    shouldDebounce: (entry) => {
+      if (entry.allMedia.length > 0) return false;
+      const text = entry.msg.text ?? entry.msg.caption ?? "";
+      if (!text.trim()) return false;
+      return !hasControlCommand(text, cfg, { botUsername: entry.botUsername });
+    },
+    onFlush: async (entries) => {
+      const last = entries.at(-1);
+      if (!last) return;
+      if (entries.length === 1) {
+        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
+        return;
+      }
+      const combinedText = entries
+        .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
+        .filter(Boolean)
+        .join("\n");
+      if (!combinedText.trim()) return;
+      const first = entries[0];
+      const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
+      const getFile =
+        typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
+      const syntheticMessage: TelegramMessage = {
+        ...first.msg,
+        text: combinedText,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: undefined,
+        date: last.msg.date ?? first.msg.date,
+      };
+      const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
+      await processMessage(
+        { message: syntheticMessage, me: baseCtx.me, getFile },
+        [],
+        first.storeAllowFrom,
+        messageIdOverride ? { messageIdOverride } : undefined,
+      );
+    },
+    onError: (err) => {
+      runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+    },
+  });
 
   const processMediaGroup = async (entry: MediaGroupEntry) => {
     try {
@@ -403,7 +463,20 @@ export const registerTelegramHandlers = ({
         throw mediaErr;
       }
       const allMedia = media ? [{ path: media.path, contentType: media.contentType }] : [];
-      await processMessage(ctx, allMedia, storeAllowFrom);
+      const senderId = msg.from?.id ? String(msg.from.id) : "";
+      const conversationKey =
+        resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
+      const debounceKey = senderId
+        ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}`
+        : null;
+      await inboundDebouncer.enqueue({
+        ctx,
+        msg,
+        allMedia,
+        storeAllowFrom,
+        debounceKey,
+        botUsername: ctx.me?.username,
+      });
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));
     }

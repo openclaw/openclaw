@@ -17,6 +17,22 @@ export type QueueConfig = {
   drop?: QueueDropPolicy;
 };
 
+export type InboundDebounceByProvider = {
+  whatsapp?: number;
+  telegram?: number;
+  discord?: number;
+  slack?: number;
+  signal?: number;
+  imessage?: number;
+  msteams?: number;
+  webchat?: number;
+};
+
+export type InboundDebounceConfig = {
+  debounceMs?: number;
+  byChannel?: InboundDebounceByProvider;
+};
+
 export type BroadcastStrategy = "parallel" | "sequential";
 
 export type BroadcastConfig = {
@@ -64,6 +80,8 @@ export type MessagesConfig = {
   responsePrefix?: string;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
+  /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
+  inbound?: InboundDebounceConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */

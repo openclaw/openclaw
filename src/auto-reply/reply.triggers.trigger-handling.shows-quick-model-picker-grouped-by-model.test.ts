@@ -263,9 +263,7 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       // Selecting the default model shows "reset to default" instead of "set to"
-      expect(normalizeTestText(text ?? "")).toContain(
-        "anthropic/claude-opus-4-5",
-      );
+      expect(normalizeTestText(text ?? "")).toContain("anthropic/claude-opus-4-5");
 
       const store = loadSessionStore(cfg.session.store);
       // When selecting the default, overrides are cleared

@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { GroupChatSchema, NativeCommandsSettingSchema, QueueSchema } from "./zod-schema.core.js";
+import {
+  GroupChatSchema,
+  InboundDebounceSchema,
+  NativeCommandsSettingSchema,
+  QueueSchema,
+} from "./zod-schema.core.js";
 
 export const SessionSchema = z
   .object({
@@ -54,6 +59,7 @@ export const MessagesSchema = z
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
+    inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
     ackReactionScope: z.enum(["group-mentions", "group-all", "direct", "all"]).optional(),
     removeAckAfterReply: z.boolean().optional(),

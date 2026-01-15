@@ -1,4 +1,9 @@
+import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../../auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import {
   buildHistoryContextFromMap,
@@ -61,14 +66,22 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const conversationHistories = new Map<string, HistoryEntry[]>();
+  const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "msteams" });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  type MSTeamsDebounceEntry = {
+    context: MSTeamsTurnContext;
+    rawText: string;
+    text: string;
+    attachments: MSTeamsAttachmentLike[];
+    wasMentioned: boolean;
+  };
+
+  const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
+    const context = params.context;
     const activity = context.activity;
-    const rawText = activity.text?.trim() ?? "";
-    const text = stripMSTeamsMentionTags(rawText);
-    const attachments = Array.isArray(activity.attachments)
-      ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
-      : [];
+    const rawText = params.rawText;
+    const text = params.text;
+    const attachments = params.attachments;
     const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
     const rawBody = text || attachmentPlaceholder;
     const from = activity.from;
@@ -288,7 +301,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     if (!isDirectMessage) {
-      const mentioned = wasMSTeamsBotMentioned(activity);
+      const mentioned = params.wasMentioned;
       if (requireMention && !mentioned) {
         log.debug("skipping message (mention required)", {
           teamId,
@@ -366,7 +379,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || wasMSTeamsBotMentioned(activity),
+      WasMentioned: isDirectMessage || params.wasMentioned,
       CommandAuthorized: true,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
@@ -432,5 +445,63 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         // Best effort.
       }
     }
+  };
+
+  const inboundDebouncer = createInboundDebouncer<MSTeamsDebounceEntry>({
+    debounceMs: inboundDebounceMs,
+    buildKey: (entry) => {
+      const conversationId = normalizeMSTeamsConversationId(
+        entry.context.activity.conversation?.id ?? "",
+      );
+      const senderId =
+        entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
+      if (!senderId || !conversationId) return null;
+      return `msteams:${appId}:${conversationId}:${senderId}`;
+    },
+    shouldDebounce: (entry) => {
+      if (!entry.text.trim()) return false;
+      if (entry.attachments.length > 0) return false;
+      return !hasControlCommand(entry.text, cfg);
+    },
+    onFlush: async (entries) => {
+      const last = entries.at(-1);
+      if (!last) return;
+      if (entries.length === 1) {
+        await handleTeamsMessageNow(last);
+        return;
+      }
+      const combinedText = entries
+        .map((entry) => entry.text)
+        .filter(Boolean)
+        .join("\n");
+      if (!combinedText.trim()) return;
+      const combinedRawText = entries
+        .map((entry) => entry.rawText)
+        .filter(Boolean)
+        .join("\n");
+      const wasMentioned = entries.some((entry) => entry.wasMentioned);
+      await handleTeamsMessageNow({
+        context: last.context,
+        rawText: combinedRawText,
+        text: combinedText,
+        attachments: [],
+        wasMentioned,
+      });
+    },
+    onError: (err) => {
+      runtime.error?.(danger(`msteams debounce flush failed: ${String(err)}`));
+    },
+  });
+
+  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+    const activity = context.activity;
+    const rawText = activity.text?.trim() ?? "";
+    const text = stripMSTeamsMentionTags(rawText);
+    const attachments = Array.isArray(activity.attachments)
+      ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
+      : [];
+    const wasMentioned = wasMSTeamsBotMentioned(activity);
+
+    await inboundDebouncer.enqueue({ context, rawText, text, attachments, wasMentioned });
   };
 }
