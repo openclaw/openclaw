@@ -116,7 +116,12 @@ export function resolveCommandAuthorization(params: {
 
   const ownerCandidates = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
   if (!allowAll && ownerCandidates.length === 0 && to) {
-    const normalizedTo = normalizeAllowFromEntry({ dock, cfg, accountId: ctx.AccountId, value: to });
+    const normalizedTo = normalizeAllowFromEntry({
+      dock,
+      cfg,
+      accountId: ctx.AccountId,
+      value: to,
+    });
     if (normalizedTo) ownerCandidates.push(normalizedTo);
   }
   const ownerList = ownerCandidates;

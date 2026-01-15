@@ -86,9 +86,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("chunks Signal markdown using the format-first chunker", async () => {
-    const sendSignal = vi
-      .fn()
-      .mockResolvedValue({ messageId: "s1", timestamp: 123 });
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
     const cfg: ClawdbotConfig = {
       channels: { signal: { textChunkLimit: 20 } },
     };

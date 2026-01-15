@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  isWhatsAppGroupJid,
-  isWhatsAppUserTarget,
-  normalizeWhatsAppTarget,
-} from "./normalize.js";
+import { isWhatsAppGroupJid, isWhatsAppUserTarget, normalizeWhatsAppTarget } from "./normalize.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
@@ -31,16 +27,10 @@ describe("normalizeWhatsAppTarget", () => {
   it("normalizes user JIDs with device suffix to E.164", () => {
     // This is the bug fix: JIDs like "41796666864:0@s.whatsapp.net" should
     // normalize to "+41796666864", not "+417966668640" (extra digit from ":0")
-    expect(normalizeWhatsAppTarget("41796666864:0@s.whatsapp.net")).toBe(
-      "+41796666864",
-    );
-    expect(normalizeWhatsAppTarget("1234567890:123@s.whatsapp.net")).toBe(
-      "+1234567890",
-    );
+    expect(normalizeWhatsAppTarget("41796666864:0@s.whatsapp.net")).toBe("+41796666864");
+    expect(normalizeWhatsAppTarget("1234567890:123@s.whatsapp.net")).toBe("+1234567890");
     // Without device suffix still works
-    expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe(
-      "+41796666864",
-    );
+    expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe("+41796666864");
   });
 
   it("normalizes LID JIDs to E.164", () => {

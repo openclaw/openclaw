@@ -432,9 +432,7 @@ export async function deleteMessageTelegram(
     verbose: opts.verbose,
   });
   await request(() => api.deleteMessage(chatId, messageId), "deleteMessage");
-  logVerbose(
-    `[telegram] Deleted message ${messageId} from chat ${chatId}`,
-  );
+  logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
 }
 

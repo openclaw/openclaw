@@ -25,13 +25,7 @@ type MarkdownToken = {
   attrGet?: (name: string) => string | null;
 };
 
-export type MarkdownStyle =
-  | "bold"
-  | "italic"
-  | "strikethrough"
-  | "code"
-  | "code_block"
-  | "spoiler";
+export type MarkdownStyle = "bold" | "italic" | "strikethrough" | "code" | "code_block" | "spoiler";
 
 export type MarkdownStyleSpan = {
   start: number;
@@ -414,11 +408,7 @@ function sliceStyleSpans(
   return mergeStyleSpans(sliced);
 }
 
-function sliceLinkSpans(
-  spans: MarkdownLinkSpan[],
-  start: number,
-  end: number,
-): MarkdownLinkSpan[] {
+function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): MarkdownLinkSpan[] {
   if (spans.length === 0) return [];
   const sliced: MarkdownLinkSpan[] = [];
   for (const span of spans) {
@@ -465,7 +455,8 @@ export function markdownToIR(markdown: string, options: MarkdownParseOptions = {
     if (span.end > codeBlockEnd) codeBlockEnd = span.end;
   }
   const finalLength = Math.max(trimmedLength, codeBlockEnd);
-  const finalText = finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
+  const finalText =
+    finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
 
   return {
     text: finalText,
