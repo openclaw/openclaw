@@ -83,9 +83,32 @@ Example (DMs on host, groups sandboxed + messaging-only tools):
 }
 ```
 
+Want “groups can only see folder X” instead of “no host access”? Keep `workspaceAccess: "none"` and mount only allowlisted paths into the sandbox:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        scope: "session",
+        workspaceAccess: "none",
+        docker: {
+          binds: [
+            // hostPath:containerPath:mode
+            "~/FriendsShared:/data:ro"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
 Related:
 - Configuration keys and defaults: [Gateway configuration](/gateway/configuration#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
+- Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
 
 ## Display labels
 - UI labels use `displayName` when available, formatted as `<channel>:<token>`.
