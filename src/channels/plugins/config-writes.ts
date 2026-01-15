@@ -7,10 +7,7 @@ type ChannelConfigWithAccounts = {
   accounts?: Record<string, { configWrites?: boolean }>;
 };
 
-function resolveAccountConfig(
-  accounts: ChannelConfigWithAccounts["accounts"],
-  accountId: string,
-) {
+function resolveAccountConfig(accounts: ChannelConfigWithAccounts["accounts"], accountId: string) {
   if (!accounts || typeof accounts !== "object") return undefined;
   if (accountId in accounts) return accounts[accountId];
   const matchKey = Object.keys(accounts).find(
