@@ -49,7 +49,7 @@ describe("handleCommands /config configWrites gating", () => {
       commands: { config: true, text: true },
       channels: { whatsapp: { allowFrom: ["*"], configWrites: false } },
     } as ClawdbotConfig;
-    const params = buildParams("/config set messages.ackReaction=\":)\"", cfg);
+    const params = buildParams('/config set messages.ackReaction=":)"', cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("Config writes are disabled");

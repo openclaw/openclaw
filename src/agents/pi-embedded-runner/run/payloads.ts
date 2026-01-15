@@ -60,7 +60,9 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
     : null;
-  const normalizedRawErrorText = rawErrorMessage ? normalizeTextForComparison(rawErrorMessage) : null;
+  const normalizedRawErrorText = rawErrorMessage
+    ? normalizeTextForComparison(rawErrorMessage)
+    : null;
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =

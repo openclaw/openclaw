@@ -95,9 +95,7 @@ export const registerTelegramHandlers = ({
       runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
 
       if (!resolveChannelConfigWrites({ cfg, channelId: "telegram", accountId })) {
-        runtime.log?.(
-          warn("[telegram] Config writes disabled; skipping group config migration."),
-        );
+        runtime.log?.(warn("[telegram] Config writes disabled; skipping group config migration."));
         return;
       }
 
