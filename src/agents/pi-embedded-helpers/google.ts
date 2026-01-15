@@ -8,6 +8,12 @@ export function isGoogleModelApi(api?: string | null): boolean {
   );
 }
 
+export function isAntigravityClaude(api?: string | null, modelId?: string): boolean {
+  if (api !== "google-antigravity") return false;
+  return modelId?.toLowerCase().includes("claude") ?? false;
+}
+
+
 export { sanitizeGoogleTurnOrdering };
 
 /**

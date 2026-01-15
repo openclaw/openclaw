@@ -303,6 +303,7 @@ export async function runEmbeddedAttempt(
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
+          modelId: params.modelId,
           sessionManager,
           sessionId: params.sessionId,
         });
