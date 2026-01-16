@@ -22,6 +22,9 @@ If the file is missing, Clawdbot uses safe-ish defaults (embedded Pi agent + per
 The Gateway exposes a JSON Schema representation of the config via `config.schema` for UI editors.
 The Control UI renders a form from this schema, with a **Raw JSON** editor as an escape hatch.
 
+Channel plugins and extensions can register schema + UI hints for their config, so channel settings
+stay schema-driven across apps without hard-coded forms.
+
 Hints (labels, grouping, sensitive fields) ship alongside the schema so clients can render
 better forms without hard-coding config knowledge.
 
