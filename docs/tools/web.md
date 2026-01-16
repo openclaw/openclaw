@@ -73,6 +73,29 @@ Search the web with Brave’s API.
 
 - `query` (required)
 - `count` (1–10; default from config)
+- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). Default: "US"
+- `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
+- `ui_lang` (optional): ISO language code for UI elements
+
+**Examples:**
+
+```javascript
+// German-specific search
+await web_search({
+  query: "TV online schauen",
+  count: 10,
+  country: "DE",
+  search_lang: "de"
+});
+
+// French search with French UI
+await web_search({
+  query: "actualités",
+  country: "FR",
+  search_lang: "fr",
+  ui_lang: "fr"
+});
+```
 
 ## web_fetch
 

@@ -454,7 +454,7 @@ export function createWebSearchTool(options?: {
     label: "Web Search",
     name: "web_search",
     description:
-      "Search the web using Brave Search API. Returns titles, URLs, and snippets for fast research.",
+      "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
       const apiKey = resolveSearchApiKey(search);
