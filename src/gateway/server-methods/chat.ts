@@ -389,7 +389,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       : path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 
     if (!fs.existsSync(transcriptPath)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "transcript file not found"));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "transcript file not found"),
+      );
       return;
     }
 
@@ -416,7 +420,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `failed to write transcript: ${errMessage}`));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `failed to write transcript: ${errMessage}`),
+      );
       return;
     }
 

@@ -55,6 +55,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How do I enable web search (and web fetch)?](#how-do-i-enable-web-search-and-web-fetch)
   - [How do I run a central Gateway with specialized workers across devices?](#how-do-i-run-a-central-gateway-with-specialized-workers-across-devices)
   - [Can the Clawdbot browser run headless?](#can-the-clawdbot-browser-run-headless)
+  - [How do I use Brave for browser control?](#how-do-i-use-brave-for-browser-control)
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
   - [Do nodes run a gateway daemon?](#do-nodes-run-a-gateway-daemon)
@@ -662,6 +663,11 @@ Headless uses the **same Chromium engine** and works for most automation (forms,
 - No visible browser window (use screenshots if you need visuals).
 - Some sites are stricter about automation in headless mode (CAPTCHAs, anti‑bot).
   For example, X/Twitter often blocks headless sessions.
+
+### How do I use Brave for browser control?
+
+Set `browser.executablePath` to your Brave binary (or any Chromium-based browser) and restart the Gateway.
+See the full config examples in [Browser](/tools/browser#use-brave-or-another-chromium-based-browser).
 
 ## Remote gateways + nodes
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
-  kind: "canary" | "chromium" | "chrome" | "custom";
+  kind: "brave" | "canary" | "chromium" | "chrome" | "custom" | "edge";
   path: string;
 };
 
@@ -28,15 +28,28 @@ function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecu
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
-      kind: "canary",
-      path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      kind: "chrome",
+      path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     },
     {
-      kind: "canary",
-      path: path.join(
-        os.homedir(),
-        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-      ),
+      kind: "chrome",
+      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+    },
+    {
+      kind: "brave",
+      path: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    },
+    {
+      kind: "brave",
+      path: path.join(os.homedir(), "Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
+    },
+    {
+      kind: "edge",
+      path: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    },
+    {
+      kind: "edge",
+      path: path.join(os.homedir(), "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
     },
     {
       kind: "chromium",
@@ -47,12 +60,15 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
       path: path.join(os.homedir(), "Applications/Chromium.app/Contents/MacOS/Chromium"),
     },
     {
-      kind: "chrome",
-      path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      kind: "canary",
+      path: "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
     },
     {
-      kind: "chrome",
-      path: path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+      kind: "canary",
+      path: path.join(
+        os.homedir(),
+        "Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      ),
     },
   ];
 
@@ -63,10 +79,16 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
+    { kind: "chrome", path: "/usr/bin/chrome" },
+    { kind: "brave", path: "/usr/bin/brave-browser" },
+    { kind: "brave", path: "/usr/bin/brave-browser-stable" },
+    { kind: "brave", path: "/usr/bin/brave" },
+    { kind: "brave", path: "/snap/bin/brave" },
+    { kind: "edge", path: "/usr/bin/microsoft-edge" },
+    { kind: "edge", path: "/usr/bin/microsoft-edge-stable" },
     { kind: "chromium", path: "/usr/bin/chromium" },
     { kind: "chromium", path: "/usr/bin/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
-    { kind: "chrome", path: "/usr/bin/chrome" },
   ];
 
   return findFirstExecutable(candidates);
@@ -82,20 +104,30 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [];
 
   if (localAppData) {
-    // Chrome Canary (user install)
+    // Chrome (user install)
     candidates.push({
-      kind: "canary",
-      path: joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"),
+      kind: "chrome",
+      path: joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+    });
+    // Brave (user install)
+    candidates.push({
+      kind: "brave",
+      path: joinWin(localAppData, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+    });
+    // Edge (user install)
+    candidates.push({
+      kind: "edge",
+      path: joinWin(localAppData, "Microsoft", "Edge", "Application", "msedge.exe"),
     });
     // Chromium (user install)
     candidates.push({
       kind: "chromium",
       path: joinWin(localAppData, "Chromium", "Application", "chrome.exe"),
     });
-    // Chrome (user install)
+    // Chrome Canary (user install)
     candidates.push({
-      kind: "chrome",
-      path: joinWin(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      kind: "canary",
+      path: joinWin(localAppData, "Google", "Chrome SxS", "Application", "chrome.exe"),
     });
   }
 
@@ -108,6 +140,26 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   candidates.push({
     kind: "chrome",
     path: joinWin(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+  });
+  // Brave (system install, 64-bit)
+  candidates.push({
+    kind: "brave",
+    path: joinWin(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+  });
+  // Brave (system install, 32-bit on 64-bit Windows)
+  candidates.push({
+    kind: "brave",
+    path: joinWin(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+  });
+  // Edge (system install, 64-bit)
+  candidates.push({
+    kind: "edge",
+    path: joinWin(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+  });
+  // Edge (system install, 32-bit on 64-bit Windows)
+  candidates.push({
+    kind: "edge",
+    path: joinWin(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
   });
 
   return findFirstExecutable(candidates);

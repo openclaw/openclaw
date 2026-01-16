@@ -2376,10 +2376,10 @@ Example:
 }
 ```
 
-### `browser` (clawd-managed Chrome)
+### `browser` (clawd-managed browser)
 
-Clawdbot can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
-Profiles can point at a **remote** Chrome via `profiles.<name>.cdpUrl`. Remote
+Clawdbot can start a **dedicated, isolated** Chrome/Brave/Edge/Chromium instance for clawd and expose a small loopback control server.
+Profiles can point at a **remote** Chromium-based browser via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
 `browser.cdpUrl` remains for legacy single-profile configs and as the base
@@ -2391,6 +2391,7 @@ Defaults:
 - CDP URL: `http://127.0.0.1:18792` (control URL + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
 - Note: the control server is started by the running gateway (Clawdbot.app menubar, or `clawdbot gateway`).
+- Auto-detect order: Chrome → Brave → Edge → Chromium → Chrome Canary.
 
 ```json5
 {
@@ -2408,7 +2409,7 @@ Defaults:
     // Advanced:
     // headless: false,
     // noSandbox: false,
-    // executablePath: "/usr/bin/chromium",
+    // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false, // set true when tunneling a remote CDP to localhost
   }
 }

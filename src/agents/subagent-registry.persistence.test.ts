@@ -119,7 +119,8 @@ describe("subagent registry persistence", () => {
     // announce should NOT be called since cleanupHandled was true
     const calls = announceSpy.mock.calls.map((call) => call[0]);
     const match = calls.find(
-      (params) => (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
+      (params) =>
+        (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
     );
     expect(match).toBeFalsy();
   });

@@ -128,10 +128,12 @@ describe("browser chrome helpers", () => {
   it("picks the first existing Chrome candidate on macOS", () => {
     const exists = vi
       .spyOn(fs, "existsSync")
-      .mockImplementation((p) => String(p).includes("Google Chrome Canary"));
+      .mockImplementation((p) =>
+        String(p).includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
+      );
     const exe = findChromeExecutableMac();
-    expect(exe?.kind).toBe("canary");
-    expect(exe?.path).toMatch(/Google Chrome Canary/);
+    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path).toMatch(/Google Chrome\.app/);
     exists.mockRestore();
   });
 
@@ -143,12 +145,17 @@ describe("browser chrome helpers", () => {
 
   it("picks the first existing Chrome candidate on Windows", () => {
     vi.stubEnv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local");
-    const exists = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((p) => String(p).includes("Chrome SxS"));
+    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+      const pathStr = String(p);
+      return (
+        pathStr.includes("Google\\Chrome\\Application\\chrome.exe") ||
+        pathStr.includes("BraveSoftware\\Brave-Browser\\Application\\brave.exe") ||
+        pathStr.includes("Microsoft\\Edge\\Application\\msedge.exe")
+      );
+    });
     const exe = findChromeExecutableWindows();
-    expect(exe?.kind).toBe("canary");
-    expect(exe?.path).toMatch(/Chrome SxS/);
+    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path).toMatch(/chrome\.exe$/);
     exists.mockRestore();
   });
 

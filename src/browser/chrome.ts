@@ -147,7 +147,9 @@ export async function launchClawdChrome(
 
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
-    throw new Error("No supported browser found (Chrome/Chromium on macOS, Linux, or Windows).");
+    throw new Error(
+      "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
+    );
   }
 
   const userDataDir = resolveClawdUserDataDir(profile.name);

@@ -1,5 +1,5 @@
 ---
-summary: "Fix Chrome/Chromium CDP startup issues for Clawdbot browser control on Linux"
+summary: "Fix Chrome/Brave/Edge/Chromium CDP startup issues for Clawdbot browser control on Linux"
 read_when: "Browser control fails on Linux, especially with snap Chromium"
 ---
 
@@ -7,7 +7,7 @@ read_when: "Browser control fails on Linux, especially with snap Chromium"
 
 ## Problem: "Failed to start Chrome CDP on port 18800"
 
-Clawdbot's browser control server fails to launch Chrome/Chromium with the error:
+Clawdbot's browser control server fails to launch Chrome/Brave/Edge/Chromium with the error:
 ```
 {"error":"Error: Failed to start Chrome CDP on port 18800 for profile \"clawd\"."}
 ```
@@ -107,7 +107,7 @@ curl -s http://127.0.0.1:18791/tabs
 | Option | Description | Default |
 |--------|-------------|---------|
 | `browser.enabled` | Enable browser control | `true` |
-| `browser.executablePath` | Path to Chrome/Chromium binary | auto-detected |
+| `browser.executablePath` | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected |
 | `browser.headless` | Run without GUI | `false` |
 | `browser.noSandbox` | Add `--no-sandbox` flag (needed for some Linux setups) | `false` |
 | `browser.attachOnly` | Don't launch browser, only attach to existing | `false` |

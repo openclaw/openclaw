@@ -54,7 +54,9 @@ describe("subagent announce formatting", () => {
     });
 
     expect(agentSpy).toHaveBeenCalled();
-    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string; sessionKey?: string } };
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: { message?: string; sessionKey?: string };
+    };
     const msg = call?.params?.message as string;
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expect(msg).toContain("background task");

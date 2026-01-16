@@ -214,11 +214,7 @@ function ensureListener() {
   });
 }
 
-function finalizeSubagentCleanup(
-  runId: string,
-  cleanup: "delete" | "keep",
-  didAnnounce: boolean,
-) {
+function finalizeSubagentCleanup(runId: string, cleanup: "delete" | "keep", didAnnounce: boolean) {
   const entry = subagentRuns.get(runId);
   if (!entry) return;
   if (cleanup === "delete") {
