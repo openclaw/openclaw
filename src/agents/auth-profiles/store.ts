@@ -111,6 +111,34 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   };
 }
 
+function mergeRecord<T>(
+  base?: Record<string, T>,
+  override?: Record<string, T>,
+): Record<string, T> | undefined {
+  if (!base && !override) return undefined;
+  if (!base) return { ...override };
+  if (!override) return { ...base };
+  return { ...base, ...override };
+}
+
+function mergeAuthProfileStores(base: AuthProfileStore, override: AuthProfileStore): AuthProfileStore {
+  if (
+    Object.keys(override.profiles).length === 0 &&
+    !override.order &&
+    !override.lastGood &&
+    !override.usageStats
+  ) {
+    return base;
+  }
+  return {
+    version: Math.max(base.version, override.version ?? base.version),
+    profiles: { ...base.profiles, ...override.profiles },
+    order: mergeRecord(base.order, override.order),
+    lastGood: mergeRecord(base.lastGood, override.lastGood),
+    usageStats: mergeRecord(base.usageStats, override.usageStats),
+  };
+}
+
 function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   const oauthPath = resolveOAuthPath();
   const oauthRaw = loadJsonFile(oauthPath);
@@ -191,7 +219,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
   return store;
 }
 
-export function ensureAuthProfileStore(
+function loadAuthProfileStoreForAgent(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
@@ -205,6 +233,19 @@ export function ensureAuthProfileStore(
       saveJsonFile(authPath, asStore);
     }
     return asStore;
+  }
+
+  // Fallback: inherit auth-profiles from main agent if subagent has none
+  if (agentDir) {
+    const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
+    const mainRaw = loadJsonFile(mainAuthPath);
+    const mainStore = coerceAuthStore(mainRaw);
+    if (mainStore && Object.keys(mainStore.profiles).length > 0) {
+      // Clone main store to subagent directory for auth inheritance
+      saveJsonFile(authPath, mainStore);
+      log.info("inherited auth-profiles from main agent", { agentDir });
+      return mainStore;
+    }
   }
 
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath(agentDir));
@@ -272,6 +313,21 @@ export function ensureAuthProfileStore(
   }
 
   return store;
+}
+
+export function ensureAuthProfileStore(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
+  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (!agentDir || authPath === mainAuthPath) {
+    return store;
+  }
+
+  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  return mergeAuthProfileStores(mainStore, store);
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
