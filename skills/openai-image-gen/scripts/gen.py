@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import base64
 import datetime as dt
 import json
 import os
@@ -96,8 +95,8 @@ def request_images(
     if model != "dall-e-2":
         args["quality"] = quality
 
-    if model.startswith("dall-e"):
-        args["response_format"] = "b64_json"
+    # Note: response_format no longer supported by OpenAI Images API
+    # dall-e models now return URLs by default
 
     if model.startswith("gpt-image"):
         if background:
@@ -212,12 +211,19 @@ def main() -> int:
             args.output_format,
             args.style,
         )
-        b64 = res.get("data", [{}])[0].get("b64_json")
-        if not b64:
+        # OpenAI Images API now returns URLs by default
+        image_url = res.get("data", [{}])[0].get("url")
+        if not image_url:
             raise RuntimeError(f"Unexpected response: {json.dumps(res)[:400]}")
-        image_bytes = base64.b64decode(b64)
+
+        # Download image from URL
         filename = f"{idx:03d}-{slugify(prompt)[:40]}.{file_ext}"
-        (out_dir / filename).write_bytes(image_bytes)
+        filepath = out_dir / filename
+        try:
+            urllib.request.urlretrieve(image_url, filepath)
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Failed to download image from {image_url}: {e}") from e
+
         items.append({"prompt": prompt, "file": filename})
 
     (out_dir / "prompts.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
