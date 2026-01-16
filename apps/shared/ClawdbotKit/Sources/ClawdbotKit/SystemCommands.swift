@@ -2,6 +2,7 @@ import Foundation
 
 public enum ClawdbotSystemCommand: String, Codable, Sendable {
     case run = "system.run"
+    case which = "system.which"
     case notify = "system.notify"
 }
 
@@ -36,6 +37,14 @@ public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
         self.env = env
         self.timeoutMs = timeoutMs
         self.needsScreenRecording = needsScreenRecording
+    }
+}
+
+public struct ClawdbotSystemWhichParams: Codable, Sendable, Equatable {
+    public var bins: [String]
+
+    public init(bins: [String]) {
+        self.bins = bins
     }
 }
 

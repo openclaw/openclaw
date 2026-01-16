@@ -164,6 +164,7 @@ final class MacNodeModeCoordinator {
         ]
 
         if SystemRunPolicy.load() != .never {
+            commands.append(ClawdbotSystemCommand.which.rawValue)
             commands.append(ClawdbotSystemCommand.run.rawValue)
         }
 
