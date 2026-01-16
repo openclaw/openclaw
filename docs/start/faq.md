@@ -70,11 +70,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?](#i-set-copilot_github_token-but-models-status-shows-shell-env-off-why)
 - [Sessions & multiple chats](#sessions-multiple-chats)
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
-  - [How do I completely reset Clawdbot (but keep it installed)?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
+  - [How do I completely reset Clawdbot but keep it installed?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
   - [I’m getting “context too large” errors — how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
+  - [How many workspaces and agents can I create?](#how-many-workspaces-and-agents-can-i-create)
 - [Models: defaults, selection, aliases, switching](#models-defaults-selection-aliases-switching)
   - [What is the “default model”?](#what-is-the-default-model)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
@@ -858,7 +859,7 @@ See [/concepts/model-providers](/concepts/model-providers) and [/environment](/e
 
 Send `/new` or `/reset` as a standalone message. See [Session management](/concepts/session).
 
-### How do I completely reset Clawdbot (but keep it installed)?
+### How do I completely reset Clawdbot but keep it installed?
 
 Use the reset command:
 
@@ -934,6 +935,10 @@ See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
 ### Do groups/threads share context with DMs?
 
 Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
+
+### How many workspaces and agents can I create?
+
+No practical limits. Even hundreds of agents should not sweat the machine, but it might get very expensive in terms of tokens. 😊
 
 ## Models: defaults, selection, aliases, switching
 
