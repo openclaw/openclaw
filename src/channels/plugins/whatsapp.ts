@@ -109,6 +109,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: Boolean(account.authDir),
+      linked: Boolean(account.authDir),
       dmPolicy: account.dmPolicy,
       allowFrom: account.allowFrom,
     }),
