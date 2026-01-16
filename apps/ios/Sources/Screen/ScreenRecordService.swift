@@ -137,9 +137,11 @@ final class ScreenRecordService: @unchecked Sendable {
         recordQueue: DispatchQueue) -> @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
     {
         { sample, type, error in
+            let sampleBox = UncheckedSendableBox(value: sample)
             // ReplayKit can call the capture handler on a background queue.
             // Serialize writes to avoid queue asserts.
             recordQueue.async {
+                let sample = sampleBox.value
                 if let error {
                     state.withLock { state in
                         if state.handlerError == nil { state.handlerError = error }

@@ -32,11 +32,10 @@ func makeBridgeTLSOptions(_ params: BridgeTLSParams?) -> NWProtocolTLS.Options? 
     sec_protocol_options_set_verify_block(
         options.securityProtocolOptions,
         { _, trust, complete in
-            guard let trust else {
-                complete(false)
-                return
-            }
-            if let cert = SecTrustGetCertificateAtIndex(trust, 0) {
+            let trustRef = sec_trust_copy_ref(trust).takeRetainedValue()
+            if let chain = SecTrustCopyCertificateChain(trustRef) as? [SecCertificate],
+               let cert = chain.first
+            {
                 let data = SecCertificateCopyData(cert) as Data
                 let fingerprint = sha256Hex(data)
                 if let expected {
@@ -49,7 +48,7 @@ func makeBridgeTLSOptions(_ params: BridgeTLSParams?) -> NWProtocolTLS.Options? 
                     return
                 }
             }
-            let ok = SecTrustEvaluateWithError(trust, nil)
+            let ok = SecTrustEvaluateWithError(trustRef, nil)
             complete(ok)
         },
         DispatchQueue(label: "com.clawdbot.bridge.tls.verify"))
