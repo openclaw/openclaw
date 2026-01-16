@@ -19,6 +19,7 @@ import {
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
+  applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
@@ -27,6 +28,7 @@ import {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setVercelAiGatewayApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -189,6 +191,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "ai-gateway-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "vercel-ai-gateway",
+      cfg: baseConfig,
+      flagValue: opts.aiGatewayApiKey,
+      flagName: "--ai-gateway-api-key",
+      envVar: "AI_GATEWAY_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setVercelAiGatewayApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "vercel-ai-gateway:default",
+      provider: "vercel-ai-gateway",
+      mode: "api_key",
+    });
+    return applyVercelAiGatewayConfig(nextConfig);
   }
 
   if (authChoice === "moonshot-api-key") {

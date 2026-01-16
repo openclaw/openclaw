@@ -93,6 +93,13 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 - CLI: `clawdbot onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
 
+### Vercel AI Gateway
+
+- Provider: `vercel-ai-gateway`
+- Auth: `AI_GATEWAY_API_KEY`
+- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.5`
+- CLI: `clawdbot onboard --auth-choice ai-gateway-api-key`
+
 ### Other built-in providers
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)

@@ -5,7 +5,11 @@ import {
   SYNTHETIC_MODEL_CATALOG,
 } from "../agents/synthetic-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { OPENROUTER_DEFAULT_MODEL_REF, ZAI_DEFAULT_MODEL_REF } from "./onboard-auth.credentials.js";
+import {
+  OPENROUTER_DEFAULT_MODEL_REF,
+  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  ZAI_DEFAULT_MODEL_REF,
+} from "./onboard-auth.credentials.js";
 import {
   buildMoonshotModelDefinition,
   MOONSHOT_BASE_URL,
@@ -55,6 +59,47 @@ export function applyOpenrouterProviderConfig(cfg: ClawdbotConfig): ClawdbotConf
       defaults: {
         ...cfg.agents?.defaults,
         models,
+      },
+    },
+  };
+}
+
+export function applyVercelAiGatewayProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF] = {
+    ...models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF],
+    alias: models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Vercel AI Gateway",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyVercelAiGatewayConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyVercelAiGatewayProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+        },
       },
     },
   };
