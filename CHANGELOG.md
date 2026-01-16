@@ -91,6 +91,7 @@
 - macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
 - Groups: treat replies to the bot as implicit mentions across supported channels.
+- Security: bump `tar` to 7.5.3 to fix GHSA-8qq5-rm4j-mr97.
 
 ## 2026.1.14-1
 

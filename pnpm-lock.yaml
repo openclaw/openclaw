@@ -126,8 +126,8 @@ importers:
         specifier: ^0.34.5
         version: 0.34.5
       tar:
-        specifier: ^7.5.2
-        version: 7.5.2
+        specifier: ^7.5.3
+        version: 7.5.3
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -3922,8 +3922,8 @@ packages:
     resolution: {integrity: sha512-DZ4yORTwrbTj/7MZYq2w+/ZFdI6OZ/f9SFHR+71gIVUZhOQPHzVCLpvRnPgyaMpfWxxk/4ONva3GQSyNIKRv6A==}
     engines: {node: '>=10'}
 
-  tar@7.5.2:
-    resolution: {integrity: sha512-7NyxrTE4Anh8km8iEy7o0QYPs+0JKBTj5ZaqHg6B39erLg0qYXN3BijtShwbsNSvQ+LN75+KV+C4QR/f6Gwnpg==}
+  tar@7.5.3:
+    resolution: {integrity: sha512-ENg5JUHUm2rDD7IvKNFGzyElLXNjachNLp6RaGf4+JOgxXHkqA+gq81ZAMCUmtMtqBsoU62lcp6S27g1LCYGGQ==}
     engines: {node: '>=18'}
 
   thenify-all@1.6.0:
@@ -8522,7 +8522,7 @@ snapshots:
       yallist: 4.0.0
     optional: true
 
-  tar@7.5.2:
+  tar@7.5.3:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0
