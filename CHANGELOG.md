@@ -27,7 +27,6 @@
 - TUI: show provider/model labels for the active session and default model.
 - Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
 - UI: show gateway auth guidance + doc link on unauthorized Control UI connections.
-- UI: add session deletion action in Control UI sessions list. (#1017) — thanks @Szpadel.
 - Security: warn on weak model tiers (Haiku, below GPT-5, below Claude 4.5) in `clawdbot security audit`.
 - Apps: store node auth tokens encrypted (Keychain/SecurePrefs).
 - Cron: isolated cron jobs now start a fresh session id on every run to prevent context buildup.
@@ -59,7 +58,6 @@
 ### Fixes
 - Messages: make `/stop` clear queued followups and pending session lane work for a hard abort.
 - Messages: make `/stop` abort active sub-agent runs spawned from the requester session and report how many were stopped.
-- Sessions: ensure `sessions.delete` clears queues, aborts embedded runs, and stops sub-agents before deletion.
 - WhatsApp: default response prefix only for self-chat, using identity name when set.
 - Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
 - Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.
@@ -71,7 +69,7 @@
 - Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
 - Agents: avoid false positives when logging unsupported Google tool schema keywords.
 - Agents: skip Gemini history downgrades for google-antigravity to preserve tool calls. (#894) — thanks @mukhtharcm.
-- Agents: map Z.AI thinking to on/off in UI/TUI and drop the pi-agent-core patch now that upstream handles binary thinking.
+- Agents: drop unsigned Gemini tool calls (and matching results) from context to prevent tool-call markup leakage across models.
 - Status: restore usage summary line for current provider when no OAuth profiles exist.
 - Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.
 - Fix: refactor session store updates, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.

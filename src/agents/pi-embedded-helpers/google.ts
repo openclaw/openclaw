@@ -16,9 +16,9 @@ export function isAntigravityClaude(api?: string | null, modelId?: string): bool
 export { sanitizeGoogleTurnOrdering };
 
 /**
- * Downgrades tool calls that are missing `thought_signature` (required by Gemini)
- * into text representations, to prevent 400 INVALID_ARGUMENT errors.
- * Also converts corresponding tool results into user messages.
+ * Drops tool calls that are missing `thought_signature` (required by Gemini)
+ * to prevent 400 INVALID_ARGUMENT errors. Matching tool results are dropped
+ * so they don't become orphaned in the transcript.
  */
 type GeminiToolCallBlock = {
   type?: unknown;
@@ -86,7 +86,7 @@ export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMe
 }
 
 export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[] {
-  const downgradedIds = new Set<string>();
+  const droppedToolCallIds = new Set<string>();
   const out: AgentMessage[] = [];
 
   const resolveToolResultId = (
@@ -113,9 +113,9 @@ export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[]
         continue;
       }
 
-      let hasDowngraded = false;
-      const newContent = assistantMsg.content.map((block) => {
-        if (!block || typeof block !== "object") return block;
+      let dropped = false;
+      const nextContent = assistantMsg.content.filter((block) => {
+        if (!block || typeof block !== "object") return true;
         const blockRecord = block as GeminiToolCallBlock;
         const type = blockRecord.type;
         if (type === "toolCall" || type === "functionCall" || type === "toolUse") {
@@ -128,64 +128,26 @@ export function downgradeGeminiHistory(messages: AgentMessage[]): AgentMessage[]
                 : typeof blockRecord.toolCallId === "string"
                   ? blockRecord.toolCallId
                   : undefined;
-            const name =
-              typeof blockRecord.name === "string"
-                ? blockRecord.name
-                : typeof blockRecord.toolName === "string"
-                  ? blockRecord.toolName
-                  : undefined;
-            const args =
-              blockRecord.arguments !== undefined ? blockRecord.arguments : blockRecord.input;
-
-            if (id) downgradedIds.add(id);
-            hasDowngraded = true;
-
-            const argsText = typeof args === "string" ? args : JSON.stringify(args, null, 2);
-
-            return {
-              type: "text",
-              text: `[Tool Call: ${name ?? "unknown"}${
-                id ? ` (ID: ${id})` : ""
-              }]\nArguments: ${argsText}`,
-            };
+            if (id) droppedToolCallIds.add(id);
+            dropped = true;
+            return false;
           }
         }
-        return block;
+        return true;
       });
 
-      out.push(hasDowngraded ? ({ ...assistantMsg, content: newContent } as AgentMessage) : msg);
+      if (dropped && nextContent.length === 0) {
+        continue;
+      }
+
+      out.push(dropped ? ({ ...assistantMsg, content: nextContent } as AgentMessage) : msg);
       continue;
     }
 
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const toolResultId = resolveToolResultId(toolMsg);
-      if (toolResultId && downgradedIds.has(toolResultId)) {
-        let textContent = "";
-        if (Array.isArray(toolMsg.content)) {
-          textContent = toolMsg.content
-            .map((entry) => {
-              if (entry && typeof entry === "object") {
-                const text = (entry as { text?: unknown }).text;
-                if (typeof text === "string") return text;
-              }
-              return JSON.stringify(entry);
-            })
-            .join("\n");
-        } else {
-          textContent = JSON.stringify(toolMsg.content);
-        }
-
-        out.push({
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `[Tool Result for ID ${toolResultId}]\n${textContent}`,
-            },
-          ],
-        } as AgentMessage);
-
+      if (toolResultId && droppedToolCallIds.has(toolResultId)) {
         continue;
       }
     }
