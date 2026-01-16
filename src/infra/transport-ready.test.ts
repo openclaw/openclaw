@@ -37,4 +37,18 @@ describe("waitForTransportReady", () => {
     ).rejects.toThrow("test transport not ready");
     expect(runtime.error).toHaveBeenCalled();
   });
+
+  it("returns early when aborted", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const controller = new AbortController();
+    controller.abort();
+    await waitForTransportReady({
+      label: "test transport",
+      timeoutMs: 200,
+      runtime,
+      abortSignal: controller.signal,
+      check: async () => ({ ok: false, error: "still down" }),
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 });
