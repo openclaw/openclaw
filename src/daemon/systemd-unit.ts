@@ -76,7 +76,7 @@ export function parseSystemdExecStart(value: string): string[] {
       inQuotes = !inQuotes;
       continue;
     }
-    if (!inQuotes && /\\s/.test(char)) {
+    if (!inQuotes && /\s/.test(char)) {
       if (current) {
         args.push(current);
         current = "";
