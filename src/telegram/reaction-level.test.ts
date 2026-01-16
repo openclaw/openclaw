@@ -18,16 +18,16 @@ describe("resolveTelegramReactionLevel", () => {
     }
   });
 
-  it("defaults to ack level when reactionLevel is not set", () => {
+  it("defaults to minimal level when reactionLevel is not set", () => {
     const cfg: ClawdbotConfig = {
       channels: { telegram: {} },
     };
 
     const result = resolveTelegramReactionLevel({ cfg });
-    expect(result.level).toBe("ack");
-    expect(result.ackEnabled).toBe(true);
-    expect(result.agentReactionsEnabled).toBe(false);
-    expect(result.agentReactionGuidance).toBeUndefined();
+    expect(result.level).toBe("minimal");
+    expect(result.ackEnabled).toBe(false);
+    expect(result.agentReactionsEnabled).toBe(true);
+    expect(result.agentReactionGuidance).toBe("minimal");
   });
 
   it("returns off level with no reactions enabled", () => {

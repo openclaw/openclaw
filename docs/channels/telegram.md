@@ -506,7 +506,7 @@ Provider options:
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
 - `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
-- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `ack` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).
