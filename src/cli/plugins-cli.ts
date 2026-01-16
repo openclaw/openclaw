@@ -49,6 +49,9 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.version) parts.push(`  version: ${plugin.version}`);
+  if (plugin.providerIds.length > 0) {
+    parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
+  }
   if (plugin.error) parts.push(chalk.red(`  error: ${plugin.error}`));
   return parts.join("\n");
 }
@@ -137,6 +140,9 @@ export function registerPluginsCli(program: Command) {
       }
       if (plugin.gatewayMethods.length > 0) {
         lines.push(`Gateway methods: ${plugin.gatewayMethods.join(", ")}`);
+      }
+      if (plugin.providerIds.length > 0) {
+        lines.push(`Providers: ${plugin.providerIds.join(", ")}`);
       }
       if (plugin.cliCommands.length > 0) {
         lines.push(`CLI commands: ${plugin.cliCommands.join(", ")}`);
