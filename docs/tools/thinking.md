@@ -14,6 +14,8 @@ read_when:
   - high → “ultrathink” (max budget)
   - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
   - `highest`, `max` map to `high`.
+- Provider notes:
+  - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
 
 ## Resolution order
 1. Inline directive on the message (applies only to that message).

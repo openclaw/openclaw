@@ -214,9 +214,6 @@
       "@sinclair/typebox": "0.34.47",
       "hono": "4.11.4",
       "tar": "7.5.3"
-    },
-    "patchedDependencies": {
-      "@mariozechner/pi-agent-core@0.46.0": "patches/@mariozechner__pi-agent-core.patch"
     }
   },
   "vitest": {

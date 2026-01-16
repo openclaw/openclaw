@@ -1,5 +1,5 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import { formatThinkingLevels, listThinkingLevels } from "../auto-reply/thinking.js";
+import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
 const REASONING_LEVELS = ["on", "off"];
@@ -33,7 +33,7 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = listThinkingLevels(options.provider, options.model);
+  const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
   return [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },

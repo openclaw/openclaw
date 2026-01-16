@@ -70,6 +70,7 @@
 - Daemon: fix profile-aware service label resolution (env-driven) and add coverage for launchd/systemd/schtasks. (#969) — thanks @bjesuiter.
 - Agents: avoid false positives when logging unsupported Google tool schema keywords.
 - Agents: skip Gemini history downgrades for google-antigravity to preserve tool calls. (#894) — thanks @mukhtharcm.
+- Agents: map Z.AI thinking to on/off in UI/TUI and drop the pi-agent-core patch now that upstream handles binary thinking.
 - Status: restore usage summary line for current provider when no OAuth profiles exist.
 - Fix: guard model fallback against undefined provider/model values. (#954) — thanks @roshanasingh4.
 - Fix: refactor session store updates, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.

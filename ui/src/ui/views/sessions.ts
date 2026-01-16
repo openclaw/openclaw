@@ -32,12 +32,41 @@ export type SessionsProps = {
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high"] as const;
+const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
   { value: "off", label: "off (explicit)" },
   { value: "on", label: "on" },
 ] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
+
+function normalizeProviderId(provider?: string | null): string {
+  if (!provider) return "";
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+  return normalized;
+}
+
+function isBinaryThinkingProvider(provider?: string | null): boolean {
+  return normalizeProviderId(provider) === "zai";
+}
+
+function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
+  return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+}
+
+function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
+  if (!isBinary) return value;
+  if (!value || value === "off") return value;
+  return "on";
+}
+
+function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+  if (!value) return null;
+  if (!isBinary) return value;
+  if (value === "on") return "low";
+  return value;
+}
 
 export function renderSessions(props: SessionsProps) {
   const rows = props.result?.sessions ?? [];
@@ -143,7 +172,10 @@ function renderRow(
   onPatch: SessionsProps["onPatch"],
 ) {
   const updated = row.updatedAt ? formatAgo(row.updatedAt) : "n/a";
-  const thinking = row.thinkingLevel ?? "";
+  const rawThinking = row.thinkingLevel ?? "";
+  const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
+  const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
+  const thinkLevels = resolveThinkLevelOptions(row.modelProvider);
   const verbose = row.verboseLevel ?? "";
   const reasoning = row.reasoningLevel ?? "";
   const displayName = row.displayName ?? row.key;
@@ -166,10 +198,12 @@ function renderRow(
           .value=${thinking}
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
-            onPatch(row.key, { thinkingLevel: value || null });
+            onPatch(row.key, {
+              thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
+            });
           }}
         >
-          ${THINK_LEVELS.map((level) =>
+          ${thinkLevels.map((level) =>
             html`<option value=${level}>${level || "inherit"}</option>`,
           )}
         </select>

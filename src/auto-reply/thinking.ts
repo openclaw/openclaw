@@ -4,6 +4,17 @@ export type ElevatedLevel = "off" | "on";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "on";
 
+function normalizeProviderId(provider?: string | null): string {
+  if (!provider) return "";
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+  return normalized;
+}
+
+export function isBinaryThinkingProvider(provider?: string | null): boolean {
+  return normalizeProviderId(provider) === "zai";
+}
+
 export const XHIGH_MODEL_REFS = [
   "openai/gpt-5.2",
   "openai-codex/gpt-5.2-codex",
@@ -22,6 +33,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (!raw) return undefined;
   const key = raw.toLowerCase();
   if (["off"].includes(key)) return "off";
+  if (["on", "enable", "enabled"].includes(key)) return "low";
   if (["min", "minimal"].includes(key)) return "minimal";
   if (["low", "thinkhard", "think-hard", "think_hard"].includes(key)) return "low";
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key))
@@ -49,12 +61,20 @@ export function listThinkingLevels(provider?: string | null, model?: string | nu
   return levels;
 }
 
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+): string[] {
+  if (isBinaryThinkingProvider(provider)) return ["off", "on"];
+  return listThinkingLevels(provider, model);
+}
+
 export function formatThinkingLevels(
   provider?: string | null,
   model?: string | null,
   separator = ", ",
 ): string {
-  return listThinkingLevels(provider, model).join(separator);
+  return listThinkingLevelLabels(provider, model).join(separator);
 }
 
 export function formatXHighModelHint(): string {
