@@ -538,7 +538,7 @@ async function maybeProbeGateway(params: {
     return { token, password };
   };
 
-  const auth = remoteUrlMissing ? resolveAuth("local") : resolveAuth("remote");
+  const auth = !isRemoteMode || remoteUrlMissing ? resolveAuth("local") : resolveAuth("remote");
   const res = await params.probe({ url, auth, timeoutMs: params.timeoutMs }).catch((err) => ({
     ok: false,
     url,
