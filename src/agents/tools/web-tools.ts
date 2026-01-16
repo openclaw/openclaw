@@ -118,6 +118,11 @@ function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boole
   return true;
 }
 
+function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
+  if (typeof fetch?.readability === "boolean") return fetch.readability;
+  return true;
+}
+
 function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   const fromConfig =
     search && "apiKey" in search && typeof search.apiKey === "string" ? search.apiKey.trim() : "";
@@ -300,6 +305,37 @@ async function readResponseText(res: Response): Promise<string> {
   }
 }
 
+export async function extractReadableContent(params: {
+  html: string;
+  url: string;
+  extractMode: (typeof EXTRACT_MODES)[number];
+}): Promise<{ text: string; title?: string } | null> {
+  try {
+    const [{ Readability }, { parseHTML }] = await Promise.all([
+      import("@mozilla/readability"),
+      import("linkedom"),
+    ]);
+    const { document } = parseHTML(params.html);
+    try {
+      (document as { baseURI?: string }).baseURI = params.url;
+    } catch {
+      // Best-effort base URI for relative links.
+    }
+    const reader = new Readability(document, { charThreshold: 0 });
+    const parsed = reader.parse();
+    if (!parsed?.content) return null;
+    const title = parsed.title || undefined;
+    if (params.extractMode === "text") {
+      const text = normalizeWhitespace(parsed.textContent ?? "");
+      return { text, title };
+    }
+    const rendered = htmlToMarkdown(parsed.content);
+    return { text: rendered.text, title: title ?? rendered.title };
+  } catch {
+    return null;
+  }
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -377,6 +413,7 @@ async function runWebFetch(params: {
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
+  readabilityEnabled: boolean;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
@@ -415,9 +452,25 @@ async function runWebFetch(params: {
   let title: string | undefined;
   let text = body;
   if (contentType.includes("text/html")) {
-    const parsed = params.extractMode === "text" ? htmlToText(body) : htmlToMarkdown(body);
-    text = parsed.text;
-    title = parsed.title;
+    if (params.readabilityEnabled) {
+      const readable = await extractReadableContent({
+        html: body,
+        url: res.url || params.url,
+        extractMode: params.extractMode,
+      });
+      if (readable?.text) {
+        text = readable.text;
+        title = readable.title;
+      } else {
+        const parsed = params.extractMode === "text" ? htmlToText(body) : htmlToMarkdown(body);
+        text = parsed.text;
+        title = parsed.title;
+      }
+    } else {
+      const parsed = params.extractMode === "text" ? htmlToText(body) : htmlToMarkdown(body);
+      text = parsed.text;
+      title = parsed.title;
+    }
   } else if (contentType.includes("application/json")) {
     try {
       text = JSON.stringify(JSON.parse(body), null, 2);
@@ -490,6 +543,7 @@ export function createWebFetchTool(options?: {
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) return null;
+  const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     `clawdbot/${VERSION}`;
@@ -511,6 +565,7 @@ export function createWebFetchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
+        readabilityEnabled,
       });
       return jsonResult(result);
     },

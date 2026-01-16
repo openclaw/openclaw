@@ -262,6 +262,8 @@ const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.readability":
+    "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.slack.thread.historyScope":

@@ -1709,11 +1709,12 @@ Legacy: `tools.bash` is still accepted as an alias.
 - `tools.web.search.maxResults` (1–10, default 5)
 - `tools.web.search.timeoutSeconds` (default 30)
 - `tools.web.search.cacheTtlMinutes` (default 15)
-- `tools.web.fetch.enabled` (default false; sandboxed sessions auto-enable unless set to false)
+- `tools.web.fetch.enabled` (default true)
 - `tools.web.fetch.maxChars` (default 50000)
 - `tools.web.fetch.timeoutSeconds` (default 30)
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.userAgent` (optional override)
+- `tools.web.fetch.readability` (default true; disable to use basic HTML cleanup only)
 
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.

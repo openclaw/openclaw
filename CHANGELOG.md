@@ -18,6 +18,7 @@
 - CLI/macOS: sync remote SSH target/identity to config and let `gateway status` auto-infer SSH targets (ssh-config aware).
 - Telegram: scope inline buttons with allowlist default + callback gating in DMs/groups.
 - Telegram: default reaction notifications to own.
+- Tools: improve `web_fetch` extraction using Readability (with fallback).
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
@@ -95,7 +96,7 @@
 - macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
 - Groups: treat replies to the bot as implicit mentions across supported channels.
-- Security: bump `tar` to 7.5.3 to fix GHSA-8qq5-rm4j-mr97.
+- Security: bump dependency `tar` to 7.5.3 to fix GHSA-8qq5-rm4j-mr97.
 
 ## 2026.1.14-1
 
