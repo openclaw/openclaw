@@ -28,6 +28,34 @@ export function isLoopbackHost(host: string) {
   );
 }
 
+export function getHeadersWithAuth(
+  url: string,
+  headers: Record<string, string> = {},
+) {
+  try {
+    const parsed = new URL(url);
+    const hasAuthHeader = Object.keys(headers).some(
+      (key) => key.toLowerCase() === "authorization",
+    );
+    if (hasAuthHeader) return headers;
+    if (parsed.username || parsed.password) {
+      const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
+      return { ...headers, Authorization: `Basic ${auth}` };
+    }
+  } catch {
+    // ignore
+  }
+  return headers;
+}
+
+export function appendCdpPath(cdpUrl: string, path: string): string {
+  const url = new URL(cdpUrl);
+  const basePath = url.pathname.replace(/\/$/, "");
+  const suffix = path.startsWith("/") ? path : `/${path}`;
+  url.pathname = `${basePath}${suffix}`;
+  return url.toString();
+}
+
 function createCdpSender(ws: WebSocket) {
   let nextId = 1;
   const pending = new Map<number, Pending>();
@@ -75,13 +103,40 @@ function createCdpSender(ws: WebSocket) {
   return { send, closeWithError };
 }
 
-export async function fetchJson<T>(url: string, timeoutMs = 1500): Promise<T> {
+export async function fetchJson<T>(
+  url: string,
+  timeoutMs = 1500,
+  init?: RequestInit,
+): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const headers = getHeadersWithAuth(
+      url,
+      (init?.headers as Record<string, string>) || {},
+    );
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export async function fetchOk(
+  url: string,
+  timeoutMs = 1500,
+  init?: RequestInit,
+): Promise<void> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const headers = getHeadersWithAuth(
+      url,
+      (init?.headers as Record<string, string>) || {},
+    );
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } finally {
     clearTimeout(t);
   }
@@ -90,8 +145,13 @@ export async function fetchJson<T>(url: string, timeoutMs = 1500): Promise<T> {
 export async function withCdpSocket<T>(
   wsUrl: string,
   fn: (send: CdpSendFn) => Promise<T>,
+  opts?: { headers?: Record<string, string> },
 ): Promise<T> {
-  const ws = new WebSocket(wsUrl, { handshakeTimeout: 5000 });
+  const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
+  const ws = new WebSocket(wsUrl, {
+    handshakeTimeout: 5000,
+    ...(Object.keys(headers).length ? { headers } : {}),
+  });
   const { send, closeWithError } = createCdpSender(ws);
 
   const openPromise = new Promise<void>((resolve, reject) => {
