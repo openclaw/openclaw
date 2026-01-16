@@ -21,6 +21,8 @@ clawdbot plugins info <id>
 clawdbot plugins enable <id>
 clawdbot plugins disable <id>
 clawdbot plugins doctor
+clawdbot plugins update <id>
+clawdbot plugins update --all
 ```
 
 ### Install
@@ -31,3 +33,12 @@ clawdbot plugins install <npm-spec>
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
 
+### Update
+
+```bash
+clawdbot plugins update <id>
+clawdbot plugins update --all
+clawdbot plugins update <id> --dry-run
+```
+
+Updates only apply to plugins installed from npm (tracked in `plugins.installs`).

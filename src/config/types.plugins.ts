@@ -8,6 +8,15 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
+export type PluginInstallRecord = {
+  source: "npm" | "archive" | "path";
+  spec?: string;
+  sourcePath?: string;
+  installPath?: string;
+  version?: string;
+  installedAt?: string;
+};
+
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
@@ -17,4 +26,5 @@ export type PluginsConfig = {
   deny?: string[];
   load?: PluginsLoadConfig;
   entries?: Record<string, PluginEntryConfig>;
+  installs?: Record<string, PluginInstallRecord>;
 };

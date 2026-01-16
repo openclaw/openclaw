@@ -172,6 +172,61 @@ describe("installPluginFromArchive", () => {
     expect(second.error).toContain("already exists");
   });
 
+  it("allows updates when mode is update", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@clawdbot/voice-call",
+        version: "0.0.1",
+        clawdbot: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const archiveV1 = packToArchive({
+      pkgDir,
+      outDir: workDir,
+      outName: "plugin-v1.tgz",
+    });
+
+    const archiveV2 = (() => {
+      fs.writeFileSync(
+        path.join(pkgDir, "package.json"),
+        JSON.stringify({
+          name: "@clawdbot/voice-call",
+          version: "0.0.2",
+          clawdbot: { extensions: ["./dist/index.js"] },
+        }),
+        "utf-8",
+      );
+      return packToArchive({
+        pkgDir,
+        outDir: workDir,
+        outName: "plugin-v2.tgz",
+      });
+    })();
+
+    const result = await withStateDir(stateDir, async () => {
+      const { installPluginFromArchive } = await import("./install.js");
+      const first = await installPluginFromArchive({ archivePath: archiveV1 });
+      const second = await installPluginFromArchive({ archivePath: archiveV2, mode: "update" });
+      return { first, second };
+    });
+
+    expect(result.first.ok).toBe(true);
+    expect(result.second.ok).toBe(true);
+    if (!result.second.ok) return;
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(result.second.targetDir, "package.json"), "utf-8"),
+    ) as { version?: string };
+    expect(manifest.version).toBe("0.0.2");
+  });
+
   it("rejects packages without clawdbot.extensions", async () => {
     const stateDir = makeTempDir();
     const workDir = makeTempDir();

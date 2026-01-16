@@ -102,7 +102,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Cla
   if (!watchEnabled) {
     if (existing) {
       watchers.delete(workspaceDir);
-      existing.timer && clearTimeout(existing.timer);
+      if (existing.timer) clearTimeout(existing.timer);
       void existing.watcher.close().catch(() => {});
     }
     return;
@@ -115,7 +115,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Cla
   }
   if (existing) {
     watchers.delete(workspaceDir);
-    existing.timer && clearTimeout(existing.timer);
+    if (existing.timer) clearTimeout(existing.timer);
     void existing.watcher.close().catch(() => {});
   }
 
