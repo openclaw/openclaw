@@ -260,10 +260,56 @@ const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = 
   { id: "openai.gpt4_legacy", re: /\bgpt-4-(0314|0613)\b/i, label: "Legacy GPT-4 snapshots" },
 ];
 
+const WEAK_TIER_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
+  { id: "anthropic.haiku", re: /\bhaiku\b/i, label: "Haiku tier (smaller model)" },
+];
+
+function isGptModel(id: string): boolean {
+  return /\bgpt-/i.test(id);
+}
+
+function isGpt5OrHigher(id: string): boolean {
+  return /\bgpt-5(?:\b|[.-])/i.test(id);
+}
+
+function isClaudeModel(id: string): boolean {
+  return /\bclaude-/i.test(id);
+}
+
+function isClaude45OrHigher(id: string): boolean {
+  return /\bclaude-[^\s/]*?(?:-4-5\b|4\.5\b)/i.test(id);
+}
+
 export function collectModelHygieneFindings(cfg: ClawdbotConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(cfg);
   if (models.length === 0) return findings;
+
+  const weakMatches = new Map<string, { model: string; source: string; reasons: string[] }>();
+  const addWeakMatch = (model: string, source: string, reason: string) => {
+    const key = `${model}@@${source}`;
+    const existing = weakMatches.get(key);
+    if (!existing) {
+      weakMatches.set(key, { model, source, reasons: [reason] });
+      return;
+    }
+    if (!existing.reasons.includes(reason)) existing.reasons.push(reason);
+  };
+
+  for (const entry of models) {
+    for (const pat of WEAK_TIER_MODEL_PATTERNS) {
+      if (pat.re.test(entry.id)) {
+        addWeakMatch(entry.id, entry.source, pat.label);
+        break;
+      }
+    }
+    if (isGptModel(entry.id) && !isGpt5OrHigher(entry.id)) {
+      addWeakMatch(entry.id, entry.source, "Below GPT-5 family");
+    }
+    if (isClaudeModel(entry.id) && !isClaude45OrHigher(entry.id)) {
+      addWeakMatch(entry.id, entry.source, "Below Claude 4.5");
+    }
+  }
 
   const matches: Array<{ model: string; source: string; reason: string }> = [];
   for (const entry of models) {
@@ -290,6 +336,25 @@ export function collectModelHygieneFindings(cfg: ClawdbotConfig): SecurityAuditF
         lines +
         more,
       remediation: "Prefer modern, instruction-hardened models for any bot that can run tools.",
+    });
+  }
+
+  if (weakMatches.size > 0) {
+    const lines = Array.from(weakMatches.values())
+      .slice(0, 12)
+      .map((m) => `- ${m.model} (${m.reasons.join("; ")}) @ ${m.source}`)
+      .join("\n");
+    const more = weakMatches.size > 12 ? `\n…${weakMatches.size - 12} more` : "";
+    findings.push({
+      checkId: "models.weak_tier",
+      severity: "warn",
+      title: "Some configured models are below recommended tiers",
+      detail:
+        "Smaller/older models are generally more susceptible to prompt injection and tool misuse.\n" +
+        lines +
+        more,
+      remediation:
+        "Use the latest, top-tier model for any bot with tools or untrusted inboxes. Avoid Haiku tiers; prefer GPT-5+ and Claude 4.5+.",
     });
   }
 

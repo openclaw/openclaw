@@ -269,6 +269,24 @@ describe("security audit", () => {
     );
   });
 
+  it("warns on weak model tiers", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-haiku-4-5" } } },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "models.weak_tier", severity: "warn" }),
+      ]),
+    );
+  });
+
   it("warns when hooks token looks short", async () => {
     const cfg: ClawdbotConfig = {
       hooks: { enabled: true, token: "short" },
