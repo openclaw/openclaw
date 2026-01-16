@@ -106,7 +106,7 @@
 - macOS: format ConnectionsStore config to satisfy SwiftFormat lint. (#852) — thanks @mneves75.
 - macOS: pass auth token/password to dashboard URL for authenticated access. (#918) — thanks @rahthakor.
 - macOS: reuse launchd gateway auth and skip wizard when gateway config already exists. (#917)
-- macOS: prefer the default bridge tunnel port in remote mode for node bridge connectivity; document SSH tunnel/bridge ports. (#960, fixes #865) — thanks @kkarimi.
+- macOS: prefer the default bridge tunnel port in remote mode for node bridge connectivity; document macOS remote control + bridge tunnels. (#960, fixes #865) — thanks @kkarimi.
 - Apps: use canonical main session keys from gateway defaults across macOS/iOS/Android to avoid creating bare `main` sessions.
 - macOS: fix cron preview/testing payload to use `channel` key. (#867) — thanks @wes-davis.
 - Telegram: honor `channels.telegram.timeoutSeconds` for grammY API requests. (#863) — thanks @Snaver.
