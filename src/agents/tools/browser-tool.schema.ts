@@ -91,7 +91,7 @@ export const BrowserToolSchema = Type.Object({
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
-  format: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
+  snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
   refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
   interactive: Type.Optional(Type.Boolean()),
   compact: Type.Optional(Type.Boolean()),
