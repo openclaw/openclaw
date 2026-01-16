@@ -71,6 +71,7 @@
 - Fix: allow local Tailscale Serve hostnames without treating tailnet clients as direct. (#885) — thanks @oswalpalash.
 - Fix: reset sessions after role-ordering conflicts to recover from consecutive user turns. (#998)
 - Fix: keep background exec aborts from killing backgrounded sessions while honoring timeouts.
+- Fix: use local auth for gateway security probe unless remote mode has a URL. (#1011) — thanks @ivanrvpereira.
 - Discord: truncate skill command descriptions for slash command limits. (#1018) — thanks @evalexpr.
 
 ## 2026.1.14-1
