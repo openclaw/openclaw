@@ -148,6 +148,26 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   messaging: {
     normalizeTarget: normalizeZaloMessagingTarget,
   },
+  directory: {
+    self: async () => null,
+    listPeers: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveZaloAccount({ cfg: cfg as CoreConfig, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const peers = Array.from(
+        new Set(
+          (account.config.allowFrom ?? [])
+            .map((entry) => String(entry).trim())
+            .filter((entry) => Boolean(entry) && entry !== "*")
+            .map((entry) => entry.replace(/^(zalo|zl):/i, "")),
+        ),
+      )
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => ({ kind: "user", id }) as const);
+      return peers;
+    },
+    listGroups: async () => [],
+  },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
