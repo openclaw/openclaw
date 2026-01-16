@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import base64
 import datetime as dt
 import json
 import os
@@ -211,18 +212,21 @@ def main() -> int:
             args.output_format,
             args.style,
         )
-        # OpenAI Images API now returns URLs by default
-        image_url = res.get("data", [{}])[0].get("url")
-        if not image_url:
+        data = res.get("data", [{}])[0]
+        image_b64 = data.get("b64_json")
+        image_url = data.get("url")
+        if not image_b64 and not image_url:
             raise RuntimeError(f"Unexpected response: {json.dumps(res)[:400]}")
 
-        # Download image from URL
         filename = f"{idx:03d}-{slugify(prompt)[:40]}.{file_ext}"
         filepath = out_dir / filename
-        try:
-            urllib.request.urlretrieve(image_url, filepath)
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Failed to download image from {image_url}: {e}") from e
+        if image_b64:
+            filepath.write_bytes(base64.b64decode(image_b64))
+        else:
+            try:
+                urllib.request.urlretrieve(image_url, filepath)
+            except urllib.error.URLError as e:
+                raise RuntimeError(f"Failed to download image from {image_url}: {e}") from e
 
         items.append({"prompt": prompt, "file": filename})
 
