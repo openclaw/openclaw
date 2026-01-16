@@ -21,6 +21,8 @@ export type ResolvedBrowserConfig = {
   cdpProtocol: "http" | "https";
   cdpHost: string;
   cdpIsLoopback: boolean;
+  remoteCdpTimeoutMs: number;
+  remoteCdpHandshakeTimeoutMs: number;
   color: string;
   executablePath?: string;
   headless: boolean;
@@ -59,6 +61,11 @@ function normalizeHexColor(raw: string | undefined) {
   const normalized = value.startsWith("#") ? value : `#${value}`;
   if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) return DEFAULT_CLAWD_BROWSER_COLOR;
   return normalized.toUpperCase();
+}
+
+function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
+  const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
+  return value < 0 ? fallback : value;
 }
 
 export function parseHttpUrl(raw: string, label: string) {
@@ -149,6 +156,11 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
   );
   const controlPort = controlInfo.port;
   const defaultColor = normalizeHexColor(cfg?.color);
+  const remoteCdpTimeoutMs = normalizeTimeoutMs(cfg?.remoteCdpTimeoutMs, 1500);
+  const remoteCdpHandshakeTimeoutMs = normalizeTimeoutMs(
+    cfg?.remoteCdpHandshakeTimeoutMs,
+    Math.max(2000, remoteCdpTimeoutMs * 2),
+  );
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
 
@@ -206,6 +218,8 @@ export function resolveBrowserConfig(cfg: BrowserConfig | undefined): ResolvedBr
     cdpProtocol,
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
+    remoteCdpTimeoutMs,
+    remoteCdpHandshakeTimeoutMs,
     color: defaultColor,
     executablePath,
     headless,

@@ -19,6 +19,8 @@ describe("browser config", () => {
     expect(clawd?.driver).toBe("clawd");
     expect(clawd?.cdpPort).toBe(18800);
     expect(clawd?.cdpUrl).toBe("http://127.0.0.1:18800");
+    expect(resolved.remoteCdpTimeoutMs).toBe(1500);
+    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
 
   it("derives default ports from CLAWDBOT_GATEWAY_PORT when unset", () => {
@@ -50,6 +52,16 @@ describe("browser config", () => {
       color: "ff4500",
     });
     expect(resolved.color).toBe("#FF4500");
+  });
+
+  it("supports custom remote CDP timeouts", () => {
+    const resolved = resolveBrowserConfig({
+      controlUrl: "http://127.0.0.1:18791",
+      remoteCdpTimeoutMs: 2200,
+      remoteCdpHandshakeTimeoutMs: 5000,
+    });
+    expect(resolved.remoteCdpTimeoutMs).toBe(2200);
+    expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(5000);
   });
 
   it("falls back to default color for invalid hex", () => {
