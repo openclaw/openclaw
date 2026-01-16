@@ -9,6 +9,8 @@ read_when:
 
 Runtime baseline: **Node >=22**.
 
+If the installer says it succeeded but you later see `clawdbot: command not found`, it’s usually a Node/npm PATH issue. See: [Node.js + npm (PATH sanity)](/install/node).
+
 ## Recommended (installer script)
 
 ```bash

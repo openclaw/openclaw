@@ -734,6 +734,14 @@
       "destination": "/start/wizard"
     },
     {
+      "source": "/start/faq",
+      "destination": "/help"
+    },
+    {
+      "source": "/start/faq/",
+      "destination": "/help"
+    },
+    {
       "source": "/oauth",
       "destination": "/concepts/oauth"
     },
@@ -752,7 +760,6 @@
           "start/wizard",
           "start/setup",
           "start/pairing",
-          "start/faq",
           "start/clawd",
           "start/showcase",
           "start/hubs",
@@ -761,9 +768,18 @@
         ]
       },
       {
+        "group": "Help",
+        "pages": [
+          "help/index",
+          "help/troubleshooting",
+          "help/faq"
+        ]
+      },
+      {
         "group": "Install & Updates",
         "pages": [
           "install/index",
+          "install/node",
           "install/installer",
           "install/updating",
           "install/uninstall",

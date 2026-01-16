@@ -32,6 +32,7 @@
 - Cron: isolated cron jobs now start a fresh session id on every run to prevent context buildup.
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
+- Docs: add `/help` hub, Node/npm PATH sanity guide, and installer PATH warnings (for “installed but command not found” setups). (#861)
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
 - Agents: default to no narration for routine tool calls. (#1008) — thanks @cpojer.
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.

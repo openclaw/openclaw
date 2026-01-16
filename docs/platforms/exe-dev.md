@@ -99,7 +99,7 @@ It can set up:
 - model provider config/login
 - Linux systemd **user** service (daemon)
 
-If you’re doing OAuth on a headless VM: do OAuth on a normal machine first, then copy the auth profile to the VM (see [FAQ](/start/faq)).
+If you’re doing OAuth on a headless VM: do OAuth on a normal machine first, then copy the auth profile to the VM (see [Help](/help)).
 
 ## 5) Remote access options
 
