@@ -57,7 +57,7 @@ import {
   updateTelegramForm,
 } from "./controllers/connections";
 import { loadPresence } from "./controllers/presence";
-import { loadSessions, patchSession } from "./controllers/sessions";
+import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
 import {
   installSkill,
   loadSkills,
@@ -277,11 +277,12 @@ export function renderApp(state: AppViewState) {
                 state.sessionsFilterLimit = next.limit;
                 state.sessionsIncludeGlobal = next.includeGlobal;
                 state.sessionsIncludeUnknown = next.includeUnknown;
-              },
-              onRefresh: () => loadSessions(state),
-              onPatch: (key, patch) => patchSession(state, key, patch),
-            })
-          : nothing}
+	              },
+	              onRefresh: () => loadSessions(state),
+	              onPatch: (key, patch) => patchSession(state, key, patch),
+	              onDelete: (key) => deleteSession(state, key),
+	            })
+	          : nothing}
 
         ${state.tab === "cron"
           ? renderCron({

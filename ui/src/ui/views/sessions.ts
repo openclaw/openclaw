@@ -29,6 +29,7 @@ export type SessionsProps = {
       reasoningLevel?: string | null;
     },
   ) => void;
+  onDelete: (key: string) => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high"] as const;
@@ -157,10 +158,13 @@ export function renderSessions(props: SessionsProps) {
           <div>Thinking</div>
           <div>Verbose</div>
           <div>Reasoning</div>
+          <div>Actions</div>
         </div>
         ${rows.length === 0
           ? html`<div class="muted">No sessions found.</div>`
-          : rows.map((row) => renderRow(row, props.basePath, props.onPatch))}
+          : rows.map((row) =>
+              renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+            )}
       </div>
     </section>
   `;
@@ -170,6 +174,8 @@ function renderRow(
   row: GatewaySessionRow,
   basePath: string,
   onPatch: SessionsProps["onPatch"],
+  onDelete: SessionsProps["onDelete"],
+  disabled: boolean,
 ) {
   const updated = row.updatedAt ? formatAgo(row.updatedAt) : "n/a";
   const rawThinking = row.thinkingLevel ?? "";
@@ -196,6 +202,7 @@ function renderRow(
       <div>
         <select
           .value=${thinking}
+          ?disabled=${disabled}
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, {
@@ -211,6 +218,7 @@ function renderRow(
       <div>
         <select
           .value=${verbose}
+          ?disabled=${disabled}
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, { verboseLevel: value || null });
@@ -224,6 +232,7 @@ function renderRow(
       <div>
         <select
           .value=${reasoning}
+          ?disabled=${disabled}
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, { reasoningLevel: value || null });
@@ -233,6 +242,11 @@ function renderRow(
             html`<option value=${level}>${level || "inherit"}</option>`,
           )}
         </select>
+      </div>
+      <div>
+        <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
+          Delete
+        </button>
       </div>
     </div>
   `;
