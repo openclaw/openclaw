@@ -54,6 +54,10 @@ vi.mock("./client.js", () => ({
   }),
 }));
 
+vi.mock("./probe.js", () => ({
+  probeIMessage: vi.fn(async () => ({ ok: true })),
+}));
+
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForSubscribe() {
