@@ -14,6 +14,7 @@ public struct ClawdbotChatView: View {
     @State private var hasPerformedInitialScroll = false
     private let showsSessionSwitcher: Bool
     private let style: Style
+    private let markdownVariant: ChatMarkdownVariant
     private let userAccent: Color?
 
     private enum Layout {
@@ -42,11 +43,13 @@ public struct ClawdbotChatView: View {
         viewModel: ClawdbotChatViewModel,
         showsSessionSwitcher: Bool = false,
         style: Style = .standard,
+        markdownVariant: ChatMarkdownVariant = .standard,
         userAccent: Color? = nil)
     {
         self._viewModel = State(initialValue: viewModel)
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
+        self.markdownVariant = markdownVariant
         self.userAccent = userAccent
     }
 
@@ -151,7 +154,11 @@ public struct ClawdbotChatView: View {
     @ViewBuilder
     private var messageListRows: some View {
         ForEach(self.visibleMessages) { msg in
-            ChatMessageBubble(message: msg, style: self.style, userAccent: self.userAccent)
+            ChatMessageBubble(
+                message: msg,
+                style: self.style,
+                markdownVariant: self.markdownVariant,
+                userAccent: self.userAccent)
                 .frame(
                     maxWidth: .infinity,
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)

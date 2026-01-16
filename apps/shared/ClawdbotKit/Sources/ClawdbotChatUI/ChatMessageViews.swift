@@ -1,7 +1,6 @@
 import ClawdbotKit
 import Foundation
 import SwiftUI
-import Textual
 
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
@@ -138,10 +137,16 @@ private struct ChatBubbleShape: InsettableShape {
 struct ChatMessageBubble: View {
     let message: ClawdbotChatMessage
     let style: ClawdbotChatView.Style
+    let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
 
     var body: some View {
-        ChatMessageBody(message: self.message, isUser: self.isUser, style: self.style, userAccent: self.userAccent)
+        ChatMessageBody(
+            message: self.message,
+            isUser: self.isUser,
+            style: self.style,
+            markdownVariant: self.markdownVariant,
+            userAccent: self.userAccent)
             .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(.horizontal, 2)
@@ -155,6 +160,7 @@ private struct ChatMessageBody: View {
     let message: ClawdbotChatMessage
     let isUser: Bool
     let style: ClawdbotChatView.Style
+    let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
 
     var body: some View {
@@ -170,9 +176,14 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser)
                 }
             } else if self.isUser {
-                ChatMarkdownView(text: text, textColor: textColor, font: .system(size: 14))
+                ChatMarkdownRenderer(
+                    text: text,
+                    context: .user,
+                    variant: self.markdownVariant,
+                    font: .system(size: 14),
+                    textColor: textColor)
             } else {
-                ChatAssistantTextBody(text: text)
+                ChatAssistantTextBody(text: text, markdownVariant: self.markdownVariant)
             }
 
             if !self.inlineAttachments.isEmpty {
@@ -584,64 +595,22 @@ private struct TypingDots: View {
 }
 
 @MainActor
-private struct ChatMarkdownView: View {
-    let text: String
-    let textColor: Color
-    let font: Font
-
-    var body: some View {
-        let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
-        VStack(alignment: .leading, spacing: 10) {
-            StructuredText(markdown: processed.cleaned)
-                .font(self.font)
-                .foregroundStyle(self.textColor)
-                .textual.textSelection(.enabled)
-
-            if !processed.images.isEmpty {
-                InlineImageList(images: processed.images)
-            }
-        }
-    }
-}
-
 @MainActor
 private struct ChatAssistantTextBody: View {
     let text: String
+    let markdownVariant: ChatMarkdownVariant
 
     var body: some View {
         let segments = AssistantTextParser.segments(from: self.text)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
                 let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
-                ChatMarkdownView(text: segment.text, textColor: ClawdbotChatTheme.assistantText, font: font)
-            }
-        }
-    }
-}
-
-@MainActor
-private struct InlineImageList: View {
-    let images: [ChatMarkdownPreprocessor.InlineImage]
-
-    var body: some View {
-        if images.isEmpty {
-            EmptyView()
-        } else {
-            ForEach(images, id: \.id) { item in
-                if let img = item.image {
-                    ClawdbotPlatformImageFactory.image(img)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxHeight: 260)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-                } else {
-                    Text(item.label.isEmpty ? "Image" : item.label)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                ChatMarkdownRenderer(
+                    text: segment.text,
+                    context: .assistant,
+                    variant: self.markdownVariant,
+                    font: font,
+                    textColor: ClawdbotChatTheme.assistantText)
             }
         }
     }
