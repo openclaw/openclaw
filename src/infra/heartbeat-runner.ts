@@ -108,9 +108,7 @@ export function resolveHeartbeatIntervalMs(
 }
 
 export function resolveHeartbeatPrompt(cfg: ClawdbotConfig, heartbeat?: HeartbeatConfig) {
-  return resolveHeartbeatPromptText(
-    heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt,
-  );
+  return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
 }
 
 function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig, heartbeat?: HeartbeatConfig) {
@@ -127,9 +125,7 @@ function resolveHeartbeatSession(cfg: ClawdbotConfig, agentId?: string) {
   const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const sessionKey =
-    scope === "global"
-      ? "global"
-      : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
+    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
   const store = loadSessionStore(storePath);
@@ -337,8 +333,10 @@ export async function runHeartbeatOnce(opts: {
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
-    const prevHeartbeatText = typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
-    const prevHeartbeatAt = typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+    const prevHeartbeatText =
+      typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
+    const prevHeartbeatAt =
+      typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
     const isDuplicateMain =
       !shouldSkipMain &&
       !mediaUrls.length &&

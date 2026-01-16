@@ -27,10 +27,7 @@ function buildSkillsSection(params: {
   ];
 }
 
-function buildMemorySection(params: {
-  isMinimal: boolean;
-  availableTools: Set<string>;
-}) {
+function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<string> }) {
   if (params.isMinimal) return [];
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];

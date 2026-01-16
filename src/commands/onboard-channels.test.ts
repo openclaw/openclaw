@@ -177,9 +177,7 @@ describe("setupChannels", () => {
       },
     );
 
-    expect(select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Select a channel" }),
-    );
+    expect(select).toHaveBeenCalledWith(expect.objectContaining({ message: "Select a channel" }));
     expect(multiselect).not.toHaveBeenCalled();
   });
 });

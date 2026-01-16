@@ -49,7 +49,10 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
     {
       kind: "edge",
-      path: path.join(os.homedir(), "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+      path: path.join(
+        os.homedir(),
+        "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      ),
     },
     {
       kind: "chromium",

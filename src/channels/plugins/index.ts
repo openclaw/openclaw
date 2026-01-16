@@ -19,14 +19,7 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 // - add an entry to `src/channels/dock.ts` for shared behavior (capabilities, allowFrom, threading, …)
 // - add ids/aliases in `src/channels/registry.ts`
 function resolveCoreChannels(): ChannelPlugin[] {
-  return [
-    telegramPlugin,
-    whatsappPlugin,
-    discordPlugin,
-    slackPlugin,
-    signalPlugin,
-    imessagePlugin,
-  ];
+  return [telegramPlugin, whatsappPlugin, discordPlugin, slackPlugin, signalPlugin, imessagePlugin];
 }
 
 function listPluginChannels(): ChannelPlugin[] {
@@ -80,12 +73,5 @@ export function normalizeChannelId(raw?: string | null): ChannelId | null {
   return plugin?.id ?? null;
 }
 
-export {
-  discordPlugin,
-  imessagePlugin,
-  signalPlugin,
-  slackPlugin,
-  telegramPlugin,
-  whatsappPlugin,
-};
+export { discordPlugin, imessagePlugin, signalPlugin, slackPlugin, telegramPlugin, whatsappPlugin };
 export type { ChannelId, ChannelPlugin } from "./types.js";

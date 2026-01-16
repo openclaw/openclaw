@@ -43,9 +43,9 @@ export function applyReplyTagsToPayload(
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return Boolean(
     payload.text ||
-      payload.mediaUrl ||
-      (payload.mediaUrls && payload.mediaUrls.length > 0) ||
-      payload.audioAsVoice,
+    payload.mediaUrl ||
+    (payload.mediaUrls && payload.mediaUrls.length > 0) ||
+    payload.audioAsVoice,
   );
 }
 

@@ -25,8 +25,6 @@ describe("sanitizeUserFacingText", () => {
 
   it("sanitizes raw API error payloads", () => {
     const raw = '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}';
-    expect(sanitizeUserFacingText(raw)).toBe(
-      "The AI service returned an error. Please try again.",
-    );
+    expect(sanitizeUserFacingText(raw)).toBe("The AI service returned an error. Please try again.");
   });
 });

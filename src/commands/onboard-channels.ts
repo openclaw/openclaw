@@ -317,7 +317,10 @@ export async function setupChannels(
   };
 
   const buildSelectionOptions = (
-    entries: Array<{ id: ChannelChoice; meta: { id: string; label: string; selectionLabel?: string } }>,
+    entries: Array<{
+      id: ChannelChoice;
+      meta: { id: string; label: string; selectionLabel?: string };
+    }>,
   ) =>
     entries.map((entry) => {
       const status = statusByChannel.get(entry.id);

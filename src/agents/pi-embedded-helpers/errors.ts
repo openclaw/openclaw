@@ -230,7 +230,11 @@ export function formatAssistantErrorText(
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
-  if (/incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(raw)) {
+  if (
+    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
+      raw,
+    )
+  ) {
     return (
       "Message ordering conflict - please try again. " +
       "If this persists, use /new to start a fresh session."
