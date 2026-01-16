@@ -1271,7 +1271,9 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across channels unless already present.
 
-If `messages.responsePrefix` is unset, no prefix is applied by default.
+If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
+replies are the exception: they default to `[{identity.name}]` when set, otherwise
+`[clawdbot]`, so same-phone conversations stay legible.
 Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
 #### Template variables

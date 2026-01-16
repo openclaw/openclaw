@@ -82,15 +82,13 @@ When the wizard asks for your personal WhatsApp number, enter the phone you will
     "selfChatMode": true,
     "dmPolicy": "allowlist",
     "allowFrom": ["+15551234567"]
-  },
-  "messages": {
-    "responsePrefix": "[clawdbot]"
   }
 }
 ```
 
-Tip: set `messages.responsePrefix` explicitly if you want a consistent bot prefix
-on outbound replies.
+Self-chat replies default to `[{identity.name}]` when set (otherwise `[clawdbot]`)
+if `messages.responsePrefix` is unset. Set it explicitly to customize or disable
+the prefix (use `""` to remove it).
 
 ### Number sourcing tips
 - **Local eSIM** from your country's mobile carrier (most reliable)

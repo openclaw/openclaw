@@ -258,6 +258,55 @@ describe("web auto-reply", () => {
     expect(reply).toHaveBeenCalledWith("🦞 hello there");
     resetLoadConfigMock();
   });
+  it("defaults responsePrefix for self-chat replies when unset", async () => {
+    setLoadConfigMock(() => ({
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
+          },
+        ],
+      },
+      channels: { whatsapp: { allowFrom: ["+1555"] } },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const resolver = vi.fn().mockResolvedValue({ text: "hello there" });
+
+    await monitorWebChannel(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hi",
+      from: "+1555",
+      to: "+1555",
+      selfE164: "+1555",
+      chatType: "direct",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    expect(reply).toHaveBeenCalledWith("[Mainbot] hello there");
+    resetLoadConfigMock();
+  });
   it("does not deliver HEARTBEAT_OK responses", async () => {
     setLoadConfigMock(() => ({
       channels: { whatsapp: { allowFrom: ["*"] } },

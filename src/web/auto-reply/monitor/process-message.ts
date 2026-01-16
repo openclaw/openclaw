@@ -1,4 +1,8 @@
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../../agents/identity.js";
+import {
+  resolveEffectiveMessagesConfig,
+  resolveIdentityName,
+  resolveIdentityNamePrefix,
+} from "../../../agents/identity.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -172,10 +176,17 @@ export async function processMessage(params: {
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
-  const responsePrefix = resolveEffectiveMessagesConfig(
-    params.cfg,
-    params.route.agentId,
-  ).responsePrefix;
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const resolvedMessages = resolveEffectiveMessagesConfig(params.cfg, params.route.agentId);
+  const isSelfChat =
+    params.msg.chatType !== "group" &&
+    Boolean(params.msg.selfE164) &&
+    normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
+  const responsePrefix =
+    resolvedMessages.responsePrefix ??
+    (configuredResponsePrefix === undefined && isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[clawdbot]"
+      : undefined);
 
   // Create mutable context for response prefix template interpolation
   let prefixContext: ResponsePrefixContext = {
