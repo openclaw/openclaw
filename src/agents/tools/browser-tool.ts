@@ -191,8 +191,8 @@ export function createBrowserTool(opts?: {
         }
         case "snapshot": {
           const format =
-            params.format === "ai" || params.format === "aria"
-              ? (params.format as "ai" | "aria")
+            params.snapshotFormat === "ai" || params.snapshotFormat === "aria"
+              ? (params.snapshotFormat as "ai" | "aria")
               : "ai";
           const mode = params.mode === "efficient" ? "efficient" : undefined;
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
