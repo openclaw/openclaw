@@ -84,7 +84,7 @@ describe("launchd install", () => {
 
       const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
       const label = "com.clawdbot.gateway";
-      const plistPath = path.join(homeDir, "Library", "LaunchAgents", `${label}.plist`);
+      const plistPath = resolveLaunchAgentPlistPath(env);
       const serviceId = `${domain}/${label}`;
 
       const enableCalls = calls.filter((c) => c[0] === "enable" && c[1] === serviceId);

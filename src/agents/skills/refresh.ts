@@ -88,10 +88,7 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
-export function ensureSkillsWatcher(params: {
-  workspaceDir: string;
-  config?: ClawdbotConfig;
-}) {
+export function ensureSkillsWatcher(params: { workspaceDir: string; config?: ClawdbotConfig }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) return;
   const watchEnabled = params.config?.skills?.load?.watch !== false;

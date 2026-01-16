@@ -21,8 +21,12 @@ const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteBridge: NodeBridgeServer | null = null;
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
-  const platformNorm = String(platform ?? "").trim().toLowerCase();
-  const familyNorm = String(deviceFamily ?? "").trim().toLowerCase();
+  const platformNorm = String(platform ?? "")
+    .trim()
+    .toLowerCase();
+  const familyNorm = String(deviceFamily ?? "")
+    .trim()
+    .toLowerCase();
   if (platformNorm.includes("mac")) return true;
   if (platformNorm.includes("darwin")) return true;
   if (familyNorm === "mac") return true;
@@ -196,9 +200,7 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
   for (const node of macNodes) {
     for (const bin of node.bins) bins.add(bin);
   }
-  const labels = macNodes
-    .map((node) => node.displayName ?? node.nodeId)
-    .filter(Boolean);
+  const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
   const note =
     labels.length > 0
       ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via nodes.run on that node.`

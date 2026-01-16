@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
 
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import {
-  ensureSkillsWatcher,
-  getSkillsSnapshotVersion,
-} from "../../agents/skills/refresh.js";
+import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
@@ -137,7 +134,7 @@ export async function ensureSkillSnapshot(params: {
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
       })
-    : nextEntry?.skillsSnapshot ??
+    : (nextEntry?.skillsSnapshot ??
       (isFirstTurnInSession
         ? undefined
         : buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -145,7 +142,7 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
-          }));
+          })));
   if (
     skillsSnapshot &&
     sessionStore &&
