@@ -19,6 +19,7 @@
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
+- Sessions: add `session.identityLinks` for cross-platform DM session linking. (#1033) — thanks @thewilloftheshadow.
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
 - Skills: add user-invocable skill commands (sanitized + unique), native skill registration gating, and an opt-out for model invocation.
 - Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.

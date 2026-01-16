@@ -337,6 +337,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer" or "per-channel-peer" isolates DM history (recommended for shared inboxes).',
+  "session.identityLinks":
+    "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":

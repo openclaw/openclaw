@@ -57,6 +57,8 @@ export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
   dmScope?: DmScope;
+  /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
+  identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
   idleMinutes?: number;
   heartbeatIdleMinutes?: number;

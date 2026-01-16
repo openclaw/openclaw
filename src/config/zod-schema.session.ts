@@ -13,6 +13,7 @@ export const SessionSchema = z
     dmScope: z
       .union([z.literal("main"), z.literal("per-peer"), z.literal("per-channel-peer")])
       .optional(),
+    identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),

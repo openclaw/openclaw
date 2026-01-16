@@ -88,13 +88,23 @@ export function buildAgentPeerSessionKey(params: {
   channel: string;
   peerKind?: "dm" | "group" | "channel" | null;
   peerId?: string | null;
+  identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer";
 }): string {
   const peerKind = params.peerKind ?? "dm";
   if (peerKind === "dm") {
     const dmScope = params.dmScope ?? "main";
-    const peerId = (params.peerId ?? "").trim();
+    let peerId = (params.peerId ?? "").trim();
+    const linkedPeerId =
+      dmScope === "main"
+        ? null
+        : resolveLinkedPeerId({
+            identityLinks: params.identityLinks,
+            channel: params.channel,
+            peerId,
+          });
+    if (linkedPeerId) peerId = linkedPeerId;
     if (dmScope === "per-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       return `agent:${normalizeAgentId(params.agentId)}:${channel}:dm:${peerId}`;
@@ -110,6 +120,38 @@ export function buildAgentPeerSessionKey(params: {
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
   const peerId = (params.peerId ?? "").trim() || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
+}
+
+function resolveLinkedPeerId(params: {
+  identityLinks?: Record<string, string[]>;
+  channel: string;
+  peerId: string;
+}): string | null {
+  const identityLinks = params.identityLinks;
+  if (!identityLinks) return null;
+  const peerId = params.peerId.trim();
+  if (!peerId) return null;
+  const candidates = new Set<string>();
+  const rawCandidate = normalizeToken(peerId);
+  if (rawCandidate) candidates.add(rawCandidate);
+  const channel = normalizeToken(params.channel);
+  if (channel) {
+    const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
+    if (scopedCandidate) candidates.add(scopedCandidate);
+  }
+  if (candidates.size === 0) return null;
+  for (const [canonical, ids] of Object.entries(identityLinks)) {
+    const canonicalName = canonical.trim();
+    if (!canonicalName) continue;
+    if (!Array.isArray(ids)) continue;
+    for (const id of ids) {
+      const normalized = normalizeToken(id);
+      if (normalized && candidates.has(normalized)) {
+        return canonicalName;
+      }
+    }
+  }
+  return null;
 }
 
 export function buildGroupHistoryKey(params: {
