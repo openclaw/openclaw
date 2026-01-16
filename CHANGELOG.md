@@ -123,6 +123,15 @@
 - Fix: normalize pairing CLI aliases, allow extension channels, and harden Zalo webhook payload parsing. (#991) — thanks @longmaba.
 - Fix: allow local Tailscale Serve hostnames without treating tailnet clients as direct. (#885) — thanks @oswalpalash.
 - Fix: reset sessions after role-ordering conflicts to recover from consecutive user turns. (#998)
+- Fix: repair orphaned user turns before embedded prompts to avoid role-ordering lockouts. (#1026) — thanks @odrobnik.
+- Dev: auto-sync Peekaboo submodule on install when clean to avoid dirty checkouts.
+- Fix: keep background exec aborts from killing backgrounded sessions while honoring timeouts.
+- Fix: use local auth for gateway security probe unless remote mode has a URL. (#1011) — thanks @ivanrvpereira.
+- Discord: truncate skill command descriptions for slash command limits. (#1018) — thanks @evalexpr.
+- macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
+- Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
+- Groups: treat replies to the bot as implicit mentions across supported channels.
+- Security: bump dependency `tar` to 7.5.3 to fix GHSA-8qq5-rm4j-mr97.
 
 ## 2026.1.14-1
 
