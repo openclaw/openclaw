@@ -16,6 +16,7 @@ export {
 export type {
   ClawdbotSkillMetadata,
   SkillEligibilityContext,
+  SkillCommandSpec,
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
@@ -24,6 +25,7 @@ export type {
 export {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
+  buildWorkspaceSkillCommandSpecs,
   filterWorkspaceSkillEntries,
   loadWorkspaceSkillEntries,
   resolveSkillsPromptForRun,

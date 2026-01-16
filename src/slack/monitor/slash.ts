@@ -8,6 +8,8 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../../auto-reply/commands-registry.js";
+import { listSkillCommandsForWorkspace } from "../../auto-reply/skill-commands.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { resolveNativeCommandsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
@@ -403,7 +405,15 @@ export function registerSlackMonitorSlashCommands(params: {
     providerSetting: account.config.commands?.native,
     globalSetting: cfg.commands?.native,
   });
-  const nativeCommands = nativeEnabled ? listNativeCommandSpecsForConfig(cfg) : [];
+  const skillCommands = nativeEnabled
+    ? listSkillCommandsForWorkspace({
+        workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+        cfg,
+      })
+    : [];
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
+    : [];
   if (nativeCommands.length > 0) {
     for (const command of nativeCommands) {
       ctx.app.command(

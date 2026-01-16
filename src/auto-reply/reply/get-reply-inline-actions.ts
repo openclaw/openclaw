@@ -11,6 +11,8 @@ import { isDirectiveOnly } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
+import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
+import { logVerbose } from "../../globals.js";
 
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -55,6 +57,7 @@ export async function handleInlineActions(params: {
   contextTokens: number;
   directiveAck?: ReplyPayload;
   abortedLastRun: boolean;
+  skillFilter?: string[];
 }): Promise<InlineActionResult> {
   const {
     ctx,
@@ -89,10 +92,46 @@ export async function handleInlineActions(params: {
     contextTokens,
     directiveAck,
     abortedLastRun: initialAbortedLastRun,
+    skillFilter,
   } = params;
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+
+  const shouldLoadSkillCommands = command.commandBodyNormalized.startsWith("/");
+  const skillCommands = shouldLoadSkillCommands
+    ? listSkillCommandsForWorkspace({
+        workspaceDir,
+        cfg,
+        skillFilter,
+      })
+    : [];
+
+  const skillInvocation =
+    allowTextCommands && skillCommands.length > 0
+      ? resolveSkillCommandInvocation({
+          commandBodyNormalized: command.commandBodyNormalized,
+          skillCommands,
+        })
+      : null;
+  if (skillInvocation) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
+      );
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    const promptParts = [
+      `Use the "${skillInvocation.command.skillName}" skill for this request.`,
+      skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
+    ].filter((entry): entry is string => Boolean(entry));
+    const rewrittenBody = promptParts.join("\n\n");
+    ctx.Body = rewrittenBody;
+    sessionCtx.Body = rewrittenBody;
+    sessionCtx.BodyStripped = rewrittenBody;
+    cleanedBody = rewrittenBody;
+  }
 
   const sendInlineReply = async (reply?: ReplyPayload) => {
     if (!reply) return;
@@ -148,33 +187,34 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await handleCommands({
-      ctx,
-      cfg,
-      command: inlineCommandContext,
-      agentId,
-      directives,
-      elevated: {
-        enabled: elevatedEnabled,
-        allowed: elevatedAllowed,
-        failures: elevatedFailures,
-      },
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      sessionScope,
-      workspaceDir,
-      defaultGroupActivation: defaultActivation,
-      resolvedThinkLevel,
-      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-      resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      resolveDefaultThinkingLevel,
-      provider,
-      model,
-      contextTokens,
-      isGroup,
-    });
+    ctx,
+    cfg,
+    command: inlineCommandContext,
+    agentId,
+    directives,
+    elevated: {
+      enabled: elevatedEnabled,
+      allowed: elevatedAllowed,
+      failures: elevatedFailures,
+    },
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    sessionScope,
+    workspaceDir,
+    defaultGroupActivation: defaultActivation,
+    resolvedThinkLevel,
+    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    resolvedReasoningLevel,
+    resolvedElevatedLevel,
+    resolveDefaultThinkingLevel,
+    provider,
+    model,
+    contextTokens,
+    isGroup,
+    skillCommands,
+  });
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -235,6 +275,7 @@ export async function handleInlineActions(params: {
     model,
     contextTokens,
     isGroup,
+    skillCommands,
   });
   if (!commandResult.shouldContinue) {
     typing.cleanup();

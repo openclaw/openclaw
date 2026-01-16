@@ -5,6 +5,7 @@ import type {
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
+  SkillInvocationPolicy,
 } from "./types.js";
 
 function stripQuotes(value: string): string {
@@ -79,6 +80,24 @@ function getFrontmatterValue(frontmatter: ParsedSkillFrontmatter, key: string): 
   return typeof raw === "string" ? raw : undefined;
 }
 
+function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (
+    normalized === "false" ||
+    normalized === "0" ||
+    normalized === "no" ||
+    normalized === "off"
+  ) {
+    return false;
+  }
+  return fallback;
+}
+
 export function resolveClawdbotMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): ClawdbotSkillMetadata | undefined {
@@ -119,6 +138,18 @@ export function resolveClawdbotMetadata(
   } catch {
     return undefined;
   }
+}
+
+export function resolveSkillInvocationPolicy(
+  frontmatter: ParsedSkillFrontmatter,
+): SkillInvocationPolicy {
+  return {
+    userInvocable: parseFrontmatterBool(getFrontmatterValue(frontmatter, "user-invocable"), true),
+    disableModelInvocation: parseFrontmatterBool(
+      getFrontmatterValue(frontmatter, "disable-model-invocation"),
+      false,
+    ),
+  };
 }
 
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {

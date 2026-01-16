@@ -318,6 +318,22 @@ describe("buildCommandsMessage", () => {
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
+
+  it("includes skill commands when provided", () => {
+    const text = buildCommandsMessage(
+      {
+        commands: { config: false, debug: false },
+      } as ClawdbotConfig,
+      [
+        {
+          name: "demo_skill",
+          skillName: "demo-skill",
+          description: "Demo skill",
+        },
+      ],
+    );
+    expect(text).toContain("/demo_skill - Demo skill");
+  });
 });
 
 describe("buildHelpMessage", () => {
