@@ -54,6 +54,7 @@
 - Discord: allow emoji/sticker uploads + channel actions in config defaults. (#870) — thanks @JDIVE.
 
 ### Fixes
+- Messages: make `/stop` clear queued followups and pending session lane work for a hard abort.
 - WhatsApp: default response prefix only for self-chat, using identity name when set.
 - Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
 - Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.

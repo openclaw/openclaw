@@ -11,7 +11,9 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext } from "../templating.js";
+import { logVerbose } from "../../globals.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { clearSessionQueues } from "./queue.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
@@ -86,6 +88,12 @@ export async function tryFastAbortFromMessage(params: {
     const { entry, key } = resolveSessionEntryForKey(store, targetKey);
     const sessionId = entry?.sessionId;
     const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+    const cleared = clearSessionQueues([key ?? targetKey, sessionId]);
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      logVerbose(
+        `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+      );
+    }
     if (entry && key) {
       entry.abortedLastRun = true;
       entry.updatedAt = Date.now();
