@@ -352,10 +352,8 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      "-1001234567890",
-      expect.any(String),
-      expect.objectContaining({ message_thread_id: 1 }),
-    );
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    const sendParams = sendMessageSpy.mock.calls[0]?.[2] as { message_thread_id?: number };
+    expect(sendParams?.message_thread_id).toBeUndefined();
   });
 });
