@@ -3,6 +3,7 @@ import {
   listPairingChannels,
   notifyPairingApproved,
 } from "../channels/plugins/pairing.js";
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
@@ -17,9 +18,25 @@ const CHANNELS: PairingChannel[] = listPairingChannels();
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown): PairingChannel {
-  const value = String(raw ?? "").trim().toLowerCase();
+  const value = (
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "number" || typeof raw === "boolean"
+        ? String(raw)
+        : ""
+  )
+    .trim()
+    .toLowerCase();
   if (!value) throw new Error("Channel required");
-  if (CHANNELS.includes(value as PairingChannel)) return value as PairingChannel;
+
+  const normalized = normalizeChannelId(value);
+  if (normalized) {
+    if (!CHANNELS.includes(normalized as PairingChannel)) {
+      throw new Error(`Channel ${normalized} does not support pairing`);
+    }
+    return normalized as PairingChannel;
+  }
+
   // Allow extension channels: validate format but don't require registry
   if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) return value as PairingChannel;
   throw new Error(`Invalid channel: ${value}`);
