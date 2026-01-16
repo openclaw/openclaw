@@ -10,9 +10,12 @@ read_when:
 Directory lookups for channels that support it (contacts/peers, groups, and “me”).
 
 ## Common flags
-- `--channel <name>`: channel id/alias (default: `whatsapp`)
+- `--channel <name>`: channel id/alias (auto when exactly one channel is configured)
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
+
+## Notes
+- For many channels, `directory` lists IDs from your configuration (allowlists / configured groups), not a live provider directory.
 
 ## Self (“me”)
 
@@ -35,4 +38,3 @@ clawdbot directory groups list --channel zalouser
 clawdbot directory groups list --channel zalouser --query "work"
 clawdbot directory groups members --channel zalouser --group-id <id>
 ```
-

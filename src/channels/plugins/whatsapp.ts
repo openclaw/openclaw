@@ -215,6 +215,45 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
   },
+  directory: {
+    self: async ({ cfg, accountId }) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      const { e164, jid } = readWebSelfId(account.authDir);
+      const id = e164 ?? jid;
+      if (!id) return null;
+      return {
+        kind: "user",
+        id,
+        name: account.name,
+        raw: { e164, jid },
+      };
+    },
+    listPeers: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const peers = (account.allowFrom ?? [])
+        .map((entry) => String(entry).trim())
+        .filter((entry) => Boolean(entry) && entry !== "*")
+        .map((entry) => normalizeWhatsAppTarget(entry) ?? "")
+        .filter(Boolean)
+        .filter((id) => !isWhatsAppGroupJid(id))
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => ({ kind: "user", id }) as const);
+      return peers;
+    },
+    listGroups: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const groups = Object.keys(account.groups ?? {})
+        .map((id) => id.trim())
+        .filter((id) => Boolean(id) && id !== "*")
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => ({ kind: "group", id }) as const);
+      return groups;
+    },
+  },
   actions: {
     listActions: ({ cfg }) => {
       if (!cfg.channels?.whatsapp) return [];

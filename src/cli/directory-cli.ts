@@ -1,10 +1,10 @@
 import type { Command } from "commander";
 
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";
+import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -45,21 +45,19 @@ export function registerDirectoryCli(program: Command) {
 
   const withChannel = (cmd: Command) =>
     cmd
-      .option("--channel <name>", "Channel (default: whatsapp)")
+      .option("--channel <name>", "Channel (auto when only one is configured)")
       .option("--account <id>", "Account id (accountId)")
       .option("--json", "Output JSON", false);
 
-  const resolve = (opts: { channel?: string; account?: string }) => {
+  const resolve = async (opts: { channel?: string; account?: string }) => {
     const cfg = loadConfig();
-    const channelInput = opts.channel ?? DEFAULT_CHAT_CHANNEL;
-    const channelId = normalizeChannelId(channelInput);
-    if (!channelId) {
-      throw new Error(`Unsupported channel: ${channelInput}`);
-    }
+    const selection = await resolveMessageChannelSelection({
+      cfg,
+      channel: opts.channel ?? null,
+    });
+    const channelId = selection.channel;
     const plugin = getChannelPlugin(channelId);
-    if (!plugin?.directory) {
-      throw new Error(`Channel ${channelId} does not support directory`);
-    }
+    if (!plugin) throw new Error(`Unsupported channel: ${String(channelId)}`);
     const accountId = opts.account?.trim() || resolveChannelDefaultAccountId({ plugin, cfg });
     return { cfg, channelId, accountId, plugin };
   };
@@ -67,7 +65,7 @@ export function registerDirectoryCli(program: Command) {
   withChannel(directory.command("self").description("Show the current account user")).action(
     async (opts) => {
       try {
-        const { cfg, channelId, accountId, plugin } = resolve({
+        const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
@@ -96,7 +94,7 @@ export function registerDirectoryCli(program: Command) {
     .option("--limit <n>", "Limit results")
     .action(async (opts) => {
       try {
-        const { cfg, channelId, accountId, plugin } = resolve({
+        const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
@@ -128,7 +126,7 @@ export function registerDirectoryCli(program: Command) {
     .option("--limit <n>", "Limit results")
     .action(async (opts) => {
       try {
-        const { cfg, channelId, accountId, plugin } = resolve({
+        const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
@@ -163,7 +161,7 @@ export function registerDirectoryCli(program: Command) {
     .option("--limit <n>", "Limit results")
     .action(async (opts) => {
       try {
-        const { cfg, channelId, accountId, plugin } = resolve({
+        const { cfg, channelId, accountId, plugin } = await resolve({
           channel: opts.channel as string | undefined,
           account: opts.account as string | undefined,
         });
