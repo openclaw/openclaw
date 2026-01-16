@@ -1,6 +1,7 @@
 import type { SessionEntry } from "../config/sessions.js";
 
 export type GatewaySessionsDefaults = {
+  modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
 };

@@ -37,7 +37,10 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   if (sessionPath) lines.push(`Session store: ${sessionPath}`);
 
   const defaults = summary.sessions?.defaults;
-  const defaultModel = defaults?.model ?? "unknown";
+  const defaultModel =
+    defaults?.model && defaults?.modelProvider
+      ? `${defaults.modelProvider}/${defaults.model}`
+      : defaults?.model ?? "unknown";
   const defaultCtx =
     typeof defaults?.contextTokens === "number"
       ? ` (${formatTokenCount(defaults.contextTokens)} ctx)`

@@ -311,6 +311,7 @@ export function getSessionDefaults(cfg: ClawdbotConfig): GatewaySessionsDefaults
     lookupContextTokens(resolved.model) ??
     DEFAULT_CONTEXT_TOKENS;
   return {
+    modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
   };

@@ -117,7 +117,7 @@ export function createSessionActions(context: SessionActionContext) {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         model: entry?.model ?? result.defaults?.model ?? undefined,
-        modelProvider: entry?.modelProvider,
+        modelProvider: entry?.modelProvider ?? result.defaults?.modelProvider ?? undefined,
         contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
         inputTokens: entry?.inputTokens ?? null,
         outputTokens: entry?.outputTokens ?? null,

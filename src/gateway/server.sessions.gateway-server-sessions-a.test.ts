@@ -11,6 +11,7 @@ import {
   startServerWithClient,
   testState,
 } from "./test-helpers.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 
 installGatewayTestHooks();
 
@@ -90,6 +91,7 @@ describe("gateway server sessions", () => {
 
     const list1 = await rpcReq<{
       path: string;
+      defaults?: { model?: string | null; modelProvider?: string | null };
       sessions: Array<{
         key: string;
         totalTokens?: number;
@@ -102,6 +104,7 @@ describe("gateway server sessions", () => {
     expect(list1.ok).toBe(true);
     expect(list1.payload?.path).toBe(storePath);
     expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
+    expect(list1.payload?.defaults?.modelProvider).toBe(DEFAULT_PROVIDER);
     const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main?.totalTokens).toBe(30);
     expect(main?.thinkingLevel).toBe("low");
