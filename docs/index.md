@@ -165,7 +165,7 @@ Example:
 
 - Start here:
   - [Docs hubs (all pages linked)](/start/hubs)
-  - [FAQ](/start/faq) ← *common questions answered*
+  - [Help](/help) ← *common fixes + troubleshooting*
   - [Configuration](/gateway/configuration)
   - [Configuration examples](/gateway/configuration-examples)
   - [Slash commands](/tools/slash-commands)
