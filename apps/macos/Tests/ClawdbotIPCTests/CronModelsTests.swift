@@ -31,7 +31,7 @@ struct CronModelsTests {
             thinking: "low",
             timeoutSeconds: 15,
             deliver: true,
-            provider: "whatsapp",
+            channel: "whatsapp",
             to: "+15551234567",
             bestEffortDeliver: false)
         let data = try JSONEncoder().encode(payload)

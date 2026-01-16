@@ -38,7 +38,7 @@ struct CronJobEditorSmokeTests {
                 thinking: "low",
                 timeoutSeconds: 120,
                 deliver: true,
-                provider: "whatsapp",
+                channel: "whatsapp",
                 to: "+15551234567",
                 bestEffortDeliver: true),
             isolation: CronIsolation(postToMainPrefix: "Cron"),
@@ -70,22 +70,16 @@ struct CronJobEditorSmokeTests {
     }
 
     @Test func cronJobEditorIncludesDeleteAfterRunForAtSchedule() throws {
-        var view = CronJobEditor(
+        let view = CronJobEditor(
             job: nil,
             isSaving: .constant(false),
             error: .constant(nil),
             onCancel: {},
             onSave: { _ in })
-        view.name = "One-shot"
-        view.sessionTarget = .main
-        view.payloadKind = .systemEvent
-        view.systemEventText = "hello"
-        view.scheduleKind = .at
-        view.atDate = Date(timeIntervalSince1970: 1_700_000_000)
-        view.deleteAfterRun = true
 
-        let payload = try view.buildPayload()
-        let raw = payload["deleteAfterRun"]?.value as? Bool
+        var root: [String: Any] = [:]
+        view.applyDeleteAfterRun(to: &root, scheduleKind: .at, deleteAfterRun: true)
+        let raw = root["deleteAfterRun"] as? Bool
         #expect(raw == true)
     }
 }

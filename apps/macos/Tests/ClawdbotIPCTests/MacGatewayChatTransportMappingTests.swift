@@ -11,7 +11,8 @@ import Testing
             stateversion: StateVersion(presence: 1, health: 1),
             uptimems: 123,
             configpath: nil,
-            statedir: nil)
+            statedir: nil,
+            sessiondefaults: nil)
 
         let hello = HelloOk(
             type: "hello",

@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import SwiftUI
 import Testing
 @testable import Clawdbot

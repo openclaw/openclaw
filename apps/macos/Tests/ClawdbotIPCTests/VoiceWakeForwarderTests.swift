@@ -17,6 +17,6 @@ import Testing
         #expect(opts.thinking == "low")
         #expect(opts.deliver == true)
         #expect(opts.to == nil)
-        #expect(opts.provider == .last)
+        #expect(opts.channel == .last)
     }
 }
