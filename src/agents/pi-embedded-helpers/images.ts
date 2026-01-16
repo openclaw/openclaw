@@ -90,6 +90,7 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
+
         const normalizedContent = options?.enforceToolCallLast
           ? (() => {
               let lastToolIndex = -1;

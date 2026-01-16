@@ -59,6 +59,33 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinkingSignature).toBe("sig");
   });
 
+  it("downgrades thinking blocks with Anthropic-style signatures for Google models", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "reasoning", signature: "sig" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "google-antigravity",
+      sessionManager,
+      sessionId: "session:google",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    expect(assistant.content?.map((block) => block.type)).toEqual(["text"]);
+    expect(assistant.content?.[0]?.text).toBe("reasoning");
+  });
+
   it("keeps unsigned thinking blocks for Antigravity Claude", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [

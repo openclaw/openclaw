@@ -138,6 +138,11 @@ export type ClawdbotPluginChannelRegistration = {
   dock?: ChannelDock;
 };
 
+export type ClawdbotPluginProviderRegistration = {
+  id: string;
+  [key: string]: unknown;
+};
+
 export type ClawdbotPluginDefinition = {
   id?: string;
   name?: string;
@@ -165,6 +170,7 @@ export type ClawdbotPluginApi = {
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
     opts?: { name?: string; names?: string[] },
   ) => void;
+  registerProvider: (provider: ClawdbotPluginProviderRegistration) => void;
   registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
   registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
   registerGatewayMethod: (method: string, handler: GatewayRequestHandler) => void;

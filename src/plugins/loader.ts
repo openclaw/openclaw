@@ -189,6 +189,7 @@ function createPluginRecord(params: {
     enabled: params.enabled,
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
+    providerIds: [],
     channelIds: [],
     providerIds: [],
     gatewayMethods: [],

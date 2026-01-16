@@ -120,11 +120,11 @@ function readDiscordCommandArgs(
   for (const definition of definitions) {
     let value: string | number | boolean | null | undefined;
     if (definition.type === "number") {
-      value = interaction.options.getNumber(definition.name);
+      value = interaction.options.getNumber(definition.name) ?? null;
     } else if (definition.type === "boolean") {
-      value = interaction.options.getBoolean(definition.name);
+      value = interaction.options.getBoolean(definition.name) ?? null;
     } else {
-      value = interaction.options.getString(definition.name);
+      value = interaction.options.getString(definition.name) ?? null;
     }
     if (value != null) {
       values[definition.name] = value;

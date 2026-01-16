@@ -62,9 +62,9 @@ export function downgradeGeminiThinkingBlocks(messages: AgentMessage[]): AgentMe
       if (!block || typeof block !== "object") return [block as AssistantContentBlock];
       const record = block as GeminiThinkingBlock;
       if (record.type !== "thinking") return [block];
-      const signature =
+      const thinkingSig =
         typeof record.thinkingSignature === "string" ? record.thinkingSignature.trim() : "";
-      if (signature.length > 0) return [block];
+      if (thinkingSig.length > 0) return [block];
       const thinking = typeof record.thinking === "string" ? record.thinking : "";
       const trimmed = thinking.trim();
       hasDowngraded = true;

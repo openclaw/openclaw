@@ -127,4 +127,20 @@ describe("sanitizeSessionMessagesImages", () => {
     const assistant = out[0] as { content?: Array<{ type?: string }> };
     expect(assistant.content?.map((b) => b.type)).toEqual(["text", "toolCall", "thinking", "text"]);
   });
+
+  it("does not synthesize tool call input when missing", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+    const assistant = out[0] as { content?: Array<Record<string, unknown>> };
+    const toolCall = assistant.content?.find((b) => b.type === "toolCall");
+    expect(toolCall).toBeTruthy();
+    expect("input" in (toolCall ?? {})).toBe(false);
+    expect("arguments" in (toolCall ?? {})).toBe(false);
+  });
 });

@@ -24,6 +24,7 @@ import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
 import type { ClawdbotConfig, ModelProviderConfig } from "../config/types.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -370,8 +371,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   };
   tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-live-state-"));
   process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-  tempAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+  tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
+  const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
+  if (tempSessionAgentDir !== tempAgentDir) {
+    saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
+  }
   process.env.CLAWDBOT_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 

@@ -60,6 +60,7 @@
 - Google: downgrade unsigned thinking blocks before send to avoid missing signature errors.
 - Doctor: avoid re-adding WhatsApp config when only legacy ack reactions are set. (#927, fixes #900) — thanks @grp06.
 - Agents: scrub tuple `items` schemas for Gemini tool calls. (#926, fixes #746) — thanks @grp06.
+- Agents: harden Antigravity Claude history/tool-call sanitization. (#968) — thanks @rdev.
 - Agents: stabilize sub-agent announce status from runtime outcomes and normalize Result/Notes. (#835) — thanks @roshanasingh4.
 - Embedded runner: suppress raw API error payloads from replies. (#924) — thanks @grp06.
 - Auth: normalize Claude Code CLI profile mode to oauth and auto-migrate config. (#855) — thanks @sebslight.
