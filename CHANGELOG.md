@@ -14,6 +14,7 @@
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
+- Agents: avoid false positives when logging unsupported Google tool schema keywords.
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.
 - Docs: add Date & Time guide and update prompt/timezone configuration docs.
 - Messages: debounce rapid inbound messages across channels with per-connector overrides. (#971) — thanks @juanpablodlc.
