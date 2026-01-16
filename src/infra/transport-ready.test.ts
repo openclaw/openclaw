@@ -9,13 +9,13 @@ describe("waitForTransportReady", () => {
     await waitForTransportReady({
       label: "test transport",
       timeoutMs: 500,
-      logAfterMs: 100,
+      logAfterMs: 120,
       logIntervalMs: 100,
-      pollIntervalMs: 50,
+      pollIntervalMs: 80,
       runtime,
       check: async () => {
         attempts += 1;
-        if (attempts > 3) return { ok: true };
+        if (attempts > 4) return { ok: true };
         return { ok: false, error: "not ready" };
       },
     });
