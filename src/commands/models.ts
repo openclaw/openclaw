@@ -6,6 +6,7 @@ export {
 } from "./models/aliases.js";
 export {
   modelsAuthAddCommand,
+  modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
 } from "./models/auth.js";
