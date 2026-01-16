@@ -28,6 +28,7 @@ const STEP_LABELS: Record<string, string> = {
   "ui:build": "Building UI",
   "clawdbot doctor": "Running doctor checks",
   "git rev-parse HEAD (after)": "Verifying update",
+  "global update": "Updating via package manager",
 };
 
 function getStepLabel(step: UpdateStepInfo): string {
@@ -206,12 +207,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          "Skipped: this Clawdbot install isn't a git checkout. Update via your package manager, then run `clawdbot doctor` and `clawdbot daemon restart`.",
+          "Skipped: this Clawdbot install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run `clawdbot doctor` and `clawdbot daemon restart`.",
         ),
       );
       defaultRuntime.log(
         theme.muted(
-          "Examples: `npm i -g clawdbot@latest`, `pnpm add -g clawdbot@latest`, or `bun add -g clawdbot@latest`",
+          "Examples: `npm i -g clawdbot@latest` or `pnpm add -g clawdbot@latest`",
         ),
       );
     }
@@ -251,9 +252,17 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
   } else if (!opts.json) {
     defaultRuntime.log("");
-    defaultRuntime.log(
-      theme.muted("Tip: Run `clawdbot daemon restart` to apply updates to a running gateway."),
-    );
+    if (result.mode === "npm" || result.mode === "pnpm") {
+      defaultRuntime.log(
+        theme.muted(
+          "Tip: Run `clawdbot doctor`, then `clawdbot daemon restart` to apply updates to a running gateway.",
+        ),
+      );
+    } else {
+      defaultRuntime.log(
+        theme.muted("Tip: Run `clawdbot daemon restart` to apply updates to a running gateway."),
+      );
+    }
   }
 }
 
@@ -276,7 +285,7 @@ Examples:
 
 Notes:
   - For git installs: fetches, rebases, installs deps, builds, and runs doctor
-  - For global installs: use npm/pnpm/bun to reinstall (see docs/install/updating.md)
+  - For global installs: auto-updates via detected package manager when possible (see docs/install/updating.md)
   - Skips update if the working directory has uncommitted changes
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.clawd.bot/cli/update")}`,

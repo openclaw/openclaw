@@ -70,10 +70,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     note(
       [
         "This install is not a git checkout.",
-        "Update via your package manager, then rerun doctor:",
-        "- npm i -g clawdbot@latest",
-        "- pnpm add -g clawdbot@latest",
-        "- bun add -g clawdbot@latest",
+        "Run `clawdbot update` to update via your package manager (npm/pnpm), then rerun doctor.",
       ].join("\n"),
       "Update",
     );
