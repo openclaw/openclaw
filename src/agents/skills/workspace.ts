@@ -8,6 +8,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
@@ -26,6 +27,14 @@ import type {
 } from "./types.js";
 
 const fsp = fs.promises;
+const skillsLogger = createSubsystemLogger("skills");
+const skillCommandDebugOnce = new Set<string>();
+
+function debugSkillCommandOnce(messageKey: string, message: string, meta?: Record<string, unknown>) {
+  if (skillCommandDebugOnce.has(messageKey)) return;
+  skillCommandDebugOnce.add(messageKey);
+  skillsLogger.debug(message, meta);
+}
 
 function filterSkillEntries(
   entries: SkillEntry[],
@@ -324,12 +333,18 @@ export function buildWorkspaceSkillCommandSpecs(
     const rawName = entry.skill.name;
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      console.warn(`[skills] Sanitized skill command name "${rawName}" to "/${base}".`);
+      debugSkillCommandOnce(
+        `sanitize:${rawName}:${base}`,
+        `Sanitized skill command name "${rawName}" to "/${base}".`,
+        { rawName, sanitized: `/${base}` },
+      );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      console.warn(
-        `[skills] De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+      debugSkillCommandOnce(
+        `dedupe:${rawName}:${unique}`,
+        `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+        { rawName, deduped: `/${unique}` },
       );
     }
     used.add(unique.toLowerCase());
