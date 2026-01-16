@@ -178,9 +178,13 @@ export async function handleZaloWebhookRequest(
   }
 
   // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }
-  const raw = body.value as Record<string, unknown>;
+  const raw = body.value;
+  const record =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   const update: ZaloUpdate | undefined =
-    raw.ok === true && raw.result ? (raw.result as ZaloUpdate) : (raw as ZaloUpdate);
+    record && record.ok === true && record.result
+      ? (record.result as ZaloUpdate)
+      : (record as ZaloUpdate | null) ?? undefined;
 
   if (!update?.event_name) {
     res.statusCode = 400;

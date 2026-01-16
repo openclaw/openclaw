@@ -8,10 +8,16 @@ const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
+const normalizeChannelId = vi.fn((raw: string) => {
+  if (!raw) return null;
+  if (raw === "imsg") return "imessage";
+  if (["telegram", "discord", "imessage"].includes(raw)) return raw;
+  return null;
+});
 const getPairingAdapter = vi.fn((channel: string) => ({
   idLabel: pairingIdLabels[channel] ?? "userId",
 }));
-const listPairingChannels = vi.fn(() => ["telegram", "discord"]);
+const listPairingChannels = vi.fn(() => ["telegram", "discord", "imessage"]);
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests,
@@ -22,6 +28,10 @@ vi.mock("../channels/plugins/pairing.js", () => ({
   listPairingChannels,
   notifyPairingApproved,
   getPairingAdapter,
+}));
+
+vi.mock("../channels/plugins/index.js", () => ({
+  normalizeChannelId,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -61,6 +71,32 @@ describe("pairing cli", () => {
     await program.parseAsync(["pairing", "list", "telegram"], { from: "user" });
 
     expect(listChannelPairingRequests).toHaveBeenCalledWith("telegram");
+  });
+
+  it("normalizes channel aliases", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    listChannelPairingRequests.mockResolvedValueOnce([]);
+
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(["pairing", "list", "imsg"], { from: "user" });
+
+    expect(normalizeChannelId).toHaveBeenCalledWith("imsg");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("imessage");
+  });
+
+  it("accepts extension channels outside the registry", async () => {
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    listChannelPairingRequests.mockResolvedValueOnce([]);
+
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+    await program.parseAsync(["pairing", "list", "zalo"], { from: "user" });
+
+    expect(normalizeChannelId).toHaveBeenCalledWith("zalo");
+    expect(listChannelPairingRequests).toHaveBeenCalledWith("zalo");
   });
 
   it("labels Discord ids as discordUserId", async () => {
