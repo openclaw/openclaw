@@ -274,6 +274,8 @@ export async function runEmbeddedPiAgent(
                     provider,
                     model: model.id,
                   },
+                  systemPromptReport: attempt.systemPromptReport,
+                  error: { kind: "role_ordering", message: errorText },
                 },
               };
             }

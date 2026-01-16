@@ -63,6 +63,7 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolResult: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
   resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
+  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
@@ -376,6 +377,17 @@ export async function runAgentTurnWithFallback(params: {
         didResetAfterCompactionFailure = true;
         continue;
       }
+      if (embeddedError?.kind === "role_ordering") {
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
+        if (didReset) {
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+            },
+          };
+        }
+      }
 
       break;
     } catch (err) {
@@ -394,6 +406,17 @@ export async function runAgentTurnWithFallback(params: {
       ) {
         didResetAfterCompactionFailure = true;
         continue;
+      }
+      if (isRoleOrderingError) {
+        const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
+        if (didReset) {
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+            },
+          };
+        }
       }
 
       // Auto-recover from Gemini session corruption by resetting the session

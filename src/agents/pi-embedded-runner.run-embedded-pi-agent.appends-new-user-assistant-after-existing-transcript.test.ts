@@ -261,4 +261,64 @@ describe("runEmbeddedPiAgent", () => {
     expect(secondUserIndex).toBeGreaterThan(firstAssistantIndex);
     expect(secondAssistantIndex).toBeGreaterThan(secondUserIndex);
   }, 20_000);
+  it("returns role ordering error when session ends with a user turn", async () => {
+    const { SessionManager } = await import("@mariozechner/pi-coding-agent");
+
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
+    const sessionFile = path.join(workspaceDir, "session.jsonl");
+
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "seed user 1" }],
+    });
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "seed assistant" }],
+      stopReason: "stop",
+      api: "openai-responses",
+      provider: "openai",
+      model: "mock-1",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "seed user 2" }],
+    });
+
+    const cfg = makeOpenAiConfig(["mock-1"]);
+    await ensureModels(cfg, agentDir);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey: "agent:main:main",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+    });
+
+    expect(result.meta.error?.kind).toBe("role_ordering");
+    expect(result.meta.error?.message).toMatch(/incorrect role information|roles must alternate/i);
+    expect(result.payloads?.[0]?.text).toContain("Message ordering conflict");
+  });
 });

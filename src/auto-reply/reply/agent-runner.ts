@@ -245,6 +245,42 @@ export async function runReplyAgent(params: {
     );
     return true;
   };
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> => {
+    if (!sessionKey || !activeSessionStore || !storePath) return false;
+    const nextSessionId = crypto.randomUUID();
+    const nextEntry: SessionEntry = {
+      ...(activeSessionStore[sessionKey] ?? activeSessionEntry),
+      sessionId: nextSessionId,
+      updatedAt: Date.now(),
+      systemSent: false,
+      abortedLastRun: false,
+    };
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const nextSessionFile = resolveSessionTranscriptPath(
+      nextSessionId,
+      agentId,
+      sessionCtx.MessageThreadId,
+    );
+    nextEntry.sessionFile = nextSessionFile;
+    activeSessionStore[sessionKey] = nextEntry;
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = nextEntry;
+      });
+    } catch (err) {
+      defaultRuntime.error(
+        `Failed to persist session reset after role ordering conflict (${sessionKey}): ${String(err)}`,
+      );
+    }
+    followupRun.run.sessionId = nextSessionId;
+    followupRun.run.sessionFile = nextSessionFile;
+    activeSessionEntry = nextEntry;
+    activeIsNewSession = true;
+    defaultRuntime.error(
+      `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+    );
+    return true;
+  };
   try {
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
@@ -260,6 +296,7 @@ export async function runReplyAgent(params: {
       shouldEmitToolResult,
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
       sessionKey,
       getActiveSessionEntry: () => activeSessionEntry,

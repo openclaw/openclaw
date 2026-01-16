@@ -20,7 +20,7 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
-    kind: "context_overflow" | "compaction_failure";
+    kind: "context_overflow" | "compaction_failure" | "role_ordering";
     message: string;
   };
 };

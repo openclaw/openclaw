@@ -222,4 +222,53 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
     }
   });
+  it("resets the session after role ordering payloads", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-role-ordering-"));
+    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    try {
+      const sessionId = "session";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "Message ordering conflict - please try again.", isError: true }],
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "role_ordering",
+            message: 'messages: roles must alternate between "user" and "assistant"',
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Message ordering conflict"),
+      });
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    } finally {
+      if (prevStateDir) {
+        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+      } else {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      }
+    }
+  });
 });
