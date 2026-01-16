@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CliBackendConfig } from "../config/types.js";
 import { runCliAgent } from "./cli-runner.js";
+import { cleanupSuspendedCliProcesses } from "./cli-runner/helpers.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const runExecMock = vi.fn();
@@ -17,9 +19,12 @@ describe("runCliAgent resume cleanup", () => {
   });
 
   it("kills stale resume processes for codex sessions", async () => {
-    // First call is for cleanupSuspendedCliProcesses (returns count 0)
-    // Second call is for cleanupResumeProcesses (pkill)
-    runExecMock.mockResolvedValue({ stdout: "0", stderr: "" });
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: "  1 S /bin/launchd\n",
+        stderr: "",
+      }) // cleanupSuspendedCliProcesses (ps)
+      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // cleanupResumeProcesses (pkill)
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "ok",
       stderr: "",
@@ -45,11 +50,7 @@ describe("runCliAgent resume cleanup", () => {
       return;
     }
 
-    // First call: cleanupSuspendedCliProcesses (bash to count)
-    // Second call: cleanupResumeProcesses (pkill)
     expect(runExecMock).toHaveBeenCalledTimes(2);
-
-    // Verify the pkill call for resume cleanup
     const pkillCall = runExecMock.mock.calls[1] ?? [];
     expect(pkillCall[0]).toBe("pkill");
     const pkillArgs = pkillCall[1] as string[];
@@ -58,45 +59,94 @@ describe("runCliAgent resume cleanup", () => {
     expect(pkillArgs[1]).toContain("resume");
     expect(pkillArgs[1]).toContain("thread-123");
   });
+});
 
-  it("cleans up suspended processes when threshold exceeded", async () => {
-    // Return count > 10 to trigger cleanup
-    runExecMock
-      .mockResolvedValueOnce({ stdout: "15", stderr: "" }) // count suspended
-      .mockResolvedValueOnce({ stdout: "", stderr: "" }); // kill command
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-    });
+describe("cleanupSuspendedCliProcesses", () => {
+  beforeEach(() => {
+    runExecMock.mockReset();
+  });
 
-    await runCliAgent({
-      sessionId: "s1",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider: "claude-cli",
-      timeoutMs: 1_000,
-      runId: "run-1",
-    });
+  it("skips when no session tokens are configured", async () => {
+    await cleanupSuspendedCliProcesses(
+      {
+        command: "tool",
+      } as CliBackendConfig,
+      0,
+    );
 
     if (process.platform === "win32") {
       expect(runExecMock).not.toHaveBeenCalled();
       return;
     }
 
-    // cleanupSuspendedCliProcesses: count + kill (2 calls)
-    // cleanupResumeProcesses: not called for claude-cli (no resumeArgs)
+    expect(runExecMock).not.toHaveBeenCalled();
+  });
+
+  it("matches sessionArg-based commands", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: [
+          "  40 T+ claude --session-id thread-1 -p",
+          "  41 S  claude --session-id thread-2 -p",
+        ].join("\n"),
+        stderr: "",
+      })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    await cleanupSuspendedCliProcesses(
+      {
+        command: "claude",
+        sessionArg: "--session-id",
+      } as CliBackendConfig,
+      0,
+    );
+
+    if (process.platform === "win32") {
+      expect(runExecMock).not.toHaveBeenCalled();
+      return;
+    }
+
     expect(runExecMock).toHaveBeenCalledTimes(2);
-
-    // First call: count suspended processes
-    const countCall = runExecMock.mock.calls[0] ?? [];
-    expect(countCall[0]).toBe("bash");
-
-    // Second call: kill suspended processes
     const killCall = runExecMock.mock.calls[1] ?? [];
-    expect(killCall[0]).toBe("bash");
+    expect(killCall[0]).toBe("kill");
+    expect(killCall[1]).toEqual(["-9", "40"]);
+  });
+
+  it("matches resumeArgs with positional session id", async () => {
+    runExecMock
+      .mockResolvedValueOnce({
+        stdout: [
+          "  50 T  codex exec resume thread-99 --color never --sandbox read-only",
+          "  51 T  codex exec resume other --color never --sandbox read-only",
+        ].join("\n"),
+        stderr: "",
+      })
+      .mockResolvedValueOnce({ stdout: "", stderr: "" });
+
+    await cleanupSuspendedCliProcesses(
+      {
+        command: "codex",
+        resumeArgs: [
+          "exec",
+          "resume",
+          "{sessionId}",
+          "--color",
+          "never",
+          "--sandbox",
+          "read-only",
+        ],
+      } as CliBackendConfig,
+      1,
+    );
+
+    if (process.platform === "win32") {
+      expect(runExecMock).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(runExecMock).toHaveBeenCalledTimes(2);
+    const killCall = runExecMock.mock.calls[1] ?? [];
+    expect(killCall[0]).toBe("kill");
+    expect(killCall[1]).toEqual(["-9", "50", "51"]);
   });
 });

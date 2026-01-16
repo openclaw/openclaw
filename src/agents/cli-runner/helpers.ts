@@ -44,42 +44,82 @@ export async function cleanupResumeProcesses(
   }
 }
 
+function buildSessionMatchers(backend: CliBackendConfig): RegExp[] {
+  const commandToken = path.basename(backend.command ?? "").trim();
+  if (!commandToken) return [];
+  const matchers: RegExp[] = [];
+  const sessionArg = backend.sessionArg?.trim();
+  const sessionArgs = backend.sessionArgs ?? [];
+  const resumeArgs = backend.resumeArgs ?? [];
+
+  const addMatcher = (args: string[]) => {
+    if (args.length === 0) return;
+    const tokens = [commandToken, ...args];
+    const pattern = tokens
+      .map((token, index) => {
+        const tokenPattern = tokenToRegex(token);
+        return index === 0 ? `(?:^|\\s)${tokenPattern}` : `\\s+${tokenPattern}`;
+      })
+      .join("");
+    matchers.push(new RegExp(pattern));
+  };
+
+  if (sessionArgs.some((arg) => arg.includes("{sessionId}"))) {
+    addMatcher(sessionArgs);
+  } else if (sessionArg) {
+    addMatcher([sessionArg, "{sessionId}"]);
+  }
+
+  if (resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
+    addMatcher(resumeArgs);
+  }
+
+  return matchers;
+}
+
+function tokenToRegex(token: string): string {
+  if (!token.includes("{sessionId}")) return escapeRegex(token);
+  const parts = token.split("{sessionId}").map((part) => escapeRegex(part));
+  return parts.join("\\S+");
+}
+
 /**
  * Cleanup suspended Clawdbot CLI processes that have accumulated.
  * Only cleans up if there are more than the threshold (default: 10).
- * Uses --session-id pattern to only target Clawdbot processes, not user's Claude Code sessions.
  */
 export async function cleanupSuspendedCliProcesses(
   backend: CliBackendConfig,
   threshold = 10,
 ): Promise<void> {
   if (process.platform === "win32") return;
-  const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) return;
-
-  // Pattern includes --session-id to only match Clawdbot processes
-  const pattern = `[${commandToken[0]}]${commandToken.slice(1)}.*--session-id`;
+  const matchers = buildSessionMatchers(backend);
+  if (matchers.length === 0) return;
 
   try {
-    // Count suspended Clawdbot processes
-    const { stdout } = await runExec("bash", [
-      "-c",
-      `ps aux | grep -E '${pattern}' | grep -E '\\s+T\\s+' | wc -l`,
-    ]);
-    const count = parseInt(stdout.trim(), 10) || 0;
+    const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
+    const suspended: number[] = [];
+    for (const line of stdout.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const match = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
+      if (!match) continue;
+      const pid = Number(match[1]);
+      const stat = match[2] ?? "";
+      const command = match[3] ?? "";
+      if (!Number.isFinite(pid)) continue;
+      if (!stat.includes("T")) continue;
+      if (!matchers.some((matcher) => matcher.test(command))) continue;
+      suspended.push(pid);
+    }
 
-    if (count > threshold) {
-      // Kill suspended Clawdbot processes only
-      await runExec("bash", [
-        "-c",
-        `ps aux | grep -E '${pattern}' | grep -E '\\s+T\\s+' | awk '{print $2}' | xargs kill -9 2>/dev/null`,
-      ]);
+    if (suspended.length > threshold) {
+      // Verified locally: stopped (T) processes ignore SIGTERM, so use SIGKILL.
+      await runExec("kill", ["-9", ...suspended.map((pid) => String(pid))]);
     }
   } catch {
     // ignore errors - best effort cleanup
   }
 }
-
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prior = CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
