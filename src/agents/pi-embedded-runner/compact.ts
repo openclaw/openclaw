@@ -8,6 +8,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -210,13 +211,29 @@ export async function compactEmbeddedPiSession(params: {
         const runtimeChannel = normalizeMessageChannel(
           params.messageChannel ?? params.messageProvider,
         );
-        const runtimeCapabilities = runtimeChannel
+        let runtimeCapabilities = runtimeChannel
           ? (resolveChannelCapabilities({
               cfg: params.config,
               channel: runtimeChannel,
               accountId: params.agentAccountId,
             }) ?? [])
           : undefined;
+        if (runtimeChannel === "telegram" && params.config) {
+          const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+            cfg: params.config,
+            accountId: params.agentAccountId ?? undefined,
+          });
+          if (inlineButtonsScope !== "off") {
+            if (!runtimeCapabilities) runtimeCapabilities = [];
+            if (
+              !runtimeCapabilities.some(
+                (cap) => String(cap).trim().toLowerCase() === "inlinebuttons",
+              )
+            ) {
+              runtimeCapabilities.push("inlineButtons");
+            }
+          }
+        }
         const runtimeInfo = {
           host: machineName,
           os: `${os.type()} ${os.release()}`,

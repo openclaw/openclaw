@@ -30,6 +30,7 @@ import {
 } from "../../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -40,6 +41,7 @@ import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
+import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   formatIMessageChatTarget,
@@ -76,6 +78,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
+  const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
+  const dbPath = opts.dbPath ?? imessageCfg.dbPath;
 
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
   const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
@@ -453,9 +457,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await inboundDebouncer.enqueue({ message });
   };
 
+  await waitForTransportReady({
+    label: "imsg rpc",
+    timeoutMs: 30_000,
+    logAfterMs: 10_000,
+    logIntervalMs: 10_000,
+    pollIntervalMs: 500,
+    abortSignal: opts.abortSignal,
+    runtime,
+    check: async () => {
+      const probe = await probeIMessage(2000, { cliPath, dbPath, runtime });
+      if (probe.ok) return { ok: true };
+      return { ok: false, error: probe.error ?? "unreachable" };
+    },
+  });
+
+  if (opts.abortSignal?.aborted) return;
+
   const client = await createIMessageRpcClient({
-    cliPath: opts.cliPath ?? imessageCfg.cliPath,
-    dbPath: opts.dbPath ?? imessageCfg.dbPath,
+    cliPath,
+    dbPath,
     runtime,
     onNotification: (msg) => {
       if (msg.method === "message") {

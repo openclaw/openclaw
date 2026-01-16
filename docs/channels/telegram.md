@@ -219,13 +219,15 @@ Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps
 
 ## Inline Buttons
 
-Telegram supports inline keyboards with callback buttons. Enable this feature via capabilities:
+Telegram supports inline keyboards with callback buttons.
 
 ```json5
 {
   "channels": {
     "telegram": {
-      "capabilities": ["inlineButtons"]
+      "capabilities": {
+        "inlineButtons": "allowlist"
+      }
     }
   }
 }
@@ -238,13 +240,25 @@ For per-account configuration:
     "telegram": {
       "accounts": {
         "main": {
-          "capabilities": ["inlineButtons"]
+          "capabilities": {
+            "inlineButtons": "allowlist"
+          }
         }
       }
     }
   }
 }
 ```
+
+Scopes:
+- `off` — inline buttons disabled
+- `dm` — only DMs (group targets blocked)
+- `group` — only groups (DM targets blocked)
+- `all` — DMs + groups
+- `allowlist` — DMs + groups, but only senders allowed by `allowFrom`/`groupAllowFrom` (same rules as control commands)
+
+Default: `allowlist`.
+Legacy: `capabilities: ["inlineButtons"]` = `inlineButtons: "all"`.
 
 ### Sending buttons
 
@@ -273,12 +287,12 @@ When a user clicks a button, the callback data is sent back to the agent as a me
 
 ### Configuration options
 
-Telegram capabilities can be configured at two levels:
+Telegram capabilities can be configured at two levels (object form shown above; legacy string arrays still supported):
 
-- `channels.telegram.capabilities`: Global default capability list applied to all Telegram accounts unless overridden.
-- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities that override or extend the global defaults for that specific account.
+- `channels.telegram.capabilities`: Global default capability config applied to all Telegram accounts unless overridden.
+- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities that override the global defaults for that specific account.
 
-Use the global setting when all Telegram bots/accounts should behave the same. Use per-account configuration when different bots need different behaviors (for example, one account only handles DMs while another is allowed in groups or has extra capabilities).
+Use the global setting when all Telegram bots/accounts should behave the same. Use per-account configuration when different bots need different behaviors (for example, one account only handles DMs while another is allowed in groups).
 ## Access control (DMs + groups)
 
 ### DM access
@@ -397,8 +411,8 @@ The agent sees reactions as **system notifications** in the conversation history
 
 **Configuration:**
 - `channels.telegram.reactionNotifications`: Controls which reactions trigger notifications
-  - `"off"` — ignore all reactions (default when not set)
-  - `"own"` — notify when users react to bot messages (best-effort; in-memory)
+  - `"off"` — ignore all reactions
+  - `"own"` — notify when users react to bot messages (best-effort; in-memory) (default)
   - `"all"` — notify for all reactions
 
 - `channels.telegram.reactionLevel`: Controls agent's reaction capability
@@ -477,8 +491,8 @@ Provider options:
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
   - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-- `channels.telegram.capabilities`: Enable channel features (e.g., "inlineButtons").
-- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities.
+- `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
+- `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
@@ -491,8 +505,8 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
-- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
-- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `ack` when not set).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).

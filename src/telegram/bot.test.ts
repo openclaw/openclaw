@@ -6,18 +6,14 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
-import { listSkillCommandsForWorkspace } from "../auto-reply/skill-commands.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  return listSkillCommandsForWorkspace({
-    workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-    cfg: config,
-  });
+  return listSkillCommandsForAgents({ cfg: config });
 }
 
 const { loadWebMedia } = vi.hoisted(() => ({
@@ -380,6 +376,47 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+
+  it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-2",
+        data: "cmd:option_b",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 11,
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
   });
 
   it("wraps inbound message with Telegram envelope", async () => {
@@ -2208,6 +2245,37 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("defaults reactionNotifications to own", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+    wasSentByBot.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 502 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 43,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
   });
 
   it("allows reaction in all mode regardless of message sender", async () => {

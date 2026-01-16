@@ -26,6 +26,7 @@ They run immediately, are stripped before the model sees the message, and the re
 {
   commands: {
     native: "auto",
+    nativeSkills: "auto",
     text: true,
     bash: false,
     bashForegroundMs: 2000,
@@ -43,6 +44,9 @@ They run immediately, are stripped before the model sees the message, and the re
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
   - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.nativeSkills` (default `"auto"`) registers **skill** commands natively when supported.
+  - Auto: on for Discord/Telegram; off for Slack (Slack requires creating a slash command per skill).
+  - Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 - `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).

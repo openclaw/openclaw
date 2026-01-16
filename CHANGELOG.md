@@ -15,11 +15,14 @@
 ### Changes
 - CLI: set process titles to `clawdbot-<command>` for clearer process listings.
 - CLI/macOS: sync remote SSH target/identity to config and let `gateway status` auto-infer SSH targets (ssh-config aware).
+- Telegram: scope inline buttons with allowlist default + callback gating in DMs/groups.
+- Telegram: default reaction notifications to own.
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.
+- Sessions: add `session.identityLinks` for cross-platform DM session linking. (#1033) — thanks @thewilloftheshadow.
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
-- Skills: add user-invocable skill commands with sanitized names and an opt-out for model invocation.
+- Skills: add user-invocable skill commands (sanitized + unique), native skill registration gating, and an opt-out for model invocation.
 - Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.
 - TUI: show provider/model labels for the active session and default model.
 - Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
@@ -29,6 +32,7 @@
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
+- Agents: default to no narration for routine tool calls. (#1008) — thanks @cpojer.
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.
 - macOS: add `system.which` for prompt-free remote skill discovery (with gateway fallback to `system.run`).
 - Docs: add Date & Time guide and update prompt/timezone configuration docs.
@@ -43,12 +47,16 @@
 - Browser: increase remote CDP reachability timeouts + add `remoteCdpTimeoutMs`/`remoteCdpHandshakeTimeoutMs`.
 - Browser: preserve auth/query tokens for remote CDP endpoints and pass Basic auth for CDP HTTP/WS. (#895) — thanks @mukhtharcm.
 - Telegram: add bidirectional reaction support with configurable notifications and agent guidance. (#964) — thanks @bohdanpodvirnyi.
+- Telegram: default reaction level to minimal for more delightful baseline reactions.
 - Telegram: allow custom commands in the bot menu (merged with native; conflicts ignored). (#860) — thanks @nachoiacovino.
 - Discord: allow allowlisted guilds without channel lists to receive messages when `groupPolicy="allowlist"`. — thanks @thewilloftheshadow.
 - Discord: allow emoji/sticker uploads + channel actions in config defaults. (#870) — thanks @JDIVE.
 
 ### Fixes
 - WhatsApp: default response prefix only for self-chat, using identity name when set.
+- Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
+- Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.
+- Agents: avoid JSON Schema `format` collisions in tool params by renaming snapshot format fields. (#1013) — thanks @marcmarg.
 - Fix: make `clawdbot update` auto-update global installs when installed via a package manager.
 - Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
 - Fix: align OpenAI image-gen defaults with DALL-E 3 standard quality and document output formats. (#880) — thanks @mkbehr.
@@ -70,8 +78,11 @@
 - Fix: normalize pairing CLI aliases, allow extension channels, and harden Zalo webhook payload parsing. (#991) — thanks @longmaba.
 - Fix: allow local Tailscale Serve hostnames without treating tailnet clients as direct. (#885) — thanks @oswalpalash.
 - Fix: reset sessions after role-ordering conflicts to recover from consecutive user turns. (#998)
+- Fix: repair orphaned user turns before embedded prompts to avoid role-ordering lockouts. (#1026) — thanks @odrobnik.
 - Fix: keep background exec aborts from killing backgrounded sessions while honoring timeouts.
+- Fix: use local auth for gateway security probe unless remote mode has a URL. (#1011) — thanks @ivanrvpereira.
 - Discord: truncate skill command descriptions for slash command limits. (#1018) — thanks @evalexpr.
+- macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
 
 ## 2026.1.14-1
 

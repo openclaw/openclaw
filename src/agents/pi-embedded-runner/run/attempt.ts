@@ -9,6 +9,7 @@ import { createAgentSession, SessionManager, SettingsManager } from "@mariozechn
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
@@ -157,13 +158,27 @@ export async function runEmbeddedAttempt(
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = runtimeChannel
+    let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
+    if (runtimeChannel === "telegram" && params.config) {
+      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+        cfg: params.config,
+        accountId: params.agentAccountId ?? undefined,
+      });
+      if (inlineButtonsScope !== "off") {
+        if (!runtimeCapabilities) runtimeCapabilities = [];
+        if (
+          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
+        ) {
+          runtimeCapabilities.push("inlineButtons");
+        }
+      }
+    }
     const reactionGuidance =
       runtimeChannel === "telegram" && params.config
         ? (() => {
@@ -426,35 +441,30 @@ export async function runEmbeddedAttempt(
         const promptStartedAt = Date.now();
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
 
-        // Check if last message is a user message to prevent consecutive user turns
-        const lastMsg = activeSession.messages[activeSession.messages.length - 1];
-        const lastMsgRole =
-          lastMsg && typeof lastMsg === "object" ? (lastMsg as { role?: unknown }).role : undefined;
-
-        if (lastMsgRole === "user") {
-          // Last message was a user message. Adding another user message would create
-          // consecutive user turns, violating Anthropic's role ordering requirement.
-          // This can happen when:
-          // 1. A previous heartbeat didn't get a response
-          // 2. A user message errored before getting an assistant response
-          // Skip this prompt to prevent "400 Incorrect role information" error.
+        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+        const leafEntry = sessionManager.getLeafEntry();
+        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+          if (leafEntry.parentId) {
+            sessionManager.branch(leafEntry.parentId);
+          } else {
+            sessionManager.resetLeaf();
+          }
+          const sessionContext = sessionManager.buildSessionContext();
+          activeSession.agent.replaceMessages(sessionContext.messages);
           log.warn(
-            `Skipping prompt because last message is a user message (would create consecutive user turns). ` +
+            `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,
           );
-          promptError = new Error(
-            "Incorrect role information: consecutive user messages would violate role ordering",
+        }
+
+        try {
+          await activeSession.prompt(params.prompt, { images: params.images });
+        } catch (err) {
+          promptError = err;
+        } finally {
+          log.debug(
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
-        } else {
-          try {
-            await activeSession.prompt(params.prompt, { images: params.images });
-          } catch (err) {
-            promptError = err;
-          } finally {
-            log.debug(
-              `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
-            );
-          }
         }
 
         try {

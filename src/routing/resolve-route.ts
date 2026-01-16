@@ -70,6 +70,7 @@ export function buildAgentSessionKey(params: {
   peer?: RoutePeer | null;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer";
+  identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const peer = params.peer;
@@ -80,6 +81,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "dm",
     peerId: peer ? normalizeId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    identityLinks: params.identityLinks,
   });
 }
 
@@ -153,6 +155,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   });
 
   const dmScope = input.cfg.session?.dmScope ?? "main";
+  const identityLinks = input.cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
@@ -165,6 +168,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         channel,
         peer,
         dmScope,
+        identityLinks,
       }),
       mainSessionKey: buildAgentMainSessionKey({
         agentId: resolvedAgentId,

@@ -4,10 +4,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
-import { danger } from "../globals.js";
 import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
+import { waitForTransportReady } from "../infra/transport-ready.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
@@ -145,23 +145,27 @@ async function waitForSignalDaemonReady(params: {
   baseUrl: string;
   abortSignal?: AbortSignal;
   timeoutMs: number;
+  logAfterMs: number;
+  logIntervalMs?: number;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const started = Date.now();
-  let lastError: string | null = null;
-
-  while (Date.now() - started < params.timeoutMs) {
-    if (params.abortSignal?.aborted) return;
-    const res = await signalCheck(params.baseUrl, 1000);
-    if (res.ok) return;
-    lastError = res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable");
-    await new Promise((r) => setTimeout(r, 150));
-  }
-
-  params.runtime.error?.(
-    danger(`daemon not ready after ${params.timeoutMs}ms (${lastError ?? "unknown error"})`),
-  );
-  throw new Error(`signal daemon not ready (${lastError ?? "unknown error"})`);
+  await waitForTransportReady({
+    label: "signal daemon",
+    timeoutMs: params.timeoutMs,
+    logAfterMs: params.logAfterMs,
+    logIntervalMs: params.logIntervalMs,
+    pollIntervalMs: 150,
+    abortSignal: params.abortSignal,
+    runtime: params.runtime,
+    check: async () => {
+      const res = await signalCheck(params.baseUrl, 1000);
+      if (res.ok) return { ok: true };
+      return {
+        ok: false,
+        error: res.error ?? (res.status ? `HTTP ${res.status}` : "unreachable"),
+      };
+    },
+  });
 }
 
 async function fetchAttachment(params: {
@@ -305,7 +309,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await waitForSignalDaemonReady({
         baseUrl,
         abortSignal: opts.abortSignal,
-        timeoutMs: 10_000,
+        timeoutMs: 30_000,
+        logAfterMs: 10_000,
+        logIntervalMs: 10_000,
         runtime,
       });
     }

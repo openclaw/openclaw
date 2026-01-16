@@ -9,8 +9,7 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
-import { listSkillCommandsForWorkspace } from "../auto-reply/skill-commands.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -39,18 +38,15 @@ export const registerTelegramNativeCommands = ({
   textLimit,
   useAccessGroups,
   nativeEnabled,
+  nativeSkillsEnabled,
   nativeDisabledExplicit,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   opts,
 }) => {
-  const skillCommands = nativeEnabled
-    ? listSkillCommandsForWorkspace({
-        workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
-        cfg,
-      })
-    : [];
+  const skillCommands =
+    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
   const nativeCommands = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
     : [];

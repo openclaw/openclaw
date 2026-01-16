@@ -13,6 +13,7 @@ export const SessionSchema = z
     dmScope: z
       .union([z.literal("main"), z.literal("per-peer"), z.literal("per-channel-peer")])
       .optional(),
+    identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
@@ -72,6 +73,7 @@ export const MessagesSchema = z
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
+    nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
@@ -81,4 +83,4 @@ export const CommandsSchema = z
     useAccessGroups: z.boolean().optional(),
   })
   .optional()
-  .default({ native: "auto" });
+  .default({ native: "auto", nativeSkills: "auto" });
