@@ -11,11 +11,16 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
-import { parseFrontmatter, resolveClawdbotMetadata } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  resolveClawdbotMetadata,
+  resolveSkillInvocationPolicy,
+} from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
+  SkillCommandSpec,
   SkillEntry,
   SkillSnapshot,
 } from "./types.js";
@@ -41,6 +46,34 @@ function filterSkillEntries(
     console.log(`[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`);
   }
   return filtered;
+}
+
+const SKILL_COMMAND_MAX_LENGTH = 32;
+const SKILL_COMMAND_FALLBACK = "skill";
+
+function sanitizeSkillCommandName(raw: string): string {
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const trimmed = normalized.slice(0, SKILL_COMMAND_MAX_LENGTH);
+  return trimmed || SKILL_COMMAND_FALLBACK;
+}
+
+function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
+  const normalizedBase = base.toLowerCase();
+  if (!used.has(normalizedBase)) return base;
+  for (let index = 2; index < 1000; index += 1) {
+    const suffix = `_${index}`;
+    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
+    const trimmedBase = base.slice(0, maxBaseLength);
+    const candidate = `${trimmedBase}${suffix}`;
+    const candidateKey = candidate.toLowerCase();
+    if (!used.has(candidateKey)) return candidate;
+  }
+  const fallback = `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
+  return fallback;
 }
 
 function loadSkillEntries(
@@ -114,6 +147,7 @@ function loadSkillEntries(
       skill,
       frontmatter,
       clawdbot: resolveClawdbotMetadata(frontmatter),
+      invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
   return skillEntries;
@@ -139,7 +173,10 @@ export function buildWorkspaceSkillSnapshot(
     opts?.skillFilter,
     opts?.eligibility,
   );
-  const resolvedSkills = eligible.map((entry) => entry.skill);
+  const promptEntries = eligible.filter(
+    (entry) => entry.invocation?.disableModelInvocation !== true,
+  );
+  const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const prompt = [remoteNote, formatSkillsForPrompt(resolvedSkills)].filter(Boolean).join("\n");
   return {
@@ -172,8 +209,11 @@ export function buildWorkspaceSkillsPrompt(
     opts?.skillFilter,
     opts?.eligibility,
   );
+  const promptEntries = eligible.filter(
+    (entry) => entry.invocation?.disableModelInvocation !== true,
+  );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  return [remoteNote, formatSkillsForPrompt(eligible.map((entry) => entry.skill))]
+  return [remoteNote, formatSkillsForPrompt(promptEntries.map((entry) => entry.skill))]
     .filter(Boolean)
     .join("\n");
 }
@@ -250,4 +290,45 @@ export function filterWorkspaceSkillEntries(
   config?: ClawdbotConfig,
 ): SkillEntry[] {
   return filterSkillEntries(entries, config);
+}
+
+export function buildWorkspaceSkillCommandSpecs(
+  workspaceDir: string,
+  opts?: {
+    config?: ClawdbotConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    entries?: SkillEntry[];
+    skillFilter?: string[];
+    eligibility?: SkillEligibilityContext;
+    reservedNames?: Set<string>;
+  },
+): SkillCommandSpec[] {
+  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+    opts?.eligibility,
+  );
+  const userInvocable = eligible.filter(
+    (entry) => entry.invocation?.userInvocable !== false,
+  );
+  const used = new Set<string>();
+  for (const reserved of opts?.reservedNames ?? []) {
+    used.add(reserved.toLowerCase());
+  }
+
+  const specs: SkillCommandSpec[] = [];
+  for (const entry of userInvocable) {
+    const base = sanitizeSkillCommandName(entry.skill.name);
+    const unique = resolveUniqueSkillCommandName(base, used);
+    used.add(unique.toLowerCase());
+    specs.push({
+      name: unique,
+      skillName: entry.skill.name,
+      description: entry.skill.description?.trim() || entry.skill.name,
+    });
+  }
+  return specs;
 }

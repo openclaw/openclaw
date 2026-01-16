@@ -22,6 +22,7 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry.js";
+import type { SkillCommandSpec } from "../agents/skills.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
 type AgentConfig = Partial<NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>>;
@@ -352,9 +353,14 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
   ].join("\n");
 }
 
-export function buildCommandsMessage(cfg?: ClawdbotConfig): string {
+export function buildCommandsMessage(
+  cfg?: ClawdbotConfig,
+  skillCommands?: SkillCommandSpec[],
+): string {
   const lines = ["ℹ️ Slash commands"];
-  const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
+  const commands = cfg
+    ? listChatCommandsForConfig(cfg, { skillCommands })
+    : listChatCommands({ skillCommands });
   for (const command of commands) {
     const primary = command.nativeName
       ? `/${command.nativeName}`

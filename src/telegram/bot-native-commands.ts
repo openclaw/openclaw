@@ -9,6 +9,8 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
+import { listSkillCommandsForWorkspace } from "../auto-reply/skill-commands.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -43,10 +45,21 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   opts,
 }) => {
-  const nativeCommands = nativeEnabled ? listNativeCommandSpecsForConfig(cfg) : [];
+  const skillCommands = nativeEnabled
+    ? listSkillCommandsForWorkspace({
+        workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+        cfg,
+      })
+    : [];
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
+    : [];
   const reservedCommands = new Set(
     listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
   );
+  for (const command of skillCommands) {
+    reservedCommands.add(command.name.toLowerCase());
+  }
   const customResolution = resolveTelegramCustomCommands({
     commands: telegramCfg.customCommands,
     reservedCommands,

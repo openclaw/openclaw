@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../config/types.js";
+import type { SkillCommandSpec } from "../agents/skills.js";
 import { CHAT_COMMANDS, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -61,8 +62,24 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function listChatCommands(): ChatCommandDefinition[] {
-  return [...CHAT_COMMANDS];
+function buildSkillCommandDefinitions(
+  skillCommands?: SkillCommandSpec[],
+): ChatCommandDefinition[] {
+  if (!skillCommands || skillCommands.length === 0) return [];
+  return skillCommands.map((spec) => ({
+    key: `skill:${spec.skillName}`,
+    nativeName: spec.name,
+    description: spec.description,
+    textAliases: [`/${spec.name}`],
+    acceptsArgs: true,
+    argsParsing: "none",
+    scope: "both",
+  }));
+}
+
+export function listChatCommands(params?: { skillCommands?: SkillCommandSpec[] }): ChatCommandDefinition[] {
+  if (!params?.skillCommands?.length) return [...CHAT_COMMANDS];
+  return [...CHAT_COMMANDS, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
 export function isCommandEnabled(cfg: ClawdbotConfig, commandKey: string): boolean {
@@ -72,23 +89,31 @@ export function isCommandEnabled(cfg: ClawdbotConfig, commandKey: string): boole
   return true;
 }
 
-export function listChatCommandsForConfig(cfg: ClawdbotConfig): ChatCommandDefinition[] {
-  return CHAT_COMMANDS.filter((command) => isCommandEnabled(cfg, command.key));
+export function listChatCommandsForConfig(
+  cfg: ClawdbotConfig,
+  params?: { skillCommands?: SkillCommandSpec[] },
+): ChatCommandDefinition[] {
+  const base = CHAT_COMMANDS.filter((command) => isCommandEnabled(cfg, command.key));
+  if (!params?.skillCommands?.length) return base;
+  return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
-export function listNativeCommandSpecs(): NativeCommandSpec[] {
-  return CHAT_COMMANDS.filter((command) => command.scope !== "text" && command.nativeName).map(
-    (command) => ({
+export function listNativeCommandSpecs(params?: { skillCommands?: SkillCommandSpec[] }): NativeCommandSpec[] {
+  return listChatCommands({ skillCommands: params?.skillCommands })
+    .filter((command) => command.scope !== "text" && command.nativeName)
+    .map((command) => ({
       name: command.nativeName ?? command.key,
       description: command.description,
       acceptsArgs: Boolean(command.acceptsArgs),
       args: command.args,
-    }),
-  );
+    }));
 }
 
-export function listNativeCommandSpecsForConfig(cfg: ClawdbotConfig): NativeCommandSpec[] {
-  return listChatCommandsForConfig(cfg)
+export function listNativeCommandSpecsForConfig(
+  cfg: ClawdbotConfig,
+  params?: { skillCommands?: SkillCommandSpec[] },
+): NativeCommandSpec[] {
+  return listChatCommandsForConfig(cfg, params)
     .filter((command) => command.scope !== "text" && command.nativeName)
     .map((command) => ({
       name: command.nativeName ?? command.key,

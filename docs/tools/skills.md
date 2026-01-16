@@ -80,6 +80,8 @@ Notes:
 - Use `{baseDir}` in instructions to reference the skill folder path.
 - Optional frontmatter keys:
   - `homepage` — URL surfaced as “Website” in the macOS Skills UI (also supported via `metadata.clawdbot.homepage`).
+  - `user-invocable` — `true|false` (default: `true`). When `true`, the skill is exposed as a user slash command.
+  - `disable-model-invocation` — `true|false` (default: `false`). When `true`, the skill is excluded from the model prompt (still available via user invocation).
 
 ## Gating (load-time filters)
 

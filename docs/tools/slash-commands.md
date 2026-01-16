@@ -96,6 +96,7 @@ Notes:
   - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
   - Currently: `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+- **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
 ## Usage vs cost (what shows where)
