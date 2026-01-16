@@ -179,7 +179,7 @@ public struct ClawdbotChatView: View {
         }
 
         if let text = self.viewModel.streamingAssistantText, AssistantTextParser.hasVisibleContent(in: text) {
-            ChatStreamingAssistantBubble(text: text)
+            ChatStreamingAssistantBubble(text: text, markdownVariant: self.markdownVariant)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

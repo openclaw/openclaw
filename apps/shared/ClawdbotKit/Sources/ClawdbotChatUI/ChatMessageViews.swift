@@ -487,10 +487,11 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     let text: String
+    let markdownVariant: ChatMarkdownVariant
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ChatAssistantTextBody(text: self.text)
+            ChatAssistantTextBody(text: self.text, markdownVariant: self.markdownVariant)
         }
         .padding(12)
         .background(
@@ -594,8 +595,6 @@ private struct TypingDots: View {
     }
 }
 
-@MainActor
-@MainActor
 private struct ChatAssistantTextBody: View {
     let text: String
     let markdownVariant: ChatMarkdownVariant
