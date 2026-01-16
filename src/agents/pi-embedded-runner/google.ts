@@ -59,7 +59,17 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   }
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
+  const properties =
+    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
+      ? (record.properties as Record<string, unknown>)
+      : undefined;
+  if (properties) {
+    for (const [key, value] of Object.entries(properties)) {
+      violations.push(...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`));
+    }
+  }
   for (const [key, value] of Object.entries(record)) {
+    if (key === "properties") continue;
     if (GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS.has(key)) {
       violations.push(`${path}.${key}`);
     }
