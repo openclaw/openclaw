@@ -113,7 +113,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -168,7 +173,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
@@ -211,7 +221,12 @@ describe("web monitor inbox", () => {
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     // Message from someone else should be blocked
@@ -316,7 +331,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -367,7 +387,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -405,7 +430,12 @@ describe("web monitor inbox", () => {
 
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {

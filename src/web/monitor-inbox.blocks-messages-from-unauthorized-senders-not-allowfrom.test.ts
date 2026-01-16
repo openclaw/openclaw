@@ -115,7 +115,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     // Message from unauthorized sender +999 (not in allowFrom)
@@ -176,7 +181,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -252,7 +262,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -293,7 +308,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -337,7 +357,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -381,7 +406,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -428,7 +458,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -473,7 +508,12 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, accountId: _ACCOUNT_ID, authDir, onMessage });
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
     const sock = await createWaSocket();
 
     const upsert = {
