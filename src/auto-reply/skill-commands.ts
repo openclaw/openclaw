@@ -1,9 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
-import {
-  buildWorkspaceSkillCommandSpecs,
-  type SkillCommandSpec,
-} from "../agents/skills.js";
+import { buildWorkspaceSkillCommandSpecs, type SkillCommandSpec } from "../agents/skills.js";
 import { listChatCommands } from "./commands-registry.js";
 
 function resolveReservedCommandNames(): Set<string> {
@@ -42,9 +39,7 @@ export function resolveSkillCommandInvocation(params: {
   if (!match) return null;
   const commandName = match[1]?.trim().toLowerCase();
   if (!commandName) return null;
-  const command = params.skillCommands.find(
-    (entry) => entry.name.toLowerCase() === commandName,
-  );
+  const command = params.skillCommands.find((entry) => entry.name.toLowerCase() === commandName);
   if (!command) return null;
   const args = match[2]?.trim();
   return { command, args: args || undefined };

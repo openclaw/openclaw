@@ -211,9 +211,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         ),
       );
       defaultRuntime.log(
-        theme.muted(
-          "Examples: `npm i -g clawdbot@latest` or `pnpm add -g clawdbot@latest`",
-        ),
+        theme.muted("Examples: `npm i -g clawdbot@latest` or `pnpm add -g clawdbot@latest`"),
       );
     }
     defaultRuntime.exit(0);

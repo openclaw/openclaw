@@ -62,9 +62,7 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function buildSkillCommandDefinitions(
-  skillCommands?: SkillCommandSpec[],
-): ChatCommandDefinition[] {
+function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatCommandDefinition[] {
   if (!skillCommands || skillCommands.length === 0) return [];
   return skillCommands.map((spec) => ({
     key: `skill:${spec.skillName}`,
@@ -77,7 +75,9 @@ function buildSkillCommandDefinitions(
   }));
 }
 
-export function listChatCommands(params?: { skillCommands?: SkillCommandSpec[] }): ChatCommandDefinition[] {
+export function listChatCommands(params?: {
+  skillCommands?: SkillCommandSpec[];
+}): ChatCommandDefinition[] {
   if (!params?.skillCommands?.length) return [...CHAT_COMMANDS];
   return [...CHAT_COMMANDS, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
@@ -98,7 +98,9 @@ export function listChatCommandsForConfig(
   return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
-export function listNativeCommandSpecs(params?: { skillCommands?: SkillCommandSpec[] }): NativeCommandSpec[] {
+export function listNativeCommandSpecs(params?: {
+  skillCommands?: SkillCommandSpec[];
+}): NativeCommandSpec[] {
   return listChatCommands({ skillCommands: params?.skillCommands })
     .filter((command) => command.scope !== "text" && command.nativeName)
     .map((command) => ({
