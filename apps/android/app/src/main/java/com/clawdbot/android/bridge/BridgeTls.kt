@@ -1,5 +1,6 @@
 package com.clawdbot.android.bridge
 
+import android.annotation.SuppressLint
 import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -21,6 +22,7 @@ fun createBridgeSocket(params: BridgeTlsParams?, onStore: ((String) -> Unit)? = 
   if (params == null) return Socket()
   val expected = params.expectedFingerprint?.let(::normalizeFingerprint)
   val defaultTrust = defaultTrustManager()
+  @SuppressLint("CustomX509TrustManager")
   val trustManager =
     object : X509TrustManager {
       override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {

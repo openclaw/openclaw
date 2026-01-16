@@ -119,7 +119,7 @@ dependencies {
   testImplementation("io.kotest:kotest-runner-junit5-jvm:6.0.7")
   testImplementation("io.kotest:kotest-assertions-core-jvm:6.0.7")
   testImplementation("org.robolectric:robolectric:4.16")
-  testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.1")
+  testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.2")
 }
 
 tasks.withType<Test>().configureEach {
