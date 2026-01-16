@@ -272,7 +272,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel } = runOutcome;
+    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -314,6 +314,7 @@ export async function runReplyAgent(params: {
       didLogHeartbeatStrip,
       blockStreamingEnabled,
       blockReplyPipeline,
+      directlySentBlockKeys,
       replyToMode,
       replyToChannel,
       currentMessageId: sessionCtx.MessageSid,

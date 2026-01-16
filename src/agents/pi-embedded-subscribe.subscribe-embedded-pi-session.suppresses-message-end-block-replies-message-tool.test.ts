@@ -14,7 +14,7 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
 
-  it("suppresses message_end block replies when the message tool already sent", () => {
+  it("suppresses message_end block replies when the message tool already sent", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -41,6 +41,9 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { action: "send", to: "+1555", message: messageText },
     });
 
+    // Wait for async handler to complete
+    await Promise.resolve();
+
     handler?.({
       type: "tool_execution_end",
       toolName: "message",
@@ -58,7 +61,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).not.toHaveBeenCalled();
   });
-  it("does not suppress message_end replies when message tool reports error", () => {
+  it("does not suppress message_end replies when message tool reports error", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -84,6 +87,9 @@ describe("subscribeEmbeddedPiSession", () => {
       toolCallId: "tool-message-err",
       args: { action: "send", to: "+1555", message: messageText },
     });
+
+    // Wait for async handler to complete
+    await Promise.resolve();
 
     handler?.({
       type: "tool_execution_end",
