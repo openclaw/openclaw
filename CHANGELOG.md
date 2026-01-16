@@ -2,6 +2,7 @@
 
 ## 2026.1.15 (unreleased)
 
+- CLI: set process titles to `clawdbot-<command>` for clearer process listings.
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
 - Onboarding: switch channels setup to a single-select loop with per-channel actions and disabled hints in the picker.
