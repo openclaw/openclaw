@@ -77,7 +77,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 2) **Model/Auth**
    - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
-   - **Anthropic token (setup-token)**: run `claude setup-token` on the gateway host (the wizard can run it for you and reuse the token).
+   - **Anthropic token (setup-token)**: run `claude setup-token` locally (the wizard can run it for you and reuse the token) or run it elsewhere and paste the token.
    - **Anthropic OAuth (Claude Code CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
    - **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.

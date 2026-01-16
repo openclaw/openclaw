@@ -63,7 +63,7 @@ clawdbot models auth paste-token --provider anthropic
 ### CLI setup
 
 ```bash
-# Run setup-token on the gateway host (wizard can run it for you)
+# Run setup-token locally (wizard can run it for you)
 clawdbot onboard --auth-choice setup-token
 
 # Reuse Claude Code CLI OAuth credentials if already logged in
@@ -80,7 +80,7 @@ clawdbot onboard --auth-choice claude-cli
 
 ## Notes
 
-- The wizard can run `claude setup-token` on the gateway host and store the token.
+- The wizard can run `claude setup-token` locally and store the token, or you can paste a token generated elsewhere.
 - Clawdbot writes `auth.profiles["anthropic:claude-cli"].mode` as `"oauth"` so the profile
   accepts both OAuth and setup-token credentials. Older configs using `"token"` are
   auto-migrated on load.
