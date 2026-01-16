@@ -203,7 +203,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       ) {
         const text = typeof params.message === "string" ? params.message : "";
         if (text.trim()) {
-          const agentId = resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg });
+          const agentId = resolveSessionAgentId({
+            sessionKey: options.agentSessionKey,
+            config: cfg,
+          });
           await appendAssistantMessageToSessionTranscript({
             agentId,
             sessionKey: options.agentSessionKey,

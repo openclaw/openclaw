@@ -99,9 +99,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
 
     // Create existing transcript
-    const existingHeader = { type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString() };
+    const existingHeader = {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+    };
     const existingMessage = { message: { role: "user", content: [{ type: "text", text: "Hi" }] } };
-    fs.writeFileSync(sessionFile, `${JSON.stringify(existingHeader)}\n${JSON.stringify(existingMessage)}\n`, "utf-8");
+    fs.writeFileSync(
+      sessionFile,
+      `${JSON.stringify(existingHeader)}\n${JSON.stringify(existingMessage)}\n`,
+      "utf-8",
+    );
 
     const store = {
       [sessionKey]: {

@@ -117,7 +117,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
     // Optional: mirror delivered text back into the session transcript so the agent "remembers" it.
     if (cfg.messages?.deliveryMirror?.enabled && params.sessionKey) {
-      const { appendAssistantMessageToSessionTranscript } = await import("../../config/sessions.js");
+      const { appendAssistantMessageToSessionTranscript } =
+        await import("../../config/sessions.js");
       const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg });
       await appendAssistantMessageToSessionTranscript({
         agentId,

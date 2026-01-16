@@ -200,7 +200,8 @@ export async function executeJob(
       message: job.payload.message,
     });
     if (res.status === "ok") await finish("ok", undefined, res.summary, res.outputText);
-    else if (res.status === "skipped") await finish("skipped", undefined, res.summary, res.outputText);
+    else if (res.status === "skipped")
+      await finish("skipped", undefined, res.summary, res.outputText);
     else await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
   } catch (err) {
     await finish("error", String(err));
