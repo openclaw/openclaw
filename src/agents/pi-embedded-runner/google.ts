@@ -204,12 +204,15 @@ export async function sanitizeSessionHistory(params: {
       : undefined,
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
-  const shouldDowngradeGemini = isGeminiLike && !isAntigravityClaudeModel;
+  const isAntigravityProvider =
+    provider === "google-antigravity" || params.modelApi === "google-antigravity";
+  const shouldDowngradeThinking = isGeminiLike && !isAntigravityClaudeModel;
   // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
-  const downgradedThinking = shouldDowngradeGemini
+  const downgradedThinking = shouldDowngradeThinking
     ? downgradeGeminiThinkingBlocks(repairedTools)
     : repairedTools;
-  const downgraded = shouldDowngradeGemini
+  const shouldDowngradeHistory = shouldDowngradeThinking && !isAntigravityProvider;
+  const downgraded = shouldDowngradeHistory
     ? downgradeGeminiHistory(downgradedThinking)
     : downgradedThinking;
 
