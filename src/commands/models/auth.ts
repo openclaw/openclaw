@@ -11,7 +11,7 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot } from "../../config/config.js";
+import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";

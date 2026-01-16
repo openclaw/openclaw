@@ -8,7 +8,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import type { ChannelChoice } from "./onboard-types.js";
 import {
   getChannelOnboardingAdapter,
@@ -44,12 +44,28 @@ async function promptConfiguredAction(params: {
   supportsDelete: boolean;
 }): Promise<ConfiguredChannelAction> {
   const { prompter, label, supportsDisable, supportsDelete } = params;
-  const options = [
-    { value: "update", label: "Modify settings" },
-    ...(supportsDisable ? [{ value: "disable", label: "Disable (keeps config)" }] : []),
-    ...(supportsDelete ? [{ value: "delete", label: "Delete config" }] : []),
-    { value: "skip", label: "Skip (leave as-is)" },
-  ] as const;
+  const updateOption: WizardSelectOption<ConfiguredChannelAction> = {
+    value: "update",
+    label: "Modify settings",
+  };
+  const disableOption: WizardSelectOption<ConfiguredChannelAction> = {
+    value: "disable",
+    label: "Disable (keeps config)",
+  };
+  const deleteOption: WizardSelectOption<ConfiguredChannelAction> = {
+    value: "delete",
+    label: "Delete config",
+  };
+  const skipOption: WizardSelectOption<ConfiguredChannelAction> = {
+    value: "skip",
+    label: "Skip (leave as-is)",
+  };
+  const options: Array<WizardSelectOption<ConfiguredChannelAction>> = [
+    updateOption,
+    ...(supportsDisable ? [disableOption] : []),
+    ...(supportsDelete ? [deleteOption] : []),
+    skipOption,
+  ];
   return (await prompter.select({
     message: `${label} already configured. What do you want to do?`,
     options,

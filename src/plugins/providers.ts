@@ -1,11 +1,11 @@
 import { createSubsystemLogger } from "../logging.js";
-import { loadClawdbotPlugins } from "./loader.js";
+import { loadClawdbotPlugins, type PluginLoadOptions } from "./loader.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
 export function resolvePluginProviders(params: {
-  config?: Parameters<typeof loadClawdbotPlugins>[0]["config"];
+  config?: PluginLoadOptions["config"];
   workspaceDir?: string;
 }): ProviderPlugin[] {
   const registry = loadClawdbotPlugins({

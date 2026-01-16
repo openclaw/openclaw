@@ -5,6 +5,7 @@ export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): Plu
     plugins: [],
     tools: [],
     channels: [],
+    providers: [],
     gatewayHandlers: {},
     httpHandlers: [],
     cliRegistrars: [],
