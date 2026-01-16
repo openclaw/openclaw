@@ -5,11 +5,13 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { fetchRemoteMedia } from "../media/fetch.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { applyTemplate, type MsgContext } from "./templating.js";
 
 const AUDIO_TRANSCRIPTION_BINARY = "whisper";
+const DEFAULT_AUDIO_MAX_BYTES = 20 * 1024 * 1024;
 
 export function isAudio(mediaType?: string | null) {
   return Boolean(mediaType?.startsWith("audio"));
@@ -38,14 +40,35 @@ export async function transcribeInboundAudio(
     (toolTranscriber?.timeoutSeconds ?? legacyTranscriber?.timeoutSeconds ?? 45) * 1000,
     1_000,
   );
+  const maxBytes =
+    hasToolTranscriber &&
+    typeof toolTranscriber?.maxBytes === "number" &&
+    toolTranscriber.maxBytes > 0
+      ? toolTranscriber.maxBytes
+      : hasToolTranscriber
+        ? DEFAULT_AUDIO_MAX_BYTES
+        : undefined;
   let tmpPath: string | undefined;
   let mediaPath = ctx.MediaPath;
   try {
     if (!mediaPath && ctx.MediaUrl) {
-      const res = await fetch(ctx.MediaUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const arrayBuf = await res.arrayBuffer();
-      const buffer = Buffer.from(arrayBuf);
+      let fetched;
+      try {
+        fetched = await fetchRemoteMedia({
+          url: ctx.MediaUrl,
+          maxBytes,
+        });
+      } catch (err) {
+        const message = String(err);
+        if (maxBytes && message.includes("exceeds maxBytes")) {
+          if (shouldLogVerbose()) {
+            logVerbose(`Skipping audio transcription: ${message}`);
+          }
+          return undefined;
+        }
+        throw err;
+      }
+      const buffer = fetched.buffer;
       tmpPath = path.join(os.tmpdir(), `clawdbot-audio-${crypto.randomUUID()}.ogg`);
       await fs.writeFile(tmpPath, buffer);
       mediaPath = tmpPath;
@@ -56,6 +79,18 @@ export async function transcribeInboundAudio(
       }
     }
     if (!mediaPath) return undefined;
+    if (maxBytes) {
+      const stat = await fs.stat(mediaPath);
+      if (!stat.isFile()) return undefined;
+      if (stat.size > maxBytes) {
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Skipping audio transcription: ${stat.size} bytes exceeds ${maxBytes}`,
+          );
+        }
+        return undefined;
+      }
+    }
 
     const templCtx: MsgContext = { ...ctx, MediaPath: mediaPath };
     const argv = hasToolTranscriber

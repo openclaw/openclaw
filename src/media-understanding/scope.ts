@@ -14,6 +14,15 @@ function normalizeMatch(value?: string | null): string | undefined {
   return normalized || undefined;
 }
 
+export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return undefined;
+  if (value === "dm" || value === "direct_message" || value === "private") return "direct";
+  if (value === "groups") return "group";
+  if (value === "channel") return "room";
+  return value;
+}
+
 export function resolveMediaUnderstandingScope(params: {
   scope?: MediaUnderstandingScopeConfig;
   sessionKey?: string;

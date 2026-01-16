@@ -15,7 +15,7 @@ import {
   normalizeMediaProviderId,
 } from "./providers/index.js";
 import { fetchWithTimeout } from "./providers/shared.js";
-import { resolveMediaUnderstandingScope } from "./scope.js";
+import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type {
   MediaAttachment,
   MediaUnderstandingOutput,
@@ -121,15 +121,6 @@ function isVideoAttachment(attachment: MediaAttachment): boolean {
 function isAudioAttachment(attachment: MediaAttachment): boolean {
   if (attachment.mime?.startsWith("audio/")) return true;
   return isAudioFileName(attachment.path ?? attachment.url);
-}
-
-function normalizeChatType(raw?: string | null): string | undefined {
-  const value = raw?.trim().toLowerCase();
-  if (!value) return undefined;
-  if (value === "dm" || value === "direct_message" || value === "private") return "direct";
-  if (value === "groups") return "group";
-  if (value === "channel") return "room";
-  return value;
 }
 
 function estimateBase64Size(bytes: number): number {
@@ -238,7 +229,7 @@ export async function applyMediaUnderstanding(params: {
   const outputs: MediaUnderstandingOutput[] = [];
   const attachments = normalizeAttachments(ctx);
   const channel = ctx.Surface ?? ctx.Provider;
-  const chatType = normalizeChatType(ctx.ChatType);
+  const chatType = normalizeMediaUnderstandingChatType(ctx.ChatType);
   const sessionKey = ctx.SessionKey;
 
   const audioCfg = cfg.tools?.audio?.transcription;

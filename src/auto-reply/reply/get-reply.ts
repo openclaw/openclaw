@@ -22,6 +22,10 @@ import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import {
+  normalizeMediaUnderstandingChatType,
+  resolveMediaUnderstandingScope,
+} from "../../media-understanding/scope.js";
 import { resolveAudioAttachment } from "./attachments.js";
 import { extractMediaUserText, formatMediaUnderstandingBody } from "../../media-understanding/format.js";
 
@@ -85,8 +89,19 @@ export async function getReplyFromConfig(
   });
 
   const audioAttachment = resolveAudioAttachment(ctx);
+  const audioScopeDecision = resolveMediaUnderstandingScope({
+    scope: cfg.tools?.audio?.transcription?.scope,
+    sessionKey: ctx.SessionKey,
+    channel: ctx.Surface ?? ctx.Provider,
+    chatType: normalizeMediaUnderstandingChatType(ctx.ChatType),
+  });
   let transcribedText: string | undefined;
-  if (hasAudioTranscriptionConfig(cfg) && audioAttachment && !mediaUnderstanding.appliedAudio) {
+  if (
+    hasAudioTranscriptionConfig(cfg) &&
+    audioAttachment &&
+    !mediaUnderstanding.appliedAudio &&
+    audioScopeDecision !== "deny"
+  ) {
     const priorUserText = extractMediaUserText(ctx.CommandBody ?? ctx.RawBody);
     const transcriptionCtx: MsgContext = {
       ...ctx,
@@ -120,6 +135,13 @@ export async function getReplyFromConfig(
         logVerbose("Replaced Body with audio transcript for reply flow");
       }
     }
+  } else if (
+    audioScopeDecision === "deny" &&
+    hasAudioTranscriptionConfig(cfg) &&
+    audioAttachment &&
+    !mediaUnderstanding.appliedAudio
+  ) {
+    logVerbose("Audio transcription disabled by scope policy.");
   }
 
   const commandAuthorized = ctx.CommandAuthorized ?? true;

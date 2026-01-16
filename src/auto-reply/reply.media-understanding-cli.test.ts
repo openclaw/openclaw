@@ -145,4 +145,35 @@ describe("CLI transcription + media understanding", () => {
       );
     });
   });
+
+  it("skips CLI transcription when scope denies", async () => {
+    await withTempHome(async (home) => {
+      mocks.runEmbeddedPiAgent.mockImplementation(async () => makeResult("ok"));
+      mocks.transcribeInboundAudio.mockClear();
+
+      const ctx = {
+        Body: "<media:video> caption text",
+        From: "+1001",
+        To: "+2000",
+        MediaPaths: ["note.ogg", "clip.mp4"],
+        Surface: "whatsapp",
+      };
+      const cfg = makeCfg(home);
+      cfg.tools.audio.transcription.scope = { default: "deny" };
+
+      await getReplyFromConfig(ctx, {}, cfg);
+
+      const outputs = (ctx as Record<string, unknown>).MediaUnderstanding as Array<{
+        kind: "video.description";
+        attachmentIndex: number;
+        text: string;
+        provider: string;
+      }>;
+      expect(outputs).toHaveLength(1);
+      expect(mocks.transcribeInboundAudio).not.toHaveBeenCalled();
+      expect((ctx as Record<string, unknown>).CommandBody).toBe("caption text");
+      expect((ctx as Record<string, unknown>).RawBody).toBe("caption text");
+      expect((ctx as Record<string, unknown>).Body).toBe("[Video]\nDescription:\nvideo desc");
+    });
+  });
 });
