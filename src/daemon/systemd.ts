@@ -23,6 +23,7 @@ import {
 } from "./systemd-unit.js";
 
 const execFileAsync = promisify(execFile);
+const toPosixPath = (value: string) => value.replace(/\\/g, "/");
 
 const formatLine = (label: string, value: string) => {
   const rich = isRich();
@@ -33,8 +34,8 @@ function resolveSystemdUnitPathForName(
   env: Record<string, string | undefined>,
   name: string,
 ): string {
-  const home = resolveHomeDir(env);
-  return path.join(home, ".config", "systemd", "user", `${name}.service`);
+  const home = toPosixPath(resolveHomeDir(env));
+  return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
 
 function resolveSystemdServiceName(env: Record<string, string | undefined>): string {
