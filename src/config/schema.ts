@@ -306,7 +306,8 @@ const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
   "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
   "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
-  "plugins.installs.*.installPath": "Resolved install directory (usually ~/.clawdbot/extensions/<id>).",
+  "plugins.installs.*.installPath":
+    "Resolved install directory (usually ~/.clawdbot/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.installedAt": "ISO timestamp of last install/update.",
   "agents.defaults.model.primary": "Primary model (provider/model).",

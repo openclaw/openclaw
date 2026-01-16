@@ -238,7 +238,11 @@ export function registerConfigCli(program: Command) {
           defaultRuntime.log(JSON.stringify(res.value ?? null, null, 2));
           return;
         }
-        if (typeof res.value === "string" || typeof res.value === "number" || typeof res.value === "boolean") {
+        if (
+          typeof res.value === "string" ||
+          typeof res.value === "number" ||
+          typeof res.value === "boolean"
+        ) {
           defaultRuntime.log(String(res.value));
           return;
         }

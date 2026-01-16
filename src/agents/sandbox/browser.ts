@@ -51,6 +51,8 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpProtocol: "http",
     cdpHost,
     cdpIsLoopback: true,
+    remoteCdpTimeoutMs: 1500,
+    remoteCdpHandshakeTimeoutMs: 3000,
     color: DEFAULT_CLAWD_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,

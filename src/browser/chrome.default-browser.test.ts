@@ -25,7 +25,9 @@ describe("browser default executable detection", () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
       if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
-        return JSON.stringify([{ LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.google.Chrome" }]);
+        return JSON.stringify([
+          { LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.google.Chrome" },
+        ]);
       }
       if (cmd === "/usr/bin/osascript" && argsStr.includes("path to application id")) {
         return "/Applications/Google Chrome.app";
@@ -55,7 +57,9 @@ describe("browser default executable detection", () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
       if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
-        return JSON.stringify([{ LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.apple.Safari" }]);
+        return JSON.stringify([
+          { LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.apple.Safari" },
+        ]);
       }
       return "";
     });

@@ -1,9 +1,4 @@
-import {
-  appendCdpPath,
-  fetchJson,
-  isLoopbackHost,
-  withCdpSocket,
-} from "./cdp.helpers.js";
+import { appendCdpPath, fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
 
 export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
 

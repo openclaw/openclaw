@@ -267,9 +267,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const timeout = 5000 + attempt * 2000;
-        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(
-          () => null,
-        );
+        const wsUrl = await getChromeWebSocketUrl(normalized, timeout).catch(() => null);
         const endpoint = wsUrl ?? normalized;
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });

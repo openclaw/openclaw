@@ -291,9 +291,7 @@ export async function statusAllCommand(
       : gatewayProbe?.error
         ? `unreachable (${gatewayProbe.error})`
         : "unreachable";
-    const gatewayAuth = gatewayReachable
-      ? ` · auth ${formatGatewayAuthUsed(probeAuth)}`
-      : "";
+    const gatewayAuth = gatewayReachable ? ` · auth ${formatGatewayAuthUsed(probeAuth)}` : "";
     const gatewaySelfLine =
       gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
         ? [

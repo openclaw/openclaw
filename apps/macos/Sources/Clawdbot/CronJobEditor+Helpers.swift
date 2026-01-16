@@ -191,8 +191,8 @@ extension CronJobEditor {
     func applyDeleteAfterRun(
         to root: inout [String: Any],
         scheduleKind: ScheduleKind? = nil,
-        deleteAfterRun: Bool? = nil
-    ) {
+        deleteAfterRun: Bool? = nil)
+    {
         let resolvedSchedule = scheduleKind ?? self.scheduleKind
         let resolvedDelete = deleteAfterRun ?? self.deleteAfterRun
         if resolvedSchedule == .at {

@@ -162,7 +162,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
             id: "call_1",
             name: "read",
             arguments: { path: "/tmp/foo" },
-            thoughtSignature: "{\"id\":1}",
+            thoughtSignature: '{"id":1}',
           },
           {
             type: "toolCall",
@@ -192,7 +192,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       { type: "text", text: "ok" },
       {
         type: "text",
-        text: "[Tool Call: read (ID: call_1)]\nArguments: {\n  \"path\": \"/tmp/foo\"\n}",
+        text: '[Tool Call: read (ID: call_1)]\nArguments: {\n  "path": "/tmp/foo"\n}',
       },
       {
         type: "toolCall",

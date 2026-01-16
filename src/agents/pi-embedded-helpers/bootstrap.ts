@@ -58,9 +58,7 @@ export function stripThoughtSignatures<T>(
     if (!block || typeof block !== "object") return block;
     const rec = block as ContentBlockWithSignature;
     const stripSnake = shouldStripSignature(rec.thought_signature);
-    const stripCamel = includeCamelCase
-      ? shouldStripSignature(rec.thoughtSignature)
-      : false;
+    const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
     if (!stripSnake && !stripCamel) {
       return block;
     }

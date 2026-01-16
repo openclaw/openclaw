@@ -372,8 +372,6 @@ async function resolveSshTarget(
   });
   if (!target) return { target: rawTarget, identity: identity ?? undefined };
   const identityFile =
-    identity ??
-    config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ??
-    undefined;
+    identity ?? config.identityFiles.find((entry) => entry.trim().length > 0)?.trim() ?? undefined;
   return { target, identity: identityFile };
 }

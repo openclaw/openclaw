@@ -28,18 +28,18 @@ describe("config discord", () => {
                 dm: {
                   enabled: true,
                   allowFrom: ["steipete"],
-                groupEnabled: true,
-                groupChannels: ["clawd-dm"],
-              },
-              actions: {
-                emojiUploads: true,
-                stickerUploads: false,
-                channels: true,
-              },
-              guilds: {
-                "123": {
-                  slug: "friends-of-clawd",
-                  requireMention: false,
+                  groupEnabled: true,
+                  groupChannels: ["clawd-dm"],
+                },
+                actions: {
+                  emojiUploads: true,
+                  stickerUploads: false,
+                  channels: true,
+                },
+                guilds: {
+                  "123": {
+                    slug: "friends-of-clawd",
+                    requireMention: false,
                     users: ["steipete"],
                     channels: {
                       general: { allow: true },

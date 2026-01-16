@@ -28,15 +28,10 @@ export function isLoopbackHost(host: string) {
   );
 }
 
-export function getHeadersWithAuth(
-  url: string,
-  headers: Record<string, string> = {},
-) {
+export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   try {
     const parsed = new URL(url);
-    const hasAuthHeader = Object.keys(headers).some(
-      (key) => key.toLowerCase() === "authorization",
-    );
+    const hasAuthHeader = Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
     if (hasAuthHeader) return headers;
     if (parsed.username || parsed.password) {
       const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
@@ -103,18 +98,11 @@ function createCdpSender(ws: WebSocket) {
   return { send, closeWithError };
 }
 
-export async function fetchJson<T>(
-  url: string,
-  timeoutMs = 1500,
-  init?: RequestInit,
-): Promise<T> {
+export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(
-      url,
-      (init?.headers as Record<string, string>) || {},
-    );
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
@@ -123,18 +111,11 @@ export async function fetchJson<T>(
   }
 }
 
-export async function fetchOk(
-  url: string,
-  timeoutMs = 1500,
-  init?: RequestInit,
-): Promise<void> {
+export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(
-      url,
-      (init?.headers as Record<string, string>) || {},
-    );
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } finally {

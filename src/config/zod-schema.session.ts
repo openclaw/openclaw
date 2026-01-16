@@ -10,11 +10,9 @@ import {
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
-    dmScope: z.union([
-      z.literal("main"),
-      z.literal("per-peer"),
-      z.literal("per-channel-peer"),
-    ]).optional(),
+    dmScope: z
+      .union([z.literal("main"), z.literal("per-peer"), z.literal("per-channel-peer")])
+      .optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),

@@ -3,7 +3,10 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
-export function recordPluginInstall(cfg: ClawdbotConfig, update: PluginInstallUpdate): ClawdbotConfig {
+export function recordPluginInstall(
+  cfg: ClawdbotConfig,
+  update: PluginInstallUpdate,
+): ClawdbotConfig {
   const { pluginId, ...record } = update;
   const installs = {
     ...cfg.plugins?.installs,

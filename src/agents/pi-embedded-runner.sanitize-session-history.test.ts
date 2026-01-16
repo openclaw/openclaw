@@ -11,9 +11,7 @@ vi.mock("./pi-embedded-helpers.js", async () => {
     ...actual,
     isGoogleModelApi: vi.fn(),
     downgradeGeminiHistory: vi.fn(),
-    sanitizeSessionMessagesImages: vi
-      .fn()
-      .mockImplementation(async (msgs) => msgs),
+    sanitizeSessionMessagesImages: vi.fn().mockImplementation(async (msgs) => msgs),
   };
 });
 
@@ -30,9 +28,7 @@ describe("sanitizeSessionHistory", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(
-      async (msgs) => msgs,
-    );
+    vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
     // Default mock implementation
     vi.mocked(helpers.downgradeGeminiHistory).mockImplementation((msgs) => {
       if (!msgs) return [];

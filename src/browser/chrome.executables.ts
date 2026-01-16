@@ -119,7 +119,12 @@ function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] 
   if (id.includes("edge")) return "edge";
   if (id.includes("chromium")) return "chromium";
   if (id.includes("canary")) return "canary";
-  if (id.includes("opera") || id.includes("vivaldi") || id.includes("yandex") || id.includes("thebrowser")) {
+  if (
+    id.includes("opera") ||
+    id.includes("vivaldi") ||
+    id.includes("yandex") ||
+    id.includes("thebrowser")
+  ) {
     return "chromium";
   }
   return "chrome";
@@ -131,13 +136,12 @@ function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
   if (lower.includes("edge") || lower.includes("msedge")) return "edge";
   if (lower.includes("chromium")) return "chromium";
   if (lower.includes("canary") || lower.includes("sxs")) return "canary";
-  if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex")) return "chromium";
+  if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex"))
+    return "chromium";
   return "chrome";
 }
 
-function detectDefaultChromiumExecutable(
-  platform: NodeJS.Platform,
-): BrowserExecutable | null {
+function detectDefaultChromiumExecutable(platform: NodeJS.Platform): BrowserExecutable | null {
   if (platform === "darwin") return detectDefaultChromiumExecutableMac();
   if (platform === "linux") return detectDefaultChromiumExecutableLinux();
   if (platform === "win32") return detectDefaultChromiumExecutableWindows();
@@ -227,8 +231,7 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
 function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   const progId = readWindowsProgId();
   const command =
-    (progId ? readWindowsCommandForProgId(progId) : null) ||
-    readWindowsCommandForProgId("http");
+    (progId ? readWindowsCommandForProgId(progId) : null) || readWindowsCommandForProgId("http");
   if (!command) return null;
   const expanded = expandWindowsEnvVars(command);
   const exePath = extractWindowsExecutablePath(expanded);
@@ -285,7 +288,7 @@ function splitExecLine(line: string): string[] {
   let quoteChar = "";
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if ((ch === "\"" || ch === "'") && (!inQuotes || ch === quoteChar)) {
+    if ((ch === '"' || ch === "'") && (!inQuotes || ch === quoteChar)) {
       if (inQuotes) {
         inQuotes = false;
         quoteChar = "";
@@ -342,7 +345,7 @@ function readWindowsCommandForProgId(progId: string): string | null {
 function expandWindowsEnvVars(value: string): string {
   return value.replace(/%([^%]+)%/g, (_match, name) => {
     const key = String(name ?? "").trim();
-    return key ? process.env[key] ?? `%${key}%` : _match;
+    return key ? (process.env[key] ?? `%${key}%`) : _match;
   });
 }
 

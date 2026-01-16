@@ -82,12 +82,13 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   return violations;
 }
 
-export function sanitizeToolsForGoogle<TSchemaType extends TSchema = TSchema, TResult = unknown>(
-  params: {
-    tools: AgentTool<TSchemaType, TResult>[];
-    provider: string;
-  },
-): AgentTool<TSchemaType, TResult>[] {
+export function sanitizeToolsForGoogle<
+  TSchemaType extends TSchema = TSchema,
+  TResult = unknown,
+>(params: {
+  tools: AgentTool<TSchemaType, TResult>[];
+  provider: string;
+}): AgentTool<TSchemaType, TResult>[] {
   if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
     return params.tools;
   }
@@ -95,7 +96,9 @@ export function sanitizeToolsForGoogle<TSchemaType extends TSchema = TSchema, TR
     if (!tool.parameters || typeof tool.parameters !== "object") return tool;
     return {
       ...tool,
-      parameters: cleanToolSchemaForGemini(tool.parameters as Record<string, unknown>) as TSchemaType,
+      parameters: cleanToolSchemaForGemini(
+        tool.parameters as Record<string, unknown>,
+      ) as TSchemaType,
     };
   });
 }

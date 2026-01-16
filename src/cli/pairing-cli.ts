@@ -1,8 +1,5 @@
 import type { Command } from "commander";
-import {
-  listPairingChannels,
-  notifyPairingApproved,
-} from "../channels/plugins/pairing.js";
+import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";

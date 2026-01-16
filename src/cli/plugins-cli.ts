@@ -378,9 +378,7 @@ export function registerPluginsCli(program: Command) {
           continue;
         }
         if (record.source !== "npm") {
-          defaultRuntime.log(
-            chalk.yellow(`Skipping "${pluginId}" (source: ${record.source}).`),
-          );
+          defaultRuntime.log(chalk.yellow(`Skipping "${pluginId}" (source: ${record.source}).`));
           continue;
         }
         if (!record.spec) {
@@ -412,9 +410,7 @@ export function registerPluginsCli(program: Command) {
           if (currentVersion && probe.version && currentVersion === probe.version) {
             defaultRuntime.log(`${pluginId} is up to date (${currentLabel}).`);
           } else {
-            defaultRuntime.log(
-              `Would update ${pluginId}: ${currentLabel} → ${nextVersion}.`,
-            );
+            defaultRuntime.log(`Would update ${pluginId}: ${currentLabel} → ${nextVersion}.`);
           }
           continue;
         }

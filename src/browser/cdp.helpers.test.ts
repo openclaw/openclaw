@@ -15,9 +15,7 @@ describe("cdp.helpers", () => {
 
   it("adds basic auth headers when credentials are present", () => {
     const headers = getHeadersWithAuth("https://user:pass@example.com");
-    expect(headers.Authorization).toBe(
-      `Basic ${Buffer.from("user:pass").toString("base64")}`,
-    );
+    expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
   });
 
   it("keeps preexisting authorization headers", () => {

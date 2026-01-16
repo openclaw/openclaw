@@ -225,7 +225,11 @@ describe("daemon-cli coverage", () => {
     });
 
     const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
-    const parsed = JSON.parse(jsonLine ?? "{}") as { ok?: boolean; action?: string; result?: string };
+    const parsed = JSON.parse(jsonLine ?? "{}") as {
+      ok?: boolean;
+      action?: string;
+      result?: string;
+    };
     expect(parsed.ok).toBe(true);
     expect(parsed.action).toBe("install");
     expect(parsed.result).toBe("installed");

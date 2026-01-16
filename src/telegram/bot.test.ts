@@ -235,9 +235,7 @@ describe("createTelegramBot", () => {
     expect(nativeStatus).toBeDefined();
     expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
     expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
-    expect(registered.filter((command) => command.command === "status")).toEqual([
-      nativeStatus,
-    ]);
+    expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
     expect(errorSpy).toHaveBeenCalled();
   });
 

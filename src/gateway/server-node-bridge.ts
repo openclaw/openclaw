@@ -162,7 +162,9 @@ export async function startGatewayNodeBridge(params: {
       });
       if (started.port > 0) {
         const scheme = params.bridgeTls?.enabled ? "tls" : "tcp";
-        params.logBridge.info(`listening on ${scheme}://${params.bridgeHost}:${started.port} (node)`);
+        params.logBridge.info(
+          `listening on ${scheme}://${params.bridgeHost}:${started.port} (node)`,
+        );
         return { bridge: started, nodePresenceTimers };
       }
     } catch (err) {

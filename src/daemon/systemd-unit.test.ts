@@ -15,7 +15,7 @@ describe("parseSystemdExecStart", () => {
   });
 
   it("preserves quoted arguments", () => {
-    const execStart = "/usr/bin/clawdbot gateway start --name \"My Bot\"";
+    const execStart = '/usr/bin/clawdbot gateway start --name "My Bot"';
     expect(parseSystemdExecStart(execStart)).toEqual([
       "/usr/bin/clawdbot",
       "gateway",

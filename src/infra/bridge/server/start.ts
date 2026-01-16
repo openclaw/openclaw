@@ -48,7 +48,8 @@ export async function startNodeBridgeServer(opts: NodeBridgeServerOpts): Promise
   const loopbackHost = "127.0.0.1";
 
   const listeners: Array<{ host: string; server: net.Server }> = [];
-  const createServer = () => (opts.tls ? tls.createServer(opts.tls, onConnection) : net.createServer(onConnection));
+  const createServer = () =>
+    opts.tls ? tls.createServer(opts.tls, onConnection) : net.createServer(onConnection);
   const primary = createServer();
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => reject(err);

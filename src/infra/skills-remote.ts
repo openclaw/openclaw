@@ -145,9 +145,7 @@ function parseBinProbePayload(payloadJSON: string | null | undefined): string[] 
   try {
     const parsed = JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown };
     if (Array.isArray(parsed.bins)) {
-      return parsed.bins
-        .map((bin) => String(bin).trim())
-        .filter(Boolean);
+      return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
       return parsed.stdout

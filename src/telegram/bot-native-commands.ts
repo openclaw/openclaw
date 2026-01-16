@@ -70,11 +70,9 @@ export const registerTelegramNativeCommands = ({
       ) => Promise<unknown>;
     };
     if (typeof api.setMyCommands === "function") {
-      api
-        .setMyCommands(allCommands)
-        .catch((err) => {
-          runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
-        });
+      api.setMyCommands(allCommands).catch((err) => {
+        runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
+      });
     } else {
       logVerbose("telegram: setMyCommands unavailable; skipping registration");
     }

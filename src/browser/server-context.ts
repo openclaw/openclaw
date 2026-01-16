@@ -1,11 +1,6 @@
 import fs from "node:fs";
 
-import {
-  appendCdpPath,
-  createTargetViaCdp,
-  getHeadersWithAuth,
-  normalizeCdpWsUrl,
-} from "./cdp.js";
+import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   isChromeCdpReady,
   isChromeReachable,
@@ -55,10 +50,7 @@ async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(
-      url,
-      (init?.headers as Record<string, string>) || {},
-    );
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
@@ -71,10 +63,7 @@ async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promi
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(
-      url,
-      (init?.headers as Record<string, string>) || {},
-    );
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } finally {
