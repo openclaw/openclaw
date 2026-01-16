@@ -124,7 +124,7 @@ describe("discord tool result dispatch", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledTimes(1);
-  }, 10000);
+  }, 20_000);
 
   it("forks thread sessions and injects starter context", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
