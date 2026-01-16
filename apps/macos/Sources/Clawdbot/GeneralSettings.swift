@@ -92,7 +92,8 @@ struct GeneralSettings: View {
                                 Text(policy.title).tag(policy)
                             }
                         }
-                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .pickerStyle(.menu)
 
                         Text("""
                         Controls remote command execution on this Mac when it is paired as a node. \
@@ -113,7 +114,8 @@ struct GeneralSettings: View {
                             Text("While Using").tag(ClawdbotLocationMode.whileUsing.rawValue)
                             Text("Always").tag(ClawdbotLocationMode.always.rawValue)
                         }
-                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .pickerStyle(.menu)
 
                         Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
                             .disabled(self.locationMode == .off)
