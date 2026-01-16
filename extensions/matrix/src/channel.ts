@@ -162,6 +162,67 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   messaging: {
     normalizeTarget: normalizeMatrixMessagingTarget,
   },
+  directory: {
+    self: async () => null,
+    listPeers: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const ids = new Set<string>();
+
+      for (const entry of account.config.dm?.allowFrom ?? []) {
+        const raw = String(entry).trim();
+        if (!raw || raw === "*") continue;
+        ids.add(raw.replace(/^matrix:/i, ""));
+      }
+
+      for (const room of Object.values(account.config.rooms ?? {})) {
+        for (const entry of room.users ?? []) {
+          const raw = String(entry).trim();
+          if (!raw || raw === "*") continue;
+          ids.add(raw.replace(/^matrix:/i, ""));
+        }
+      }
+
+      return Array.from(ids)
+        .map((raw) => raw.trim())
+        .filter(Boolean)
+        .map((raw) => {
+          const lowered = raw.toLowerCase();
+          const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+          if (cleaned.startsWith("@")) return `user:${cleaned}`;
+          return cleaned;
+        })
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => {
+          const raw = id.startsWith("user:") ? id.slice("user:".length) : id;
+          const incomplete = !raw.startsWith("@") || !raw.includes(":");
+          return {
+            kind: "user",
+            id,
+            ...(incomplete ? { name: "incomplete id; expected @user:server" } : {}),
+          };
+        });
+    },
+    listGroups: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const ids = Object.keys(account.config.rooms ?? {})
+        .map((raw) => raw.trim())
+        .filter((raw) => Boolean(raw) && raw !== "*")
+        .map((raw) => raw.replace(/^matrix:/i, ""))
+        .map((raw) => {
+          const lowered = raw.toLowerCase();
+          if (lowered.startsWith("room:") || lowered.startsWith("channel:")) return raw;
+          if (raw.startsWith("!")) return `room:${raw}`;
+          return raw;
+        })
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => ({ kind: "group", id }) as const);
+      return ids;
+    },
+  },
   actions: matrixMessageActions,
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
