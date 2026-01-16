@@ -208,10 +208,12 @@ export async function runMessageAction(
 
   if (action === "send") {
     const to = readStringParam(params, "to", { required: true });
+    // Allow message to be omitted when sending media-only (e.g., voice notes)
+    const mediaHint = readStringParam(params, "media", { trim: false });
     let message = readStringParam(params, "message", {
-      required: true,
+      required: !mediaHint, // Only require message if no media hint
       allowEmpty: true,
-    });
+    }) ?? "";
 
     const parsed = parseReplyDirectives(message);
     message = parsed.text;

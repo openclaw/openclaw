@@ -98,6 +98,18 @@ export const buildTelegramMessageContext = async ({
     }
   };
 
+  const sendRecordVoice = async () => {
+    try {
+      await bot.api.sendChatAction(
+        chatId,
+        "record_voice",
+        buildTypingThreadParams(resolvedThreadId),
+      );
+    } catch (err) {
+      logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
+    }
+  };
+
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
   if (!isGroup) {
     if (dmPolicy === "disabled") return null;
@@ -408,6 +420,7 @@ export const buildTelegramMessageContext = async ({
     route,
     skillFilter,
     sendTyping,
+    sendRecordVoice,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,

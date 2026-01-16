@@ -130,8 +130,13 @@ export async function handleTelegramAction(
       throw new Error("Telegram sendMessage is disabled.");
     }
     const to = readStringParam(params, "to", { required: true });
-    const content = readStringParam(params, "content", { required: true });
     const mediaUrl = readStringParam(params, "mediaUrl");
+    // Allow content to be omitted when sending media-only (e.g., voice notes)
+    const content =
+      readStringParam(params, "content", {
+        required: !mediaUrl,
+        allowEmpty: true,
+      }) ?? "";
     const buttons = readTelegramButtons(params);
     if (buttons && !hasInlineButtonsCapability({ cfg, accountId: accountId ?? undefined })) {
       throw new Error(
