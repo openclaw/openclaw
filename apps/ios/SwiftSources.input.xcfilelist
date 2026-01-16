@@ -26,7 +26,7 @@ Sources/Voice/VoiceTab.swift
 Sources/Voice/VoiceWakeManager.swift
 Sources/Voice/VoiceWakePreferences.swift
 ../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatComposer.swift
-../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatMarkdownSplitter.swift
+../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatMarkdownPreprocessor.swift
 ../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatMessageViews.swift
 ../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatModels.swift
 ../shared/ClawdbotKit/Sources/ClawdbotChatUI/ChatPayloadDecoding.swift
