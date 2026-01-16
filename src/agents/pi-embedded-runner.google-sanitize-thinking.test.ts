@@ -157,8 +157,20 @@ describe("sanitizeSessionHistory (google thinking)", () => {
         content: [
           { type: "text", text: "hello", thought_signature: "msg_abc123" },
           { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
-          { type: "toolCall", id: "call_1", thoughtSignature: "{\"id\":1}" },
-          { type: "toolCall", id: "call_2", thoughtSignature: "c2ln" },
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "read",
+            arguments: { path: "/tmp/foo" },
+            thoughtSignature: "{\"id\":1}",
+          },
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "read",
+            arguments: { path: "/tmp/bar" },
+            thoughtSignature: "c2ln",
+          },
         ],
       },
     ] satisfies AgentMessage[];
@@ -177,9 +189,18 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     };
     expect(assistant.content).toEqual([
       { type: "text", text: "hello" },
-      { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
-      { type: "toolCall", id: "call_1" },
-      { type: "toolCall", id: "call_2", thoughtSignature: "c2ln" },
+      { type: "text", text: "ok" },
+      {
+        type: "text",
+        text: "[Tool Call: read (ID: call_1)]\nArguments: {\n  \"path\": \"/tmp/foo\"\n}",
+      },
+      {
+        type: "toolCall",
+        id: "call_2",
+        name: "read",
+        arguments: { path: "/tmp/bar" },
+        thoughtSignature: "c2ln",
+      },
     ]);
   });
 
