@@ -211,49 +211,23 @@ export async function runReplyAgent(params: {
   });
 
   let responseUsageLine: string | undefined;
-  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> => {
-    if (!sessionKey || !activeSessionStore || !storePath) return false;
-    const nextSessionId = crypto.randomUUID();
-    const nextEntry: SessionEntry = {
-      ...(activeSessionStore[sessionKey] ?? activeSessionEntry),
-      sessionId: nextSessionId,
-      updatedAt: Date.now(),
-      systemSent: false,
-      abortedLastRun: false,
-    };
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const nextSessionFile = resolveSessionTranscriptPath(
-      nextSessionId,
-      agentId,
-      sessionCtx.MessageThreadId,
-    );
-    nextEntry.sessionFile = nextSessionFile;
-    activeSessionStore[sessionKey] = nextEntry;
-    try {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = nextEntry;
-      });
-    } catch (err) {
-      defaultRuntime.error(
-        `Failed to persist session reset after compaction failure (${sessionKey}): ${String(err)}`,
-      );
-    }
-    followupRun.run.sessionId = nextSessionId;
-    followupRun.run.sessionFile = nextSessionFile;
-    activeSessionEntry = nextEntry;
-    activeIsNewSession = true;
-    defaultRuntime.error(
-      `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
-    );
-    return true;
+  type SessionResetOptions = {
+    failureLabel: string;
+    buildLogMessage: (nextSessionId: string) => string;
+    cleanupTranscripts?: boolean;
   };
-  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> => {
+  const resetSession = async ({
+    failureLabel,
+    buildLogMessage,
+    cleanupTranscripts,
+  }: SessionResetOptions): Promise<boolean> => {
     if (!sessionKey || !activeSessionStore || !storePath) return false;
     const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
-    const prevSessionId = prevEntry?.sessionId;
+    if (!prevEntry) return false;
+    const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
-      ...(activeSessionStore[sessionKey] ?? activeSessionEntry),
+      ...prevEntry,
       sessionId: nextSessionId,
       updatedAt: Date.now(),
       systemSent: false,
@@ -273,17 +247,15 @@ export async function runReplyAgent(params: {
       });
     } catch (err) {
       defaultRuntime.error(
-        `Failed to persist session reset after role ordering conflict (${sessionKey}): ${String(err)}`,
+        `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
       );
     }
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
-    defaultRuntime.error(
-      `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
-    );
-    if (prevSessionId) {
+    defaultRuntime.error(buildLogMessage(nextSessionId));
+    if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
       const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
       if (resolved) transcriptCandidates.add(resolved);
@@ -298,6 +270,19 @@ export async function runReplyAgent(params: {
     }
     return true;
   };
+  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "compaction failure",
+      buildLogMessage: (nextSessionId) =>
+        `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+    });
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
+    resetSession({
+      failureLabel: "role ordering conflict",
+      buildLogMessage: (nextSessionId) =>
+        `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
+      cleanupTranscripts: true,
+    });
   try {
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
