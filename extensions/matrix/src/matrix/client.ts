@@ -50,13 +50,13 @@ export function resolveMatrixConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = cfg.channels?.matrix ?? {};
-  const homeserver = clean(env.MATRIX_HOMESERVER) || clean(matrix.homeserver);
-  const userId = clean(env.MATRIX_USER_ID) || clean(matrix.userId);
+  const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
+  const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
   const accessToken =
-    clean(env.MATRIX_ACCESS_TOKEN) || clean(matrix.accessToken) || undefined;
-  const password = clean(env.MATRIX_PASSWORD) || clean(matrix.password) || undefined;
+    clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
+  const password = clean(matrix.password) || clean(env.MATRIX_PASSWORD) || undefined;
   const deviceName =
-    clean(env.MATRIX_DEVICE_NAME) || clean(matrix.deviceName) || undefined;
+    clean(matrix.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
   const initialSyncLimit =
     typeof matrix.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))

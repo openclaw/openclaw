@@ -12,6 +12,7 @@
 - **BREAKING:** iOS minimum version is now 18.0 to support Textual markdown rendering in native chat. (#702)
 - **BREAKING:** Microsoft Teams is now a plugin; install `@clawdbot/msteams` via `clawdbot plugins install @clawdbot/msteams`.
 - **BREAKING:** Discord/Telegram channel tokens now prefer config over env (env is fallback only).
+- **BREAKING:** Matrix channel credentials now prefer config over env (env is fallback only).
 
 ### Changes
 - CLI: set process titles to `clawdbot-<command>` for clearer process listings.
