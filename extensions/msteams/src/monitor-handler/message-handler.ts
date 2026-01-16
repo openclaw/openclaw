@@ -6,9 +6,10 @@ import {
 } from "../../../../src/auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../../../src/auto-reply/reply/dispatch-from-config.js";
 import {
-  buildHistoryContextFromMap,
+  buildPendingHistoryContextFromMap,
   clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntry,
   type HistoryEntry,
 } from "../../../../src/auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
@@ -302,6 +303,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       teamConfig,
       channelConfig,
     });
+    const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
 
     if (!isDirectMessage) {
       const mentionGate = resolveMentionGating({
@@ -319,11 +321,22 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
+        if (historyLimit > 0) {
+          recordPendingHistoryEntry({
+            historyMap: conversationHistories,
+            historyKey: conversationId,
+            limit: historyLimit,
+            entry: {
+              sender: senderName,
+              body: rawBody,
+              timestamp: timestamp?.getTime(),
+              messageId: activity.id ?? undefined,
+            },
+          });
+        }
         return;
       }
     }
-
-    const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -352,16 +365,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
     if (isRoomish && historyKey && historyLimit > 0) {
-      combinedBody = buildHistoryContextFromMap({
+      combinedBody = buildPendingHistoryContextFromMap({
         historyMap: conversationHistories,
         historyKey,
         limit: historyLimit,
-        entry: {
-          sender: senderName,
-          body: rawBody,
-          timestamp: timestamp?.getTime(),
-          messageId: activity.id ?? undefined,
-        },
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -432,7 +439,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
-        if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
+        if (isRoomish && historyKey && historyLimit > 0) {
           clearHistoryEntries({
             historyMap: conversationHistories,
             historyKey,
@@ -446,7 +453,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
         );
       }
-      if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
+      if (isRoomish && historyKey && historyLimit > 0) {
         clearHistoryEntries({ historyMap: conversationHistories, historyKey });
       }
     } catch (err) {

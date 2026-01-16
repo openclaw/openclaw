@@ -4,6 +4,7 @@ import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
+  buildPendingHistoryContextFromMap,
   HISTORY_CONTEXT_MARKER,
 } from "./history.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
@@ -80,5 +81,28 @@ describe("history helpers", () => {
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");
     expect(result).not.toContain("C: three");
+  });
+
+  it("builds context from pending map without appending", () => {
+    const historyMap = new Map<string, { sender: string; body: string }[]>();
+    historyMap.set("room", [
+      { sender: "A", body: "one" },
+      { sender: "B", body: "two" },
+    ]);
+
+    const result = buildPendingHistoryContextFromMap({
+      historyMap,
+      historyKey: "room",
+      limit: 3,
+      currentMessage: "current",
+      formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
+    });
+
+    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["one", "two"]);
+    expect(result).toContain(HISTORY_CONTEXT_MARKER);
+    expect(result).toContain("A: one");
+    expect(result).toContain("B: two");
+    expect(result).toContain(CURRENT_MESSAGE_MARKER);
+    expect(result).toContain("current");
   });
 });

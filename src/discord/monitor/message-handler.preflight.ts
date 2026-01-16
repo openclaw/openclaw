@@ -2,7 +2,7 @@ import { ChannelType, MessageType, type User } from "@buape/carbon";
 
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
+import { recordPendingHistoryEntry, type HistoryEntry } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
@@ -353,6 +353,14 @@ export async function preflightDiscordMessage(
         },
         "discord: skipping guild message",
       );
+      if (historyEntry && params.historyLimit > 0) {
+        recordPendingHistoryEntry({
+          historyMap: params.guildHistories,
+          historyKey: message.channelId,
+          limit: params.historyLimit,
+          entry: historyEntry,
+        });
+      }
       return null;
     }
   }

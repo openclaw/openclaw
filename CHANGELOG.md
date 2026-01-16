@@ -20,6 +20,7 @@
 - Telegram: scope inline buttons with allowlist default + callback gating in DMs/groups.
 - Telegram: default reaction notifications to own.
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
+- Channels: inject only pending (mention-gated) group history; clear history on any processed message.
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Repo: ignore local identity files to avoid accidental commits. (#1001) — thanks @gerardward2007.
 - Sessions/Security: add `session.dmScope` for multi-user DM isolation and audit warnings. (#948) — thanks @Alphonse-arianee.

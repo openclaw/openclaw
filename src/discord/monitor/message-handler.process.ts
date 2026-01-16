@@ -10,7 +10,10 @@ import {
 } from "../../auto-reply/reply/response-prefix-template.js";
 import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntries,
+} from "../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
@@ -59,7 +62,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
-    historyEntry,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -130,15 +132,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     timestamp: resolveTimestampMs(message.timestamp),
     body: text,
   });
-  let shouldClearHistory = false;
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
   if (shouldIncludeChannelHistory) {
-    combinedBody = buildHistoryContextFromMap({
+    combinedBody = buildPendingHistoryContextFromMap({
       historyMap: guildHistories,
       historyKey: message.channelId,
       limit: historyLimit,
-      entry: historyEntry,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
         formatAgentEnvelope({
@@ -148,7 +148,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
         }),
     });
-    shouldClearHistory = true;
   }
   if (!isDirectMessage) {
     const name = formatDiscordUserTag(author);
@@ -279,7 +278,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     );
   }
 
-  let didSendReply = false;
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
@@ -306,7 +304,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         textLimit,
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
       });
-      didSendReply = true;
       replyReference.markSent();
     },
     onError: (err, info) => {
@@ -337,7 +334,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   markDispatchIdle();
   if (!queuedFinal) {
-    if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
+    if (isGuildMessage && historyLimit > 0) {
       clearHistoryEntries({
         historyMap: guildHistories,
         historyKey: message.channelId,
@@ -345,7 +342,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return;
   }
-  didSendReply = true;
   if (shouldLogVerbose()) {
     const finalCount = counts.final;
     logVerbose(
@@ -365,7 +361,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     });
   }
-  if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
+  if (isGuildMessage && historyLimit > 0) {
     clearHistoryEntries({
       historyMap: guildHistories,
       historyKey: message.channelId,

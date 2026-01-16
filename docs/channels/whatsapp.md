@@ -202,9 +202,9 @@ The wizard uses it to set your **allowlist/owner** so your own DMs are permitted
   - `always`: always triggers.
 - `/activation mention|always` is owner-only and must be sent as a standalone message.
 - Owner = `channels.whatsapp.allowFrom` (or self E.164 if unset).
-- **History injection**:
-  - Recent messages (default 50) inserted under:
-    `[Chat messages since your last reply - for context]`
+- **History injection** (pending-only):
+  - Recent *unprocessed* messages (default 50) inserted under:
+    `[Chat messages since your last reply - for context]` (messages already in the session are not re-injected)
   - Current message under:
     `[Current message - respond to this]`
   - Sender suffix appended: `[from: Name (+E164)]`

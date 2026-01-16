@@ -106,7 +106,7 @@ describe("web auto-reply", () => {
     vi.useRealTimers();
   });
 
-  it("supports always-on group activation with silent token and preserves history", async () => {
+  it("supports always-on group activation with silent token and clears pending history", async () => {
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn();
@@ -180,9 +180,9 @@ describe("web auto-reply", () => {
 
     expect(resolver).toHaveBeenCalledTimes(2);
     const payload = resolver.mock.calls[1][0];
-    expect(payload.Body).toContain("Chat messages since your last reply");
-    expect(payload.Body).toContain("Alice (+111): first");
-    expect(payload.Body).toContain("[message_id: g-always-1]");
+    expect(payload.Body).not.toContain("Chat messages since your last reply");
+    expect(payload.Body).not.toContain("Alice (+111): first");
+    expect(payload.Body).not.toContain("[message_id: g-always-1]");
     expect(payload.Body).toContain("Bob: second");
     expect(reply).toHaveBeenCalledTimes(1);
 
