@@ -16,10 +16,20 @@ describe("resolveTelegramToken", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prefers env token over config", () => {
+  it("prefers config token over env", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
     const cfg = {
       channels: { telegram: { botToken: "cfg-token" } },
+    } as ClawdbotConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res.token).toBe("cfg-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("uses env token when config is missing", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: { telegram: {} },
     } as ClawdbotConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("env-token");

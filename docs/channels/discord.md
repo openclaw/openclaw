@@ -13,6 +13,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 2) Set the token for Clawdbot:
    - Env: `DISCORD_BOT_TOKEN=...`
    - Or config: `channels.discord.token: "..."`.
+   - If both are set, config wins; env is fallback.
 3) Invite the bot to your server with message permissions.
 4) Start the gateway.
 5) DM access is pairing by default; approve the pairing code on first contact.
@@ -39,8 +40,8 @@ Minimal config:
 1. Create a Discord application → Bot, enable the intents you need (DMs + guild messages + message content), and grab the bot token.
 2. Invite the bot to your server with the permissions required to read/send messages where you want to use it.
 3. Configure Clawdbot with `DISCORD_BOT_TOKEN` (or `channels.discord.token` in `~/.clawdbot/clawdbot.json`).
-4. Run the gateway; it auto-starts the Discord channel when a token is available (env or config) and `channels.discord.enabled` is not `false`.
-   - If you prefer env vars, set `DISCORD_BOT_TOKEN` (a config block is optional).
+4. Run the gateway; it auto-starts the Discord channel when a token is available (config first, env fallback) and `channels.discord.enabled` is not `false`.
+   - If you prefer env vars, set `DISCORD_BOT_TOKEN` (and omit config).
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session. Bare numeric IDs are ambiguous and rejected.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
 7. Direct chats: secure by default via `channels.discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `clawdbot pairing approve discord <code>`.
