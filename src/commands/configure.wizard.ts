@@ -256,6 +256,17 @@ export async function runConfigureWizard(
     }
 
     let nextConfig = { ...baseConfig };
+    let didSetGatewayMode = false;
+    if (nextConfig.gateway?.mode !== "local") {
+      nextConfig = {
+        ...nextConfig,
+        gateway: {
+          ...nextConfig.gateway,
+          mode: "local",
+        },
+      };
+      didSetGatewayMode = true;
+    }
     let workspaceDir =
       nextConfig.agents?.defaults?.workspace ??
       baseConfig.agents?.defaults?.workspace ??
@@ -512,6 +523,11 @@ export async function runConfigureWizard(
       }
 
       if (!ranSection) {
+        if (didSetGatewayMode) {
+          await persistConfig();
+          outro("Gateway mode set to local.");
+          return;
+        }
         outro("No changes selected.");
         return;
       }
