@@ -108,6 +108,11 @@ Sub-agents use a dedicated in-process queue lane:
 - Lane name: `subagent`
 - Concurrency: `agents.defaults.subagents.maxConcurrent` (default `1`)
 
+## Stopping
+
+- Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it.
+- The `/stop` reply includes how many sub-agent runs were stopped.
+
 ## Limitations
 
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending “announce back” work is lost.

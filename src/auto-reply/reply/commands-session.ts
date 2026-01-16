@@ -6,7 +6,7 @@ import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../inf
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import { formatAbortReplyText, isAbortTrigger, setAbortMemory, stopSubagentsForRequester } from "./abort.js";
 import { clearSessionQueues } from "./queue.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -208,7 +208,14 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  const { stopped } = stopSubagentsForRequester({
+    cfg: params.cfg,
+    requesterSessionKey: abortTarget.key ?? params.sessionKey,
+  });
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
@@ -241,5 +248,12 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  const { stopped } = stopSubagentsForRequester({
+    cfg: params.cfg,
+    requesterSessionKey: abortTarget.key ?? params.sessionKey,
+  });
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped) },
+  };
 };

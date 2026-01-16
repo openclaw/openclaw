@@ -3,7 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { tryFastAbortFromMessage } from "./abort.js";
+import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -70,7 +70,9 @@ export async function dispatchReplyFromConfig(params: {
 
   const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
   if (fastAbort.handled) {
-    const payload = { text: "⚙️ Agent was aborted." } satisfies ReplyPayload;
+    const payload = {
+      text: formatAbortReplyText(fastAbort.stoppedSubagents),
+    } satisfies ReplyPayload;
     let queuedFinal = false;
     let routedFinalCount = 0;
     if (shouldRouteToOriginating && originatingChannel && originatingTo) {

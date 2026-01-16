@@ -1,5 +1,6 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -14,6 +15,7 @@ import type { MsgContext } from "../templating.js";
 import { logVerbose } from "../../globals.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "../../agents/tools/sessions-helpers.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();
@@ -30,6 +32,14 @@ export function getAbortMemory(key: string): boolean | undefined {
 
 export function setAbortMemory(key: string, value: boolean): void {
   ABORT_MEMORY.set(key, value);
+}
+
+export function formatAbortReplyText(stoppedSubagents?: number): string {
+  if (typeof stoppedSubagents !== "number") {
+    return "⚙️ Agent was aborted.";
+  }
+  const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
+  return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
 }
 
 function resolveSessionEntryForKey(
@@ -54,10 +64,62 @@ function resolveAbortTargetKey(ctx: MsgContext): string | undefined {
   return sessionKey || undefined;
 }
 
+function normalizeRequesterSessionKey(
+  cfg: ClawdbotConfig,
+  key: string | undefined,
+): string | undefined {
+  const cleaned = key?.trim();
+  if (!cleaned) return undefined;
+  const { mainKey, alias } = resolveMainSessionAlias(cfg);
+  return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
+}
+
+export function stopSubagentsForRequester(params: {
+  cfg: ClawdbotConfig;
+  requesterSessionKey?: string;
+}): { stopped: number } {
+  const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
+  if (!requesterKey) return { stopped: 0 };
+  const runs = listSubagentRunsForRequester(requesterKey);
+  if (runs.length === 0) return { stopped: 0 };
+
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
+  const seenChildKeys = new Set<string>();
+  let stopped = 0;
+
+  for (const run of runs) {
+    if (run.endedAt) continue;
+    const childKey = run.childSessionKey?.trim();
+    if (!childKey || seenChildKeys.has(childKey)) continue;
+    seenChildKeys.add(childKey);
+
+    const cleared = clearSessionQueues([childKey]);
+    const parsed = parseAgentSessionKey(childKey);
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+    let store = storeCache.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      storeCache.set(storePath, store);
+    }
+    const entry = store[childKey];
+    const sessionId = entry?.sessionId;
+    const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
+
+    if (aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      stopped += 1;
+    }
+  }
+
+  if (stopped > 0) {
+    logVerbose(`abort: stopped ${stopped} subagent run(s) for ${requesterKey}`);
+  }
+  return { stopped };
+}
+
 export async function tryFastAbortFromMessage(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
-}): Promise<{ handled: boolean; aborted: boolean }> {
+}): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
   const commandAuthorized = ctx.CommandAuthorized ?? true;
   const auth = resolveCommandAuthorization({
@@ -81,6 +143,7 @@ export async function tryFastAbortFromMessage(params: {
   if (!abortRequested) return { handled: false, aborted: false };
 
   const abortKey = targetKey ?? auth.from ?? auth.to;
+  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
   if (targetKey) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -108,11 +171,13 @@ export async function tryFastAbortFromMessage(params: {
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }
-    return { handled: true, aborted };
+    const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    return { handled: true, aborted, stoppedSubagents: stopped };
   }
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
-  return { handled: true, aborted: false };
+  const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+  return { handled: true, aborted: false, stoppedSubagents: stopped };
 }

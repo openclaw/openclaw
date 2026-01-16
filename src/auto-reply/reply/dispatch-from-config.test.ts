@@ -24,6 +24,11 @@ vi.mock("./route-reply.js", () => ({
 
 vi.mock("./abort.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
+  formatAbortReplyText: (stoppedSubagents?: number) => {
+    if (typeof stoppedSubagents !== "number") return "⚙️ Agent was aborted.";
+    const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
+    return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
+  },
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
@@ -120,6 +125,31 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
+    });
+  });
+
+  it("fast-abort reply includes stopped subagent count when provided", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: true,
+      stoppedSubagents: 2,
+    });
+    const cfg = {} as ClawdbotConfig;
+    const dispatcher = createDispatcher();
+    const ctx: MsgContext = {
+      Provider: "telegram",
+      Body: "/stop",
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: vi.fn(async () => ({ text: "hi" }) as ReplyPayload),
+    });
+
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "⚙️ Agent was aborted. Stopped 2 sub-agents.",
     });
   });
 

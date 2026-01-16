@@ -57,6 +57,7 @@
 
 ### Fixes
 - Messages: make `/stop` clear queued followups and pending session lane work for a hard abort.
+- Messages: make `/stop` abort active sub-agent runs spawned from the requester session and report how many were stopped.
 - WhatsApp: default response prefix only for self-chat, using identity name when set.
 - Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
 - Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.

@@ -354,6 +354,12 @@ export function releaseSubagentRun(runId: string) {
   if (subagentRuns.size === 0) stopSweeper();
 }
 
+export function listSubagentRunsForRequester(requesterSessionKey: string): SubagentRunRecord[] {
+  const key = requesterSessionKey.trim();
+  if (!key) return [];
+  return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
+}
+
 export function initSubagentRegistry() {
   restoreSubagentRunsOnce();
 }
