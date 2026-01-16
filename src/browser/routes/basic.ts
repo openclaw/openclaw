@@ -1,5 +1,6 @@
 import type express from "express";
 
+import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
@@ -36,6 +37,19 @@ export function registerBrowserBasicRoutes(app: express.Express, ctx: BrowserRou
     ]);
 
     const profileState = current.profiles.get(profileCtx.profile.name);
+    let detectedBrowser: string | null = null;
+    let detectedExecutablePath: string | null = null;
+    let detectError: string | null = null;
+
+    try {
+      const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
+      if (detected) {
+        detectedBrowser = detected.kind;
+        detectedExecutablePath = detected.path;
+      }
+    } catch (err) {
+      detectError = String(err);
+    }
 
     res.json({
       enabled: current.resolved.enabled,
@@ -48,6 +62,9 @@ export function registerBrowserBasicRoutes(app: express.Express, ctx: BrowserRou
       cdpPort: profileCtx.profile.cdpPort,
       cdpUrl: profileCtx.profile.cdpUrl,
       chosenBrowser: profileState?.running?.exe.kind ?? null,
+      detectedBrowser,
+      detectedExecutablePath,
+      detectError,
       userDataDir: profileState?.running?.userDataDir ?? null,
       color: profileCtx.profile.color,
       headless: current.resolved.headless,

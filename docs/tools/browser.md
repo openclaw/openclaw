@@ -14,8 +14,10 @@ control server.
 
 Beginner view:
 - Think of it as a **separate, agent-only browser**.
-- It does **not** touch your personal browser profile.
+- The `clawd` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
+- The default `chrome` profile uses the **system default Chromium browser** via the
+  extension relay; switch to `clawd` for the isolated managed browser.
 
 ## What you get
 
@@ -38,6 +40,14 @@ clawdbot browser --browser-profile clawd snapshot
 
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
+
+## Profiles: `clawd` vs `chrome`
+
+- `clawd`: managed, isolated browser (no extension required).
+- `chrome`: extension relay to your **system browser** (requires the Clawdbot
+  extension to be attached to a tab).
+
+Set `browser.defaultProfile: "clawd"` if you want managed mode by default.
 
 ## Configuration
 
@@ -71,11 +81,21 @@ Notes:
 - `cdpUrl` defaults to `controlUrl + 1` when unset.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Default profile is `chrome` (extension relay). Use `defaultProfile: "clawd"` for the managed browser.
+- Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Local `clawd` profiles auto-assign `cdpPort`/`cdpUrl` — set those only for remote CDP.
 
 ## Use Brave (or another Chromium-based browser)
 
-Set `browser.executablePath` to override auto-detection:
+If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
+Clawdbot uses it automatically. Set `browser.executablePath` to override
+auto-detection:
+
+CLI example:
+
+```bash
+clawdbot config set browser.executablePath "/usr/bin/google-chrome"
+```
 
 ```json5
 // macOS
@@ -338,6 +358,10 @@ Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF)
 Playwright. If Playwright isn’t installed, those endpoints return a clear 501
 error. ARIA snapshots and basic screenshots still work for clawd-managed Chrome.
 For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
+
+If you see `Playwright is not available in this gateway build`, install the full
+Playwright package (not `playwright-core`) and restart the gateway, or reinstall
+Clawdbot with browser support.
 
 ## How it works (internal)
 
