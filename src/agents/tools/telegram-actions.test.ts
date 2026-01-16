@@ -135,7 +135,7 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/Telegram agent reactions disabled.*reactionLevel="off"/);
   });
 
-  it("blocks reactions when reactionLevel is ack (default)", async () => {
+  it("blocks reactions when reactionLevel is ack", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "ack" } },
     } as ClawdbotConfig;
