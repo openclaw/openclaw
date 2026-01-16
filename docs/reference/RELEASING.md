@@ -63,7 +63,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 
 7) **GitHub release + appcast**
 - [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
-- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `clawdbot X.Y.Z`** (not just the tag); body should inline the product-facing bullets from the changelog (no bare links) **and must not repeat the title inside the body**.
+- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `clawdbot X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.
 - [ ] Attach artifacts: `npm pack` tarball (optional), `Clawdbot-X.Y.Z.zip`, and `Clawdbot-X.Y.Z.dSYM.zip` (if generated).
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
 - [ ] From a clean temp directory (no `package.json`), run `npx -y clawdbot@X.Y.Z send --help` to confirm install/CLI entrypoints work.
