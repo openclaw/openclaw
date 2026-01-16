@@ -39,7 +39,7 @@ struct InstancesSettingsSmokeTests {
                 host: "gateway",
                 ip: "10.0.0.4",
                 version: "3.0.0",
-                platform: "iOS 17",
+                platform: "iOS 18",
                 deviceFamily: nil,
                 modelIdentifier: nil,
                 lastInputSeconds: nil,

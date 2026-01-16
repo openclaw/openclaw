@@ -1,6 +1,7 @@
 import ClawdbotKit
 import Foundation
 import SwiftUI
+import Textual
 
 private enum ChatUIConstants {
     static let bubbleMaxWidth: CGFloat = 560
@@ -169,37 +170,7 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser)
                 }
             } else if self.isUser {
-                let split = ChatMarkdownSplitter.split(markdown: text)
-                ForEach(split.blocks) { block in
-                    switch block.kind {
-                    case .text:
-                        MarkdownTextView(text: block.text, textColor: textColor, font: .system(size: 14))
-                    case let .code(language):
-                        CodeBlockView(code: block.text, language: language, isUser: self.isUser)
-                    }
-                }
-
-                if !split.images.isEmpty {
-                    ForEach(
-                        split.images,
-                        id: \ChatMarkdownSplitter.InlineImage.id)
-                    { (item: ChatMarkdownSplitter.InlineImage) in
-                        if let img = item.image {
-                            ClawdbotPlatformImageFactory.image(img)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxHeight: 260)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-                        } else {
-                            Text(item.label.isEmpty ? "Image" : item.label)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
+                ChatMarkdownView(text: text, textColor: textColor, font: .system(size: 14))
             } else {
                 ChatAssistantTextBody(text: text)
             }
@@ -613,26 +584,22 @@ private struct TypingDots: View {
 }
 
 @MainActor
-private struct MarkdownTextView: View {
+private struct ChatMarkdownView: View {
     let text: String
     let textColor: Color
     let font: Font
 
     var body: some View {
-        let normalized = self.text.replacingOccurrences(
-            of: "(?<!\\n)\\n(?!\\n)",
-            with: " ",
-            options: .regularExpression)
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        if let attributed = try? AttributedString(markdown: normalized, options: options) {
-            Text(attributed)
+        let processed = ChatMarkdownPreprocessor.preprocess(markdown: self.text)
+        VStack(alignment: .leading, spacing: 10) {
+            StructuredText(markdown: processed.cleaned)
                 .font(self.font)
                 .foregroundStyle(self.textColor)
-        } else {
-            Text(normalized)
-                .font(self.font)
-                .foregroundStyle(self.textColor)
+                .textual.textSelection(.enabled)
+
+            if !processed.images.isEmpty {
+                InlineImageList(images: processed.images)
+            }
         }
     }
 }
@@ -646,80 +613,36 @@ private struct ChatAssistantTextBody: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(segments) { segment in
                 let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
-                ChatMarkdownBody(text: segment.text, textColor: ClawdbotChatTheme.assistantText, font: font)
+                ChatMarkdownView(text: segment.text, textColor: ClawdbotChatTheme.assistantText, font: font)
             }
         }
     }
 }
 
 @MainActor
-private struct ChatMarkdownBody: View {
-    let text: String
-    let textColor: Color
-    let font: Font
+private struct InlineImageList: View {
+    let images: [ChatMarkdownPreprocessor.InlineImage]
 
     var body: some View {
-        let split = ChatMarkdownSplitter.split(markdown: self.text)
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(split.blocks) { block in
-                switch block.kind {
-                case .text:
-                    MarkdownTextView(text: block.text, textColor: self.textColor, font: self.font)
-                case let .code(language):
-                    CodeBlockView(code: block.text, language: language, isUser: false)
-                }
-            }
-
-            if !split.images.isEmpty {
-                ForEach(
-                    split.images,
-                    id: \ChatMarkdownSplitter.InlineImage.id)
-                { (item: ChatMarkdownSplitter.InlineImage) in
-                    if let img = item.image {
-                        ClawdbotPlatformImageFactory.image(img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 260)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-                    } else {
-                        Text(item.label.isEmpty ? "Image" : item.label)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+        if images.isEmpty {
+            EmptyView()
+        } else {
+            ForEach(images, id: \.id) { item in
+                if let img = item.image {
+                    ClawdbotPlatformImageFactory.image(img)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 260)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                } else {
+                    Text(item.label.isEmpty ? "Image" : item.label)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
-        .textSelection(.enabled)
-    }
-}
-
-@MainActor
-private struct CodeBlockView: View {
-    let code: String
-    let language: String?
-    let isUser: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let language, !language.isEmpty {
-                Text(language)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-            }
-            Text(self.code)
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
-                .foregroundStyle(self.isUser ? .white : .primary)
-                .textSelection(.enabled)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(self.isUser ? Color.white.opacity(0.16) : Color.black.opacity(0.06))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

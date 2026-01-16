@@ -395,7 +395,7 @@ extension InstancesSettings {
             host: "phone",
             ip: "10.0.0.3",
             version: "2.0.0",
-            platform: "iOS 17.2",
+            platform: "iOS 18.0",
             deviceFamily: "iPhone",
             modelIdentifier: nil,
             lastInputSeconds: 35,
@@ -446,7 +446,7 @@ extension InstancesSettings {
         _ = view.platformIcon("watchOS 10")
         _ = view.platformIcon("unknown 1.0")
         _ = view.prettyPlatform("macOS 14.2")
-        _ = view.prettyPlatform("iOS 17")
+        _ = view.prettyPlatform("iOS 18")
         _ = view.prettyPlatform("ipados 17.1")
         _ = view.prettyPlatform("linux")
         _ = view.prettyPlatform("   ")

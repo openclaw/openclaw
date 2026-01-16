@@ -2,6 +2,7 @@
 
 ## 2026.1.15 (unreleased)
 
+- **BREAKING:** iOS minimum version is now 18.0 to support Textual markdown rendering in native chat. (#702)
 - **BREAKING:** Microsoft Teams is now a plugin; install `@clawdbot/msteams` via `clawdbot plugins install @clawdbot/msteams`.
 - CLI: set process titles to `clawdbot-<command>` for clearer process listings.
 - CLI/macOS: sync remote SSH target/identity to config and let `gateway status` auto-infer SSH targets (ssh-config aware).
