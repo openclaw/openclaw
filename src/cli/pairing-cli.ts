@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import {
   listPairingChannels,
   notifyPairingApproved,
-  resolvePairingChannel,
 } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
@@ -16,8 +15,14 @@ import { theme } from "../terminal/theme.js";
 
 const CHANNELS: PairingChannel[] = listPairingChannels();
 
+/** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown): PairingChannel {
-  return resolvePairingChannel(raw);
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (!value) throw new Error("Channel required");
+  if (CHANNELS.includes(value as PairingChannel)) return value as PairingChannel;
+  // Allow extension channels: validate format but don't require registry
+  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) return value as PairingChannel;
+  throw new Error(`Invalid channel: ${value}`);
 }
 
 async function notifyApproved(channel: PairingChannel, id: string) {
