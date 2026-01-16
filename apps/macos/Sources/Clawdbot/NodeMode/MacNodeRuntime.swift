@@ -586,8 +586,8 @@ actor MacNodeRuntime {
             let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !key.isEmpty else { continue }
             let upper = key.uppercased()
-            if blockedEnvKeys.contains(upper) { continue }
-            if blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
+            if self.blockedEnvKeys.contains(upper) { continue }
+            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
             merged[key] = value
         }
         return merged

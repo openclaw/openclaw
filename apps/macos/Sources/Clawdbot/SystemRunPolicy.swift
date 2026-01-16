@@ -10,11 +10,11 @@ enum SystemRunPolicy: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .never:
-            return "Never"
+            "Never"
         case .ask:
-            return "Always Ask"
+            "Always Ask"
         case .always:
-            return "Always Allow"
+            "Always Allow"
         }
     }
 
@@ -75,13 +75,13 @@ enum SystemRunAllowlist {
 
     static func contains(_ argv: [String], defaults: UserDefaults = .standard) -> Bool {
         let key = key(for: argv)
-        return load(from: defaults).contains(key)
+        return self.load(from: defaults).contains(key)
     }
 
     static func add(_ argv: [String], defaults: UserDefaults = .standard) {
         let key = key(for: argv)
         guard !key.isEmpty else { return }
-        var allowlist = load(from: defaults)
+        var allowlist = self.load(from: defaults)
         if allowlist.insert(key).inserted {
             MacNodeConfigFile.setSystemRunAllowlist(Array(allowlist).sorted())
         }
