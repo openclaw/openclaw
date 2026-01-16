@@ -422,7 +422,8 @@ export async function runEmbeddedAttempt(
 
         // Check if last message is a user message to prevent consecutive user turns
         const lastMsg = activeSession.messages[activeSession.messages.length - 1];
-        const lastMsgRole = lastMsg && typeof lastMsg === "object" ? (lastMsg as { role?: unknown }).role : undefined;
+        const lastMsgRole =
+          lastMsg && typeof lastMsg === "object" ? (lastMsg as { role?: unknown }).role : undefined;
 
         if (lastMsgRole === "user") {
           // Last message was a user message. Adding another user message would create
@@ -433,9 +434,11 @@ export async function runEmbeddedAttempt(
           // Skip this prompt to prevent "400 Incorrect role information" error.
           log.warn(
             `Skipping prompt because last message is a user message (would create consecutive user turns). ` +
-            `runId=${params.runId} sessionId=${params.sessionId}`
+              `runId=${params.runId} sessionId=${params.sessionId}`,
           );
-          promptError = new Error("Incorrect role information: consecutive user messages would violate role ordering");
+          promptError = new Error(
+            "Incorrect role information: consecutive user messages would violate role ordering",
+          );
         } else {
           try {
             await activeSession.prompt(params.prompt, { images: params.images });

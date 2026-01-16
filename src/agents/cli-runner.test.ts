@@ -126,15 +126,7 @@ describe("cleanupSuspendedCliProcesses", () => {
     await cleanupSuspendedCliProcesses(
       {
         command: "codex",
-        resumeArgs: [
-          "exec",
-          "resume",
-          "{sessionId}",
-          "--color",
-          "never",
-          "--sandbox",
-          "read-only",
-        ],
+        resumeArgs: ["exec", "resume", "{sessionId}", "--color", "never", "--sandbox", "read-only"],
       } as CliBackendConfig,
       1,
     );

@@ -8,10 +8,18 @@ import {
   upsertAuthProfile,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
+import {
+  CONFIG_PATH_CLAWDBOT,
+  readConfigFileSnapshot,
+  type ClawdbotConfig,
+} from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
@@ -21,7 +29,11 @@ import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { updateConfig } from "./shared.js";
 import { resolvePluginProviders } from "../../plugins/providers.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import type { ProviderAuthMethod, ProviderAuthResult, ProviderPlugin } from "../../plugins/types.js";
+import type {
+  ProviderAuthMethod,
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "../../plugins/types.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 
 const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
@@ -334,14 +346,16 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   const prompter = createClackPrompter();
   const selectedProvider =
     resolveProviderMatch(providers, opts.provider) ??
-    (await prompter.select({
-      message: "Select a provider",
-      options: providers.map((provider) => ({
-        value: provider.id,
-        label: provider.label,
-        hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
-      })),
-    }).then((id) => resolveProviderMatch(providers, String(id))));
+    (await prompter
+      .select({
+        message: "Select a provider",
+        options: providers.map((provider) => ({
+          value: provider.id,
+          label: provider.label,
+          hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
+        })),
+      })
+      .then((id) => resolveProviderMatch(providers, String(id))));
 
   if (!selectedProvider) {
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
@@ -351,16 +365,16 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     pickAuthMethod(selectedProvider, opts.method) ??
     (selectedProvider.auth.length === 1
       ? selectedProvider.auth[0]
-      : await prompter.select({
-          message: `Auth method for ${selectedProvider.label}`,
-          options: selectedProvider.auth.map((method) => ({
-            value: method.id,
-            label: method.label,
-            hint: method.hint,
-          })),
-        }).then((id) =>
-          selectedProvider.auth.find((method) => method.id === String(id)),
-        ));
+      : await prompter
+          .select({
+            message: `Auth method for ${selectedProvider.label}`,
+            options: selectedProvider.auth.map((method) => ({
+              value: method.id,
+              label: method.label,
+              hint: method.hint,
+            })),
+          })
+          .then((id) => selectedProvider.auth.find((method) => method.id === String(id))));
 
   if (!chosenMethod) {
     throw new Error("Unknown auth method. Use --method <id> to select one.");
