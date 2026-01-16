@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from "vitest";
 
 import { createExecTool } from "./bash-tools.exec";
-import { getFinishedSession, getSession, resetProcessRegistryForTests } from "./bash-process-registry";
+import {
+  getFinishedSession,
+  getSession,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry";
 import { killProcessTree } from "./shell-utils";
 
 afterEach(() => {
@@ -14,7 +18,7 @@ test("background exec is not killed when tool signal aborts", async () => {
 
   const result = await tool.execute(
     "toolcall",
-    { command: "node -e \"setTimeout(() => {}, 5000)\"", background: true },
+    { command: 'node -e "setTimeout(() => {}, 5000)"', background: true },
     abortController.signal,
   );
 
