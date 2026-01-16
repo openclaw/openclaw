@@ -19,14 +19,14 @@ enum MacNodeBridgeTLSStore {
     }
 
     static func loadFingerprint(stableID: String) -> String? {
-        let key = keyPrefix + stableID
-        let raw = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = self.keyPrefix + stableID
+        let raw = self.defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static func saveFingerprint(_ value: String, stableID: String) {
-        let key = keyPrefix + stableID
-        defaults.set(value, forKey: key)
+        let key = self.keyPrefix + stableID
+        self.defaults.set(value, forKey: key)
     }
 }
 
@@ -71,5 +71,5 @@ private func sha256Hex(_ data: Data) -> String {
 }
 
 private func normalizeMacNodeFingerprint(_ raw: String) -> String {
-    raw.lowercased().filter { $0.isHexDigit }
+    raw.lowercased().filter(\.isHexDigit)
 }
