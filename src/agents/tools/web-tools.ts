@@ -48,6 +48,22 @@ const WebSearchSchema = Type.Object({
       maximum: MAX_SEARCH_COUNT,
     }),
   ),
+  country: Type.Optional(
+    Type.String({
+      description:
+        "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
+    }),
+  ),
+  search_lang: Type.Optional(
+    Type.String({
+      description: "ISO language code for search results (e.g., 'de', 'en', 'fr').",
+    }),
+  ),
+  ui_lang: Type.Optional(
+    Type.String({
+      description: "ISO language code for UI elements.",
+    }),
+  ),
 });
 
 const WebFetchSchema = Type.Object({
