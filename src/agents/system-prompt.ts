@@ -12,6 +12,105 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
  */
 export type PromptMode = "full" | "minimal" | "none";
 
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  isMinimal: boolean;
+  readToolName: string;
+}) {
+  const trimmed = params.skillsPrompt?.trim();
+  if (!trimmed || params.isMinimal) return [];
+  return [
+    "## Skills",
+    `Skills provide task-specific instructions. Use \`${params.readToolName}\` to load the SKILL.md at the location listed for that skill.`,
+    trimmed,
+    "",
+  ];
+}
+
+function buildMemorySection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+}) {
+  if (params.isMinimal) return [];
+  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+    return [];
+  }
+  return [
+    "## Memory Recall",
+    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    "",
+  ];
+}
+
+function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
+  if (!ownerLine || isMinimal) return [];
+  return ["## User Identity", ownerLine, ""];
+}
+
+function buildTimeSection(params: {
+  userTimezone?: string;
+  userTime?: string;
+  userTimeFormat?: ResolvedTimeFormat;
+}) {
+  if (!params.userTimezone && !params.userTime) return [];
+  return [
+    "## Current Date & Time",
+    params.userTime
+      ? `${params.userTime} (${params.userTimezone ?? "unknown"})`
+      : `Time zone: ${params.userTimezone}. Current time unknown; assume UTC for date/time references.`,
+    params.userTimeFormat
+      ? `Time format: ${params.userTimeFormat === "24" ? "24-hour" : "12-hour"}`
+      : "",
+    "",
+  ];
+}
+
+function buildReplyTagsSection(isMinimal: boolean) {
+  if (isMinimal) return [];
+  return [
+    "## Reply Tags",
+    "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- [[reply_to_current]] replies to the triggering message.",
+    "- [[reply_to:<id>]] replies to a specific message id when you have it.",
+    "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
+    "Tags are stripped before sending; support depends on the current channel config.",
+    "",
+  ];
+}
+
+function buildMessagingSection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  messageChannelOptions: string;
+  inlineButtonsEnabled: boolean;
+  runtimeChannel?: string;
+}) {
+  if (params.isMinimal) return [];
+  return [
+    "## Messaging",
+    "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
+    params.availableTools.has("message")
+      ? [
+          "",
+          "### message tool",
+          "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+          "- For `action=send`, include `to` and `message`.",
+          `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
+          params.inlineButtonsEnabled
+            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            : params.runtimeChannel
+              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to add "inlineButtons" to ${params.runtimeChannel}.capabilities or ${params.runtimeChannel}.accounts.<id>.capabilities.`
+              : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
+    "",
+  ];
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -118,6 +217,7 @@ export function buildAgentSystemPrompt(params: {
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
   const canonicalToolNames = rawToolNames.filter(Boolean);
+  // Preserve caller casing while deduping tool names by lowercase.
   const canonicalByNormalized = new Map<string, string>();
   for (const name of canonicalToolNames) {
     const normalized = name.toLowerCase();
@@ -191,26 +291,12 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
-  const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
-  // Skip skills section for subagent/none modes
-  const skillsSection =
-    skillsPrompt && !isMinimal
-      ? [
-          "## Skills",
-          `Skills provide task-specific instructions. Use \`${readToolName}\` to load the SKILL.md at the location listed for that skill.`,
-          ...skillsLines,
-          "",
-        ]
-      : [];
-  // Skip memory section for subagent/none modes
-  const memorySection =
-    !isMinimal && (availableTools.has("memory_search") || availableTools.has("memory_get"))
-      ? [
-          "## Memory Recall",
-          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-          "",
-        ]
-      : [];
+  const skillsSection = buildSkillsSection({
+    skillsPrompt,
+    isMinimal,
+    readToolName,
+  });
+  const memorySection = buildMemorySection({ isMinimal, availableTools });
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
@@ -335,63 +421,23 @@ export function buildAgentSystemPrompt(params: {
           .join("\n")
       : "",
     params.sandboxInfo?.enabled ? "" : "",
-    // Skip user identity for subagent/none modes
-    ownerLine && !isMinimal ? "## User Identity" : "",
-    ownerLine && !isMinimal ? ownerLine : "",
-    ownerLine && !isMinimal ? "" : "",
-    ...(userTimezone || userTime
-      ? [
-          "## Current Date & Time",
-          userTime
-            ? `${userTime} (${userTimezone ?? "unknown"})`
-            : `Time zone: ${userTimezone}. Current time unknown; assume UTC for date/time references.`,
-          params.userTimeFormat
-            ? `Time format: ${params.userTimeFormat === "24" ? "24-hour" : "12-hour"}`
-            : "",
-          "",
-        ]
-      : []),
+    ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...buildTimeSection({
+      userTimezone,
+      userTime,
+      userTimeFormat: params.userTimeFormat,
+    }),
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Clawdbot and included below in Project Context.",
     "",
-    // Skip reply tags for subagent/none modes
-    ...(isMinimal
-      ? []
-      : [
-          "## Reply Tags",
-          "To request a native reply/quote on supported surfaces, include one tag in your reply:",
-          "- [[reply_to_current]] replies to the triggering message.",
-          "- [[reply_to:<id>]] replies to a specific message id when you have it.",
-          "Whitespace inside the tag is allowed (e.g. [[ reply_to_current ]] / [[ reply_to: 123 ]]).",
-          "Tags are stripped before sending; support depends on the current channel config.",
-          "",
-        ]),
-    // Skip messaging section for subagent/none modes
-    ...(isMinimal
-      ? []
-      : [
-          "## Messaging",
-          "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
-          "- Cross-session messaging → use sessions_send(sessionKey, message)",
-          "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
-          availableTools.has("message")
-            ? [
-                "",
-                "### message tool",
-                "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-                "- For `action=send`, include `to` and `message`.",
-                `- If multiple channels are configured, pass \`channel\` (${messageChannelOptions}).`,
-                inlineButtonsEnabled
-                  ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
-                  : runtimeChannel
-                    ? `- Inline buttons not enabled for ${runtimeChannel}. If you need them, ask to add "inlineButtons" to ${runtimeChannel}.capabilities or ${runtimeChannel}.accounts.<id>.capabilities.`
-                    : "",
-              ]
-                .filter(Boolean)
-                .join("\n")
-            : "",
-          "",
-        ]),
+    ...buildReplyTagsSection(isMinimal),
+    ...buildMessagingSection({
+      isMinimal,
+      availableTools,
+      messageChannelOptions,
+      inlineButtonsEnabled,
+      runtimeChannel,
+    }),
   ];
 
   if (extraSystemPrompt) {
