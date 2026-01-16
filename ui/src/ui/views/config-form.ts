@@ -3,5 +3,6 @@ export {
   analyzeConfigSchema,
   type ConfigSchemaAnalysis,
 } from "./config-form.analyze";
-export type { JsonSchema } from "./config-form.shared";
+export { renderNode } from "./config-form.node";
+export { schemaType, type JsonSchema } from "./config-form.shared";
 

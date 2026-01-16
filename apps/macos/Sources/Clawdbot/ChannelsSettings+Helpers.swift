@@ -1,6 +1,6 @@
 import AppKit
 
-extension ConnectionsSettings {
+extension ChannelsSettings {
     func date(fromMs ms: Double?) -> Date? {
         guard let ms else { return nil }
         return Date(timeIntervalSince1970: ms / 1000)

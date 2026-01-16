@@ -12,6 +12,8 @@ import {
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatChannelMeta } from "../registry.js";
+import { SlackConfigSchema } from "../../config/zod-schema.providers-core.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -80,6 +82,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.slack"] },
+  configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {
     listAccountIds: (cfg) => listSlackAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),

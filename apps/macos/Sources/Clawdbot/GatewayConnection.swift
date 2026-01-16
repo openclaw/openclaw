@@ -56,6 +56,7 @@ actor GatewayConnection {
         case configGet = "config.get"
         case configSet = "config.set"
         case configPatch = "config.patch"
+        case configSchema = "config.schema"
         case wizardStart = "wizard.start"
         case wizardNext = "wizard.next"
         case wizardCancel = "wizard.cancel"

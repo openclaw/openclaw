@@ -21,6 +21,8 @@ import {
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 import { getChatChannelMeta } from "../registry.js";
+import { WhatsAppConfigSchema } from "../../config/zod-schema.providers-whatsapp.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
@@ -60,6 +62,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
   gatewayMethods: ["web.login.start", "web.login.wait"],
+  configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
   config: {
     listAccountIds: (cfg) => listWhatsAppAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),

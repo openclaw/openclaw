@@ -2,11 +2,12 @@ import { html, nothing } from "lit";
 
 import { formatAgo } from "../format";
 import type { WhatsAppStatus } from "../types";
-import type { ConnectionsProps } from "./connections.types";
-import { formatDuration } from "./connections.shared";
+import type { ChannelsProps } from "./channels.types";
+import { renderChannelConfigSection } from "./channels.config";
+import { formatDuration } from "./channels.shared";
 
 export function renderWhatsAppCard(params: {
-  props: ConnectionsProps;
+  props: ChannelsProps;
   whatsapp?: WhatsAppStatus;
   accountCountLabel: unknown;
 }) {
@@ -110,6 +111,8 @@ export function renderWhatsAppCard(params: {
           Refresh
         </button>
       </div>
+
+      ${renderChannelConfigSection({ channelId: "whatsapp", props })}
     </div>
   `;
 }

@@ -29,7 +29,7 @@ describe("iconForTab", () => {
   it("returns stable icons for known tabs", () => {
     expect(iconForTab("chat")).toBe("💬");
     expect(iconForTab("overview")).toBe("📊");
-    expect(iconForTab("connections")).toBe("🔗");
+    expect(iconForTab("channels")).toBe("🔗");
     expect(iconForTab("instances")).toBe("📡");
     expect(iconForTab("sessions")).toBe("📄");
     expect(iconForTab("cron")).toBe("⏰");

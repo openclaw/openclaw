@@ -17,15 +17,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type {
-  ChatQueueItem,
-  CronFormState,
-  DiscordForm,
-  IMessageForm,
-  SlackForm,
-  SignalForm,
-  TelegramForm,
-} from "./ui-types";
+import type { ChatQueueItem, CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
 
@@ -73,25 +65,7 @@ export type AppViewState = {
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
   whatsappBusy: boolean;
-  telegramForm: TelegramForm;
-  telegramSaving: boolean;
-  telegramTokenLocked: boolean;
-  telegramConfigStatus: string | null;
-  discordForm: DiscordForm;
-  discordSaving: boolean;
-  discordTokenLocked: boolean;
-  discordConfigStatus: string | null;
-  slackForm: SlackForm;
-  slackSaving: boolean;
-  slackTokenLocked: boolean;
-  slackAppTokenLocked: boolean;
-  slackConfigStatus: string | null;
-  signalForm: SignalForm;
-  signalSaving: boolean;
-  signalConfigStatus: string | null;
-  imessageForm: IMessageForm;
-  imessageSaving: boolean;
-  imessageConfigStatus: string | null;
+  configFormDirty: boolean;
   presenceLoading: boolean;
   presenceEntries: PresenceEntry[];
   presenceError: string | null;
@@ -145,11 +119,8 @@ export type AppViewState = {
   handleWhatsAppStart: (force: boolean) => Promise<void>;
   handleWhatsAppWait: () => Promise<void>;
   handleWhatsAppLogout: () => Promise<void>;
-  handleTelegramSave: () => Promise<void>;
-  handleDiscordSave: () => Promise<void>;
-  handleSlackSave: () => Promise<void>;
-  handleSignalSave: () => Promise<void>;
-  handleIMessageSave: () => Promise<void>;
+  handleChannelConfigSave: () => Promise<void>;
+  handleChannelConfigReload: () => Promise<void>;
   handleConfigLoad: () => Promise<void>;
   handleConfigSave: () => Promise<void>;
   handleConfigApply: () => Promise<void>;
@@ -188,10 +159,5 @@ export type AppViewState = {
   handleLogsLevelFilterToggle: (level: LogLevel) => void;
   handleLogsAutoFollowToggle: (next: boolean) => void;
   handleCallDebugMethod: (method: string, params: string) => Promise<void>;
-  handleUpdateDiscordForm: (path: string, value: unknown) => void;
-  handleUpdateSlackForm: (path: string, value: unknown) => void;
-  handleUpdateSignalForm: (path: string, value: unknown) => void;
-  handleUpdateTelegramForm: (path: string, value: unknown) => void;
-  handleUpdateIMessageForm: (path: string, value: unknown) => void;
 };
 

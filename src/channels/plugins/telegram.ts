@@ -17,7 +17,9 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatChannelMeta } from "../registry.js";
+import { TelegramConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { telegramMessageActions } from "./actions/telegram.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -77,6 +79,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.telegram"] },
+  configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),

@@ -80,6 +80,7 @@ export type PluginRecord = {
   httpHandlers: number;
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
+  configJsonSchema?: Record<string, unknown>;
 };
 
 export type PluginRegistry = {

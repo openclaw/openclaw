@@ -13,7 +13,9 @@ import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
+import { DiscordConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { discordMessageActions } from "./actions/discord.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -57,6 +59,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.discord"] },
+  configSchema: buildChannelConfigSchema(DiscordConfigSchema),
   config: {
     listAccountIds: (cfg) => listDiscordAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),

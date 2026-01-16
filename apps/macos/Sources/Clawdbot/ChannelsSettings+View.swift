@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension ConnectionsSettings {
+extension ChannelsSettings {
     var body: some View {
         HStack(spacing: 0) {
             self.sidebar
@@ -57,7 +57,7 @@ extension ConnectionsSettings {
 
     private var emptyDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Connections")
+            Text("Channels")
                 .font(.title3.weight(.semibold))
             Text("Select a channel to view status and settings.")
                 .font(.callout)
@@ -67,7 +67,7 @@ extension ConnectionsSettings {
         .padding(.vertical, 18)
     }
 
-    private func channelDetail(_ channel: ConnectionChannel) -> some View {
+    private func channelDetail(_ channel: ChannelItem) -> some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 16) {
                 self.detailHeader(for: channel)
@@ -81,7 +81,7 @@ extension ConnectionsSettings {
         }
     }
 
-    private func sidebarRow(_ channel: ConnectionChannel) -> some View {
+    private func sidebarRow(_ channel: ChannelItem) -> some View {
         let isSelected = self.selectedChannel == channel
         return Button {
             self.selectedChannel = channel
@@ -119,7 +119,7 @@ extension ConnectionsSettings {
             .padding(.top, 2)
     }
 
-    private func detailHeader(for channel: ConnectionChannel) -> some View {
+    private func detailHeader(for channel: ChannelItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Label(channel.detailTitle, systemImage: channel.systemImage)

@@ -1,7 +1,9 @@
 import type { ClawdbotConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { MSTeamsConfigSchema } from "../../../src/config/zod-schema.providers-core.js";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
 import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
@@ -64,6 +66,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["channels.msteams"] },
+  configSchema: buildChannelConfigSchema(MSTeamsConfigSchema),
   config: {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
     resolveAccount: (cfg) => ({

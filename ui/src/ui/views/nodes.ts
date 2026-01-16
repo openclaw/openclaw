@@ -12,7 +12,7 @@ export function renderNodes(props: NodesProps) {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Nodes</div>
-          <div class="card-sub">Paired devices and live connections.</div>
+          <div class="card-sub">Paired devices and live links.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
