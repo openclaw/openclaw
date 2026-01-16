@@ -7,7 +7,8 @@ import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR } from "../utils.js";
-import { normalizeCdpWsUrl } from "./cdp.js";
+import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import { appendCdpPath } from "./cdp.helpers.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -71,9 +72,10 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const base = cdpUrl.replace(/\/$/, "");
-    const res = await fetch(`${base}/json/version`, {
+    const versionUrl = appendCdpPath(cdpUrl, "/json/version");
+    const res = await fetch(versionUrl, {
       signal: ctrl.signal,
+      headers: getHeadersWithAuth(versionUrl),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as ChromeVersion;
@@ -98,7 +100,11 @@ export async function getChromeWebSocketUrl(
 
 async function canOpenWebSocket(wsUrl: string, timeoutMs = 800): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
-    const ws = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+    const headers = getHeadersWithAuth(wsUrl);
+    const ws = new WebSocket(wsUrl, {
+      handshakeTimeout: timeoutMs,
+      ...(Object.keys(headers).length ? { headers } : {}),
+    });
     const timer = setTimeout(
       () => {
         try {

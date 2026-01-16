@@ -1,4 +1,11 @@
-import { fetchJson, isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  isLoopbackHost,
+  withCdpSocket,
+} from "./cdp.helpers.js";
+
+export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
@@ -8,6 +15,13 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
     if (cdpPort) ws.port = cdpPort;
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  }
+  if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
+    ws.username = cdp.username;
+    ws.password = cdp.password;
+  }
+  for (const [key, value] of cdp.searchParams.entries()) {
+    if (!ws.searchParams.has(key)) ws.searchParams.append(key, value);
   }
   return ws.toString();
 }
@@ -68,8 +82,10 @@ export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
 }): Promise<{ targetId: string }> {
-  const base = opts.cdpUrl.replace(/\/$/, "");
-  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(`${base}/json/version`, 1500);
+  const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
+    appendCdpPath(opts.cdpUrl, "/json/version"),
+    1500,
+  );
   const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
   const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
   if (!wsUrl) throw new Error("CDP /json/version missing webSocketDebuggerUrl");
