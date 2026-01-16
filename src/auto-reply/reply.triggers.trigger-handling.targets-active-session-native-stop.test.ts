@@ -50,6 +50,7 @@ vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
 
 import { abortEmbeddedPiRun, runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { loadSessionStore } from "../config/sessions.js";
+import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import { getReplyFromConfig } from "./reply.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
@@ -113,6 +114,32 @@ describe("trigger handling", () => {
           2,
         ),
       );
+      const followupRun: FollowupRun = {
+        prompt: "queued",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          agentDir: join(home, "agent"),
+          sessionId: targetSessionId,
+          sessionKey: targetSessionKey,
+          messageProvider: "telegram",
+          agentAccountId: "acct",
+          sessionFile: join(home, "session.jsonl"),
+          workspaceDir: join(home, "workspace"),
+          config: cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          timeoutMs: 1000,
+          blockReplyBreak: "text_end",
+        },
+      };
+      enqueueFollowupRun(
+        targetSessionKey,
+        followupRun,
+        { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+        "none",
+      );
+      expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
 
       const res = await getReplyFromConfig(
         {
@@ -136,6 +163,7 @@ describe("trigger handling", () => {
       expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith(targetSessionId);
       const store = loadSessionStore(cfg.session.store);
       expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
+      expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
     });
   });
   it("applies native /model to the target session", async () => {

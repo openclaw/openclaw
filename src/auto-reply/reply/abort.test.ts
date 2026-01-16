@@ -1,10 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { isAbortTrigger, tryFastAbortFromMessage } from "./abort.js";
+import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { initSessionState } from "./session.js";
+
+vi.mock("../../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
+  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+}));
+
+const commandQueueMocks = vi.hoisted(() => ({
+  clearCommandLane: vi.fn(),
+}));
+
+vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
 describe("abort detection", () => {
   it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
@@ -60,5 +72,69 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
+  });
+
+  it("fast-abort clears queued followups and session lane", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as ClawdbotConfig;
+    const sessionKey = "telegram:123";
+    const sessionId = "session-123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId,
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const followupRun: FollowupRun = {
+      prompt: "queued",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: path.join(root, "agent"),
+        sessionId,
+        sessionKey,
+        messageProvider: "telegram",
+        agentAccountId: "acct",
+        sessionFile: path.join(root, "session.jsonl"),
+        workspaceDir: path.join(root, "workspace"),
+        config: cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        timeoutMs: 1000,
+        blockReplyBreak: "text_end",
+      },
+    };
+    enqueueFollowupRun(
+      sessionKey,
+      followupRun,
+      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+      "none",
+    );
+    expect(getFollowupQueueDepth(sessionKey)).toBe(1);
+
+    const result = await tryFastAbortFromMessage({
+      ctx: {
+        CommandBody: "/stop",
+        RawBody: "/stop",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        From: "telegram:123",
+        To: "telegram:123",
+      },
+      cfg,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+    expect(commandQueueMocks.clearCommandLane).toHaveBeenCalledWith(`session:${sessionKey}`);
   });
 });
