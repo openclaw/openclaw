@@ -86,6 +86,7 @@
 - Fix: use local auth for gateway security probe unless remote mode has a URL. (#1011) — thanks @ivanrvpereira.
 - Discord: truncate skill command descriptions for slash command limits. (#1018) — thanks @evalexpr.
 - macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
+- Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
 
 ## 2026.1.14-1
 
