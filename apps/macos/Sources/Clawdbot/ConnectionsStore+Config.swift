@@ -38,10 +38,10 @@ extension ConnectionsStore {
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?[
             "ui",
-            ]?.dictionaryValue
+        ]?.dictionaryValue
         let rawSeam = ui?[
             "seamColor",
-            ]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        ]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
     }
 

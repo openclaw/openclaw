@@ -312,9 +312,23 @@ final class MacNodeModeCoordinator {
                 }
 
                 let remotePort = Self.remoteBridgePort()
+                let preferredLocalPort = Self.loopbackBridgePort()
+                if let preferredLocalPort {
+                    self.logger.info(
+                        "mac node bridge tunnel starting " +
+                            "preferredLocalPort=\(preferredLocalPort, privacy: .public) " +
+                            "remotePort=\(remotePort, privacy: .public)")
+                } else {
+                    self.logger.info(
+                        "mac node bridge tunnel starting " +
+                            "preferredLocalPort=none " +
+                            "remotePort=\(remotePort, privacy: .public)")
+                }
                 self.tunnel = try await RemotePortTunnel.create(
                     remotePort: remotePort,
-                    allowRemoteUrlOverride: false)
+                    preferredLocalPort: preferredLocalPort,
+                    allowRemoteUrlOverride: false,
+                    allowRandomLocalPort: true)
                 if let localPort = self.tunnel?.localPort,
                    let port = NWEndpoint.Port(rawValue: localPort)
                 {
@@ -389,10 +403,10 @@ final class MacNodeModeCoordinator {
                     let preferred = BridgeDiscoveryPreferences.preferredStableID()
                     if let preferred,
                        let match = results.first(where: {
-                        if case .service = $0.endpoint {
-                            return BridgeEndpointID.stableID($0.endpoint) == preferred
-                        }
-                        return false
+                           if case .service = $0.endpoint {
+                               return BridgeEndpointID.stableID($0.endpoint) == preferred
+                           }
+                           return false
                        })
                     {
                         state.finish(match.endpoint)
