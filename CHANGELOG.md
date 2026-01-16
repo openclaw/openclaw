@@ -29,6 +29,7 @@
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
+- Agents: default to no narration for routine tool calls. (#1008) — thanks @cpojer.
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.
 - macOS: add `system.which` for prompt-free remote skill discovery (with gateway fallback to `system.run`).
 - Docs: add Date & Time guide and update prompt/timezone configuration docs.
