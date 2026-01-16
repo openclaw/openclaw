@@ -53,6 +53,7 @@
 - Telegram: allow custom commands in the bot menu (merged with native; conflicts ignored). (#860) — thanks @nachoiacovino.
 - Discord: allow allowlisted guilds without channel lists to receive messages when `groupPolicy="allowlist"`. — thanks @thewilloftheshadow.
 - Discord: allow emoji/sticker uploads + channel actions in config defaults. (#870) — thanks @JDIVE.
+- Channels/Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) via zca-cli. (#1032) — thanks @suminhthanh.
 
 ### Fixes
 - Messages: make `/stop` clear queued followups and pending session lane work for a hard abort.
