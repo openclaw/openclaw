@@ -56,6 +56,7 @@ Calendar Colors
 
 Email Formatting
 - Prefer plain text. Use `--body-file` for multi-paragraph messages (or `--body-file -` for stdin).
+- Same `--body-file` pattern works for drafts and replies.
 - `--body` does not unescape `\n`. If you need inline newlines, use a heredoc or `$'Line 1\n\nLine 2'`.
 - Use `--body-html` only when you need rich formatting.
 - HTML tags: `<p>` for paragraphs, `<br>` for line breaks, `<strong>` for bold, `<em>` for italic, `<a href="url">` for links, `<ul>`/`<li>` for lists.
