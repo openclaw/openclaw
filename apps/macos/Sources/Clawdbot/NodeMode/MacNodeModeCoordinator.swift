@@ -463,7 +463,7 @@ final class MacNodeModeCoordinator {
         }
     }
 
-    nonisolated private static func targetFromResult(_ result: NWBrowser.Result) -> BridgeTarget? {
+    private nonisolated static func targetFromResult(_ result: NWBrowser.Result) -> BridgeTarget? {
         let endpoint = result.endpoint
         guard case .service = endpoint else { return nil }
         let stableID = BridgeEndpointID.stableID(endpoint)
@@ -477,7 +477,7 @@ final class MacNodeModeCoordinator {
         return BridgeTarget(endpoint: endpoint, stableID: stableID, tls: tlsParams)
     }
 
-    nonisolated private static func resolveDiscoveredTLSParams(
+    private nonisolated static func resolveDiscoveredTLSParams(
         stableID: String,
         tlsEnabled: Bool,
         tlsFingerprintSha256: String?) -> MacNodeBridgeTLSParams?
@@ -503,7 +503,7 @@ final class MacNodeModeCoordinator {
         return nil
     }
 
-    nonisolated private static func resolveManualTLSParams(stableID: String) -> MacNodeBridgeTLSParams? {
+    private nonisolated static func resolveManualTLSParams(stableID: String) -> MacNodeBridgeTLSParams? {
         if let stored = MacNodeBridgeTLSStore.loadFingerprint(stableID: stableID) {
             return MacNodeBridgeTLSParams(
                 required: true,
@@ -519,12 +519,12 @@ final class MacNodeModeCoordinator {
             storeKey: stableID)
     }
 
-    nonisolated private static func txtValue(_ dict: [String: String], key: String) -> String? {
+    private nonisolated static func txtValue(_ dict: [String: String], key: String) -> String? {
         let raw = dict[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return raw.isEmpty ? nil : raw
     }
 
-    nonisolated private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
+    private nonisolated static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
         guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
         return raw == "1" || raw == "true" || raw == "yes"
     }
