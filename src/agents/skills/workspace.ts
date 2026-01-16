@@ -30,7 +30,11 @@ const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
-function debugSkillCommandOnce(messageKey: string, message: string, meta?: Record<string, unknown>) {
+function debugSkillCommandOnce(
+  messageKey: string,
+  message: string,
+  meta?: Record<string, unknown>,
+) {
   if (skillCommandDebugOnce.has(messageKey)) return;
   skillCommandDebugOnce.add(messageKey);
   skillsLogger.debug(message, meta);
