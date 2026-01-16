@@ -38,6 +38,22 @@ clawdbot onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 **Best for:** using your Claude subscription or existing Claude Code CLI login.
 
+### Where to get a setup-token
+
+Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. Run this on the **gateway host**:
+
+```bash
+claude setup-token
+```
+
+Paste the token into Clawdbot (wizard: **Anthropic token (paste setup-token)**), or let Clawdbot run the command for you:
+
+```bash
+clawdbot onboard --auth-choice setup-token
+# or
+clawdbot models auth setup-token --provider anthropic
+```
+
 ### CLI setup
 
 ```bash
