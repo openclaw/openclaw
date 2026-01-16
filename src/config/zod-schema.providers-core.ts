@@ -367,6 +367,7 @@ export const IMessageAccountSchemaBase = z.object({
   configWrites: z.boolean().optional(),
   cliPath: ExecutableTokenSchema.optional(),
   dbPath: z.string().optional(),
+  remoteHost: z.string().optional(),
   service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
   region: z.string().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
