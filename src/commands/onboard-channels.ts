@@ -18,9 +18,20 @@ import {
   ensureOnboardingPluginInstalled,
   reloadOnboardingPluginRegistry,
 } from "./onboarding/plugin-install.js";
-import type { ChannelOnboardingDmPolicy, SetupChannelsOptions } from "./onboarding/types.js";
+import type {
+  ChannelOnboardingDmPolicy,
+  ChannelOnboardingStatus,
+  SetupChannelsOptions,
+} from "./onboarding/types.js";
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
+
+type ChannelStatusSummary = {
+  installedPlugins: ReturnType<typeof listChannelPlugins>;
+  catalogEntries: ReturnType<typeof listChannelPluginCatalogEntries>;
+  statusByChannel: Map<ChannelChoice, ChannelOnboardingStatus>;
+  statusLines: string[];
+};
 
 function formatAccountLabel(accountId: string): string {
   return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;
@@ -67,6 +78,59 @@ async function promptRemovalAccountId(params: {
     initialValue: defaultAccountId,
   })) as string;
   return normalizeAccountId(selected) ?? defaultAccountId;
+}
+
+async function collectChannelStatus(params: {
+  cfg: ClawdbotConfig;
+  options?: SetupChannelsOptions;
+  accountOverrides: Partial<Record<ChannelChoice, string>>;
+}): Promise<ChannelStatusSummary> {
+  const installedPlugins = listChannelPlugins();
+  const installedIds = new Set(installedPlugins.map((plugin) => plugin.id));
+  const catalogEntries = listChannelPluginCatalogEntries().filter(
+    (entry) => !installedIds.has(entry.id),
+  );
+  const statusEntries = await Promise.all(
+    listChannelOnboardingAdapters().map((adapter) =>
+      adapter.getStatus({
+        cfg: params.cfg,
+        options: params.options,
+        accountOverrides: params.accountOverrides,
+      }),
+    ),
+  );
+  const catalogStatuses = catalogEntries.map((entry) => ({
+    channel: entry.id,
+    configured: false,
+    statusLines: [`${entry.meta.label}: install plugin to enable`],
+    selectionHint: "plugin · install",
+    quickstartScore: 0,
+  }));
+  const combinedStatuses = [...statusEntries, ...catalogStatuses];
+  const statusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
+  const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
+  return {
+    installedPlugins,
+    catalogEntries,
+    statusByChannel,
+    statusLines,
+  };
+}
+
+export async function noteChannelStatus(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+  options?: SetupChannelsOptions;
+  accountOverrides?: Partial<Record<ChannelChoice, string>>;
+}): Promise<void> {
+  const { statusLines } = await collectChannelStatus({
+    cfg: params.cfg,
+    options: params.options,
+    accountOverrides: params.accountOverrides ?? {},
+  });
+  if (statusLines.length > 0) {
+    await params.prompter.note(statusLines.join("\n"), "Channel status");
+  }
 }
 
 async function noteChannelPrimer(
@@ -174,26 +238,9 @@ export async function setupChannels(
     accountOverrides.whatsapp = options.whatsappAccountId.trim();
   }
 
-  const installedPlugins = listChannelPlugins();
-  const catalogEntries = listChannelPluginCatalogEntries().filter(
-    (entry) => !installedPlugins.some((plugin) => plugin.id === entry.id),
-  );
-  const statusEntries = await Promise.all(
-    listChannelOnboardingAdapters().map((adapter) =>
-      adapter.getStatus({ cfg, options, accountOverrides }),
-    ),
-  );
-  const catalogStatuses = catalogEntries.map((entry) => ({
-    channel: entry.id,
-    configured: false,
-    statusLines: [`${entry.meta.label}: install plugin to enable`],
-    selectionHint: "plugin · install",
-    quickstartScore: 0,
-  }));
-  const combinedStatuses = [...statusEntries, ...catalogStatuses];
-  const statusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
-  const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
-  if (statusLines.length > 0) {
+  const { installedPlugins, catalogEntries, statusByChannel, statusLines } =
+    await collectChannelStatus({ cfg: next, options, accountOverrides });
+  if (!options?.skipStatusNote && statusLines.length > 0) {
     await prompter.note(statusLines.join("\n"), "Channel status");
   }
 
@@ -234,15 +281,36 @@ export async function setupChannels(
     if (!selection.includes(channel)) selection.push(channel);
   };
 
+  const resolveDisabledHint = (channel: ChannelChoice): string | undefined => {
+    const plugin = getChannelPlugin(channel);
+    if (!plugin) return undefined;
+    const accountId = resolveChannelDefaultAccountId({ plugin, cfg: next });
+    const account = plugin.config.resolveAccount(next, accountId);
+    let enabled: boolean | undefined;
+    if (plugin.config.isEnabled) {
+      enabled = plugin.config.isEnabled(account, next);
+    } else if (typeof (account as { enabled?: boolean })?.enabled === "boolean") {
+      enabled = (account as { enabled?: boolean }).enabled;
+    } else if (
+      typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
+        ?.enabled === "boolean"
+    ) {
+      enabled = (next.channels as Record<string, { enabled?: boolean }>)[channel]?.enabled;
+    }
+    return enabled === false ? "disabled" : undefined;
+  };
+
   const buildSelectionOptions = (
     entries: Array<{ id: ChannelChoice; meta: { id: string; label: string; selectionLabel?: string } }>,
   ) =>
     entries.map((entry) => {
       const status = statusByChannel.get(entry.id);
+      const disabledHint = resolveDisabledHint(entry.id);
+      const hint = [status?.selectionHint, disabledHint].filter(Boolean).join(" · ") || undefined;
       return {
         value: entry.meta.id,
         label: entry.meta.selectionLabel ?? entry.meta.label,
-        ...(status?.selectionHint ? { hint: status.selectionHint } : {}),
+        ...(hint ? { hint } : {}),
       };
     });
 

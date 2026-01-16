@@ -125,4 +125,61 @@ describe("setupChannels", () => {
     expect(multiselect).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
   });
+
+  it("adds disabled hint to channel selection when a channel is disabled", async () => {
+    let selectionCount = 0;
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        selectionCount += 1;
+        const opts = options as Array<{ value: string; hint?: string }>;
+        const telegram = opts.find((opt) => opt.value === "telegram");
+        expect(telegram?.hint).toContain("disabled");
+        return selectionCount === 1 ? "telegram" : "__done__";
+      }
+      if (message.includes("already configured")) return "skip";
+      return "__done__";
+    });
+    const multiselect = vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    });
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect,
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await setupChannels(
+      {
+        channels: {
+          telegram: {
+            botToken: "token",
+            enabled: false,
+          },
+        },
+      } as ClawdbotConfig,
+      runtime,
+      prompter,
+      {
+        skipConfirm: true,
+      },
+    );
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select a channel" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
 });
