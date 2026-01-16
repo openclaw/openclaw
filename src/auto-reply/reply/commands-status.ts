@@ -156,10 +156,7 @@ export async function buildStatusReply(params: {
     usageProviders.add(currentUsageProvider);
   }
   const usageByProvider = new Map<string, string>();
-  let usageSummaryCache:
-    | Awaited<ReturnType<typeof loadProviderUsageSummary>>
-    | null
-    | undefined;
+  let usageSummaryCache: Awaited<ReturnType<typeof loadProviderUsageSummary>> | null | undefined;
   if (usageProviders.size > 0) {
     try {
       usageSummaryCache = await loadProviderUsageSummary({

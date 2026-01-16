@@ -119,11 +119,14 @@ describe("runConfigureWizard", () => {
     mocks.clackText.mockResolvedValue("");
     mocks.clackConfirm.mockResolvedValue(false);
 
-    await runConfigureWizard({ command: "configure" }, {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    });
+    await runConfigureWizard(
+      { command: "configure" },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
 
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
