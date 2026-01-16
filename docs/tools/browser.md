@@ -71,7 +71,7 @@ Notes:
 - `cdpUrl` defaults to `controlUrl + 1` when unset.
 - `attachOnly: true` means “never launch a local browser; only attach if it is already running.”
 - `color` + per-profile `color` tint the browser UI so you can see which profile is active.
-- Auto-detect order: Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Auto-detect order: default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
 
 ## Use Brave (or another Chromium-based browser)
 

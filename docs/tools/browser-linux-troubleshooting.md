@@ -107,7 +107,7 @@ curl -s http://127.0.0.1:18791/tabs
 | Option | Description | Default |
 |--------|-------------|---------|
 | `browser.enabled` | Enable browser control | `true` |
-| `browser.executablePath` | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected |
+| `browser.executablePath` | Path to a Chromium-based browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (prefers default browser when Chromium-based) |
 | `browser.headless` | Run without GUI | `false` |
 | `browser.noSandbox` | Add `--no-sandbox` flag (needed for some Linux setups) | `false` |
 | `browser.attachOnly` | Don't launch browser, only attach to existing | `false` |
