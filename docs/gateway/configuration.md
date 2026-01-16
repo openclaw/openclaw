@@ -871,6 +871,7 @@ Notes:
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported channels stay text-only.
 - Set `commands.native: true|false` to force all, or override per channel with `channels.discord.commands.native`, `channels.telegram.commands.native`, `channels.slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
+- `channels.telegram.customCommands` adds extra Telegram bot menu entries. Names are normalized; conflicts with native commands are ignored.
 - `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
 - `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
@@ -929,6 +930,10 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
           }
         }
       },
+      customCommands: [
+        { command: "backup", description: "Git backup" },
+        { command: "generate", description: "Create an image" }
+      ],
       historyLimit: 50,                     // include last N group messages as context (0 disables)
       replyToMode: "first",                 // off | first | all
       streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
