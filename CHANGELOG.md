@@ -33,6 +33,7 @@
 - Fix: refactor session store updates, add chat.inject, and harden subagent cleanup flow. (#944) — thanks @tyler6204.
 - Fix: clean up suspended CLI processes across backends. (#978) — thanks @Nachx639.
 - Fix: support MiniMax coding plan usage responses with `model_remains`/`current_interval_*` payloads.
+- Fix: suppress WhatsApp pairing replies for historical catch-up DMs on initial link. (#904)
 - CLI: add `--json` output for `clawdbot daemon` lifecycle/install commands.
 - Memory: make `node-llama-cpp` an optional dependency (avoid Node 25 install failures) and improve local-embeddings fallback/errors.
 - Browser: add `snapshot refs=aria` (Playwright aria-ref ids) for self-resolving refs across `snapshot` → `act`.
