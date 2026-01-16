@@ -191,7 +191,6 @@ function createPluginRecord(params: {
     toolNames: [],
     providerIds: [],
     channelIds: [],
-    providerIds: [],
     gatewayMethods: [],
     cliCommands: [],
     services: [],
