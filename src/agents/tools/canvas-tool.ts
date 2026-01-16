@@ -40,7 +40,7 @@ const CanvasToolSchema = Type.Object({
   // eval
   javaScript: Type.Optional(Type.String()),
   // snapshot
-  format: optionalStringEnum(CANVAS_SNAPSHOT_FORMATS),
+  outputFormat: optionalStringEnum(CANVAS_SNAPSHOT_FORMATS),
   maxWidth: Type.Optional(Type.Number()),
   quality: Type.Optional(Type.Number()),
   delayMs: Type.Optional(Type.Number()),
@@ -127,7 +127,7 @@ export function createCanvasTool(): AnyAgentTool {
           return jsonResult({ ok: true });
         }
         case "snapshot": {
-          const formatRaw = typeof params.format === "string" ? params.format.toLowerCase() : "png";
+          const formatRaw = typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
           const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
           const maxWidth =
             typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
