@@ -99,6 +99,7 @@ describe("session_status tool", () => {
     expect(details.ok).toBe(true);
     expect(details.statusText).toContain("Clawdbot");
     expect(details.statusText).toContain("🧠 Model:");
+    expect(details.statusText).not.toContain("OAuth/token status");
   });
 
   it("errors for unknown session keys", async () => {
