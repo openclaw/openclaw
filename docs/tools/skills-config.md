@@ -16,7 +16,9 @@ All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.j
       extraDirs: [
         "~/Projects/agent-scripts/skills",
         "~/Projects/oss/some-skill-pack/skills"
-      ]
+      ],
+      watch: true,
+      watchDebounceMs: 250
     },
     install: {
       preferBrew: true,
@@ -42,6 +44,8 @@ All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.j
 - `allowBundled`: optional allowlist for **bundled** skills only. When set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
+- `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
+- `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
   This only affects **skill installs**; the Gateway runtime should still be Node
@@ -57,4 +61,4 @@ Per-skill fields:
 
 - Keys under `entries` map to the skill name by default. If a skill defines
   `metadata.clawdbot.skillKey`, use that key instead.
-- Changes to skills are picked up on the next new session.
+- Changes to skills are picked up on the next agent turn when the watcher is enabled.

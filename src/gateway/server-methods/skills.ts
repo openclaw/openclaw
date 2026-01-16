@@ -3,6 +3,7 @@ import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import {
   ErrorCodes,
   errorShape,
@@ -30,6 +31,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
+      eligibility: { remote: getRemoteSkillEligibility() },
     });
     respond(true, report, undefined);
   },

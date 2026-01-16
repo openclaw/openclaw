@@ -11,6 +11,10 @@ export type SkillsLoadConfig = {
    * Each directory should contain skill subfolders with `SKILL.md`.
    */
   extraDirs?: string[];
+  /** Watch skill folders for changes and refresh the skills snapshot. */
+  watch?: boolean;
+  /** Debounce for the skills watcher (ms). */
+  watchDebounceMs?: number;
 };
 
 export type SkillsInstallConfig = {

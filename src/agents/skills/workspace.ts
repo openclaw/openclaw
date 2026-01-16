@@ -13,7 +13,12 @@ import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { parseFrontmatter, resolveClawdbotMetadata } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
-import type { ParsedSkillFrontmatter, SkillEntry, SkillSnapshot } from "./types.js";
+import type {
+  ParsedSkillFrontmatter,
+  SkillEligibilityContext,
+  SkillEntry,
+  SkillSnapshot,
+} from "./types.js";
 
 const fsp = fs.promises;
 
@@ -21,8 +26,9 @@ function filterSkillEntries(
   entries: SkillEntry[],
   config?: ClawdbotConfig,
   skillFilter?: string[],
+  eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config }));
+  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
     const normalized = skillFilter.map((entry) => String(entry).trim()).filter(Boolean);
@@ -122,18 +128,28 @@ export function buildWorkspaceSkillSnapshot(
     entries?: SkillEntry[];
     /** If provided, only include skills with these names */
     skillFilter?: string[];
+    eligibility?: SkillEligibilityContext;
+    snapshotVersion?: number;
   },
 ): SkillSnapshot {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(skillEntries, opts?.config, opts?.skillFilter);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+    opts?.eligibility,
+  );
   const resolvedSkills = eligible.map((entry) => entry.skill);
+  const remoteNote = opts?.eligibility?.remote?.note?.trim();
+  const prompt = [remoteNote, formatSkillsForPrompt(resolvedSkills)].filter(Boolean).join("\n");
   return {
-    prompt: formatSkillsForPrompt(resolvedSkills),
+    prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
       primaryEnv: entry.clawdbot?.primaryEnv,
     })),
     resolvedSkills,
+    version: opts?.snapshotVersion,
   };
 }
 
@@ -146,11 +162,20 @@ export function buildWorkspaceSkillsPrompt(
     entries?: SkillEntry[];
     /** If provided, only include skills with these names */
     skillFilter?: string[];
+    eligibility?: SkillEligibilityContext;
   },
 ): string {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(skillEntries, opts?.config, opts?.skillFilter);
-  return formatSkillsForPrompt(eligible.map((entry) => entry.skill));
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+    opts?.eligibility,
+  );
+  const remoteNote = opts?.eligibility?.remote?.note?.trim();
+  return [remoteNote, formatSkillsForPrompt(eligible.map((entry) => entry.skill))]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function resolveSkillsPromptForRun(params: {

@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -16,6 +17,11 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import {
+  primeRemoteSkillsCache,
+  refreshRemoteBinsForConnectedNodes,
+  setSkillsRemoteBridge,
+} from "../infra/skills-remote.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -287,6 +293,13 @@ export async function startGatewayServer(
   const bridgeSendToSession = bridgeRuntime.bridgeSendToSession;
   const bridgeSendToAllSubscribed = bridgeRuntime.bridgeSendToAllSubscribed;
   const broadcastVoiceWakeChanged = bridgeRuntime.broadcastVoiceWakeChanged;
+
+  setSkillsRemoteBridge(bridge);
+  void primeRemoteSkillsCache();
+  registerSkillsChangeListener(() => {
+    const latest = loadConfig();
+    void refreshRemoteBinsForConnectedNodes(latest);
+  });
 
   const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
     broadcast,

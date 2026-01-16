@@ -54,6 +54,38 @@ The macOS app presents itself as a node. Common commands:
 
 The node reports a `permissions` map so agents can decide what’s allowed.
 
+## Node run policy + allowlist
+
+`system.run` is controlled by the macOS app **Node Run Commands** policy:
+
+- `Always Ask`: prompt per command (default).
+- `Always Allow`: run without prompts.
+- `Never`: disable `system.run` (tool not advertised).
+
+The policy + allowlist live on the Mac in:
+
+```
+~/.clawdbot/macos-node.json
+```
+
+Schema:
+
+```json
+{
+  "systemRun": {
+    "policy": "ask",
+    "allowlist": [
+      "[\"/bin/echo\",\"hello\"]"
+    ]
+  }
+}
+```
+
+Notes:
+- `allowlist` entries are JSON-encoded argv arrays.
+- Choosing “Always Allow” in the prompt adds that command to the allowlist.
+- Allowlisted runs ignore `PATH` overrides; other env vars are merged with the app’s environment.
+
 ## Deep links
 
 The app registers the `clawdbot://` URL scheme for local actions.

@@ -270,6 +270,8 @@ export const ClawdbotSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            watch: z.boolean().optional(),
+            watchDebounceMs: z.number().int().min(0).optional(),
           })
           .optional(),
         install: z

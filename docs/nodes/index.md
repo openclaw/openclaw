@@ -163,6 +163,7 @@ Notes:
 - `system.notify` respects notification permission state on the macOS app.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
+- `system.run` is gated by the macOS app policy (Settings → "Node Run Commands"): "Always Ask" prompts per command, "Always Allow" runs without prompts, and "Never" disables the tool. Denied prompts return `SYSTEM_RUN_DENIED`; disabled returns `SYSTEM_RUN_DISABLED`.
 
 ## Permissions map
 

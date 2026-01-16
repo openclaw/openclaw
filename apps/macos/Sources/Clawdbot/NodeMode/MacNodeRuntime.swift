@@ -426,6 +426,44 @@ actor MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
 
+        let wasAllowlisted = SystemRunAllowlist.contains(command)
+        switch Self.systemRunPolicy() {
+        case .never:
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DISABLED: policy=never")
+        case .always:
+            break
+        case .ask:
+            if !wasAllowlisted {
+                let services = await self.mainActorServices()
+                let decision = await services.confirmSystemRun(
+                    command: SystemRunAllowlist.displayString(for: command),
+                    cwd: params.cwd)
+                switch decision {
+                case .allowOnce:
+                    break
+                case .allowAlways:
+                    SystemRunAllowlist.add(command)
+                case .deny:
+                    return Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "SYSTEM_RUN_DENIED: user denied")
+                }
+            }
+        }
+
+        var env = params.env
+        if wasAllowlisted, let overrides = env {
+            var merged = ProcessInfo.processInfo.environment
+            for (key, value) in overrides where key != "PATH" {
+                merged[key] = value
+            }
+            env = merged
+        }
+
         if params.needsScreenRecording == true {
             let authorized = await PermissionManager
                 .status([.screenRecording])[.screenRecording] ?? false
@@ -441,7 +479,7 @@ actor MacNodeRuntime {
         let result = await ShellExecutor.runDetailed(
             command: command,
             cwd: params.cwd,
-            env: params.env,
+            env: env,
             timeout: timeoutSec)
 
         struct RunPayload: Encodable {
@@ -527,6 +565,10 @@ actor MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+    }
+
+    private nonisolated static func systemRunPolicy() -> SystemRunPolicy {
+        SystemRunPolicy.load()
     }
 
     private nonisolated static func locationMode() -> ClawdbotLocationMode {

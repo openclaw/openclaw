@@ -15,6 +15,7 @@ export {
 } from "./skills/env-overrides.js";
 export type {
   ClawdbotSkillMetadata,
+  SkillEligibilityContext,
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,

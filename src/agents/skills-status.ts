@@ -12,6 +12,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillEntry,
+  type SkillEligibilityContext,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
@@ -135,6 +136,7 @@ function buildSkillStatus(
   entry: SkillEntry,
   config?: ClawdbotConfig,
   prefs?: SkillsInstallPreferences,
+  eligibility?: SkillEligibilityContext,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -156,13 +158,25 @@ function buildSkillStatus(
   const requiredConfig = entry.clawdbot?.requires?.config ?? [];
   const requiredOs = entry.clawdbot?.os ?? [];
 
-  const missingBins = requiredBins.filter((bin) => !hasBinary(bin));
+  const missingBins = requiredBins.filter((bin) => {
+    if (hasBinary(bin)) return false;
+    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    return true;
+  });
   const missingAnyBins =
-    requiredAnyBins.length > 0 && !requiredAnyBins.some((bin) => hasBinary(bin))
+    requiredAnyBins.length > 0 &&
+    !(
+      requiredAnyBins.some((bin) => hasBinary(bin)) ||
+      eligibility?.remote?.hasAnyBin?.(requiredAnyBins)
+    )
       ? requiredAnyBins
       : [];
   const missingOs =
-    requiredOs.length > 0 && !requiredOs.includes(process.platform) ? requiredOs : [];
+    requiredOs.length > 0 &&
+    !requiredOs.includes(process.platform) &&
+    !eligibility?.remote?.platforms?.some((platform) => requiredOs.includes(platform))
+      ? requiredOs
+      : [];
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
@@ -233,6 +247,7 @@ export function buildWorkspaceSkillStatus(
     config?: ClawdbotConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
+    eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
@@ -241,6 +256,8 @@ export function buildWorkspaceSkillStatus(
   return {
     workspaceDir,
     managedSkillsDir,
-    skills: skillEntries.map((entry) => buildSkillStatus(entry, opts?.config, prefs)),
+    skills: skillEntries.map((entry) =>
+      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility),
+    ),
   };
 }

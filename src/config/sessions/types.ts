@@ -95,6 +95,7 @@ export type SessionSkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string }>;
   resolvedSkills?: Skill[];
+  version?: number;
 };
 
 export type SessionSystemPromptReport = {

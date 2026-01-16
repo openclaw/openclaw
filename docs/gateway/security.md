@@ -52,6 +52,22 @@ When the audit prints findings, treat this as a priority order:
 5. **Plugins/extensions**: only load what you explicitly trust.
 6. **Model choice**: prefer modern, instruction-hardened models for any bot with tools.
 
+## Node execution (system.run)
+
+If a macOS node is paired, the Gateway can invoke `system.run` on that node. This is **remote code execution** on the Mac:
+
+- Requires node pairing (approval + token).
+- Controlled on the Mac via **Settings → "Node Run Commands"**: "Always Ask" (default), "Always Allow", or "Never".
+- If you don’t want remote execution, set the policy to "Never" and remove node pairing for that Mac.
+
+## Dynamic skills (watcher / remote nodes)
+
+Clawdbot can refresh the skills list mid-session:
+- **Skills watcher**: changes to `SKILL.md` can update the skills snapshot on the next agent turn.
+- **Remote nodes**: connecting a macOS node can make macOS-only skills eligible (based on bin probing).
+
+Treat skill folders as **trusted code** and restrict who can modify them.
+
 ## The Threat Model
 
 Your AI assistant can:

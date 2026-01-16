@@ -34,6 +34,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I load skills from a custom folder?](#can-i-load-skills-from-a-custom-folder)
   - [How can I use different models for different tasks?](#how-can-i-use-different-models-for-different-tasks)
   - [How do I install skills on Linux?](#how-do-i-install-skills-on-linux)
+  - [Can I run Apple/macOS-only skills from Linux?](#can-i-run-applemacos-only-skills-from-linux)
   - [Do you have a Notion or HeyGen integration?](#do-you-have-a-notion-or-heygen-integration)
   - [How do I install the Chrome extension for browser takeover?](#how-do-i-install-the-chrome-extension-for-browser-takeover)
 - [Sandboxing and memory](#sandboxing-and-memory)
@@ -398,6 +399,40 @@ npm i -g clawdhub
 ```bash
 pnpm add -g clawdhub
 ```
+
+### Is there a way to run Apple/macOS-only skills if my Gateway runs on Linux?
+
+Not directly. macOS skills are gated by `metadata.clawdbot.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `imsg`, `apple-notes`, `apple-reminders`) will not load unless you override the gating.
+
+You have three supported patterns:
+
+**Option A - run the Gateway on a Mac (simplest).**  
+Run the Gateway where the macOS binaries exist, then connect from Linux in [remote mode](#how-do-i-run-clawdbot-in-remote-mode-client-connects-to-a-gateway-elsewhere) or over Tailscale. The skills load normally because the Gateway host is macOS.
+
+**Option B - use a macOS node (no SSH).**  
+Run the Gateway on Linux, pair a macOS node (menubar app), and set **Node Run Commands** to "Always Ask" or "Always Allow" on the Mac. Clawdbot can treat macOS-only skills as eligible when the required binaries exist on the node. The agent runs those skills via the `nodes` tool. If you choose "Always Ask", approving "Always Allow" in the prompt adds that command to the allowlist.
+
+**Option C - proxy macOS binaries over SSH (advanced).**  
+Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wrappers that run on a Mac. Then override the skill to allow Linux so it stays eligible.
+
+1) Create an SSH wrapper for the binary (example: `imsg`):
+   ```bash
+   #!/usr/bin/env bash
+   set -euo pipefail
+   exec ssh -T user@mac-host /opt/homebrew/bin/imsg "$@"
+   ```
+2) Put the wrapper on `PATH` on the Linux host (for example `~/bin/imsg`).
+3) Override the skill metadata (workspace or `~/.clawdbot/skills`) to allow Linux:
+   ```markdown
+   ---
+   name: imsg
+   description: iMessage/SMS CLI for listing chats, history, watch, and sending.
+   metadata: {"clawdbot":{"os":["darwin","linux"],"requires":{"bins":["imsg"]}}}
+   ---
+   ```
+4) Start a new session so the skills snapshot refreshes.
+
+For iMessage specifically, you can also point `channels.imessage.cliPath` at an SSH wrapper (Clawdbot only needs stdio). See [iMessage](/channels/imessage).
 
 ### Do you have a Notion or HeyGen integration?
 

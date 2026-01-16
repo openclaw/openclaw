@@ -1,9 +1,14 @@
 import crypto from "node:crypto";
 
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import {
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+} from "../../agents/skills/refresh.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
 export async function prependSystemEvents(params: {
@@ -88,6 +93,11 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
+  const remoteEligibility = getRemoteSkillEligibility();
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const shouldRefreshSnapshot =
+    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -96,10 +106,12 @@ export async function ensureSkillSnapshot(params: {
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot
+      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
         ? buildWorkspaceSkillSnapshot(workspaceDir, {
             config: cfg,
             skillFilter,
+            eligibility: { remote: remoteEligibility },
+            snapshotVersion,
           })
         : current.skillsSnapshot;
     nextEntry = {
@@ -118,20 +130,28 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot =
-    nextEntry?.skillsSnapshot ??
-    (isFirstTurnInSession
-      ? undefined
-      : buildWorkspaceSkillSnapshot(workspaceDir, {
-          config: cfg,
-          skillFilter,
-        }));
+  const skillsSnapshot = shouldRefreshSnapshot
+    ? buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: cfg,
+        skillFilter,
+        eligibility: { remote: remoteEligibility },
+        snapshotVersion,
+      })
+    : nextEntry?.skillsSnapshot ??
+      (isFirstTurnInSession
+        ? undefined
+        : buildWorkspaceSkillSnapshot(workspaceDir, {
+            config: cfg,
+            skillFilter,
+            eligibility: { remote: remoteEligibility },
+            snapshotVersion,
+          }));
   if (
     skillsSnapshot &&
     sessionStore &&
     sessionKey &&
     !isFirstTurnInSession &&
-    !nextEntry?.skillsSnapshot
+    (!nextEntry?.skillsSnapshot || shouldRefreshSnapshot)
   ) {
     const current = nextEntry ?? {
       sessionId: sessionId ?? crypto.randomUUID(),

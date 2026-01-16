@@ -30,6 +30,7 @@ export type NodePairingPairedNode = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  bins?: string[];
   permissions?: Record<string, boolean>;
   remoteIp?: string;
   createdAtMs: number;
@@ -272,6 +273,7 @@ export async function updatePairedNodeMetadata(
       remoteIp: patch.remoteIp ?? existing.remoteIp,
       caps: patch.caps ?? existing.caps,
       commands: patch.commands ?? existing.commands,
+      bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
     };
 

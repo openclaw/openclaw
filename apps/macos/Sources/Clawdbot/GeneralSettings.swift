@@ -84,6 +84,25 @@ struct GeneralSettings: View {
                         binding: self.$cameraEnabled)
 
                     VStack(alignment: .leading, spacing: 6) {
+                        Text("Node Run Commands")
+                            .font(.body)
+
+                        Picker("", selection: self.$state.systemRunPolicy) {
+                            ForEach(SystemRunPolicy.allCases) { policy in
+                                Text(policy.title).tag(policy)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("""
+                        Controls remote command execution on this Mac when it is paired as a node. "Always Ask" prompts on each command; "Always Allow" runs without prompts; "Never" disables `system.run`.
+                        """)
+                        .font(.footnote)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Location Access")
                             .font(.body)
 

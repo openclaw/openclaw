@@ -1,5 +1,8 @@
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
 import { startNodeBridgeServer } from "../infra/bridge/server.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../infra/skills-remote.js";
 import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../infra/voicewake.js";
 import { isLoopbackAddress } from "./net.js";
@@ -16,6 +19,7 @@ export type GatewayNodeBridgeRuntime = {
 };
 
 export async function startGatewayNodeBridge(params: {
+  cfg: ClawdbotConfig;
   bridgeEnabled: boolean;
   bridgePort: number;
   bridgeHost: string | null;
@@ -114,6 +118,21 @@ export async function startGatewayNodeBridge(params: {
         onAuthenticated: async (node) => {
           beaconNodePresence(node, "node-connected");
           startNodePresenceTimer(node);
+          recordRemoteNodeInfo({
+            nodeId: node.nodeId,
+            displayName: node.displayName,
+            platform: node.platform,
+            deviceFamily: node.deviceFamily,
+            commands: node.commands,
+          });
+          bumpSkillsSnapshotVersion({ reason: "remote-node" });
+          await refreshRemoteNodeBins({
+            nodeId: node.nodeId,
+            platform: node.platform,
+            deviceFamily: node.deviceFamily,
+            commands: node.commands,
+            cfg: params.cfg,
+          });
 
           try {
             const cfg = await loadVoiceWakeConfig();

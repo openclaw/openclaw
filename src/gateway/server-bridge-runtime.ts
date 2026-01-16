@@ -3,6 +3,7 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { startCanvasHost } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { deriveDefaultBridgePort, deriveDefaultCanvasHostPort } from "../config/port-defaults.js";
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
@@ -33,15 +34,7 @@ export type GatewayBridgeRuntime = {
 };
 
 export async function startGatewayBridgeRuntime(params: {
-  cfg: {
-    bridge?: {
-      enabled?: boolean;
-      port?: number;
-      bind?: "loopback" | "lan" | "auto" | "custom";
-    };
-    canvasHost?: { port?: number; root?: string; liveReload?: boolean };
-    discovery?: { wideArea?: { enabled?: boolean } };
-  };
+  cfg: ClawdbotConfig;
   port: number;
   canvasHostEnabled: boolean;
   canvasHost: CanvasHostHandler | null;
@@ -200,6 +193,7 @@ export async function startGatewayBridgeRuntime(params: {
       : undefined;
 
   const bridgeRuntime = await startGatewayNodeBridge({
+    cfg: params.cfg,
     bridgeEnabled,
     bridgePort,
     bridgeHost,

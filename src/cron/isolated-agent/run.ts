@@ -20,6 +20,7 @@ import {
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -34,6 +35,7 @@ import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/s
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
@@ -205,9 +207,12 @@ export async function runCronIsolatedAgentTurn(params: {
   const commandBody = base;
 
   const needsSkillsSnapshot = cronSession.isNewSession || !cronSession.sessionEntry.skillsSnapshot;
+  const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const skillsSnapshot = needsSkillsSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
+        eligibility: { remote: getRemoteSkillEligibility() },
+        snapshotVersion: skillsSnapshotVersion,
       })
     : cronSession.sessionEntry.skillsSnapshot;
   if (needsSkillsSnapshot && skillsSnapshot) {

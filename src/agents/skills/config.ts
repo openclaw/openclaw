@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ClawdbotConfig, SkillConfig } from "../../config/config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEntry } from "./types.js";
+import type { SkillEligibilityContext, SkillEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
@@ -89,16 +89,22 @@ export function hasBinary(bin: string): boolean {
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: ClawdbotConfig;
+  eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config } = params;
+  const { entry, config, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
   const osList = entry.clawdbot?.os ?? [];
+  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   if (skillConfig?.enabled === false) return false;
   if (!isBundledSkillAllowed(entry, allowBundled)) return false;
-  if (osList.length > 0 && !osList.includes(resolveRuntimePlatform())) {
+  if (
+    osList.length > 0 &&
+    !osList.includes(resolveRuntimePlatform()) &&
+    !remotePlatforms.some((platform) => osList.includes(platform))
+  ) {
     return false;
   }
   if (entry.clawdbot?.always === true) {
@@ -108,12 +114,16 @@ export function shouldIncludeSkill(params: {
   const requiredBins = entry.clawdbot?.requires?.bins ?? [];
   if (requiredBins.length > 0) {
     for (const bin of requiredBins) {
-      if (!hasBinary(bin)) return false;
+      if (hasBinary(bin)) continue;
+      if (eligibility?.remote?.hasBin?.(bin)) continue;
+      return false;
     }
   }
   const requiredAnyBins = entry.clawdbot?.requires?.anyBins ?? [];
   if (requiredAnyBins.length > 0) {
-    const anyFound = requiredAnyBins.some((bin) => hasBinary(bin));
+    const anyFound =
+      requiredAnyBins.some((bin) => hasBinary(bin)) ||
+      eligibility?.remote?.hasAnyBin?.(requiredAnyBins);
     if (!anyFound) return false;
   }
 

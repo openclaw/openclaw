@@ -31,6 +31,12 @@ struct MenuContent: View {
         self._updateStatus = Bindable(wrappedValue: updater?.updateStatus ?? UpdateStatus.disabled)
     }
 
+    private var systemRunPolicyBinding: Binding<SystemRunPolicy> {
+        Binding(
+            get: { self.state.systemRunPolicy },
+            set: { self.state.systemRunPolicy = $0 })
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) {
@@ -67,6 +73,13 @@ struct MenuContent: View {
             }
             Toggle(isOn: self.$cameraEnabled) {
                 Label("Allow Camera", systemImage: "camera")
+            }
+            Picker(selection: self.systemRunPolicyBinding) {
+                ForEach(SystemRunPolicy.allCases) { policy in
+                    Text(policy.title).tag(policy)
+                }
+            } label: {
+                Label("Node Run Commands", systemImage: "terminal")
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
