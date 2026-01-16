@@ -10,6 +10,18 @@ function resolveAutoDefault(providerId?: ChannelId): boolean {
   return false;
 }
 
+export function resolveNativeSkillsEnabled(params: {
+  providerId: ChannelId;
+  providerSetting?: NativeCommandsSetting;
+  globalSetting?: NativeCommandsSetting;
+}): boolean {
+  const { providerId, providerSetting, globalSetting } = params;
+  const setting = providerSetting === undefined ? globalSetting : providerSetting;
+  if (setting === true) return true;
+  if (setting === false) return false;
+  return resolveAutoDefault(providerId);
+}
+
 export function resolveNativeCommandsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;

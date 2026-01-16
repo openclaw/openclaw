@@ -6,18 +6,14 @@ import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
-import { listSkillCommandsForWorkspace } from "../auto-reply/skill-commands.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  return listSkillCommandsForWorkspace({
-    workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-    cfg: config,
-  });
+  return listSkillCommandsForAgents({ cfg: config });
 }
 
 const { loadWebMedia } = vi.hoisted(() => ({

@@ -72,6 +72,7 @@ export const MessagesSchema = z
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
+    nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
@@ -81,4 +82,4 @@ export const CommandsSchema = z
     useAccessGroups: z.boolean().optional(),
   })
   .optional()
-  .default({ native: "auto" });
+  .default({ native: "auto", nativeSkills: "auto" });

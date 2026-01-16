@@ -321,17 +321,26 @@ export function buildWorkspaceSkillCommandSpecs(
 
   const specs: SkillCommandSpec[] = [];
   for (const entry of userInvocable) {
-    const base = sanitizeSkillCommandName(entry.skill.name);
+    const rawName = entry.skill.name;
+    const base = sanitizeSkillCommandName(rawName);
+    if (base !== rawName) {
+      console.warn(`[skills] Sanitized skill command name "${rawName}" to "/${base}".`);
+    }
     const unique = resolveUniqueSkillCommandName(base, used);
+    if (unique !== base) {
+      console.warn(
+        `[skills] De-duplicated skill command name for "${rawName}" to "/${unique}".`,
+      );
+    }
     used.add(unique.toLowerCase());
-    const rawDescription = entry.skill.description?.trim() || entry.skill.name;
+    const rawDescription = entry.skill.description?.trim() || rawName;
     const description =
       rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
         ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
         : rawDescription;
     specs.push({
       name: unique,
-      skillName: entry.skill.name,
+      skillName: rawName,
       description,
     });
   }

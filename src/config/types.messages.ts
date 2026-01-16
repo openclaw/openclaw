@@ -95,6 +95,8 @@ export type NativeCommandsSetting = boolean | "auto";
 export type CommandsConfig = {
   /** Enable native command registration when supported (default: "auto"). */
   native?: NativeCommandsSetting;
+  /** Enable native skill command registration when supported (default: "auto"). */
+  nativeSkills?: NativeCommandsSetting;
   /** Enable text command parsing (default: true). */
   text?: boolean;
   /** Allow bash chat command (`!`; `/bash` alias) (default: false). */
@@ -114,4 +116,6 @@ export type CommandsConfig = {
 export type ProviderCommandsConfig = {
   /** Override native command registration for this provider (bool or "auto"). */
   native?: NativeCommandsSetting;
+  /** Override native skill command registration for this provider (bool or "auto"). */
+  nativeSkills?: NativeCommandsSetting;
 };

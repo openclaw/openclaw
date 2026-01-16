@@ -10,6 +10,7 @@ import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/re
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
+  resolveNativeSkillsEnabled,
 } from "../config/commands.js";
 import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -190,6 +191,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     providerSetting: telegramCfg.commands?.native,
     globalSetting: cfg.commands?.native,
   });
+  const nativeSkillsEnabled = resolveNativeSkillsEnabled({
+    providerId: "telegram",
+    providerSetting: telegramCfg.commands?.nativeSkills,
+    globalSetting: cfg.commands?.nativeSkills,
+  });
   const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
     providerSetting: telegramCfg.commands?.native,
     globalSetting: cfg.commands?.native,
@@ -297,6 +303,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     textLimit,
     useAccessGroups,
     nativeEnabled,
+    nativeSkillsEnabled,
     nativeDisabledExplicit,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,

@@ -118,6 +118,7 @@ export async function getReplyFromConfig(
     cfg,
     agentId,
     agentDir,
+    workspaceDir,
     agentCfg,
     sessionCtx,
     sessionEntry,
@@ -136,6 +137,7 @@ export async function getReplyFromConfig(
     model,
     typing,
     opts,
+    skillFilter: opts?.skillFilter,
   });
   if (directiveResult.kind === "reply") {
     return directiveResult.reply;
@@ -145,6 +147,7 @@ export async function getReplyFromConfig(
     commandSource,
     command,
     allowTextCommands,
+    skillCommands,
     directives,
     cleanedBody,
     elevatedEnabled,
@@ -187,6 +190,7 @@ export async function getReplyFromConfig(
     allowTextCommands,
     inlineStatusRequested,
     command,
+    skillCommands,
     directives,
     cleanedBody,
     elevatedEnabled,

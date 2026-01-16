@@ -1,4 +1,5 @@
 import { getChannelDock } from "../../channels/dock.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -39,6 +40,7 @@ export async function handleInlineActions(params: {
   allowTextCommands: boolean;
   inlineStatusRequested: boolean;
   command: Parameters<typeof handleCommands>[0]["command"];
+  skillCommands?: SkillCommandSpec[];
   directives: InlineDirectives;
   cleanedBody: string;
   elevatedEnabled: boolean;
@@ -99,13 +101,16 @@ export async function handleInlineActions(params: {
   let cleanedBody = initialCleanedBody;
 
   const shouldLoadSkillCommands = command.commandBodyNormalized.startsWith("/");
-  const skillCommands = shouldLoadSkillCommands
-    ? listSkillCommandsForWorkspace({
-        workspaceDir,
-        cfg,
-        skillFilter,
-      })
-    : [];
+  const skillCommands =
+    shouldLoadSkillCommands && params.skillCommands
+      ? params.skillCommands
+      : shouldLoadSkillCommands
+        ? listSkillCommandsForWorkspace({
+            workspaceDir,
+            cfg,
+            skillFilter,
+          })
+        : [];
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0

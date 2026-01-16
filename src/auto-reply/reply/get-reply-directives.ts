@@ -1,8 +1,10 @@
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
+import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -24,6 +26,7 @@ export type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
   allowTextCommands: boolean;
+  skillCommands?: SkillCommandSpec[];
   directives: InlineDirectives;
   cleanedBody: string;
   messageProviderKey: string;
@@ -65,6 +68,7 @@ export async function resolveReplyDirectives(params: {
   cfg: ClawdbotConfig;
   agentId: string;
   agentDir: string;
+  workspaceDir: string;
   agentCfg: AgentDefaults;
   sessionCtx: TemplateContext;
   sessionEntry?: SessionEntry;
@@ -83,6 +87,7 @@ export async function resolveReplyDirectives(params: {
   model: string;
   typing: TypingController;
   opts?: GetReplyOptions;
+  skillFilter?: string[];
 }): Promise<ReplyDirectiveResult> {
   const {
     ctx,
@@ -90,6 +95,7 @@ export async function resolveReplyDirectives(params: {
     agentId,
     agentCfg,
     agentDir,
+    workspaceDir,
     sessionCtx,
     sessionEntry,
     sessionStore,
@@ -106,6 +112,7 @@ export async function resolveReplyDirectives(params: {
     model: initialModel,
     typing,
     opts,
+    skillFilter,
   } = params;
   let provider = initialProvider;
   let model = initialModel;
@@ -132,11 +139,23 @@ export async function resolveReplyDirectives(params: {
     surface: command.surface,
     commandSource: ctx.CommandSource,
   });
+  const shouldResolveSkillCommands =
+    allowTextCommands && command.commandBodyNormalized.includes("/");
+  const skillCommands = shouldResolveSkillCommands
+    ? listSkillCommandsForWorkspace({
+        workspaceDir,
+        cfg,
+        skillFilter,
+      })
+    : [];
   const reservedCommands = new Set(
     listChatCommands().flatMap((cmd) =>
       cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
     ),
   );
+  for (const command of skillCommands) {
+    reservedCommands.add(command.name.toLowerCase());
+  }
   const configuredAliases = Object.values(cfg.agents?.defaults?.models ?? {})
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
@@ -385,6 +404,7 @@ export async function resolveReplyDirectives(params: {
       commandSource,
       command,
       allowTextCommands,
+      skillCommands,
       directives,
       cleanedBody,
       messageProviderKey,
