@@ -351,10 +351,11 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
             return false
         case .local:
-            if !cmd.contains("clawdbot") { return false }
+            // The gateway daemon may listen as `clawdbot` or as its runtime (`node`, `bun`, etc).
             if full.contains("gateway-daemon") { return true }
             // If args are unavailable, treat a clawdbot listener as expected.
-            return full == cmd
+            if cmd.contains("clawdbot"), full == cmd { return true }
+            return false
         case .unconfigured:
             return false
         }
