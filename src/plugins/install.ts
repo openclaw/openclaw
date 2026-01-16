@@ -12,6 +12,7 @@ type PluginInstallLogger = {
 
 type PackageManifest = {
   name?: string;
+  version?: string;
   dependencies?: Record<string, string>;
   clawdbot?: { extensions?: string[] };
 };
@@ -22,6 +23,7 @@ export type InstallPluginResult =
       pluginId: string;
       targetDir: string;
       manifestName?: string;
+      version?: string;
       extensions: string[];
     }
   | { ok: false; error: string };
@@ -70,6 +72,13 @@ async function resolvePackedPackageDir(extractDir: string): Promise<string> {
   return path.join(extractDir, onlyDir);
 }
 
+export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
+  const extensionsBase = extensionsDir
+    ? resolveUserPath(extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  return path.join(extensionsBase, safeDirName(pluginId));
+}
+
 async function ensureClawdbotExtensions(manifest: PackageManifest) {
   const extensions = manifest.clawdbot?.extensions;
   if (!Array.isArray(extensions)) {
@@ -104,9 +113,14 @@ export async function installPluginFromArchive(params: {
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
 
   const archivePath = resolveUserPath(params.archivePath);
   if (!(await fileExists(archivePath))) {
@@ -157,17 +171,47 @@ export async function installPluginFromArchive(params: {
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const pluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
+  if (params.expectedPluginId && params.expectedPluginId !== pluginId) {
+    return {
+      ok: false,
+      error: `plugin id mismatch: expected ${params.expectedPluginId}, got ${pluginId}`,
+    };
+  }
   const targetDir = path.join(extensionsDir, safeDirName(pluginId));
 
-  if (await fileExists(targetDir)) {
+  if (mode === "install" && (await fileExists(targetDir))) {
     return {
       ok: false,
       error: `plugin already exists: ${targetDir} (delete it first)`,
     };
   }
 
+  if (dryRun) {
+    return {
+      ok: true,
+      pluginId,
+      targetDir,
+      manifestName: pkgName || undefined,
+      version: typeof manifest.version === "string" ? manifest.version : undefined,
+      extensions,
+    };
+  }
+
   logger.info?.(`Installing to ${targetDir}…`);
-  await fs.cp(packageDir, targetDir, { recursive: true });
+  let backupDir: string | null = null;
+  if (mode === "update" && (await fileExists(targetDir))) {
+    backupDir = `${targetDir}.backup-${Date.now()}`;
+    await fs.rename(targetDir, backupDir);
+  }
+  try {
+    await fs.cp(packageDir, targetDir, { recursive: true });
+  } catch (err) {
+    if (backupDir) {
+      await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rename(backupDir, targetDir).catch(() => undefined);
+    }
+    return { ok: false, error: `failed to copy plugin: ${String(err)}` };
+  }
 
   for (const entry of extensions) {
     const resolvedEntry = path.resolve(targetDir, entry);
@@ -185,6 +229,10 @@ export async function installPluginFromArchive(params: {
       cwd: targetDir,
     });
     if (npmRes.code !== 0) {
+      if (backupDir) {
+        await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
+        await fs.rename(backupDir, targetDir).catch(() => undefined);
+      }
       return {
         ok: false,
         error: `npm install failed: ${npmRes.stderr.trim() || npmRes.stdout.trim()}`,
@@ -192,11 +240,16 @@ export async function installPluginFromArchive(params: {
     }
   }
 
+  if (backupDir) {
+    await fs.rm(backupDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
   return {
     ok: true,
     pluginId,
     targetDir,
     manifestName: pkgName || undefined,
+    version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
   };
 }
@@ -206,9 +259,15 @@ export async function installPluginFromNpmSpec(params: {
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
+  const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
   if (!spec) return { ok: false, error: "missing npm spec" };
 
@@ -241,5 +300,8 @@ export async function installPluginFromNpmSpec(params: {
     extensionsDir: params.extensionsDir,
     timeoutMs,
     logger,
+    mode,
+    dryRun,
+    expectedPluginId,
   });
 }

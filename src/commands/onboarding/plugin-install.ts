@@ -4,6 +4,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging.js";
+import { recordPluginInstall } from "../../plugins/installs.js";
 import { loadClawdbotPlugins } from "../../plugins/loader.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -158,6 +159,13 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   if (result.ok) {
     next = ensurePluginEnabled(next, result.pluginId);
+    next = recordPluginInstall(next, {
+      pluginId: result.pluginId,
+      source: "npm",
+      spec: entry.install.npmSpec,
+      installPath: result.targetDir,
+      version: result.version,
+    });
     return { cfg: next, installed: true };
   }
 

@@ -160,10 +160,14 @@ clawdbot plugins install <path>              # add a local file/dir to plugins.l
 clawdbot plugins install ./extensions/voice-call # relative path ok
 clawdbot plugins install ./plugin.tgz        # install from a local tarball
 clawdbot plugins install @clawdbot/voice-call # install from npm
+clawdbot plugins update <id>
+clawdbot plugins update --all
 clawdbot plugins enable <id>
 clawdbot plugins disable <id>
 clawdbot plugins doctor
 ```
+
+`plugins update` only works for npm installs tracked under `plugins.installs`.
 
 Plugins may also register their own top‑level commands (example: `clawdbot voicecall`).
 

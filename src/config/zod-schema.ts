@@ -326,6 +326,21 @@ export const ClawdbotSchema = z
               .passthrough(),
           )
           .optional(),
+        installs: z
+          .record(
+            z.string(),
+            z
+              .object({
+                source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
+                spec: z.string().optional(),
+                sourcePath: z.string().optional(),
+                installPath: z.string().optional(),
+                version: z.string().optional(),
+                installedAt: z.string().optional(),
+              })
+              .passthrough(),
+          )
+          .optional(),
       })
       .optional(),
   })
