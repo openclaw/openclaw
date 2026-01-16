@@ -175,6 +175,7 @@ const FIELD_LABELS: Record<string, string> = {
   "talk.apiKey": "Talk API Key",
   "channels.whatsapp": "WhatsApp",
   "channels.telegram": "Telegram",
+  "channels.telegram.customCommands": "Telegram Custom Commands",
   "channels.discord": "Discord",
   "channels.slack": "Slack",
   "channels.signal": "Signal",
@@ -348,6 +349,8 @@ const FIELD_HELP: Record<string, string> = {
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
+  "channels.telegram.customCommands":
+    "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',

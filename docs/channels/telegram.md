@@ -101,6 +101,29 @@ group messages, so use admin if you need full visibility.
 - Raw HTML from models is escaped to avoid Telegram parse errors.
 - If Telegram rejects the HTML payload, Clawdbot retries the same message as plain text.
 
+## Commands (native + custom)
+Clawdbot registers native commands (like `/status`, `/reset`, `/model`) with Telegram’s bot menu on startup.
+You can add custom commands to the menu via config:
+
+```json5
+{
+  channels: {
+    telegram: {
+      customCommands: [
+        { command: "backup", description: "Git backup" },
+        { command: "generate", description: "Create an image" }
+      ]
+    }
+  }
+}
+```
+
+Notes:
+- Custom commands are **menu entries only**; Clawdbot does not implement them unless you handle them elsewhere.
+- Command names are normalized (leading `/` stripped, lowercased) and must match `a-z`, `0-9`, `_` (1–32 chars).
+- Custom commands **cannot override native commands**. Conflicts are ignored and logged.
+- If `commands.native` is disabled, only custom commands are registered (or cleared if none).
+
 ## Limits
 - Outbound text is chunked to `channels.telegram.textChunkLimit` (default 4000).
 - Media downloads/uploads are capped by `channels.telegram.mediaMaxMb` (default 5).
