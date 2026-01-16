@@ -15,3 +15,6 @@ Related:
 
 Tip: run `clawdbot daemon --help` for platform-specific flags.
 
+Notes:
+- `daemon status` supports `--json` for scripting.
+- `daemon install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).

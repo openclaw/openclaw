@@ -140,7 +140,7 @@ final class GatewayProcessManager {
 
     func refreshLog() {
         guard self.logRefreshTask == nil else { return }
-        let path = LogLocator.launchdGatewayLogPath
+        let path = GatewayLaunchAgentManager.launchdGatewayLogPath()
         let limit = self.logLimit
         self.logRefreshTask = Task { [weak self] in
             let log = await Task.detached(priority: .utility) {
@@ -354,7 +354,7 @@ final class GatewayProcessManager {
 
     func clearLog() {
         self.log = ""
-        try? FileManager.default.removeItem(atPath: LogLocator.launchdGatewayLogPath)
+        try? FileManager.default.removeItem(atPath: GatewayLaunchAgentManager.launchdGatewayLogPath())
         self.logger.debug("gateway log cleared")
     }
 
