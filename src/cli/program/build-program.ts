@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerBrowserCli } from "../browser-cli.js";
+import { registerConfigCli } from "../config-cli.js";
 import { createProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
 import { registerPreActionHooks } from "./preaction.js";
@@ -22,6 +23,7 @@ export function buildProgram() {
   registerSetupCommand(program);
   registerOnboardCommand(program);
   registerConfigureCommand(program);
+  registerConfigCli(program);
   registerMaintenanceCommands(program);
   registerMessageCommands(program, ctx);
   registerAgentCommands(program, {

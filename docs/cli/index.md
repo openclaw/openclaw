@@ -13,7 +13,8 @@ This page describes the current CLI behavior. If commands change, update this do
 
 - [`setup`](/cli/setup)
 - [`onboard`](/cli/onboard)
-- [`configure`](/cli/configure) (alias: `config`)
+- [`configure`](/cli/configure)
+- [`config`](/cli/config)
 - [`doctor`](/cli/doctor)
 - [`dashboard`](/cli/dashboard)
 - [`reset`](/cli/reset)
@@ -83,7 +84,11 @@ Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
 clawdbot [--dev] [--profile <name>] <command>
   setup
   onboard
-  configure (alias: config)
+  configure
+  config
+    get
+    set
+    unset
   doctor
   security
     audit
@@ -310,8 +315,17 @@ Options:
 - `--node-manager <npm|pnpm|bun>` (pnpm recommended; bun not recommended for Gateway runtime)
 - `--json`
 
-### `configure` / `config`
+### `configure`
 Interactive configuration wizard (models, channels, skills, gateway).
+
+### `config`
+Non-interactive config helpers (get/set/unset). Running `clawdbot config` with no
+subcommand launches the wizard.
+
+Subcommands:
+- `config get <path>`: print a config value (dot/bracket path).
+- `config set <path> <value>`: set a value (JSON5 or raw string).
+- `config unset <path>`: remove a value.
 
 ### `doctor`
 Health checks + quick fixes (config + gateway + legacy services).
