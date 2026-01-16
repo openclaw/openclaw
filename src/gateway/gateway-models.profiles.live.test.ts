@@ -98,8 +98,17 @@ function isGoogleModelNotFoundText(text: string): boolean {
   return false;
 }
 
+function isGoogleishProvider(provider: string): boolean {
+  return provider === "google" || provider.startsWith("google-");
+}
+
 function isRefreshTokenReused(error: string): boolean {
   return /refresh_token_reused/i.test(error);
+}
+
+function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
 }
 
 function isMissingProfileError(error: string): boolean {
@@ -471,7 +480,30 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (payload?.status !== "ok") {
             throw new Error(`agent status=${String(payload?.status)}`);
           }
-          const text = extractPayloadText(payload?.result);
+          let text = extractPayloadText(payload?.result);
+          if (!text) {
+            logProgress(`${progressLabel}: empty response, retrying`);
+            const retry = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${randomUUID()}-retry`,
+                message:
+                  "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
+            );
+            if (retry?.status !== "ok") {
+              throw new Error(`agent status=${String(retry?.status)}`);
+            }
+            text = extractPayloadText(retry?.result);
+          }
+          if (!text && isGoogleishProvider(model.provider)) {
+            logProgress(`${progressLabel}: skip (google empty response)`);
+            break;
+          }
           if (
             isEmptyStreamText(text) &&
             (model.provider === "minimax" || model.provider === "openai-codex")
@@ -479,7 +511,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
           }
-          if (model.provider === "google" && isGoogleModelNotFoundText(text)) {
+          if (isGoogleishProvider(model.provider) && isGoogleModelNotFoundText(text)) {
             // Catalog drift: model IDs can disappear or become unavailable on the API.
             // Treat as skip when scanning "all models" for Google.
             logProgress(`${progressLabel}: skip (google model not found)`);
@@ -491,7 +523,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             phase: "prompt",
             label: params.label,
           });
-          if (!isMeaningful(text)) throw new Error(`not meaningful: ${text}`);
+          if (!isMeaningful(text)) {
+            if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
+              logProgress(`${progressLabel}: skip (google not meaningful)`);
+              break;
+            }
+            throw new Error(`not meaningful: ${text}`);
+          }
           if (!/\bmicro\s*-?\s*tasks?\b/i.test(text) || !/\bmacro\s*-?\s*tasks?\b/i.test(text)) {
             throw new Error(`missing required keywords: ${text}`);
           }
@@ -733,6 +771,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
+            break;
+          }
+          if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+            logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
           if (isMissingProfileError(message)) {

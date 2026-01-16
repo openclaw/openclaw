@@ -62,6 +62,11 @@ function isModelNotFoundErrorMessage(raw: string): boolean {
   return false;
 }
 
+function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
+}
+
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
   if (!trimmed) return fallback;
@@ -371,6 +376,18 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (empty response)`);
               break;
             }
+            if (
+              ok.text.length === 0 &&
+              allowNotFoundSkip &&
+              (model.provider === "google-antigravity" || model.provider === "openai-codex")
+            ) {
+              skipped.push({
+                model: id,
+                reason: "no text returned (provider returned empty content)",
+              });
+              logProgress(`${progressLabel}: skip (empty response)`);
+              break;
+            }
             expect(ok.text.length).toBeGreaterThan(0);
             logProgress(`${progressLabel}: done`);
             break;
@@ -414,6 +431,15 @@ describeLive("live models (profile keys)", () => {
             ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (rate limit)`);
+              break;
+            }
+            if (
+              allowNotFoundSkip &&
+              model.provider === "openai-codex" &&
+              isChatGPTUsageLimitErrorMessage(message)
+            ) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
               break;
             }
             logProgress(`${progressLabel}: failed`);

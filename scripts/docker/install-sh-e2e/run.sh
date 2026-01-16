@@ -323,38 +323,41 @@ run_profile() {
   local workspace="$3"
   local agent_model_provider="$4" # "openai"|"anthropic"
 
-  echo "==> Onboard ($profile)"
-  if [[ "$agent_model_provider" == "openai" ]]; then
-    clawdbot --profile "$profile" onboard \
-      --non-interactive \
-      --flow quickstart \
-      --auth-choice openai-api-key \
-      --openai-api-key "$OPENAI_API_KEY" \
-      --gateway-port "$port" \
+	  echo "==> Onboard ($profile)"
+	  if [[ "$agent_model_provider" == "openai" ]]; then
+	    clawdbot --profile "$profile" onboard \
+	      --non-interactive \
+	      --accept-risk \
+	      --flow quickstart \
+	      --auth-choice openai-api-key \
+	      --openai-api-key "$OPENAI_API_KEY" \
+	      --gateway-port "$port" \
+	      --gateway-bind loopback \
+      --gateway-auth token \
+      --workspace "$workspace" \
+      --skip-health
+	  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
+	    clawdbot --profile "$profile" onboard \
+	      --non-interactive \
+	      --accept-risk \
+	      --flow quickstart \
+	      --auth-choice token \
+	      --token-provider anthropic \
+	      --token "$ANTHROPIC_API_TOKEN" \
+	      --gateway-port "$port" \
       --gateway-bind loopback \
       --gateway-auth token \
       --workspace "$workspace" \
       --skip-health
-  elif [[ -n "$ANTHROPIC_API_TOKEN" ]]; then
-    clawdbot --profile "$profile" onboard \
-      --non-interactive \
-      --flow quickstart \
-      --auth-choice token \
-      --token-provider anthropic \
-      --token "$ANTHROPIC_API_TOKEN" \
-      --gateway-port "$port" \
-      --gateway-bind loopback \
-      --gateway-auth token \
-      --workspace "$workspace" \
-      --skip-health
-  else
-    clawdbot --profile "$profile" onboard \
-      --non-interactive \
-      --flow quickstart \
-      --auth-choice apiKey \
-      --anthropic-api-key "$ANTHROPIC_API_KEY" \
-      --gateway-port "$port" \
-      --gateway-bind loopback \
+	  else
+	    clawdbot --profile "$profile" onboard \
+	      --non-interactive \
+	      --accept-risk \
+	      --flow quickstart \
+	      --auth-choice apiKey \
+	      --anthropic-api-key "$ANTHROPIC_API_KEY" \
+	      --gateway-port "$port" \
+	      --gateway-bind loopback \
       --gateway-auth token \
       --workspace "$workspace" \
       --skip-health
