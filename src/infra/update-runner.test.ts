@@ -96,6 +96,8 @@ describe("runGatewayUpdate", () => {
     await fs.writeFile(path.join(tempDir, "pnpm-lock.yaml"), "", "utf-8");
     const { runner, calls } = createRunner({
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { code: 1 },
+      "npm root -g": { code: 1 },
+      "pnpm root -g": { code: 1 },
     });
 
     const result = await runGatewayUpdate({
@@ -106,9 +108,111 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("not-git-install");
-    expect(calls.some((call) => call.startsWith("pnpm "))).toBe(false);
-    expect(calls.some((call) => call.startsWith("npm "))).toBe(false);
-    expect(calls.some((call) => call.startsWith("bun "))).toBe(false);
+    expect(calls.some((call) => call.startsWith("pnpm add -g"))).toBe(false);
+    expect(calls.some((call) => call.startsWith("npm i -g"))).toBe(false);
+  });
+
+  it("updates global npm installs when detected", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "clawdbot");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "npm i -g clawdbot@latest") {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: pkgRoot,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(result.before?.version).toBe("1.0.0");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(calls.some((call) => call === "npm i -g clawdbot@latest")).toBe(true);
+  });
+
+  it("updates global bun installs when detected", async () => {
+    const oldBunInstall = process.env.BUN_INSTALL;
+    const bunInstall = path.join(tempDir, "bun-install");
+    process.env.BUN_INSTALL = bunInstall;
+
+    try {
+      const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
+      const pkgRoot = path.join(bunGlobalRoot, "clawdbot");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(pkgRoot, "package.json"),
+        JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
+        "utf-8",
+      );
+
+      const calls: string[] = [];
+      const runCommand = async (argv: string[]) => {
+        const key = argv.join(" ");
+        calls.push(key);
+        if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+          return { stdout: "", stderr: "not a git repository", code: 128 };
+        }
+        if (key === "npm root -g") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (key === "pnpm root -g") {
+          return { stdout: "", stderr: "", code: 1 };
+        }
+        if (key === "bun add -g clawdbot@latest") {
+          await fs.writeFile(
+            path.join(pkgRoot, "package.json"),
+            JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
+            "utf-8",
+          );
+          return { stdout: "ok", stderr: "", code: 0 };
+        }
+        return { stdout: "", stderr: "", code: 0 };
+      };
+
+      const result = await runGatewayUpdate({
+        cwd: pkgRoot,
+        runCommand: async (argv, _options) => runCommand(argv),
+        timeoutMs: 5000,
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.mode).toBe("bun");
+      expect(result.before?.version).toBe("1.0.0");
+      expect(result.after?.version).toBe("2.0.0");
+      expect(calls.some((call) => call === "bun add -g clawdbot@latest")).toBe(true);
+    } finally {
+      if (oldBunInstall === undefined) delete process.env.BUN_INSTALL;
+      else process.env.BUN_INSTALL = oldBunInstall;
+    }
   });
 
   it("rejects git roots that are not a clawdbot checkout", async () => {
