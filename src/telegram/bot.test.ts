@@ -2247,6 +2247,37 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("defaults reactionNotifications to own", async () => {
+    onSpy.mockReset();
+    enqueueSystemEvent.mockReset();
+    wasSentByBot.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 502 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 43,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+    });
+
+    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("allows reaction in all mode regardless of message sender", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();

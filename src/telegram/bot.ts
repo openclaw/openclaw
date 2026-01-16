@@ -322,8 +322,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const messageId = reaction.message_id;
       const user = reaction.user;
 
-      // Resolve reaction notification mode (default: "off")
-      const reactionMode = telegramCfg.reactionNotifications ?? "off";
+      // Resolve reaction notification mode (default: "own")
+      const reactionMode = telegramCfg.reactionNotifications ?? "own";
       if (reactionMode === "off") return;
       if (user?.is_bot) return;
       if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) return;

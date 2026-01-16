@@ -411,8 +411,8 @@ The agent sees reactions as **system notifications** in the conversation history
 
 **Configuration:**
 - `channels.telegram.reactionNotifications`: Controls which reactions trigger notifications
-  - `"off"` — ignore all reactions (default when not set)
-  - `"own"` — notify when users react to bot messages (best-effort; in-memory)
+  - `"off"` — ignore all reactions
+  - `"own"` — notify when users react to bot messages (best-effort; in-memory) (default)
   - `"all"` — notify for all reactions
 
 - `channels.telegram.reactionLevel`: Controls agent's reaction capability
@@ -505,7 +505,7 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
-- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
 - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
 Related global options:
