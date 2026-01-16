@@ -185,17 +185,26 @@ export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
   modelId?: string;
+  provider?: string;
   sessionManager: SessionManager;
   sessionId: string;
 }): Promise<AgentMessage[]> {
   const isAntigravityClaudeModel = isAntigravityClaude(params.modelApi, params.modelId);
+  const provider = (params.provider ?? "").toLowerCase();
+  const modelId = (params.modelId ?? "").toLowerCase();
+  const isOpenRouterGemini =
+    (provider === "openrouter" || provider === "opencode") && modelId.includes("gemini");
+  const isGeminiLike = isGoogleModelApi(params.modelApi) || isOpenRouterGemini;
   const sanitizedImages = await sanitizeSessionMessagesImages(params.messages, "session:history", {
     sanitizeToolCallIds: shouldSanitizeToolCallIds(params.modelApi),
     enforceToolCallLast: params.modelApi === "anthropic-messages",
     preserveSignatures: params.modelApi === "google-antigravity" && isAntigravityClaudeModel,
+    sanitizeThoughtSignatures: isOpenRouterGemini
+      ? { allowBase64Only: true, includeCamelCase: true }
+      : undefined,
   });
   const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
-  const shouldDowngradeGemini = isGoogleModelApi(params.modelApi) && !isAntigravityClaudeModel;
+  const shouldDowngradeGemini = isGeminiLike && !isAntigravityClaudeModel;
   // Gemini rejects unsigned thinking blocks; downgrade them before send to avoid INVALID_ARGUMENT.
   const downgradedThinking = shouldDowngradeGemini
     ? downgradeGeminiThinkingBlocks(repairedTools)

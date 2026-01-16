@@ -308,6 +308,7 @@ export async function compactEmbeddedPiSession(params: {
               messages: session.messages,
               modelApi: model.api,
               modelId,
+              provider,
               sessionManager,
               sessionId: params.sessionId,
             });

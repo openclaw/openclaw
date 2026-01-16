@@ -145,6 +145,65 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[1]?.text).toBe("internal note");
   });
 
+  it("strips non-base64 thought signatures for OpenRouter Gemini", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const input = [
+      {
+        role: "user",
+        content: "hi",
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hello", thought_signature: "msg_abc123" },
+          { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "read",
+            arguments: { path: "/tmp/foo" },
+            thoughtSignature: "{\"id\":1}",
+          },
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "read",
+            arguments: { path: "/tmp/bar" },
+            thoughtSignature: "c2ln",
+          },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionHistory({
+      messages: input,
+      modelApi: "openrouter",
+      provider: "openrouter",
+      modelId: "google/gemini-1.5-pro",
+      sessionManager,
+      sessionId: "session:openrouter-gemini",
+    });
+
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thought_signature?: string; thoughtSignature?: string }>;
+    };
+    expect(assistant.content).toEqual([
+      { type: "text", text: "hello" },
+      { type: "text", text: "ok" },
+      {
+        type: "text",
+        text: "[Tool Call: read (ID: call_1)]\nArguments: {\n  \"path\": \"/tmp/foo\"\n}",
+      },
+      {
+        type: "toolCall",
+        id: "call_2",
+        name: "read",
+        arguments: { path: "/tmp/bar" },
+        thoughtSignature: "c2ln",
+      },
+    ]);
+  });
+
   it("downgrades only unsigned thinking blocks when mixed with signed ones", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [

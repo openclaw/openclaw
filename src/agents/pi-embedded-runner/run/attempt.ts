@@ -323,6 +323,7 @@ export async function runEmbeddedAttempt(
           messages: activeSession.messages,
           modelApi: params.model.api,
           modelId: params.modelId,
+          provider: params.provider,
           sessionManager,
           sessionId: params.sessionId,
         });

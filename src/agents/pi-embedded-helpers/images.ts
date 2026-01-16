@@ -34,6 +34,10 @@ export async function sanitizeSessionMessagesImages(
     sanitizeToolCallIds?: boolean;
     enforceToolCallLast?: boolean;
     preserveSignatures?: boolean;
+    sanitizeThoughtSignatures?: {
+      allowBase64Only?: boolean;
+      includeCamelCase?: boolean;
+    };
   },
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
@@ -82,7 +86,7 @@ export async function sanitizeSessionMessagesImages(
       if (Array.isArray(content)) {
         const strippedContent = options?.preserveSignatures
           ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content); // Strip for Gemini
+          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent = strippedContent.filter((block) => {
           if (!block || typeof block !== "object") return true;
