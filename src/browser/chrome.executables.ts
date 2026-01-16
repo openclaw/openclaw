@@ -95,12 +95,17 @@ function exists(filePath: string) {
   }
 }
 
-function execText(command: string, args: string[], timeoutMs = 1200): string | null {
+function execText(
+  command: string,
+  args: string[],
+  timeoutMs = 1200,
+  maxBuffer = 1024 * 1024,
+): string | null {
   try {
     const output = execFileSync(command, args, {
       timeout: timeoutMs,
       encoding: "utf8",
-      maxBuffer: 1024 * 1024,
+      maxBuffer,
     });
     return String(output ?? "").trim() || null;
   } catch {
@@ -140,14 +145,12 @@ function detectDefaultChromiumExecutable(
 }
 
 function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
-  const bundleId = execText("/usr/bin/osascript", [
-    "-e",
-    'id of application (path to default application for URL "http://example.com")',
-  ]);
-  if (!bundleId || !CHROMIUM_BUNDLE_IDS.has(bundleId.trim())) return null;
+  const bundleId = detectDefaultBrowserBundleIdMac();
+  if (!bundleId || !CHROMIUM_BUNDLE_IDS.has(bundleId)) return null;
+
   const appPathRaw = execText("/usr/bin/osascript", [
     "-e",
-    'POSIX path of (path to default application for URL "http://example.com")',
+    `POSIX path of (path to application id "${bundleId}")`,
   ]);
   if (!appPathRaw) return null;
   const appPath = appPathRaw.trim().replace(/\/$/, "");
@@ -160,6 +163,45 @@ function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   const exePath = path.join(appPath, "Contents", "MacOS", exeName.trim());
   if (!exists(exePath)) return null;
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
+}
+
+function detectDefaultBrowserBundleIdMac(): string | null {
+  const plistPath = path.join(
+    os.homedir(),
+    "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist",
+  );
+  if (!exists(plistPath)) return null;
+  const handlersRaw = execText(
+    "/usr/bin/plutil",
+    ["-extract", "LSHandlers", "json", "-o", "-", "--", plistPath],
+    2000,
+    5 * 1024 * 1024,
+  );
+  if (!handlersRaw) return null;
+  let handlers: unknown;
+  try {
+    handlers = JSON.parse(handlersRaw);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(handlers)) return null;
+
+  const resolveScheme = (scheme: string) => {
+    let candidate: string | null = null;
+    for (const entry of handlers) {
+      if (!entry || typeof entry !== "object") continue;
+      const record = entry as Record<string, unknown>;
+      if (record.LSHandlerURLScheme !== scheme) continue;
+      const role =
+        (typeof record.LSHandlerRoleAll === "string" && record.LSHandlerRoleAll) ||
+        (typeof record.LSHandlerRoleViewer === "string" && record.LSHandlerRoleViewer) ||
+        null;
+      if (role) candidate = role;
+    }
+    return candidate;
+  };
+
+  return resolveScheme("http") ?? resolveScheme("https");
 }
 
 function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {

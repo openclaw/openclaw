@@ -24,10 +24,10 @@ describe("browser default executable detection", () => {
   it("prefers default Chromium browser on macOS", async () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
-      if (cmd === "/usr/bin/osascript" && argsStr.includes("id of application")) {
-        return "com.google.Chrome";
+      if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
+        return JSON.stringify([{ LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.google.Chrome" }]);
       }
-      if (cmd === "/usr/bin/osascript" && argsStr.includes("POSIX path")) {
+      if (cmd === "/usr/bin/osascript" && argsStr.includes("path to application id")) {
         return "/Applications/Google Chrome.app";
       }
       if (cmd === "/usr/bin/defaults") {
@@ -35,9 +35,11 @@ describe("browser default executable detection", () => {
       }
       return "";
     });
-    vi.mocked(fs.existsSync).mockImplementation((p) =>
-      String(p).includes("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-    );
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const value = String(p);
+      if (value.includes("com.apple.launchservices.secure.plist")) return true;
+      return value.includes("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    });
 
     const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
     const exe = resolveBrowserExecutableForPlatform(
@@ -52,14 +54,16 @@ describe("browser default executable detection", () => {
   it("falls back when default browser is non-Chromium on macOS", async () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
-      if (cmd === "/usr/bin/osascript" && argsStr.includes("id of application")) {
-        return "com.apple.Safari";
+      if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
+        return JSON.stringify([{ LSHandlerURLScheme: "http", LSHandlerRoleAll: "com.apple.Safari" }]);
       }
       return "";
     });
-    vi.mocked(fs.existsSync).mockImplementation((p) =>
-      String(p).includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
-    );
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      const value = String(p);
+      if (value.includes("com.apple.launchservices.secure.plist")) return true;
+      return value.includes("Google Chrome.app/Contents/MacOS/Google Chrome");
+    });
 
     const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
     const exe = resolveBrowserExecutableForPlatform(
