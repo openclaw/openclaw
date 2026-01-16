@@ -49,12 +49,21 @@ function hasConfigGatewayCreds(cfg: ClawdbotConfig): boolean {
   return Boolean(localToken || localPassword || remoteToken || remotePassword);
 }
 
-export async function noteMacLaunchctlGatewayEnvOverrides(cfg: ClawdbotConfig) {
-  if (process.platform !== "darwin") return;
+export async function noteMacLaunchctlGatewayEnvOverrides(
+  cfg: ClawdbotConfig,
+  deps?: {
+    platform?: NodeJS.Platform;
+    getenv?: (name: string) => Promise<string | undefined>;
+    noteFn?: typeof note;
+  },
+) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") return;
   if (!hasConfigGatewayCreds(cfg)) return;
 
-  const envToken = await launchctlGetenv("CLAWDBOT_GATEWAY_TOKEN");
-  const envPassword = await launchctlGetenv("CLAWDBOT_GATEWAY_PASSWORD");
+  const getenv = deps?.getenv ?? launchctlGetenv;
+  const envToken = await getenv("CLAWDBOT_GATEWAY_TOKEN");
+  const envPassword = await getenv("CLAWDBOT_GATEWAY_PASSWORD");
   if (!envToken && !envPassword) return;
 
   const lines = [
@@ -68,5 +77,5 @@ export async function noteMacLaunchctlGatewayEnvOverrides(cfg: ClawdbotConfig) {
     envPassword ? "  launchctl unsetenv CLAWDBOT_GATEWAY_PASSWORD" : undefined,
   ].filter((line): line is string => Boolean(line));
 
-  note(lines.join("\n"), "Gateway (macOS)");
+  (deps?.noteFn ?? note)(lines.join("\n"), "Gateway (macOS)");
 }

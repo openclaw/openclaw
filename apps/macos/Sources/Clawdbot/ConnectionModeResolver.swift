@@ -47,4 +47,3 @@ enum ConnectionModeResolver {
         return EffectiveConnectionMode(mode: seen ? .local : .unconfigured, source: .onboarding)
     }
 }
-
