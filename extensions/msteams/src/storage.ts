@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { resolveStateDir } from "../config/paths.js";
+import { resolveStateDir } from "../../../src/config/paths.js";
 
 export type MSTeamsStorePathOptions = {
   env?: NodeJS.ProcessEnv;

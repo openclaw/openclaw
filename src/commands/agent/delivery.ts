@@ -116,7 +116,7 @@ export async function deliverAgentCommandResult(params: {
         bestEffort: bestEffortDeliver,
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
-        deps: createOutboundSendDeps(deps, cfg),
+        deps: createOutboundSendDeps(deps),
       });
     }
   }

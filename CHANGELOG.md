@@ -2,6 +2,7 @@
 
 ## 2026.1.15 (unreleased)
 
+- **BREAKING:** Microsoft Teams is now a plugin; install `@clawdbot/msteams` via `clawdbot plugins install @clawdbot/msteams`.
 - CLI: set process titles to `clawdbot-<command>` for clearer process listings.
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.

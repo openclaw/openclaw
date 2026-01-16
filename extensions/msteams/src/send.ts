@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/types.js";
+import type { ClawdbotConfig } from "../../../src/config/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import {

@@ -1,6 +1,6 @@
-import type { ClawdbotConfig } from "../config/types.js";
-import { danger } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { ClawdbotConfig } from "../../../src/config/types.js";
+import { danger } from "../../../src/globals.js";
+import type { RuntimeEnv } from "../../../src/runtime.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";

@@ -2,7 +2,7 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../channels/plugins/types.js";
-import type { CliDeps } from "../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
@@ -23,16 +23,7 @@ export async function messageCommand(
     throw new Error(`Unknown message action: ${action}`);
   }
 
-  const outboundDeps: OutboundSendDeps = {
-    sendWhatsApp: deps.sendMessageWhatsApp,
-    sendTelegram: deps.sendMessageTelegram,
-    sendDiscord: deps.sendMessageDiscord,
-    sendSlack: deps.sendMessageSlack,
-    sendSignal: deps.sendMessageSignal,
-    sendIMessage: deps.sendMessageIMessage,
-    sendMSTeams: (to, text, opts) =>
-      deps.sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }),
-  };
+  const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   const run = async () =>
     await runMessageAction({

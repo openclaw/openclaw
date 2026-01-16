@@ -1,7 +1,7 @@
-import { chunkMarkdownText } from "../auto-reply/chunk.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { MSTeamsReplyStyle } from "../config/types.js";
+import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import type { ReplyPayload } from "../../../src/auto-reply/types.js";
+import type { MSTeamsReplyStyle } from "../../../src/config/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
 

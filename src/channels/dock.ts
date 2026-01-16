@@ -293,27 +293,6 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       }),
     },
   },
-  msteams: {
-    id: "msteams",
-    capabilities: {
-      chatTypes: ["direct", "channel", "thread"],
-      polls: true,
-      threads: true,
-      media: true,
-    },
-    outbound: { textChunkLimit: 4000 },
-    config: {
-      resolveAllowFrom: ({ cfg }) => cfg.channels?.msteams?.allowFrom ?? [],
-      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
-    },
-    threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
-    },
-  },
 };
 
 function buildDockFromPlugin(plugin: ChannelPlugin): ChannelDock {

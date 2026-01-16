@@ -10,7 +10,6 @@ type PackResult = { files?: PackFile[] };
 const requiredPaths = [
   "dist/discord/send.js",
   "dist/hooks/gmail.js",
-  "dist/msteams/send.js",
   "dist/whatsapp/normalize.js",
 ];
 const forbiddenPrefixes = ["dist/Clawdbot.app/"];
@@ -68,6 +67,7 @@ function checkPluginVersions() {
     for (const item of mismatches) {
       console.error(`  - ${item}`);
     }
+    console.error("release-check: run `pnpm plugins:sync` to align plugin versions.");
     process.exit(1);
   }
 }

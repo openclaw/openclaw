@@ -44,15 +44,6 @@ importers:
       '@mariozechner/pi-tui':
         specifier: ^0.46.0
         version: 0.46.0
-      '@microsoft/agents-hosting':
-        specifier: ^1.1.1
-        version: 1.1.1
-      '@microsoft/agents-hosting-express':
-        specifier: ^1.1.1
-        version: 1.1.1
-      '@microsoft/agents-hosting-extensions-teams':
-        specifier: ^1.1.1
-        version: 1.1.1
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
@@ -244,6 +235,24 @@ importers:
       matrix-js-sdk:
         specifier: 40.0.0
         version: 40.0.0
+
+  extensions/msteams:
+    dependencies:
+      '@microsoft/agents-hosting':
+        specifier: ^1.1.1
+        version: 1.1.1
+      '@microsoft/agents-hosting-express':
+        specifier: ^1.1.1
+        version: 1.1.1
+      '@microsoft/agents-hosting-extensions-teams':
+        specifier: ^1.1.1
+        version: 1.1.1
+      express:
+        specifier: ^5.2.1
+        version: 5.2.1
+      proper-lockfile:
+        specifier: ^4.1.2
+        version: 4.1.2
 
   extensions/voice-call:
     dependencies:

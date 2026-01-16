@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MSTeamsConfig } from "../config/types.js";
+import type { MSTeamsConfig } from "../../../src/config/types.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
