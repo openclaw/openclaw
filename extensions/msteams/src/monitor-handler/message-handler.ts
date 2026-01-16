@@ -1,23 +1,23 @@
-import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
+import { formatAgentEnvelope } from "../../../../src/auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
+} from "../../../../src/auto-reply/inbound-debounce.js";
+import { dispatchReplyFromConfig } from "../../../../src/auto-reply/reply/dispatch-from-config.js";
 import {
   buildHistoryContextFromMap,
   clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-} from "../../auto-reply/reply/history.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+} from "../../../../src/auto-reply/reply/history.js";
+import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
+import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
+} from "../../../../src/pairing/pairing-store.js";
+import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
 
 import {
   buildMSTeamsAttachmentPlaceholder,

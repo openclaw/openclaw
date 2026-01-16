@@ -12,6 +12,24 @@ export type ChannelPluginCatalogEntry = {
 
 const CATALOG: ChannelPluginCatalogEntry[] = [
   {
+    id: "msteams",
+    meta: {
+      id: "msteams",
+      label: "Microsoft Teams",
+      selectionLabel: "Microsoft Teams (Bot Framework)",
+      docsPath: "/channels/msteams",
+      docsLabel: "msteams",
+      blurb: "Bot Framework; enterprise support.",
+      aliases: ["teams"],
+      order: 60,
+    },
+    install: {
+      npmSpec: "@clawdbot/msteams",
+      localPath: "extensions/msteams",
+      defaultChoice: "npm",
+    },
+  },
+  {
     id: "matrix",
     meta: {
       id: "matrix",

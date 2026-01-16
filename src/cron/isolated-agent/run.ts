@@ -28,7 +28,7 @@ import {
   normalizeThinkLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import type { CliDeps } from "../../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
@@ -355,23 +355,7 @@ export async function runCronIsolatedAgentTurn(params: {
         accountId: resolvedDelivery.accountId,
         payloads,
         bestEffort: bestEffortDeliver,
-        deps: {
-          sendWhatsApp: params.deps.sendMessageWhatsApp,
-          sendTelegram: params.deps.sendMessageTelegram,
-          sendDiscord: params.deps.sendMessageDiscord,
-          sendSlack: params.deps.sendMessageSlack,
-          sendSignal: params.deps.sendMessageSignal,
-          sendIMessage: params.deps.sendMessageIMessage,
-          sendMSTeams: params.deps.sendMessageMSTeams
-            ? async (to, text, opts) =>
-                await params.deps.sendMessageMSTeams({
-                  cfg: params.cfg,
-                  to,
-                  text,
-                  mediaUrl: opts?.mediaUrl,
-                })
-            : undefined,
-        },
+        deps: createOutboundSendDeps(params.deps),
       });
     } catch (err) {
       if (!bestEffortDeliver) {

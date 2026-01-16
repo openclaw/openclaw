@@ -1,6 +1,9 @@
 import type { IncomingMessage } from "node:http";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   extractHookToken,
   normalizeAgentPayload,
@@ -9,6 +12,13 @@ import {
 } from "./hooks.js";
 
 describe("gateway hooks helpers", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
   test("resolveHooksConfig normalizes paths + requires token", () => {
     const base = {
       hooks: {
@@ -84,6 +94,15 @@ describe("gateway hooks helpers", () => {
       expect(imsg.value.channel).toBe("imessage");
     }
 
+    setActivePluginRegistry(
+      createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
+        },
+      ]),
+    );
     const teams = normalizeAgentPayload(
       { message: "yo", channel: "teams" },
       { idFactory: () => "x" },
@@ -96,4 +115,35 @@ describe("gateway hooks helpers", () => {
     const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
     expect(bad.ok).toBe(false);
   });
+});
+
+const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  channels,
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  cliRegistrars: [],
+  services: [],
+  diagnostics: [],
+});
+
+const emptyRegistry = createRegistry([]);
+
+const createMSTeamsPlugin = (params: { aliases?: string[] }): ChannelPlugin => ({
+  id: "msteams",
+  meta: {
+    id: "msteams",
+    label: "Microsoft Teams",
+    selectionLabel: "Microsoft Teams (Bot Framework)",
+    docsPath: "/channels/msteams",
+    blurb: "Bot Framework; enterprise support.",
+    aliases: params.aliases,
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({}),
+  },
 });

@@ -1,11 +1,15 @@
-import type { ClawdbotConfig } from "../../../config/config.js";
-import type { DmPolicy } from "../../../config/types.js";
-import { resolveMSTeamsCredentials } from "../../../msteams/token.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
-import { formatDocsLink } from "../../../terminal/links.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { addWildcardAllowFrom } from "./helpers.js";
+import type { ClawdbotConfig } from "../../../src/config/config.js";
+import type { DmPolicy } from "../../../src/config/types.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { formatDocsLink } from "../../../src/terminal/links.js";
+import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+} from "../../../src/channels/plugins/onboarding-types.js";
+import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
+
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
 
@@ -34,7 +38,7 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
       "2) Add a client secret (App Password)",
       "3) Set webhook URL + messaging endpoint",
       "Tip: you can also set MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID.",
-      `Docs: ${formatDocsLink("/msteams", "msteams")}`,
+      `Docs: ${formatDocsLink("/channels/msteams", "msteams")}`,
     ].join("\n"),
     "MS Teams credentials",
   );

@@ -9,7 +9,6 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
-  "msteams",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -74,19 +73,10 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
   },
-  msteams: {
-    id: "msteams",
-    label: "MS Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    docsLabel: "msteams",
-    blurb: "supported (Bot Framework).",
-  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
-  teams: "msteams",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

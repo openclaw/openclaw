@@ -1,4 +1,4 @@
-import type { MSTeamsConfig } from "../config/types.js";
+import type { MSTeamsConfig } from "../../../src/config/types.js";
 
 export type MSTeamsCredentials = {
   appId: string;

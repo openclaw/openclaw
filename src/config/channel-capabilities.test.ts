@@ -1,8 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveChannelCapabilities } from "./channel-capabilities.js";
 import type { ClawdbotConfig } from "./config.js";
 
 describe("resolveChannelCapabilities", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
   it("returns undefined for missing inputs", () => {
     expect(resolveChannelCapabilities({})).toBeUndefined();
     expect(resolveChannelCapabilities({ cfg: {} as ClawdbotConfig })).toBeUndefined();
@@ -74,6 +85,15 @@ describe("resolveChannelCapabilities", () => {
   });
 
   it("supports msteams capabilities", () => {
+    setActivePluginRegistry(
+      createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin(),
+        },
+      ]),
+    );
     const cfg = {
       channels: { msteams: { capabilities: [" polls ", ""] } },
     } satisfies Partial<ClawdbotConfig>;
@@ -85,4 +105,34 @@ describe("resolveChannelCapabilities", () => {
       }),
     ).toEqual(["polls"]);
   });
+});
+
+const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  channels,
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  cliRegistrars: [],
+  services: [],
+  diagnostics: [],
+});
+
+const emptyRegistry = createRegistry([]);
+
+const createMSTeamsPlugin = (): ChannelPlugin => ({
+  id: "msteams",
+  meta: {
+    id: "msteams",
+    label: "Microsoft Teams",
+    selectionLabel: "Microsoft Teams (Bot Framework)",
+    docsPath: "/channels/msteams",
+    blurb: "Bot Framework; enterprise support.",
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({}),
+  },
 });

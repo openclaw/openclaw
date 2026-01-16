@@ -1,5 +1,5 @@
-import { detectMime } from "../../media/mime.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { detectMime } from "../../../../src/media/mime.js";
+import { saveMediaBuffer } from "../../../../src/media/store.js";
 import { downloadMSTeamsImageAttachments } from "./download.js";
 import { GRAPH_ROOT, isRecord, normalizeContentType, resolveAllowedHosts } from "./shared.js";
 import type {

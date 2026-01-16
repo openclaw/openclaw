@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { MSTeamsConfig } from "../config/types.js";
+import type { MSTeamsConfig } from "../../../src/config/types.js";
 
 const hostMockState = vi.hoisted(() => ({
   tokenError: null as Error | null,

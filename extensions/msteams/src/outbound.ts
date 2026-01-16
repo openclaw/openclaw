@@ -1,7 +1,8 @@
-import { chunkMarkdownText } from "../../../auto-reply/chunk.js";
-import { createMSTeamsPollStoreFs } from "../../../msteams/polls.js";
-import { sendMessageMSTeams, sendPollMSTeams } from "../../../msteams/send.js";
-import type { ChannelOutboundAdapter } from "../types.js";
+import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
+import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
+
+import { createMSTeamsPollStoreFs } from "./polls.js";
+import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",

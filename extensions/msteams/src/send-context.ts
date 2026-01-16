@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "../config/types.js";
-import type { getChildLogger as getChildLoggerFn } from "../logging.js";
+import type { ClawdbotConfig } from "../../../src/config/types.js";
+import type { getChildLogger as getChildLoggerFn } from "../../../src/logging.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,

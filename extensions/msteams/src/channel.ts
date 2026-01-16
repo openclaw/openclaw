@@ -1,12 +1,12 @@
-import { chunkMarkdownText } from "../../auto-reply/chunk.js";
-import type { ClawdbotConfig } from "../../config/config.js";
-import { createMSTeamsPollStoreFs } from "../../msteams/polls.js";
-import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
-import { resolveMSTeamsCredentials } from "../../msteams/token.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { msteamsOnboardingAdapter } from "./onboarding/msteams.js";
-import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
-import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
+import type { ClawdbotConfig } from "../../../src/config/config.js";
+import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
+import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../../src/channels/plugins/types.js";
+
+import { msteamsOnboardingAdapter } from "./onboarding.js";
+import { msteamsOutbound } from "./outbound.js";
+import { sendMessageMSTeams } from "./send.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 type ResolvedMSTeamsAccount = {
   accountId: string;
@@ -17,10 +17,12 @@ type ResolvedMSTeamsAccount = {
 const meta = {
   id: "msteams",
   label: "Microsoft Teams",
-  selectionLabel: "Microsoft Teams (Bot)",
-  docsPath: "/msteams",
+  selectionLabel: "Microsoft Teams (Bot Framework)",
+  docsPath: "/channels/msteams",
   docsLabel: "msteams",
-  blurb: "bot via Microsoft Teams.",
+  blurb: "Bot Framework; enterprise support.",
+  aliases: ["teams"],
+  order: 60,
 } as const;
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
@@ -120,58 +122,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       return ["poll"] satisfies ChannelMessageActionName[];
     },
   },
-  outbound: {
-    deliveryMode: "direct",
-    chunker: chunkMarkdownText,
-    textChunkLimit: 4000,
-    pollMaxOptions: 12,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error(
-            "Delivering to MS Teams requires --to <conversationId|user:ID|conversation:ID>",
-          ),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    sendText: async ({ cfg, to, text, deps }) => {
-      const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
-      const result = await send(to, text);
-      return { channel: "msteams", ...result };
-    },
-    sendMedia: async ({ cfg, to, text, mediaUrl, deps }) => {
-      const send =
-        deps?.sendMSTeams ??
-        ((to, text, opts) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }));
-      const result = await send(to, text, { mediaUrl });
-      return { channel: "msteams", ...result };
-    },
-    sendPoll: async ({ cfg, to, poll }) => {
-      const maxSelections = poll.maxSelections ?? 1;
-      const result = await sendPollMSTeams({
-        cfg,
-        to,
-        question: poll.question,
-        options: poll.options,
-        maxSelections,
-      });
-      const pollStore = createMSTeamsPollStoreFs();
-      await pollStore.createPoll({
-        id: result.pollId,
-        question: poll.question,
-        options: poll.options,
-        maxSelections,
-        createdAt: new Date().toISOString(),
-        conversationId: result.conversationId,
-        messageId: result.messageId,
-        votes: {},
-      });
-      return result;
-    },
-  },
+  outbound: msteamsOutbound,
   status: {
     defaultRuntime: {
       accountId: DEFAULT_ACCOUNT_ID,
@@ -204,7 +155,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   gateway: {
     startAccount: async (ctx) => {
-      const { monitorMSTeamsProvider } = await import("../../msteams/index.js");
+      const { monitorMSTeamsProvider } = await import("./index.js");
       const port = ctx.cfg.channels?.msteams?.webhook?.port ?? 3978;
       ctx.setStatus({ accountId: ctx.accountId, port });
       ctx.log?.info(`starting provider (port ${port})`);
