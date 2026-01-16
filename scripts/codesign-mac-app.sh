@@ -253,5 +253,13 @@ fi
 # Finally sign the bundle
 sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
+# Deep sign to catch missed nested code - only for non-Apple certs (self-signed, custom)
+# Apple certs (Developer ID, Apple Development/Distribution) have specific entitlements
+# per component that --deep would override, breaking TCC permissions.
+if [[ "$IDENTITY" != *"Developer ID"* && "$IDENTITY" != *"Apple Development"* && "$IDENTITY" != *"Apple Distribution"* ]]; then
+  echo "Non-Apple certificate detected; applying deep sign for consistency"
+  codesign --force --deep ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$APP_BUNDLE"
+fi
+
 rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_APP" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"
