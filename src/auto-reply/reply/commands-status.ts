@@ -15,6 +15,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
+  formatUsageSummaryLine,
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
@@ -139,22 +140,34 @@ export async function buildStatusReply(params: {
     (profile) => profile.type === "oauth" || profile.type === "token",
   );
 
-  const usageProviders = Array.from(
-    new Set(
-      oauthProfiles
-        .map((profile) => resolveUsageProviderId(profile.provider))
-        .filter((entry): entry is UsageProviderId => Boolean(entry)),
-    ),
-  );
-  const usageByProvider = new Map<string, string>();
-  if (usageProviders.length > 0) {
+  const usageProviders = new Set<UsageProviderId>();
+  for (const profile of oauthProfiles) {
+    const entry = resolveUsageProviderId(profile.provider);
+    if (entry) usageProviders.add(entry);
+  }
+  const currentUsageProvider = (() => {
     try {
-      const usageSummary = await loadProviderUsageSummary({
+      return resolveUsageProviderId(provider);
+    } catch {
+      return undefined;
+    }
+  })();
+  if (usageProviders.size === 0 && currentUsageProvider) {
+    usageProviders.add(currentUsageProvider);
+  }
+  const usageByProvider = new Map<string, string>();
+  let usageSummaryCache:
+    | Awaited<ReturnType<typeof loadProviderUsageSummary>>
+    | null
+    | undefined;
+  if (usageProviders.size > 0) {
+    try {
+      usageSummaryCache = await loadProviderUsageSummary({
         timeoutMs: 3500,
-        providers: usageProviders,
+        providers: Array.from(usageProviders),
         agentDir: statusAgentDir,
       });
-      for (const snapshot of usageSummary.providers) {
+      for (const snapshot of usageSummaryCache.providers) {
         const formatted = formatUsageWindowSummary(snapshot, {
           now: Date.now(),
           maxWindows: 2,
@@ -168,10 +181,16 @@ export async function buildStatusReply(params: {
 
   let usageLine: string | null = null;
   try {
-    const usageProvider = resolveUsageProviderId(provider);
-    if (oauthProfiles.length === 0 && usageProvider) {
-      const usage = usageByProvider.get(usageProvider);
-      if (usage) usageLine = `📊 Usage: ${usage}`;
+    if (oauthProfiles.length === 0 && currentUsageProvider) {
+      const summaryLine = usageSummaryCache
+        ? formatUsageSummaryLine(usageSummaryCache, { now: Date.now(), maxProviders: 1 })
+        : null;
+      if (summaryLine) {
+        usageLine = summaryLine;
+      } else {
+        const usage = usageByProvider.get(currentUsageProvider);
+        if (usage) usageLine = `📊 Usage: ${usage}`;
+      }
     }
   } catch {
     usageLine = null;

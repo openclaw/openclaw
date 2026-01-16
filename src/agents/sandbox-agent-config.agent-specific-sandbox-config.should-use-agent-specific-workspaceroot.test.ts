@@ -56,6 +56,7 @@ vi.mock("../skills.js", async (importOriginal) => {
 describe("Agent-specific sandbox config", () => {
   beforeEach(() => {
     spawnCalls.length = 0;
+    vi.resetModules();
   });
 
   it("should use agent-specific workspaceRoot", async () => {
