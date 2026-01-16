@@ -76,6 +76,7 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
 
 const ACCOUNT_ID = "default";
+const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
 let authDir: string;
 
 describe("web monitor inbox", () => {
@@ -112,7 +113,7 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -121,7 +122,7 @@ describe("web monitor inbox", () => {
         {
           key: { id: "auth1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
           message: { conversation: "authorized message" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(60_000),
         },
       ],
     };
@@ -167,7 +168,7 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
@@ -177,7 +178,7 @@ describe("web monitor inbox", () => {
         {
           key: { id: "self1", fromMe: false, remoteJid: "123@s.whatsapp.net" },
           message: { conversation: "self message" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(60_000),
         },
       ],
     };
@@ -210,7 +211,7 @@ describe("web monitor inbox", () => {
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     // Message from someone else should be blocked
@@ -224,7 +225,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(),
         },
       ],
     };
@@ -250,7 +251,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "ping again" },
-          messageTimestamp: 1_700_000_002,
+          messageTimestamp: nowSeconds(),
         },
       ],
     };
@@ -271,7 +272,7 @@ describe("web monitor inbox", () => {
             remoteJid: "123@s.whatsapp.net",
           },
           message: { conversation: "self ping" },
-          messageTimestamp: 1_700_000_001,
+          messageTimestamp: nowSeconds(),
         },
       ],
     };
@@ -315,7 +316,7 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -328,7 +329,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "hello" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(),
         },
       ],
     };
@@ -366,7 +367,7 @@ describe("web monitor inbox", () => {
     });
 
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -379,7 +380,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "hello again" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(),
         },
       ],
     };
@@ -404,7 +405,7 @@ describe("web monitor inbox", () => {
 
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const onMessage = vi.fn();
-    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const listener = await monitorWebInbox({ verbose: false, accountId: ACCOUNT_ID, authDir, onMessage });
     const sock = await createWaSocket();
 
     const upsert = {
@@ -417,7 +418,7 @@ describe("web monitor inbox", () => {
             remoteJid: "999@s.whatsapp.net",
           },
           message: { conversation: "old message" },
-          messageTimestamp: 1_700_000_000,
+          messageTimestamp: nowSeconds(),
           pushName: "History Sender",
         },
       ],
