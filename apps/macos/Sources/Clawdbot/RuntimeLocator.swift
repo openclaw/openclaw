@@ -134,6 +134,8 @@ enum RuntimeLocator {
 
         do {
             try process.run()
+            // Read pipe before waitUntilExit to avoid potential deadlock
+            let data = pipe.fileHandleForReading.readToEndSafely()
             process.waitUntilExit()
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
@@ -149,7 +151,6 @@ enum RuntimeLocator {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let data = pipe.fileHandleForReading.readToEndSafely()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
