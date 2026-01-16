@@ -169,6 +169,20 @@ The agent was interrupted mid-response.
 
 **Fix:** Just send another message. The session continues.
 
+### "Agent failed before reply: Unknown model: anthropic/claude-haiku-3-5"
+
+Clawdbot intentionally rejects **older/insecure models** (especially those more
+vulnerable to prompt injection). If you see this error, the model name is no
+longer supported.
+
+**Fix:**
+- Pick a **latest** model for the provider and update your config or model alias.
+- If you’re unsure which models are available, run `clawdbot models list` or
+  `clawdbot models scan` and choose a supported one.
+- Check gateway logs for the detailed failure reason.
+
+See also: [Models CLI](/cli/models) and [Model providers](/concepts/model-providers).
+
 ### Messages Not Triggering
 
 **Check 1:** Is the sender allowlisted?
@@ -305,6 +319,139 @@ Clawdbot keeps conversation history in memory.
   }
 }
 ```
+
+## Common troubleshooting
+
+### “All models failed” — what should I check first?
+
+- **Credentials** present for the provider(s) being tried (auth profiles + env vars).
+- **Model routing**: confirm `agents.defaults.model.primary` and fallbacks are models you can access.
+- **Gateway logs** in `/tmp/clawdbot/…` for the exact provider error.
+- **Model status**: use `/model status` (chat) or `clawdbot models status` (CLI).
+
+### I’m running on my personal WhatsApp number — why is self-chat weird?
+
+Enable self-chat mode and allowlist your own number:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      selfChatMode: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["+15555550123"]
+    }
+  }
+}
+```
+
+See [WhatsApp setup](/channels/whatsapp).
+
+### WhatsApp logged me out. How do I re‑auth?
+
+Run the login command again and scan the QR code:
+
+```bash
+clawdbot channels login
+```
+
+### Build errors on `main` — what’s the standard fix path?
+
+1) `git pull origin main && pnpm install`
+2) `pnpm clawdbot doctor`
+3) Check GitHub issues or Discord
+4) Temporary workaround: check out an older commit
+
+### npm install fails (allow-build-scripts / missing tar or yargs). What now?
+
+If you’re running from source, use the repo’s package manager: **pnpm** (preferred).
+The repo declares `packageManager: "pnpm@…"`, and pnpm patches are tracked in `pnpm.patchedDependencies`.
+
+Typical recovery:
+```bash
+git status   # ensure you’re in the repo root
+pnpm install
+pnpm build
+pnpm clawdbot doctor
+clawdbot daemon restart
+```
+
+Why: pnpm is the configured package manager for this repo, and the dependency
+patching workflow relies on it.
+
+### How do I switch between git installs and npm installs?
+
+Use the **website installer** and select the install method with a flag. It
+upgrades in place and rewrites the gateway service to point at the new install.
+
+Switch **to git install**:
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --no-onboard
+```
+
+Switch **to npm global**:
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash
+```
+
+Notes:
+- The git flow only rebases if the repo is clean. Commit or stash changes first.
+- After switching, run:
+  ```bash
+  clawdbot doctor
+  clawdbot daemon restart
+  ```
+
+### Telegram block streaming isn’t splitting text between tool calls. Why?
+
+Block streaming only sends **completed text blocks**. Common reasons you see a single message:
+- `agents.defaults.blockStreamingDefault` is still `"off"`.
+- `channels.telegram.blockStreaming` is set to `false`.
+- `channels.telegram.streamMode` is `partial` or `block` **and draft streaming is active**
+  (private chat + topics). Draft streaming disables block streaming in that case.
+- Your `minChars` / coalesce settings are too high, so chunks get merged.
+- The model emits one large text block (no mid‑reply flush points).
+
+Fix checklist:
+1) Put block streaming settings under `agents.defaults`, not the root.
+2) Set `channels.telegram.streamMode: "off"` if you want real multi‑message block replies.
+3) Use smaller chunk/coalesce thresholds while debugging.
+
+See [Streaming](/concepts/streaming).
+
+### Discord doesn’t reply in my server even with `requireMention: false`. Why?
+
+`requireMention` only controls mention‑gating **after** the channel passes allowlists.
+By default `channels.discord.groupPolicy` is **allowlist**, so guilds must be explicitly enabled.
+If you set `channels.discord.guilds.<guildId>.channels`, only the listed channels are allowed; omit it to allow all channels in the guild.
+
+Fix checklist:
+1) Set `channels.discord.groupPolicy: "open"` **or** add a guild allowlist entry (and optionally a channel allowlist).
+2) Use **numeric channel IDs** in `channels.discord.guilds.<guildId>.channels`.
+3) Put `requireMention: false` **under** `channels.discord.guilds` (global or per‑channel).
+   Top‑level `channels.discord.requireMention` is not a supported key.
+4) Ensure the bot has **Message Content Intent** and channel permissions.
+5) Run `clawdbot channels status --probe` for audit hints.
+
+Docs: [Discord](/channels/discord), [Channels troubleshooting](/channels/troubleshooting).
+
+### Cloud Code Assist API error: invalid tool schema (400). What now?
+
+This is almost always a **tool schema compatibility** issue. The Cloud Code Assist
+endpoint accepts a strict subset of JSON Schema. Clawdbot scrubs/normalizes tool
+schemas in current `main`, but the fix is not in the last release yet (as of
+January 13, 2026).
+
+Fix checklist:
+1) **Update Clawdbot**:
+   - If you can run from source, pull `main` and restart the gateway.
+   - Otherwise, wait for the next release that includes the schema scrubber.
+2) Avoid unsupported keywords like `anyOf/oneOf/allOf`, `patternProperties`,
+   `additionalProperties`, `minLength`, `maxLength`, `format`, etc.
+3) If you define custom tools, keep the top‑level schema as `type: "object"` with
+   `properties` and simple enums.
+
+See [Tools](/tools) and [TypeBox schemas](/concepts/typebox).
 
 ## macOS Specific Issues
 
