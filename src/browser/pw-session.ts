@@ -8,7 +8,7 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
-import { isLoopbackHost } from "./cdp.helpers.js";
+import { getHeadersWithAuth } from "./cdp.helpers.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
 
 export type BrowserConsoleMessage = {
@@ -257,18 +257,6 @@ function observeBrowser(browser: Browser) {
   for (const context of browser.contexts()) observeContext(context);
 }
 
-export async function getConnectedBrowser(cdpUrl: string): Promise<Browser> {
-  const { browser } = await connectBrowser(cdpUrl);
-  return browser;
-}
-
-function getWsEndpoint(cdpUrl: string): string {
-  const u = new URL(cdpUrl);
-  // Ensure we use wss/ws matching the protocol
-  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  return u.toString();
-}
-
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
   if (cached?.cdpUrl === normalized) return cached;
@@ -283,7 +271,8 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
           () => null,
         );
         const endpoint = wsUrl ?? normalized;
-        const browser = await chromium.connectOverCDP(endpoint, { timeout });
+        const headers = getHeadersWithAuth(endpoint);
+        const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized };
         cached = connected;
         observeBrowser(browser);

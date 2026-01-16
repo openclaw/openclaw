@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import {
+  appendCdpPath,
   createTargetViaCdp,
   getHeadersWithAuth,
   normalizeCdpWsUrl,
@@ -14,7 +15,6 @@ import {
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
-import { getConnectedBrowser } from "./pw-session.js";
 import type {
   BrowserRouteContext,
   BrowserTab,
@@ -110,40 +110,7 @@ function createProfileContext(
     profileState.running = running;
   };
 
-  const listTabsViaPlaywright = async (): Promise<BrowserTab[]> => {
-    const browser = await getConnectedBrowser(profile.cdpUrl);
-    const contexts = browser.contexts();
-    const pages = contexts.flatMap((c) => c.pages());
-    // Note: Playwright pages don't sync title instantly, returning URL is safer for list
-    return pages.map((p) => ({
-      targetId: p.url(),
-      title: "",
-      url: p.url(),
-      type: "page",
-    }));
-  };
-
-  const openTabViaPlaywright = async (url?: string): Promise<BrowserTab> => {
-    const browser = await getConnectedBrowser(profile.cdpUrl);
-    // Reuse context or create new
-    const context = browser.contexts()[0] || (await browser.newContext());
-    const page = await context.newPage();
-    if (url) await page.goto(url);
-    return { targetId: page.url(), title: "", url: page.url(), type: "page" };
-  };
-
-  const closeTabViaPlaywright = async (targetId: string) => {
-    const browser = await getConnectedBrowser(profile.cdpUrl);
-    const pages = browser.contexts().flatMap((c) => c.pages());
-    // Find page by URL match (simple strategy)
-    const page = pages.find((p) => p.url() === targetId);
-    if (page) await page.close();
-  };
-
   const listTabs = async (): Promise<BrowserTab[]> => {
-    if (!profile.cdpIsLoopback) {
-      return await listTabsViaPlaywright();
-    }
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -152,7 +119,7 @@ function createProfileContext(
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(`${profile.cdpUrl.replace(/\/$/, "")}/json/list`);
+    >(appendCdpPath(profile.cdpUrl, "/json/list"));
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
@@ -165,9 +132,6 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
-    if (!profile.cdpIsLoopback) {
-      return await openTabViaPlaywright(url);
-    }
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
@@ -195,8 +159,13 @@ function createProfileContext(
       type?: string;
     };
 
-    const base = profile.cdpUrl.replace(/\/$/, "");
-    const endpoint = `${base}/json/new?${encoded}`;
+    const endpointUrl = new URL(appendCdpPath(profile.cdpUrl, "/json/new"));
+    const endpoint = endpointUrl.search
+      ? (() => {
+          endpointUrl.searchParams.set("url", url);
+          return endpointUrl.toString();
+        })()
+      : `${endpointUrl.toString()}?${encoded}`;
     const created = await fetchJson<CdpTarget>(endpoint, 1500, {
       method: "PUT",
     }).catch(async (err) => {
@@ -213,7 +182,7 @@ function createProfileContext(
       targetId: created.id,
       title: created.title ?? "",
       url: created.url ?? url,
-      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, base),
+      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
       type: created.type,
     };
   };
@@ -376,7 +345,6 @@ function createProfileContext(
   };
 
   const focusTab = async (targetId: string): Promise<void> => {
-    const base = profile.cdpUrl.replace(/\/$/, "");
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -385,16 +353,12 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
-    await fetchOk(`${base}/json/activate/${resolved.targetId}`);
+    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolved.targetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolved.targetId;
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
-    if (!profile.cdpIsLoopback) {
-      return await closeTabViaPlaywright(targetId);
-    }
-    const base = profile.cdpUrl.replace(/\/$/, "");
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -403,7 +367,7 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
-    await fetchOk(`${base}/json/close/${resolved.targetId}`);
+    await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolved.targetId}`));
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {

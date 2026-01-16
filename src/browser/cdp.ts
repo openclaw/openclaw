@@ -1,33 +1,11 @@
-import { isLoopbackHost, withCdpSocket } from "./cdp.helpers.js";
+import {
+  appendCdpPath,
+  fetchJson,
+  isLoopbackHost,
+  withCdpSocket,
+} from "./cdp.helpers.js";
 
-export function getHeadersWithAuth(
-  url: string,
-  headers: Record<string, string> = {},
-) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.username || parsed.password) {
-      const auth = Buffer.from(
-        `${parsed.username}:${parsed.password}`,
-      ).toString("base64");
-      return { ...headers, Authorization: `Basic ${auth}` };
-    }
-  } catch (_e) {
-    // ignore
-  }
-  return headers;
-}
-
-export async function fetchJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: getHeadersWithAuth(url) });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return (await res.json()) as Promise<T>;
-}
-
-export async function fetchOk(url: string): Promise<void> {
-  const res = await fetch(url, { headers: getHeadersWithAuth(url) });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-}
+export { appendCdpPath, fetchJson, fetchOk, getHeadersWithAuth } from "./cdp.helpers.js";
 
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
@@ -37,6 +15,13 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
     if (cdpPort) ws.port = cdpPort;
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
+  }
+  if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
+    ws.username = cdp.username;
+    ws.password = cdp.password;
+  }
+  for (const [key, value] of cdp.searchParams.entries()) {
+    if (!ws.searchParams.has(key)) ws.searchParams.append(key, value);
   }
   return ws.toString();
 }
@@ -97,9 +82,9 @@ export async function createTargetViaCdp(opts: {
   cdpUrl: string;
   url: string;
 }): Promise<{ targetId: string }> {
-  const base = opts.cdpUrl.replace(/\/$/, "");
   const version = await fetchJson<{ webSocketDebuggerUrl?: string }>(
-    `${base}/json/version`,
+    appendCdpPath(opts.cdpUrl, "/json/version"),
+    1500,
   );
   const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
   const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";

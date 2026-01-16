@@ -154,6 +154,14 @@ Example:
 Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
 directly to a Chromium-based browser instance without a remote control server.
 
+Remote CDP URLs can include auth:
+- Query tokens (e.g., `https://provider.example?token=<token>`)
+- HTTP Basic auth (e.g., `https://user:pass@provider.example`)
+
+Clawdbot preserves the auth when calling `/json/*` endpoints and when connecting
+to the CDP WebSocket. Prefer environment variables or secrets managers for
+tokens instead of committing them to config files.
+
 ### Running the control server on the browser machine
 
 Run a standalone browser control server (recommended when your Gateway is remote):
