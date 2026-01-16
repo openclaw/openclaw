@@ -71,9 +71,3 @@ Help:
 ```bash
 curl -fsSL https://clawd.bot/install-cli.sh | bash -s -- --help
 ```
-
-## Patches (npm / pnpm / bun)
-
-Clawdbot’s `postinstall` script includes a builtin JS patcher that can apply `pnpm.patchedDependencies` patches even when the package manager doesn’t support them (notably Bun). pnpm itself already applies `pnpm.patchedDependencies`, so the fallback skips pnpm installs to avoid double-applying.
-
-See: [Bun notes](/install/bun).

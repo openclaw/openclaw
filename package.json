@@ -47,7 +47,6 @@
     "README-header.png",
     "CHANGELOG.md",
     "LICENSE",
-    "patches/**",
     "scripts/postinstall.js",
     "dist/terminal/**",
     "dist/routing/**",

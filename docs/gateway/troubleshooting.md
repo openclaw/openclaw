@@ -365,7 +365,7 @@ clawdbot channels login
 ### npm install fails (allow-build-scripts / missing tar or yargs). What now?
 
 If you’re running from source, use the repo’s package manager: **pnpm** (preferred).
-The repo declares `packageManager: "pnpm@…"`, and pnpm patches are tracked in `pnpm.patchedDependencies`.
+The repo declares `packageManager: "pnpm@…"`.
 
 Typical recovery:
 ```bash
@@ -376,8 +376,7 @@ pnpm clawdbot doctor
 clawdbot daemon restart
 ```
 
-Why: pnpm is the configured package manager for this repo, and the dependency
-patching workflow relies on it.
+Why: pnpm is the configured package manager for this repo.
 
 ### How do I switch between git installs and npm installs?
 
