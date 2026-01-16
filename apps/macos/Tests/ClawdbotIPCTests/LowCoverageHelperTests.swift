@@ -112,20 +112,6 @@ struct LowCoverageHelperTests {
         _ = PresenceReporter._testPrimaryIPv4Address()
     }
 
-    @Test func gatewayLaunchAgentHelpers() async throws {
-        await TestIsolation.withEnvValues(
-            [
-                "CLAWDBOT_GATEWAY_BIND": "Lan",
-                "CLAWDBOT_GATEWAY_TOKEN": " secret ",
-            ]) {
-                #expect(GatewayLaunchAgentManager._testPreferredGatewayBind() == "lan")
-                #expect(GatewayLaunchAgentManager._testPreferredGatewayToken() == "secret")
-                #expect(
-                    GatewayLaunchAgentManager._testEscapePlistValue("a&b<c>\"'") ==
-                        "a&amp;b&lt;c&gt;&quot;&apos;")
-            }
-    }
-
     @Test func portGuardianParsesListenersAndBuildsReports() {
         let output = """
         p123

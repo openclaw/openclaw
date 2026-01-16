@@ -15,33 +15,59 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { buildServiceEnvironment } from "../../daemon/service-env.js";
 import { defaultRuntime } from "../../runtime.js";
+import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
 import { parsePort } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
-  if (resolveIsNixMode(process.env)) {
-    defaultRuntime.error("Nix mode detected; daemon install is disabled.");
+  const json = Boolean(opts.json);
+  const warnings: string[] = [];
+  const stdout = json ? createNullWriter() : process.stdout;
+  const emit = (payload: {
+    ok: boolean;
+    result?: string;
+    message?: string;
+    error?: string;
+    service?: {
+      label: string;
+      loaded: boolean;
+      loadedText: string;
+      notLoadedText: string;
+    };
+    hints?: string[];
+    warnings?: string[];
+  }) => {
+    if (!json) return;
+    emitDaemonActionJson({ action: "install", ...payload });
+  };
+  const fail = (message: string) => {
+    if (json) {
+      emit({ ok: false, error: message, warnings: warnings.length ? warnings : undefined });
+    } else {
+      defaultRuntime.error(message);
+    }
     defaultRuntime.exit(1);
+  };
+
+  if (resolveIsNixMode(process.env)) {
+    fail("Nix mode detected; daemon install is disabled.");
     return;
   }
 
   const cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    defaultRuntime.error("Invalid port");
-    defaultRuntime.exit(1);
+    fail("Invalid port");
     return;
   }
   const port = portOverride ?? resolveGatewayPort(cfg);
   if (!Number.isFinite(port) || port <= 0) {
-    defaultRuntime.error("Invalid port");
-    defaultRuntime.exit(1);
+    fail("Invalid port");
     return;
   }
   const runtimeRaw = opts.runtime ? String(opts.runtime) : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    defaultRuntime.error('Invalid --runtime (use "node" or "bun")');
-    defaultRuntime.exit(1);
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
 
@@ -50,14 +76,22 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
-    defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
-    defaultRuntime.exit(1);
+    fail(`Gateway service check failed: ${String(err)}`);
     return;
   }
   if (loaded) {
     if (!opts.force) {
-      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-      defaultRuntime.log("Reinstall with: clawdbot daemon install --force");
+      emit({
+        ok: true,
+        result: "already-installed",
+        message: `Gateway service already ${service.loadedText}.`,
+        service: buildDaemonServiceSnapshot(service, loaded),
+        warnings: warnings.length ? warnings : undefined,
+      });
+      if (!json) {
+        defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+        defaultRuntime.log("Reinstall with: clawdbot daemon install --force");
+      }
       return;
     }
   }
@@ -77,7 +111,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (runtimeRaw === "node") {
     const systemNode = await resolveSystemNodeInfo({ env: process.env });
     const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) defaultRuntime.log(warning);
+    if (warning) {
+      if (json) warnings.push(warning);
+      else defaultRuntime.log(warning);
+    }
   }
   const environment = buildServiceEnvironment({
     env: process.env,
@@ -92,13 +129,26 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   try {
     await service.install({
       env: process.env,
-      stdout: process.stdout,
+      stdout,
       programArguments,
       workingDirectory,
       environment,
     });
   } catch (err) {
-    defaultRuntime.error(`Gateway install failed: ${String(err)}`);
-    defaultRuntime.exit(1);
+    fail(`Gateway install failed: ${String(err)}`);
+    return;
   }
+
+  let installed = true;
+  try {
+    installed = await service.isLoaded({ env: process.env });
+  } catch {
+    installed = true;
+  }
+  emit({
+    ok: true,
+    result: "installed",
+    service: buildDaemonServiceSnapshot(service, installed),
+    warnings: warnings.length ? warnings : undefined,
+  });
 }

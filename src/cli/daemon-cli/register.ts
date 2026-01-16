@@ -47,6 +47,7 @@ export function registerDaemonCli(program: Command) {
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--force", "Reinstall/overwrite if already installed", false)
+    .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runDaemonInstall(opts);
     });
@@ -54,29 +55,33 @@ export function registerDaemonCli(program: Command) {
   daemon
     .command("uninstall")
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
-    .action(async () => {
-      await runDaemonUninstall();
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runDaemonUninstall(opts);
     });
 
   daemon
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
-    .action(async () => {
-      await runDaemonStart();
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runDaemonStart(opts);
     });
 
   daemon
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
-    .action(async () => {
-      await runDaemonStop();
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runDaemonStop(opts);
     });
 
   daemon
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
-    .action(async () => {
-      await runDaemonRestart();
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runDaemonRestart(opts);
     });
 
   // Build default deps (parity with other commands).

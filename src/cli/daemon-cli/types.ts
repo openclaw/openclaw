@@ -19,4 +19,9 @@ export type DaemonInstallOptions = {
   runtime?: string;
   token?: string;
   force?: boolean;
+  json?: boolean;
+};
+
+export type DaemonLifecycleOptions = {
+  json?: boolean;
 };

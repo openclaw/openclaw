@@ -7,6 +7,8 @@ import Testing
         let snapshot = LaunchAgentPlistSnapshot(
             programArguments: [],
             environment: ["CLAWDBOT_GATEWAY_TOKEN": "launchd-token"],
+            stdoutPath: nil,
+            stderrPath: nil,
             port: nil,
             bind: nil,
             token: "launchd-token",
@@ -31,6 +33,8 @@ import Testing
         let snapshot = LaunchAgentPlistSnapshot(
             programArguments: [],
             environment: ["CLAWDBOT_GATEWAY_TOKEN": "launchd-token"],
+            stdoutPath: nil,
+            stderrPath: nil,
             port: nil,
             bind: nil,
             token: "launchd-token",
@@ -48,6 +52,8 @@ import Testing
         let snapshot = LaunchAgentPlistSnapshot(
             programArguments: [],
             environment: ["CLAWDBOT_GATEWAY_PASSWORD": "launchd-pass"],
+            stdoutPath: nil,
+            stderrPath: nil,
             port: nil,
             bind: nil,
             token: nil,

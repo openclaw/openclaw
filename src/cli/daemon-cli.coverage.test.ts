@@ -209,6 +209,28 @@ describe("daemon-cli coverage", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("installs the daemon with json output", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceInstall.mockClear();
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "install", "--port", "18789", "--json"], {
+      from: "user",
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const parsed = JSON.parse(jsonLine ?? "{}") as { ok?: boolean; action?: string; result?: string };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.action).toBe("install");
+    expect(parsed.result).toBe("installed");
+  });
+
   it("starts and stops the daemon via service helpers", async () => {
     serviceRestart.mockClear();
     serviceStop.mockClear();
@@ -224,5 +246,26 @@ describe("daemon-cli coverage", () => {
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits json for daemon start/stop", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceRestart.mockClear();
+    serviceStop.mockClear();
+    serviceIsLoaded.mockResolvedValue(true);
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "start", "--json"], { from: "user" });
+    await program.parseAsync(["daemon", "stop", "--json"], { from: "user" });
+
+    const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
+    const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
+    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
+    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
   });
 });
