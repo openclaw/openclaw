@@ -9,7 +9,6 @@ RUN apt-get update \
 
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY patches ./patches
 COPY scripts/postinstall.js ./scripts/postinstall.js
 RUN corepack enable \
   && pnpm install --frozen-lockfile

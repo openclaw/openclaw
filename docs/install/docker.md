@@ -152,7 +152,6 @@ WORKDIR /app
 # Cache dependencies unless package metadata changes
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
-COPY patches ./patches
 COPY scripts ./scripts
 
 RUN pnpm install --frozen-lockfile
