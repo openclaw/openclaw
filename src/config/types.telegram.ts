@@ -14,6 +14,14 @@ export type TelegramActionConfig = {
   deleteMessage?: boolean;
 };
 
+/** Custom command definition for Telegram bot menu. */
+export type TelegramCustomCommand = {
+  /** Command name (without leading /). */
+  command: string;
+  /** Description shown in Telegram command menu. */
+  description: string;
+};
+
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -21,6 +29,8 @@ export type TelegramAccountConfig = {
   capabilities?: string[];
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
+  /** Custom commands to register in Telegram's command menu (merged with native). */
+  customCommands?: TelegramCustomCommand[];
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /**

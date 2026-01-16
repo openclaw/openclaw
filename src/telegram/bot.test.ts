@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+} from "../auto-reply/commands-registry.js";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
@@ -162,6 +166,107 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
     expect(useSpy).toHaveBeenCalledWith("throttler");
+  });
+
+  it("merges custom commands with native commands", () => {
+    const config = {
+      channels: {
+        telegram: {
+          customCommands: [
+            { command: "custom_backup", description: "Git backup" },
+            { command: "/Custom_Generate", description: "Create an image" },
+          ],
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+
+    createTelegramBot({ token: "tok" });
+
+    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    const native = listNativeCommandSpecsForConfig(config).map((command) => ({
+      command: command.name,
+      description: command.description,
+    }));
+    expect(registered.slice(0, native.length)).toEqual(native);
+    expect(registered.slice(native.length)).toEqual([
+      { command: "custom_backup", description: "Git backup" },
+      { command: "custom_generate", description: "Create an image" },
+    ]);
+  });
+
+  it("ignores custom commands that collide with native commands", () => {
+    const errorSpy = vi.fn();
+    const config = {
+      channels: {
+        telegram: {
+          customCommands: [
+            { command: "status", description: "Custom status" },
+            { command: "custom_backup", description: "Git backup" },
+          ],
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+
+    createTelegramBot({
+      token: "tok",
+      runtime: {
+        log: vi.fn(),
+        error: errorSpy,
+        exit: ((code: number) => {
+          throw new Error(`exit ${code}`);
+        }) as (code: number) => never,
+      },
+    });
+
+    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    const native = listNativeCommandSpecsForConfig(config).map((command) => ({
+      command: command.name,
+      description: command.description,
+    }));
+    const nativeStatus = native.find((command) => command.command === "status");
+    expect(nativeStatus).toBeDefined();
+    expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
+    expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
+    expect(registered.filter((command) => command.command === "status")).toEqual([
+      nativeStatus,
+    ]);
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("registers custom commands when native commands are disabled", () => {
+    const config = {
+      commands: { native: false },
+      channels: {
+        telegram: {
+          customCommands: [
+            { command: "custom_backup", description: "Git backup" },
+            { command: "custom_generate", description: "Create an image" },
+          ],
+        },
+      },
+    };
+    loadConfig.mockReturnValue(config);
+
+    createTelegramBot({ token: "tok" });
+
+    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+      command: string;
+      description: string;
+    }>;
+    expect(registered).toEqual([
+      { command: "custom_backup", description: "Git backup" },
+      { command: "custom_generate", description: "Create an image" },
+    ]);
+    const reserved = listNativeCommandSpecs().map((command) => command.name);
+    expect(registered.some((command) => reserved.includes(command.command))).toBe(false);
   });
 
   it("forces native fetch only under Bun", () => {
