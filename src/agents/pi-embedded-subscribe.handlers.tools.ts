@@ -11,7 +11,7 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 
-export function handleToolExecutionStart(
+export async function handleToolExecutionStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
@@ -53,7 +53,8 @@ export function handleToolExecutionStart(
       args: args as Record<string, unknown>,
     },
   });
-  ctx.params.onAgentEvent?.({
+  // Await onAgentEvent to ensure typing indicator starts before tool summaries are emitted.
+  await ctx.params.onAgentEvent?.({
     stream: "tool",
     data: { phase: "start", name: toolName, toolCallId },
   });
@@ -108,7 +109,7 @@ export function handleToolExecutionUpdate(
       partialResult: sanitized,
     },
   });
-  ctx.params.onAgentEvent?.({
+  void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
       phase: "update",
@@ -170,7 +171,7 @@ export function handleToolExecutionEnd(
       result: sanitizedResult,
     },
   });
-  ctx.params.onAgentEvent?.({
+  void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: {
       phase: "result",
