@@ -137,6 +137,83 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
+  it("handles nested MiniMax usage payloads", async () => {
+    const makeResponse = (status: number, body: unknown): Response => {
+      const payload = typeof body === "string" ? body : JSON.stringify(body);
+      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
+      return new Response(payload, { status, headers });
+    };
+
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+        return makeResponse(200, {
+          base_resp: { status_code: 0, status_msg: "ok" },
+          data: {
+            plan_name: "Coding Plan",
+            usage: {
+              prompt_limit: 200,
+              prompt_remain: 50,
+              next_reset_time: "2026-01-07T05:00:00Z",
+            },
+          },
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadProviderUsageSummary({
+      now: Date.UTC(2026, 0, 7, 0, 0, 0),
+      auth: [{ provider: "minimax", token: "token-1b" }],
+      fetch: mockFetch,
+    });
+
+    const minimax = summary.providers.find((p) => p.provider === "minimax");
+    expect(minimax?.windows[0]?.usedPercent).toBe(75);
+    expect(minimax?.plan).toBe("Coding Plan");
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
+  it("handles MiniMax model_remains usage payloads", async () => {
+    const makeResponse = (status: number, body: unknown): Response => {
+      const payload = typeof body === "string" ? body : JSON.stringify(body);
+      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
+      return new Response(payload, { status, headers });
+    };
+
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+        return makeResponse(200, {
+          base_resp: { status_code: 0, status_msg: "ok" },
+          model_remains: [
+            {
+              start_time: 1736217600,
+              end_time: 1736235600,
+              remains_time: 600,
+              current_interval_total_count: 120,
+              current_interval_usage_count: 30,
+              model_name: "MiniMax-M2.1",
+            },
+          ],
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadProviderUsageSummary({
+      now: Date.UTC(2026, 0, 7, 0, 0, 0),
+      auth: [{ provider: "minimax", token: "token-1b" }],
+      fetch: mockFetch,
+    });
+
+    const minimax = summary.providers.find((p) => p.provider === "minimax");
+    expect(minimax?.windows[0]?.usedPercent).toBe(25);
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
   it("discovers Claude usage from token auth profiles", async () => {
     await withTempHome(
       async (tempHome) => {
