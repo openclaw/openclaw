@@ -45,7 +45,11 @@ import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
-import { logToolSchemasForGoogle, sanitizeSessionHistory } from "../google.js";
+import {
+  logToolSchemasForGoogle,
+  sanitizeSessionHistory,
+  sanitizeToolsForGoogle,
+} from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
@@ -127,7 +131,7 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
 
-    const tools = createClawdbotCodingTools({
+    const toolsRaw = createClawdbotCodingTools({
       exec: {
         ...resolveExecToolDefaults(params.config),
         elevated: params.bashElevated,
@@ -148,6 +152,7 @@ export async function runEmbeddedAttempt(
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
     });
+    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();

@@ -44,7 +44,11 @@ import {
 } from "../skills.js";
 import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../workspace.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
-import { logToolSchemasForGoogle, sanitizeSessionHistory } from "./google.js";
+import {
+  logToolSchemasForGoogle,
+  sanitizeSessionHistory,
+  sanitizeToolsForGoogle,
+} from "./google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -183,7 +187,7 @@ export async function compactEmbeddedPiSession(params: {
           warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
         });
         const runAbortController = new AbortController();
-        const tools = createClawdbotCodingTools({
+        const toolsRaw = createClawdbotCodingTools({
           exec: {
             ...resolveExecToolDefaults(params.config),
             elevated: params.bashElevated,
@@ -200,6 +204,7 @@ export async function compactEmbeddedPiSession(params: {
           modelId,
           modelAuthMode: resolveModelAuthMode(model.provider, params.config),
         });
+        const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
         logToolSchemasForGoogle({ tools, provider });
         const machineName = await getMachineDisplayName();
         const runtimeChannel = normalizeMessageChannel(
