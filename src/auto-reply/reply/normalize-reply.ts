@@ -1,6 +1,7 @@
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
@@ -41,6 +42,11 @@ export function normalizeReplyPayload(
     if (stripped.shouldSkip && !hasMedia) return null;
     text = stripped.text;
   }
+
+  if (text) {
+    text = sanitizeUserFacingText(text);
+  }
+  if (!text?.trim() && !hasMedia) return null;
 
   // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext

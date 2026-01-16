@@ -14,6 +14,7 @@ export {
   isAuthErrorMessage,
   isBillingAssistantError,
   parseApiErrorInfo,
+  sanitizeUserFacingText,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCompactionFailureError,

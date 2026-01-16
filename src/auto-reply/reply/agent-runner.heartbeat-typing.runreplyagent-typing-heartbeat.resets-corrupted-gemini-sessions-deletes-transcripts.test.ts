@@ -213,4 +213,31 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
     }
   });
+  it("returns friendly message for role ordering errors thrown as exceptions", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error("400 Incorrect role information");
+    });
+
+    const { run } = createMinimalRun({});
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Message ordering conflict"),
+    });
+    expect(res).toMatchObject({
+      text: expect.not.stringContaining("400"),
+    });
+  });
+  it("returns friendly message for 'roles must alternate' errors thrown as exceptions", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      throw new Error('messages: roles must alternate between "user" and "assistant"');
+    });
+
+    const { run } = createMinimalRun({});
+    const res = await run();
+
+    expect(res).toMatchObject({
+      text: expect.stringContaining("Message ordering conflict"),
+    });
+  });
 });

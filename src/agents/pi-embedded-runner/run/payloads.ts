@@ -63,6 +63,8 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedRawErrorText = rawErrorMessage
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
+  const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
+  const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
@@ -102,6 +104,11 @@ export function buildEmbeddedRunPayloads(params: {
     if (!lastAssistantErrored) return false;
     const trimmed = text.trim();
     if (!trimmed) return false;
+    if (errorText) {
+      const normalized = normalizeTextForComparison(trimmed);
+      if (normalized && normalizedErrorText && normalized === normalizedErrorText) return true;
+      if (trimmed === genericErrorText) return true;
+    }
     if (rawErrorMessage && trimmed === rawErrorMessage) return true;
     if (normalizedRawErrorText) {
       const normalized = normalizeTextForComparison(trimmed);
