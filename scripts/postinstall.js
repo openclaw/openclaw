@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 function detectPackageManager(ua = process.env.npm_config_user_agent ?? "") {
@@ -34,6 +35,52 @@ function ensureExecutable(targetPath) {
     fs.chmodSync(targetPath, 0o755);
   } catch (err) {
     console.warn(`[postinstall] chmod failed: ${err}`);
+  }
+}
+
+function hasGit(repoRoot) {
+  const result = spawnSync("git", ["--version"], { cwd: repoRoot, stdio: "ignore" });
+  return result.status === 0;
+}
+
+function isSubmoduleDirty(submodulePath, repoRoot) {
+  const result = spawnSync("git", ["-C", submodulePath, "status", "--porcelain"], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+  });
+  if (result.status !== 0) return false;
+  return result.stdout.trim().length > 0;
+}
+
+function shouldSyncSubmodule(name, repoRoot) {
+  const result = spawnSync("git", ["submodule", "status", "--recursive", "--", name], {
+    cwd: repoRoot,
+    encoding: "utf-8",
+  });
+  if (result.status !== 0) return false;
+  const line = result.stdout.trim().split("\n")[0];
+  if (!line) return false;
+  const marker = line[0];
+  return marker === "-" || marker === "+";
+}
+
+function syncPeekabooSubmodule(repoRoot) {
+  if (!hasGit(repoRoot)) return;
+  if (!fs.existsSync(path.join(repoRoot, ".gitmodules"))) return;
+  const peekabooPath = path.join(repoRoot, "Peekaboo");
+  if (fs.existsSync(peekabooPath) && isSubmoduleDirty(peekabooPath, repoRoot)) {
+    console.warn("[postinstall] Peekaboo submodule dirty; skipping update");
+    return;
+  }
+  if (!shouldSyncSubmodule("Peekaboo", repoRoot)) return;
+  const result = spawnSync(
+    "git",
+    ["submodule", "update", "--init", "--recursive", "--", "Peekaboo"],
+    { cwd: repoRoot, encoding: "utf-8" },
+  );
+  if (result.status !== 0) {
+    const stderr = result.stderr?.toString().trim();
+    console.warn(`[postinstall] Peekaboo submodule update failed: ${stderr || "unknown error"}`);
   }
 }
 
@@ -246,6 +293,7 @@ function main() {
   process.chdir(repoRoot);
 
   ensureExecutable(path.join(repoRoot, "dist", "entry.js"));
+  syncPeekabooSubmodule(repoRoot);
 
   if (!shouldApplyPnpmPatchedDependenciesFallback()) {
     return;
