@@ -55,6 +55,8 @@ actor MacNodeRuntime {
                 return try await self.handleScreenRecordInvoke(req)
             case ClawdbotSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
+            case ClawdbotSystemCommand.which.rawValue:
+                return try await self.handleSystemWhich(req)
             case ClawdbotSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
             default:
@@ -491,6 +493,33 @@ actor MacNodeRuntime {
             stdout: result.stdout,
             stderr: result.stderr,
             error: result.errorMessage))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemWhich(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(ClawdbotSystemWhichParams.self, from: req.paramsJSON)
+        let bins = params.bins
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !bins.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: bins required")
+        }
+
+        let searchPaths = CommandResolver.preferredPaths()
+        var matches: [String] = []
+        var paths: [String: String] = [:]
+        for bin in bins {
+            if let path = CommandResolver.findExecutable(named: bin, searchPaths: searchPaths) {
+                matches.append(bin)
+                paths[bin] = path
+            }
+        }
+
+        struct WhichPayload: Encodable {
+            let bins: [String]
+            let paths: [String: String]
+        }
+        let payload = try Self.encodePayload(WhichPayload(bins: matches, paths: paths))
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 

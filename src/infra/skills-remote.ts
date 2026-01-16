@@ -37,6 +37,10 @@ function supportsSystemRun(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.run");
 }
 
+function supportsSystemWhich(commands?: string[]): boolean {
+  return Array.isArray(commands) && commands.includes("system.which");
+}
+
 function upsertNode(record: {
   nodeId: string;
   displayName?: string;
@@ -136,6 +140,27 @@ function buildBinProbeScript(bins: string[]): string {
   return `for b in ${escaped}; do if command -v "$b" >/dev/null 2>&1; then echo "$b"; fi; done`;
 }
 
+function parseBinProbePayload(payloadJSON: string | null | undefined): string[] {
+  if (!payloadJSON) return [];
+  try {
+    const parsed = JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown };
+    if (Array.isArray(parsed.bins)) {
+      return parsed.bins
+        .map((bin) => String(bin).trim())
+        .filter(Boolean);
+    }
+    if (typeof parsed.stdout === "string") {
+      return parsed.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+  } catch {
+    return [];
+  }
+  return [];
+}
+
 export async function refreshRemoteNodeBins(params: {
   nodeId: string;
   platform?: string;
@@ -146,7 +171,9 @@ export async function refreshRemoteNodeBins(params: {
 }) {
   if (!remoteBridge) return;
   if (!isMacPlatform(params.platform, params.deviceFamily)) return;
-  if (!supportsSystemRun(params.commands)) return;
+  const canWhich = supportsSystemWhich(params.commands);
+  const canRun = supportsSystemRun(params.commands);
+  if (!canWhich && !canRun) return;
 
   const workspaceDirs = listWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
@@ -158,31 +185,30 @@ export async function refreshRemoteNodeBins(params: {
   }
   if (requiredBins.size === 0) return;
 
-  const script = buildBinProbeScript([...requiredBins]);
-  const payload = {
-    command: ["/bin/sh", "-lc", script],
-  };
   try {
-    const res = await remoteBridge.invoke({
-      nodeId: params.nodeId,
-      command: "system.run",
-      paramsJSON: JSON.stringify(payload),
-      timeoutMs: params.timeoutMs ?? 15_000,
-    });
+    const binsList = [...requiredBins];
+    const res = await remoteBridge.invoke(
+      canWhich
+        ? {
+            nodeId: params.nodeId,
+            command: "system.which",
+            paramsJSON: JSON.stringify({ bins: binsList }),
+            timeoutMs: params.timeoutMs ?? 15_000,
+          }
+        : {
+            nodeId: params.nodeId,
+            command: "system.run",
+            paramsJSON: JSON.stringify({
+              command: ["/bin/sh", "-lc", buildBinProbeScript(binsList)],
+            }),
+            timeoutMs: params.timeoutMs ?? 15_000,
+          },
+    );
     if (!res.ok) {
       log.warn(`remote bin probe failed (${params.nodeId}): ${res.error?.message ?? "unknown"}`);
       return;
     }
-    const raw = typeof res.payloadJSON === "string" ? res.payloadJSON : "";
-    const parsed =
-      raw && raw.trim().length > 0
-        ? (JSON.parse(raw) as { stdout?: string })
-        : ({ stdout: "" } as { stdout?: string });
-    const stdout = typeof parsed.stdout === "string" ? parsed.stdout : "";
-    const bins = stdout
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const bins = parseBinProbePayload(res.payloadJSON);
     recordRemoteNodeBins(params.nodeId, bins);
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });

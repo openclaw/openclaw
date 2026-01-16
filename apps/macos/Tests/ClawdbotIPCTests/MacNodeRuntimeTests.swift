@@ -21,6 +21,15 @@ struct MacNodeRuntimeTests {
         #expect(response.ok == false)
     }
 
+    @Test func handleInvokeRejectsEmptySystemWhich() async throws {
+        let runtime = MacNodeRuntime()
+        let params = ClawdbotSystemWhichParams(bins: [])
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(id: "req-2b", command: ClawdbotSystemCommand.which.rawValue, paramsJSON: json))
+        #expect(response.ok == false)
+    }
+
     @Test func handleInvokeRejectsEmptyNotification() async throws {
         let runtime = MacNodeRuntime()
         let params = ClawdbotSystemNotifyParams(title: "", body: "")
