@@ -4,31 +4,11 @@ import {
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
-import type { ClawdbotConfig } from "../../../config/config.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
-
-function hasTelegramInlineButtons(cfg: ClawdbotConfig): boolean {
-  const caps = new Set<string>();
-  for (const entry of cfg.channels?.telegram?.capabilities ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed) caps.add(trimmed.toLowerCase());
-  }
-  const accounts = cfg.channels?.telegram?.accounts;
-  if (accounts && typeof accounts === "object") {
-    for (const account of Object.values(accounts)) {
-      const accountCaps = (account as { capabilities?: unknown })?.capabilities;
-      if (!Array.isArray(accountCaps)) continue;
-      for (const entry of accountCaps) {
-        const trimmed = String(entry).trim();
-        if (trimmed) caps.add(trimmed.toLowerCase());
-      }
-    }
-  }
-  return caps.has("inlinebuttons");
-}
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -42,7 +22,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("deleteMessage")) actions.add("delete");
     return Array.from(actions);
   },
-  supportsButtons: ({ cfg }) => hasTelegramInlineButtons(cfg),
+  supportsButtons: ({ cfg }) => {
+    const accounts = listEnabledTelegramAccounts(cfg).filter(
+      (account) => account.tokenSource !== "none",
+    );
+    if (accounts.length === 0) return false;
+    return accounts.some((account) =>
+      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
+    );
+  },
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action !== "sendMessage") return null;

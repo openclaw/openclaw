@@ -328,9 +328,27 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/Telegram bot token missing/);
   });
 
-  it("requires inlineButtons capability when buttons are provided", async () => {
+  it("allows inline buttons by default (allowlist)", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Choose",
+        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("blocks inline buttons when scope is off", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "off" } },
+      },
     } as ClawdbotConfig;
     await expect(
       handleTelegramAction(
@@ -342,13 +360,32 @@ describe("handleTelegramAction", () => {
         },
         cfg,
       ),
-    ).rejects.toThrow(/inlineButtons/i);
+    ).rejects.toThrow(/inline buttons are disabled/i);
+  });
+
+  it("blocks inline buttons in groups when scope is dm", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
+      },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "-100123456",
+          content: "Choose",
+          buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/inline buttons are limited to DMs/i);
   });
 
   it("sends messages with inline keyboard buttons when enabled", async () => {
     const cfg = {
       channels: {
-        telegram: { botToken: "tok", capabilities: ["inlineButtons"] },
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
       },
     } as ClawdbotConfig;
     await handleTelegramAction(

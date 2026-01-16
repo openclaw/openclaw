@@ -9,6 +9,7 @@ import { createAgentSession, SessionManager, SettingsManager } from "@mariozechn
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
@@ -157,13 +158,27 @@ export async function runEmbeddedAttempt(
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = runtimeChannel
+    let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
           cfg: params.config,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
+    if (runtimeChannel === "telegram" && params.config) {
+      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+        cfg: params.config,
+        accountId: params.agentAccountId ?? undefined,
+      });
+      if (inlineButtonsScope !== "off") {
+        if (!runtimeCapabilities) runtimeCapabilities = [];
+        if (
+          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
+        ) {
+          runtimeCapabilities.push("inlineButtons");
+        }
+      }
+    }
     const reactionGuidance =
       runtimeChannel === "telegram" && params.config
         ? (() => {

@@ -14,6 +14,14 @@ export type TelegramActionConfig = {
   deleteMessage?: boolean;
 };
 
+export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+
+export type TelegramCapabilitiesConfig =
+  | string[]
+  | {
+      inlineButtons?: TelegramInlineButtonsScope;
+    };
+
 /** Custom command definition for Telegram bot menu. */
 export type TelegramCustomCommand = {
   /** Command name (without leading /). */
@@ -26,7 +34,7 @@ export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
+  capabilities?: TelegramCapabilitiesConfig;
   /** Override native command registration for Telegram (bool or "auto"). */
   commands?: ProviderCommandsConfig;
   /** Custom commands to register in Telegram's command menu (merged with native). */

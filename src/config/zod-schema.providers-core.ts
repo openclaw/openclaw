@@ -19,6 +19,15 @@ import {
   resolveTelegramCustomCommands,
 } from "./telegram-custom-commands.js";
 
+const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+
+const TelegramCapabilitiesSchema = z.union([
+  z.array(z.string()),
+  z.object({
+    inlineButtons: TelegramInlineButtonsScopeSchema.optional(),
+  }),
+]);
+
 export const TelegramTopicSchema = z.object({
   requireMention: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
@@ -62,7 +71,7 @@ const validateTelegramCustomCommands = (
 
 export const TelegramAccountSchemaBase = z.object({
   name: z.string().optional(),
-  capabilities: z.array(z.string()).optional(),
+  capabilities: TelegramCapabilitiesSchema.optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
   customCommands: z.array(TelegramCustomCommandSchema).optional(),

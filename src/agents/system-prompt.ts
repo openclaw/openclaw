@@ -98,7 +98,7 @@ function buildMessagingSection(params: {
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
             : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to add "inlineButtons" to ${params.runtimeChannel}.capabilities or ${params.runtimeChannel}.accounts.<id>.capabilities.`
+              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
         ]
           .filter(Boolean)
