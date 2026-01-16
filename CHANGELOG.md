@@ -34,6 +34,7 @@
 - Daemon: share profile/state-dir resolution across service helpers and honor `CLAWDBOT_STATE_DIR` for Windows task scripts.
 - Docs: clarify multi-gateway rescue bot guidance. (#969) — thanks @bjesuiter.
 - Docs: add `/help` hub, Node/npm PATH sanity guide, and installer PATH warnings (for “installed but command not found” setups). (#861)
+- Docs: clarify web_search country defaults to Brave’s region choice. (#1046) — thanks @YuriNachos.
 - Agents: add Current Date & Time system prompt section with configurable time format (auto/12/24).
 - Agents: default to no narration for routine tool calls. (#1008) — thanks @cpojer.
 - Tools: normalize Slack/Discord message timestamps with `timestampMs`/`timestampUtc` while keeping raw provider fields.

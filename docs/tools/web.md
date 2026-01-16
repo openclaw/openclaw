@@ -73,7 +73,7 @@ Search the web with Brave’s API.
 
 - `query` (required)
 - `count` (1–10; default from config)
-- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). Default: "US"
+- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
 - `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
 - `ui_lang` (optional): ISO language code for UI elements
 
