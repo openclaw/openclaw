@@ -290,9 +290,7 @@ export function createSessionStatusTool(opts?: {
             providers: [usageProvider],
             agentDir,
           });
-          const snapshot = usageSummary.providers.find(
-            (entry) => entry.provider === usageProvider,
-          );
+          const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
           if (snapshot) {
             const formatted = formatUsageWindowSummary(snapshot, {
               now: Date.now(),
