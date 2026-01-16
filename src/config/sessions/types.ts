@@ -33,6 +33,8 @@ export type SessionEntry = {
   providerOverride?: string;
   modelOverride?: string;
   authProfileOverride?: string;
+  authProfileOverrideSource?: "auto" | "user";
+  authProfileOverrideCompactionCount?: number;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";

@@ -156,8 +156,12 @@ export async function persistInlineDirectives(params: {
           }
           if (profileOverride) {
             sessionEntry.authProfileOverride = profileOverride;
+            sessionEntry.authProfileOverrideSource = "user";
+            delete sessionEntry.authProfileOverrideCompactionCount;
           } else if (directives.hasModelDirective) {
             delete sessionEntry.authProfileOverride;
+            delete sessionEntry.authProfileOverrideSource;
+            delete sessionEntry.authProfileOverrideCompactionCount;
           }
           provider = resolved.ref.provider;
           model = resolved.ref.model;

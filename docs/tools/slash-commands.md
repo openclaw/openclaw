@@ -54,7 +54,7 @@ They run immediately, are stripped before the model sees the message, and the re
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes a short provider usage/quota line when available)
+- `/status` (show current status; includes provider usage/quota when available, plus OAuth/token status block when OAuth profiles exist)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)

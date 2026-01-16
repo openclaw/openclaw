@@ -22,6 +22,10 @@ clawdbot models set <model-or-alias>
 clawdbot models scan
 ```
 
+`clawdbot models status` shows the resolved default/fallbacks plus an auth overview.
+When provider usage snapshots are available, the OAuth/token status section includes
+provider usage headers.
+
 ## Aliases + fallbacks
 
 ```bash
@@ -36,4 +40,3 @@ clawdbot models auth add
 clawdbot models auth setup-token
 clawdbot models auth paste-token
 ```
-

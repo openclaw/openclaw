@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { buildAuthHealthSummary, formatRemainingShort } from "../../agents/auth-health.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
@@ -28,9 +29,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import {
-  formatUsageSummaryLine,
+  formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
+  type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import {
   buildAgentMainSessionKey,
@@ -257,10 +259,14 @@ export function createSessionStatusTool(opts?: {
           delete nextEntry.providerOverride;
           delete nextEntry.modelOverride;
           delete nextEntry.authProfileOverride;
+          delete nextEntry.authProfileOverrideSource;
+          delete nextEntry.authProfileOverrideCompactionCount;
         } else {
           nextEntry.providerOverride = selection.provider;
           nextEntry.modelOverride = selection.model;
           delete nextEntry.authProfileOverride;
+          delete nextEntry.authProfileOverrideSource;
+          delete nextEntry.authProfileOverrideCompactionCount;
         }
         store[resolved.key] = nextEntry;
         await updateSessionStore(storePath, (nextStore) => {
@@ -277,23 +283,47 @@ export function createSessionStatusTool(opts?: {
         defaultModel: DEFAULT_MODEL,
       });
       const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
-      const usageProvider = resolveUsageProviderId(providerForCard);
-      let usageLine: string | undefined;
-      if (usageProvider) {
+      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+      const authHealth = buildAuthHealthSummary({
+        store: authStore,
+        cfg,
+      });
+      const oauthProfiles = authHealth.profiles.filter(
+        (profile) => profile.type === "oauth" || profile.type === "token",
+      );
+
+      const usageProviders = Array.from(
+        new Set(
+          oauthProfiles
+            .map((profile) => resolveUsageProviderId(profile.provider))
+            .filter((provider): provider is UsageProviderId => Boolean(provider)),
+        ),
+      );
+      const usageByProvider = new Map<string, string>();
+      if (usageProviders.length > 0) {
         try {
           const usageSummary = await loadProviderUsageSummary({
             timeoutMs: 3500,
-            providers: [usageProvider],
+            providers: usageProviders,
             agentDir,
           });
-          const formatted = formatUsageSummaryLine(usageSummary, {
-            now: Date.now(),
-          });
-          if (formatted) usageLine = formatted;
+          for (const snapshot of usageSummary.providers) {
+            const formatted = formatUsageWindowSummary(snapshot, {
+              now: Date.now(),
+              maxWindows: 2,
+            });
+            if (formatted) usageByProvider.set(snapshot.provider, formatted);
+          }
         } catch {
           // ignore
         }
       }
+
+      const usageProvider = resolveUsageProviderId(providerForCard);
+      const usageLine =
+        oauthProfiles.length === 0 && usageProvider && usageByProvider.has(usageProvider)
+          ? `📊 Usage: ${usageByProvider.get(usageProvider)}`
+          : undefined;
 
       const isGroup =
         resolved.entry.chatType === "group" ||
@@ -340,13 +370,53 @@ export function createSessionStatusTool(opts?: {
         includeTranscriptUsage: false,
       });
 
+      const authStatusLines = (() => {
+        if (oauthProfiles.length === 0) return [];
+        const formatStatus = (status: string) => {
+          if (status === "ok") return "ok";
+          if (status === "static") return "static";
+          if (status === "expiring") return "expiring";
+          if (status === "missing") return "unknown";
+          return "expired";
+        };
+        const profilesByProvider = new Map<string, typeof oauthProfiles>();
+        for (const profile of oauthProfiles) {
+          const current = profilesByProvider.get(profile.provider);
+          if (current) current.push(profile);
+          else profilesByProvider.set(profile.provider, [profile]);
+        }
+        const lines: string[] = ["OAuth/token status"];
+        for (const [provider, profiles] of profilesByProvider) {
+          const usageKey = resolveUsageProviderId(provider);
+          const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+          const usageSuffix = usage ? ` — usage: ${usage}` : "";
+          lines.push(`- ${provider}${usageSuffix}`);
+          for (const profile of profiles) {
+            const labelText = profile.label || profile.profileId;
+            const status = formatStatus(profile.status);
+            const expiry =
+              profile.status === "static"
+                ? ""
+                : profile.expiresAt
+                  ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+                  : " expires unknown";
+            const source = profile.source !== "store" ? ` (${profile.source})` : "";
+            lines.push(`  - ${labelText} ${status}${expiry}${source}`);
+          }
+        }
+        return lines;
+      })();
+
+      const fullStatusText =
+        authStatusLines.length > 0 ? `${statusText}\n\n${authStatusLines.join("\n")}` : statusText;
+
       return {
-        content: [{ type: "text", text: statusText }],
+        content: [{ type: "text", text: fullStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
-          statusText,
+          statusText: fullStatusText,
         },
       };
     },

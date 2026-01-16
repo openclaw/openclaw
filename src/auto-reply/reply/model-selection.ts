@@ -217,6 +217,8 @@ export async function createModelSelectionState(params: {
     const profile = store.profiles[sessionEntry.authProfileOverride];
     if (!profile || profile.provider !== provider) {
       delete sessionEntry.authProfileOverride;
+      delete sessionEntry.authProfileOverrideSource;
+      delete sessionEntry.authProfileOverrideCompactionCount;
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {

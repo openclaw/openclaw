@@ -286,6 +286,8 @@ export async function agentCommand(
         const profile = store.profiles[authProfileId];
         if (!profile || profile.provider !== provider) {
           delete entry.authProfileOverride;
+          delete entry.authProfileOverrideSource;
+          delete entry.authProfileOverrideCompactionCount;
           entry.updatedAt = Date.now();
           if (sessionStore && sessionKey) {
             sessionStore[sessionKey] = entry;

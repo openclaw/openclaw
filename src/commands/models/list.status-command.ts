@@ -14,6 +14,12 @@ import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { parseModelRef, resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import {
+  formatUsageWindowSummary,
+  loadProviderUsageSummary,
+  resolveUsageProviderId,
+  type UsageProviderId,
+} from "../../infra/provider-usage.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
@@ -402,6 +408,32 @@ export async function modelsStatusCommand(
     return;
   }
 
+  const usageByProvider = new Map<string, string>();
+  const usageProviders = Array.from(
+    new Set(
+      oauthProfiles
+        .map((profile) => resolveUsageProviderId(profile.provider))
+        .filter((provider): provider is UsageProviderId => Boolean(provider)),
+    ),
+  );
+  if (usageProviders.length > 0) {
+    try {
+      const usageSummary = await loadProviderUsageSummary({
+        providers: usageProviders,
+        agentDir,
+        timeoutMs: 3500,
+      });
+      for (const snapshot of usageSummary.providers) {
+        const formatted = formatUsageWindowSummary(snapshot, { now: Date.now(), maxWindows: 2 });
+        if (formatted) {
+          usageByProvider.set(snapshot.provider, formatted);
+        }
+      }
+    } catch {
+      // ignore usage failures
+    }
+  }
+
   const formatStatus = (status: string) => {
     if (status === "ok") return colorize(rich, theme.success, "ok");
     if (status === "static") return colorize(rich, theme.muted, "static");
@@ -410,19 +442,32 @@ export async function modelsStatusCommand(
     return colorize(rich, theme.error, "expired");
   };
 
+  const profilesByProvider = new Map<string, typeof oauthProfiles>();
   for (const profile of oauthProfiles) {
-    const labelText = profile.label || profile.profileId;
-    const label = colorize(rich, theme.accent, labelText);
-    const status = formatStatus(profile.status);
-    const expiry =
-      profile.status === "static"
-        ? ""
-        : profile.expiresAt
-          ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
-          : " expires unknown";
-    const source =
-      profile.source !== "store" ? colorize(rich, theme.muted, ` (${profile.source})`) : "";
-    runtime.log(`- ${label} ${status}${expiry}${source}`);
+    const current = profilesByProvider.get(profile.provider);
+    if (current) current.push(profile);
+    else profilesByProvider.set(profile.provider, [profile]);
+  }
+
+  for (const [provider, profiles] of profilesByProvider) {
+    const usageKey = resolveUsageProviderId(provider);
+    const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
+    const usageSuffix = usage ? colorize(rich, theme.muted, ` usage: ${usage}`) : "";
+    runtime.log(`- ${colorize(rich, theme.heading, provider)}${usageSuffix}`);
+    for (const profile of profiles) {
+      const labelText = profile.label || profile.profileId;
+      const label = colorize(rich, theme.accent, labelText);
+      const status = formatStatus(profile.status);
+      const expiry =
+        profile.status === "static"
+          ? ""
+          : profile.expiresAt
+            ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+            : " expires unknown";
+      const source =
+        profile.source !== "store" ? colorize(rich, theme.muted, ` (${profile.source})`) : "";
+      runtime.log(`  - ${label} ${status}${expiry}${source}`);
+    }
   }
 
   if (opts.check) runtime.exit(checkStatus);

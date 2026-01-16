@@ -264,8 +264,12 @@ export async function handleDirectiveOnly(params: {
       }
       if (profileOverride) {
         sessionEntry.authProfileOverride = profileOverride;
+        sessionEntry.authProfileOverrideSource = "user";
+        delete sessionEntry.authProfileOverrideCompactionCount;
       } else if (directives.hasModelDirective) {
         delete sessionEntry.authProfileOverride;
+        delete sessionEntry.authProfileOverrideSource;
+        delete sessionEntry.authProfileOverrideCompactionCount;
       }
     }
     if (directives.hasQueueDirective && directives.queueReset) {

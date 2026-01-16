@@ -1,5 +1,5 @@
 import { clampPercent } from "./provider-usage.shared.js";
-import type { UsageSummary, UsageWindow } from "./provider-usage.types.js";
+import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) return null;
@@ -33,6 +33,28 @@ function formatWindowShort(window: UsageWindow, now?: number): string {
   const reset = formatResetRemaining(window.resetAt, now);
   const resetSuffix = reset ? ` ⏱${reset}` : "";
   return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
+}
+
+export function formatUsageWindowSummary(
+  snapshot: ProviderUsageSnapshot,
+  opts?: { now?: number; maxWindows?: number; includeResets?: boolean },
+): string | null {
+  if (snapshot.error) return `error: ${snapshot.error}`;
+  if (snapshot.windows.length === 0) return null;
+  const now = opts?.now ?? Date.now();
+  const maxWindows =
+    typeof opts?.maxWindows === "number" && opts.maxWindows > 0
+      ? Math.min(opts.maxWindows, snapshot.windows.length)
+      : snapshot.windows.length;
+  const includeResets = opts?.includeResets ?? false;
+  const windows = snapshot.windows.slice(0, maxWindows);
+  const parts = windows.map((window) => {
+    const remaining = clampPercent(100 - window.usedPercent);
+    const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
+    const resetSuffix = reset ? ` ⏱${reset}` : "";
+    return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
+  });
+  return parts.join(" · ");
 }
 
 export function formatUsageSummaryLine(

@@ -48,6 +48,17 @@ If no explicit order is configured, Clawdbot uses a round‑robin order:
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
 - **Cooldown/disabled profiles** are moved to the end, ordered by soonest expiry.
 
+### Session stickiness (cache-friendly)
+
+Clawdbot **pins the chosen auth profile per session** to keep provider caches warm.
+It does **not** rotate on every request. The pinned profile is reused until:
+- the session is reset (`/new` / `/reset`)
+- a compaction completes (compaction count increments)
+- the profile is in cooldown/disabled
+
+Manual selection via `/model …@<profileId>` sets a **user override** for that session
+and is not auto‑rotated until a new session starts.
+
 ### Why OAuth can “look lost”
 
 If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
