@@ -307,8 +307,13 @@ async function runWebSearch(params: {
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
+  country?: string;
+  search_lang?: string;
+  ui_lang?: string;
 }): Promise<Record<string, unknown>> {
-  const cacheKey = normalizeCacheKey(`${params.provider}:${params.query}:${params.count}`);
+  const cacheKey = normalizeCacheKey(
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`
+  );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
 
@@ -320,6 +325,15 @@ async function runWebSearch(params: {
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
   url.searchParams.set("q", params.query);
   url.searchParams.set("count", String(params.count));
+  if (params.country) {
+    url.searchParams.set("country", params.country);
+  }
+  if (params.search_lang) {
+    url.searchParams.set("search_lang", params.search_lang);
+  }
+  if (params.ui_lang) {
+    url.searchParams.set("ui_lang", params.ui_lang);
+  }
 
   const res = await fetch(url.toString(), {
     method: "GET",
@@ -451,6 +465,9 @@ export function createWebSearchTool(options?: {
       const query = readStringParam(params, "query", { required: true });
       const count =
         readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+      const country = readStringParam(params, "country");
+      const search_lang = readStringParam(params, "search_lang");
+      const ui_lang = readStringParam(params, "ui_lang");
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -458,6 +475,9 @@ export function createWebSearchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider: resolveSearchProvider(search),
+        country,
+        search_lang,
+        ui_lang,
       });
       return jsonResult(result);
     },
