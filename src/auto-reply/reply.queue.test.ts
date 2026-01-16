@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { pollUntil } from "../../test/helpers/poll.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import {
   isEmbeddedPiRunActive,
@@ -109,7 +110,6 @@ describe("queue followups", () => {
   });
 
   it("summarizes dropped followups when cap is exceeded", async () => {
-    vi.useFakeTimers();
     await withTempHome(async (home) => {
       const prompts: string[] = [];
       vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
@@ -133,8 +133,10 @@ describe("queue followups", () => {
       vi.mocked(isEmbeddedPiRunActive).mockReturnValue(false);
       await getReplyFromConfig({ Body: "three", From: "+1002", To: "+2000" }, {}, cfg);
 
-      await vi.runAllTimersAsync();
-      await Promise.resolve();
+      await pollUntil(
+        async () => (prompts.some((p) => p.includes("[Queue overflow]")) ? true : null),
+        { timeoutMs: 2000 },
+      );
 
       expect(prompts.some((p) => p.includes("[Queue overflow]"))).toBe(true);
     });

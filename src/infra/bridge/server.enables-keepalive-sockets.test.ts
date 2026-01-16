@@ -323,12 +323,24 @@ describe("node bridge server", { timeout: suiteTimeoutMs }, () => {
       resolveDisconnected = resolve;
     });
 
+    let pendingRequest: {
+      requestId: string;
+      nodeId: string;
+      ts: number;
+    } | null = null;
     const server = await startNodeBridgeServer({
       host: "127.0.0.1",
       port: 0,
       pairingBaseDir: baseDir,
       onAuthenticated: async (node) => {
         lastAuthed = node;
+      },
+      onPairRequested: async (request) => {
+        pendingRequest = {
+          requestId: request.requestId,
+          nodeId: request.nodeId,
+          ts: request.ts,
+        };
       },
       onDisconnected: async (node) => {
         disconnected = node;
@@ -351,13 +363,7 @@ describe("node bridge server", { timeout: suiteTimeoutMs }, () => {
     });
 
     // Approve the pending request from the gateway side.
-    const pending = await pollUntil(
-      async () => {
-        const list = await listNodePairing(baseDir);
-        return list.pending.find((p) => p.nodeId === "n4");
-      },
-      { timeoutMs: pairingTimeoutMs },
-    );
+    const pending = await pollUntil(async () => pendingRequest, { timeoutMs: pairingTimeoutMs });
     expect(pending).toBeTruthy();
     if (!pending) throw new Error("expected a pending request");
     const approved = await approveNodePairing(pending.requestId, baseDir);
