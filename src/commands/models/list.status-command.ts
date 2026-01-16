@@ -424,7 +424,11 @@ export async function modelsStatusCommand(
         timeoutMs: 3500,
       });
       for (const snapshot of usageSummary.providers) {
-        const formatted = formatUsageWindowSummary(snapshot, { now: Date.now(), maxWindows: 2 });
+        const formatted = formatUsageWindowSummary(snapshot, {
+          now: Date.now(),
+          maxWindows: 2,
+          includeResets: true,
+        });
         if (formatted) {
           usageByProvider.set(snapshot.provider, formatted);
         }
