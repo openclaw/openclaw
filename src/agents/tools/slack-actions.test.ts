@@ -361,4 +361,48 @@ describe("handleSlackAction", () => {
     expect(payload.pins[0].message?.timestampMs).toBe(expectedMs);
     expect(payload.pins[0].message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
+
+  it("uses user token for reads when available", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
+    } as ClawdbotConfig;
+    readSlackMessages.mockClear();
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
+    const [, opts] = readSlackMessages.mock.calls[0] ?? [];
+    expect(opts?.token).toBe("xoxp-1");
+  });
+
+  it("falls back to bot token for reads when user token missing", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-1" } },
+    } as ClawdbotConfig;
+    readSlackMessages.mockClear();
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
+    const [, opts] = readSlackMessages.mock.calls[0] ?? [];
+    expect(opts?.token).toBeUndefined();
+  });
+
+  it("uses bot token for writes when userTokenReadOnly is true", async () => {
+    const cfg = {
+      channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
+    } as ClawdbotConfig;
+    sendSlackMessage.mockClear();
+    await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
+    const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
+    expect(opts?.token).toBeUndefined();
+  });
+
+  it("allows user token writes when bot token is missing", async () => {
+    const cfg = {
+      channels: {
+        slack: { userToken: "xoxp-1", userTokenReadOnly: false },
+      },
+    } as ClawdbotConfig;
+    sendSlackMessage.mockClear();
+    await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
+    const [, , opts] = sendSlackMessage.mock.calls[0] ?? [];
+    expect(opts?.token).toBe("xoxp-1");
+  });
 });

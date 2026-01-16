@@ -204,6 +204,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.token": "Discord Bot Token",
   "channels.slack.botToken": "Slack Bot Token",
   "channels.slack.appToken": "Slack App Token",
+  "channels.slack.userToken": "Slack User Token",
+  "channels.slack.userTokenReadOnly": "Slack User Token Read Only",
   "channels.slack.thread.historyScope": "Slack Thread History Scope",
   "channels.slack.thread.inheritParent": "Slack Thread Parent Inheritance",
   "channels.signal.account": "Signal Account",

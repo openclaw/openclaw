@@ -78,10 +78,32 @@ export async function handleSlackAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const accountOpts = accountId ? { accountId } : undefined;
   const account = resolveSlackAccount({ cfg, accountId });
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
+  const userToken = account.config.userToken?.trim() || undefined;
+  const botToken = account.botToken?.trim();
+  const allowUserWrites = account.config.userTokenReadOnly === false;
+
+  // Choose the most appropriate token for Slack read/write operations.
+  const getTokenForOperation = (operation: "read" | "write") => {
+    if (operation === "read") return userToken ?? botToken;
+    if (!allowUserWrites) return botToken;
+    return botToken ?? userToken;
+  };
+
+  const buildActionOpts = (operation: "read" | "write") => {
+    const token = getTokenForOperation(operation);
+    const tokenOverride = token && token !== botToken ? token : undefined;
+    if (!accountId && !tokenOverride) return undefined;
+    return {
+      ...(accountId ? { accountId } : {}),
+      ...(tokenOverride ? { token: tokenOverride } : {}),
+    };
+  };
+
+  const readOpts = buildActionOpts("read");
+  const writeOpts = buildActionOpts("write");
 
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {
@@ -94,28 +116,28 @@ export async function handleSlackAction(
         removeErrorMessage: "Emoji is required to remove a Slack reaction.",
       });
       if (remove) {
-        if (accountOpts) {
-          await removeSlackReaction(channelId, messageId, emoji, accountOpts);
+        if (writeOpts) {
+          await removeSlackReaction(channelId, messageId, emoji, writeOpts);
         } else {
           await removeSlackReaction(channelId, messageId, emoji);
         }
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
-        const removed = accountOpts
-          ? await removeOwnSlackReactions(channelId, messageId, accountOpts)
+        const removed = writeOpts
+          ? await removeOwnSlackReactions(channelId, messageId, writeOpts)
           : await removeOwnSlackReactions(channelId, messageId);
         return jsonResult({ ok: true, removed });
       }
-      if (accountOpts) {
-        await reactSlackMessage(channelId, messageId, emoji, accountOpts);
+      if (writeOpts) {
+        await reactSlackMessage(channelId, messageId, emoji, writeOpts);
       } else {
         await reactSlackMessage(channelId, messageId, emoji);
       }
       return jsonResult({ ok: true, added: emoji });
     }
-    const reactions = accountOpts
-      ? await listSlackReactions(channelId, messageId, accountOpts)
+    const reactions = readOpts
+      ? await listSlackReactions(channelId, messageId, readOpts)
       : await listSlackReactions(channelId, messageId);
     return jsonResult({ ok: true, reactions });
   }
@@ -135,7 +157,7 @@ export async function handleSlackAction(
           context,
         );
         const result = await sendSlackMessage(to, content, {
-          accountId: accountId ?? undefined,
+          ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
         });
@@ -162,8 +184,8 @@ export async function handleSlackAction(
         const content = readStringParam(params, "content", {
           required: true,
         });
-        if (accountOpts) {
-          await editSlackMessage(channelId, messageId, content, accountOpts);
+        if (writeOpts) {
+          await editSlackMessage(channelId, messageId, content, writeOpts);
         } else {
           await editSlackMessage(channelId, messageId, content);
         }
@@ -176,8 +198,8 @@ export async function handleSlackAction(
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
-        if (accountOpts) {
-          await deleteSlackMessage(channelId, messageId, accountOpts);
+        if (writeOpts) {
+          await deleteSlackMessage(channelId, messageId, writeOpts);
         } else {
           await deleteSlackMessage(channelId, messageId);
         }
@@ -193,7 +215,7 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const result = await readSlackMessages(channelId, {
-          accountId: accountId ?? undefined,
+          ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
@@ -220,8 +242,8 @@ export async function handleSlackAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      if (accountOpts) {
-        await pinSlackMessage(channelId, messageId, accountOpts);
+      if (writeOpts) {
+        await pinSlackMessage(channelId, messageId, writeOpts);
       } else {
         await pinSlackMessage(channelId, messageId);
       }
@@ -231,15 +253,15 @@ export async function handleSlackAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      if (accountOpts) {
-        await unpinSlackMessage(channelId, messageId, accountOpts);
+      if (writeOpts) {
+        await unpinSlackMessage(channelId, messageId, writeOpts);
       } else {
         await unpinSlackMessage(channelId, messageId);
       }
       return jsonResult({ ok: true });
     }
-    const pins = accountOpts
-      ? await listSlackPins(channelId, accountOpts)
+    const pins = writeOpts
+      ? await listSlackPins(channelId, readOpts)
       : await listSlackPins(channelId);
     const normalizedPins = pins.map((pin) => {
       const message = pin.message
@@ -258,8 +280,8 @@ export async function handleSlackAction(
       throw new Error("Slack member info is disabled.");
     }
     const userId = readStringParam(params, "userId", { required: true });
-    const info = accountOpts
-      ? await getSlackMemberInfo(userId, accountOpts)
+    const info = writeOpts
+      ? await getSlackMemberInfo(userId, readOpts)
       : await getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
   }
@@ -268,7 +290,7 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const emojis = accountOpts ? await listSlackEmojis(accountOpts) : await listSlackEmojis();
+    const emojis = readOpts ? await listSlackEmojis(readOpts) : await listSlackEmojis();
     return jsonResult({ ok: true, emojis });
   }
 

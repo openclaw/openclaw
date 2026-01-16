@@ -220,6 +220,8 @@ export const SlackAccountSchema = z.object({
   configWrites: z.boolean().optional(),
   botToken: z.string().optional(),
   appToken: z.string().optional(),
+  userToken: z.string().optional(),
+  userTokenReadOnly: z.boolean().optional().default(true),
   allowBots: z.boolean().optional(),
   requireMention: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),

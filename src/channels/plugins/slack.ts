@@ -1,5 +1,9 @@
+import { createActionGate, readNumberParam, readStringParam } from "../../agents/tools/common.js";
+import { handleSlackAction } from "../../agents/tools/slack-actions.js";
+import { loadConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import {
+  listEnabledSlackAccounts,
   listSlackAccountIds,
   type ResolvedSlackAccount,
   resolveDefaultSlackAccountId,
@@ -21,10 +25,22 @@ import {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
-import { createSlackActions } from "./slack.actions.js";
-import type { ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
 
 const meta = getChatChannelMeta("slack");
+
+// Select the appropriate Slack token for read/write operations.
+function getTokenForOperation(
+  account: ResolvedSlackAccount,
+  operation: "read" | "write",
+): string | undefined {
+  const userToken = account.config.userToken?.trim() || undefined;
+  const botToken = account.botToken?.trim();
+  const allowUserWrites = account.config.userTokenReadOnly === false;
+  if (operation === "read") return userToken ?? botToken;
+  if (!allowUserWrites) return botToken;
+  return botToken ?? userToken;
+}
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
@@ -36,7 +52,21 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     idLabel: "slackUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(slack|user):/i, ""),
     notifyApproval: async ({ id }) => {
-      await sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE);
+      const cfg = loadConfig();
+      const account = resolveSlackAccount({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+      });
+      const token = getTokenForOperation(account, "write");
+      const botToken = account.botToken?.trim();
+      const tokenOverride = token && token !== botToken ? token : undefined;
+      if (tokenOverride) {
+        await sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE, {
+          token: tokenOverride,
+        });
+      } else {
+        await sendMessageSlack(`user:${id}`, PAIRING_APPROVED_MESSAGE);
+      }
     },
   },
   capabilities: {
@@ -139,7 +169,197 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
   },
-  actions: createSlackActions(meta.id),
+  actions: {
+    listActions: ({ cfg }) => {
+      const accounts = listEnabledSlackAccounts(cfg).filter(
+        (account) => account.botTokenSource !== "none",
+      );
+      if (accounts.length === 0) return [];
+      const isActionEnabled = (key: string, defaultValue = true) => {
+        for (const account of accounts) {
+          const gate = createActionGate(
+            (account.actions ?? cfg.channels?.slack?.actions) as Record<
+              string,
+              boolean | undefined
+            >,
+          );
+          if (gate(key, defaultValue)) return true;
+        }
+        return false;
+      };
+
+      const actions = new Set<ChannelMessageActionName>(["send"]);
+      if (isActionEnabled("reactions")) {
+        actions.add("react");
+        actions.add("reactions");
+      }
+      if (isActionEnabled("messages")) {
+        actions.add("read");
+        actions.add("edit");
+        actions.add("delete");
+      }
+      if (isActionEnabled("pins")) {
+        actions.add("pin");
+        actions.add("unpin");
+        actions.add("list-pins");
+      }
+      if (isActionEnabled("memberInfo")) actions.add("member-info");
+      if (isActionEnabled("emojiList")) actions.add("emoji-list");
+      return Array.from(actions);
+    },
+    extractToolSend: ({ args }) => {
+      const action = typeof args.action === "string" ? args.action.trim() : "";
+      if (action !== "sendMessage") return null;
+      const to = typeof args.to === "string" ? args.to : undefined;
+      if (!to) return null;
+      const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+      return { to, accountId };
+    },
+    handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+      const resolveChannelId = () =>
+        readStringParam(params, "channelId") ?? readStringParam(params, "to", { required: true });
+
+      if (action === "send") {
+        const to = readStringParam(params, "to", { required: true });
+        const content = readStringParam(params, "message", {
+          required: true,
+          allowEmpty: true,
+        });
+        const mediaUrl = readStringParam(params, "media", { trim: false });
+        const threadId = readStringParam(params, "threadId");
+        const replyTo = readStringParam(params, "replyTo");
+        return await handleSlackAction(
+          {
+            action: "sendMessage",
+            to,
+            content,
+            mediaUrl: mediaUrl ?? undefined,
+            accountId: accountId ?? undefined,
+            threadTs: threadId ?? replyTo ?? undefined,
+          },
+          cfg,
+          toolContext,
+        );
+      }
+
+      if (action === "react") {
+        const messageId = readStringParam(params, "messageId", {
+          required: true,
+        });
+        const emoji = readStringParam(params, "emoji", { allowEmpty: true });
+        const remove = typeof params.remove === "boolean" ? params.remove : undefined;
+        return await handleSlackAction(
+          {
+            action: "react",
+            channelId: resolveChannelId(),
+            messageId,
+            emoji,
+            remove,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "reactions") {
+        const messageId = readStringParam(params, "messageId", {
+          required: true,
+        });
+        const limit = readNumberParam(params, "limit", { integer: true });
+        return await handleSlackAction(
+          {
+            action: "reactions",
+            channelId: resolveChannelId(),
+            messageId,
+            limit,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "read") {
+        const limit = readNumberParam(params, "limit", { integer: true });
+        return await handleSlackAction(
+          {
+            action: "readMessages",
+            channelId: resolveChannelId(),
+            limit,
+            before: readStringParam(params, "before"),
+            after: readStringParam(params, "after"),
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "edit") {
+        const messageId = readStringParam(params, "messageId", {
+          required: true,
+        });
+        const content = readStringParam(params, "message", { required: true });
+        return await handleSlackAction(
+          {
+            action: "editMessage",
+            channelId: resolveChannelId(),
+            messageId,
+            content,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "delete") {
+        const messageId = readStringParam(params, "messageId", {
+          required: true,
+        });
+        return await handleSlackAction(
+          {
+            action: "deleteMessage",
+            channelId: resolveChannelId(),
+            messageId,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "pin" || action === "unpin" || action === "list-pins") {
+        const messageId =
+          action === "list-pins"
+            ? undefined
+            : readStringParam(params, "messageId", { required: true });
+        return await handleSlackAction(
+          {
+            action:
+              action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
+            channelId: resolveChannelId(),
+            messageId,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+        );
+      }
+
+      if (action === "member-info") {
+        const userId = readStringParam(params, "userId", { required: true });
+        return await handleSlackAction(
+          { action: "memberInfo", userId, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      if (action === "emoji-list") {
+        return await handleSlackAction(
+          { action: "emojiList", accountId: accountId ?? undefined },
+          cfg,
+        );
+      }
+
+      throw new Error(`Action ${action} is not supported for provider ${meta.id}.`);
+    },
+  },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
@@ -225,20 +445,30 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ to, text, accountId, deps, replyToId }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, cfg }) => {
       const send = deps?.sendSlack ?? sendMessageSlack;
+      const account = resolveSlackAccount({ cfg, accountId });
+      const token = getTokenForOperation(account, "write");
+      const botToken = account.botToken?.trim();
+      const tokenOverride = token && token !== botToken ? token : undefined;
       const result = await send(to, text, {
         threadTs: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        ...(tokenOverride ? { token: tokenOverride } : {}),
       });
       return { channel: "slack", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, cfg }) => {
       const send = deps?.sendSlack ?? sendMessageSlack;
+      const account = resolveSlackAccount({ cfg, accountId });
+      const token = getTokenForOperation(account, "write");
+      const botToken = account.botToken?.trim();
+      const tokenOverride = token && token !== botToken ? token : undefined;
       const result = await send(to, text, {
         mediaUrl,
         threadTs: replyToId ?? undefined,
         accountId: accountId ?? undefined,
+        ...(tokenOverride ? { token: tokenOverride } : {}),
       });
       return { channel: "slack", ...result };
     },
