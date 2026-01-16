@@ -25,7 +25,9 @@ vi.mock("./route-reply.js", () => ({
 vi.mock("./abort.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
-    if (typeof stoppedSubagents !== "number") return "⚙️ Agent was aborted.";
+    if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
+      return "⚙️ Agent was aborted.";
+    }
     const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
     return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
   },

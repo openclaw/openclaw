@@ -222,7 +222,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted. Stopped 0 sub-agents.");
+      expect(text).toBe("⚙️ Agent was aborted.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -238,7 +238,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted. Stopped 0 sub-agents.");
+      expect(text).toBe("⚙️ Agent was aborted.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

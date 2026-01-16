@@ -35,7 +35,7 @@ export function setAbortMemory(key: string, value: boolean): void {
 }
 
 export function formatAbortReplyText(stoppedSubagents?: number): string {
-  if (typeof stoppedSubagents !== "number") {
+  if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
     return "⚙️ Agent was aborted.";
   }
   const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
