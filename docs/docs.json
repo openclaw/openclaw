@@ -734,6 +734,14 @@
       "destination": "/start/wizard"
     },
     {
+      "source": "/install/node",
+      "destination": "/install#nodejs--npm-path-sanity"
+    },
+    {
+      "source": "/install/node/",
+      "destination": "/install#nodejs--npm-path-sanity"
+    },
+    {
       "source": "/start/faq",
       "destination": "/help"
     },
@@ -779,7 +787,6 @@
         "group": "Install & Updates",
         "pages": [
           "install/index",
-          "install/node",
           "install/installer",
           "install/updating",
           "install/uninstall",

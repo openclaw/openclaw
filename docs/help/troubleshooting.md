@@ -31,7 +31,7 @@ clawdbot status --deep
 
 Almost always a Node/npm PATH issue. Start here:
 
-- [Node.js + npm (PATH sanity)](/install/node)
+- [Install (Node/npm PATH sanity)](/install#nodejs--npm-path-sanity)
 
 ### Gateway “unauthorized”, can’t connect, or keeps reconnecting
 

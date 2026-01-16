@@ -19,7 +19,7 @@ To see the current flags/behavior, run:
 curl -fsSL https://clawd.bot/install.sh | bash -s -- --help
 ```
 
-If the installer completes but `clawdbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Node.js + npm (PATH sanity)](/install/node).
+If the installer completes but `clawdbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
 
 ## install.sh (recommended)
 
