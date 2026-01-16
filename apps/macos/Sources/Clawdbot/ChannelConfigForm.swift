@@ -9,58 +9,63 @@ struct ConfigSchemaForm: View {
         self.renderNode(schema, path: path)
     }
 
-    @ViewBuilder
-    private func renderNode(_ schema: ConfigSchemaNode, path: ConfigPath) -> some View {
+    private func renderNode(_ schema: ConfigSchemaNode, path: ConfigPath) -> AnyView {
         let value = store.configValue(at: path)
         let label = hintForPath(path, hints: store.configUiHints)?.label ?? schema.title
         let help = hintForPath(path, hints: store.configUiHints)?.help ?? schema.description
 
         switch schema.schemaType {
         case "object":
-            VStack(alignment: .leading, spacing: 12) {
-                if let label {
-                    Text(label)
-                        .font(.callout.weight(.semibold))
+            return AnyView(
+                VStack(alignment: .leading, spacing: 12) {
+                    if let label {
+                        Text(label)
+                            .font(.callout.weight(.semibold))
+                    }
+                    if let help {
+                        Text(help)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    let properties = schema.properties
+                    let sortedKeys = properties.keys.sorted { lhs, rhs in
+                        let orderA = hintForPath(path + [.key(lhs)], hints: store.configUiHints)?.order ?? 0
+                        let orderB = hintForPath(path + [.key(rhs)], hints: store.configUiHints)?.order ?? 0
+                        if orderA != orderB { return orderA < orderB }
+                        return lhs < rhs
+                    }
+                    ForEach(sortedKeys, id: \ .self) { key in
+                        if let child = properties[key] {
+                            self.renderNode(child, path: path + [.key(key)])
+                        }
+                    }
+                    if schema.allowsAdditionalProperties {
+                        self.renderAdditionalProperties(schema, path: path, value: value)
+                    }
                 }
-                if let help {
-                    Text(help)
+            )
+        case "array":
+            return AnyView(self.renderArray(schema, path: path, value: value, label: label, help: help))
+        case "boolean":
+            return AnyView(
+                Toggle(isOn: self.boolBinding(path)) {
+                    if let label { Text(label) } else { Text("Enabled") }
+                }
+                .help(help ?? "")
+            )
+        case "number", "integer":
+            return AnyView(self.renderNumberField(schema, path: path, label: label, help: help))
+        case "string":
+            return AnyView(self.renderStringField(schema, path: path, label: label, help: help))
+        default:
+            return AnyView(
+                VStack(alignment: .leading, spacing: 6) {
+                    if let label { Text(label).font(.callout.weight(.semibold)) }
+                    Text("Unsupported field type.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                let properties = schema.properties
-                let sortedKeys = properties.keys.sorted { lhs, rhs in
-                    let orderA = hintForPath(path + [.key(lhs)], hints: store.configUiHints)?.order ?? 0
-                    let orderB = hintForPath(path + [.key(rhs)], hints: store.configUiHints)?.order ?? 0
-                    if orderA != orderB { return orderA < orderB }
-                    return lhs < rhs
-                }
-                ForEach(sortedKeys, id: \ .self) { key in
-                    if let child = properties[key] {
-                        self.renderNode(child, path: path + [.key(key)])
-                    }
-                }
-                if schema.allowsAdditionalProperties {
-                    self.renderAdditionalProperties(schema, path: path, value: value)
-                }
-            }
-        case "array":
-            self.renderArray(schema, path: path, value: value, label: label, help: help)
-        case "boolean":
-            Toggle(isOn: self.boolBinding(path)) {
-                if let label { Text(label) } else { Text("Enabled") }
-            }
-            .help(help ?? "")
-        case "number", "integer":
-            self.renderNumberField(schema, path: path, label: label, help: help)
-        case "string":
-            self.renderStringField(schema, path: path, label: label, help: help)
-        default:
-            VStack(alignment: .leading, spacing: 6) {
-                if let label { Text(label).font(.callout.weight(.semibold)) }
-                Text("Unsupported field type.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            )
         }
     }
 
@@ -171,49 +176,50 @@ struct ConfigSchemaForm: View {
         path: ConfigPath,
         value: Any?) -> some View
     {
-        guard let additionalSchema = schema.additionalProperties else { return }
-        let dict = value as? [String: Any] ?? [:]
-        let reserved = Set(schema.properties.keys)
-        let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
+        if let additionalSchema = schema.additionalProperties {
+            let dict = value as? [String: Any] ?? [:]
+            let reserved = Set(schema.properties.keys)
+            let extras = dict.keys.filter { !reserved.contains($0) }.sorted()
 
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Extra entries")
-                .font(.callout.weight(.semibold))
-            if extras.isEmpty {
-                Text("No extra entries yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(extras, id: \ .self) { key in
-                    let itemPath: ConfigPath = path + [.key(key)]
-                    HStack(alignment: .top, spacing: 8) {
-                        TextField("Key", text: self.mapKeyBinding(path: path, key: key))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 160)
-                        self.renderNode(additionalSchema, path: itemPath)
-                        Button("Remove") {
-                            var next = dict
-                            next.removeValue(forKey: key)
-                            store.updateConfigValue(path: path, value: next)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Extra entries")
+                    .font(.callout.weight(.semibold))
+                if extras.isEmpty {
+                    Text("No extra entries yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(extras, id: \ .self) { key in
+                        let itemPath: ConfigPath = path + [.key(key)]
+                        HStack(alignment: .top, spacing: 8) {
+                            TextField("Key", text: self.mapKeyBinding(path: path, key: key))
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 160)
+                            self.renderNode(additionalSchema, path: itemPath)
+                            Button("Remove") {
+                                var next = dict
+                                next.removeValue(forKey: key)
+                                store.updateConfigValue(path: path, value: next)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
                 }
-            }
-            Button("Add") {
-                var next = dict
-                var index = 1
-                var key = "new-\(index)"
-                while next[key] != nil {
-                    index += 1
-                    key = "new-\(index)"
+                Button("Add") {
+                    var next = dict
+                    var index = 1
+                    var key = "new-\(index)"
+                    while next[key] != nil {
+                        index += 1
+                        key = "new-\(index)"
+                    }
+                    next[key] = additionalSchema.defaultValue
+                    store.updateConfigValue(path: path, value: next)
                 }
-                next[key] = additionalSchema.defaultValue
-                store.updateConfigValue(path: path, value: next)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
         }
     }
 

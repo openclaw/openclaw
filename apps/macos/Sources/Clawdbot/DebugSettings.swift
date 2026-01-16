@@ -900,7 +900,7 @@ extension DebugSettings {
     }
 }
 
-private struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
+struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             configuration.label

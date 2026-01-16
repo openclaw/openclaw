@@ -65,9 +65,9 @@ extension ChannelsStore {
     }
 
     func updateConfigValue(path: ConfigPath, value: Any?) {
-        var root = self.configDraft
+        var root: Any = self.configDraft
         setValue(&root, path: path, value: value)
-        self.configDraft = root
+        self.configDraft = root as? [String: Any] ?? self.configDraft
         self.configDirty = true
     }
 
@@ -125,7 +125,7 @@ private func setValue(_ root: inout Any, path: ConfigPath, value: Any?) {
     case .index(let index):
         var array = root as? [Any] ?? []
         if index >= array.count {
-            array.append(contentsOf: repeatElement(NSNull(), count: index - array.count + 1))
+            array.append(contentsOf: repeatElement(NSNull() as Any, count: index - array.count + 1))
         }
         if path.count == 1 {
             if let value {
