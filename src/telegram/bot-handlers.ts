@@ -13,6 +13,7 @@ import type { TelegramMessage } from "./bot/types.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
+import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 import { resolveChannelConfigWrites } from "../channels/plugins/config-writes.js";
 
@@ -183,6 +184,131 @@ export const registerTelegramHandlers = ({
       const callbackMessage = callback.message;
       if (!data || !callbackMessage) return;
 
+      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
+        cfg,
+        accountId,
+      });
+      if (inlineButtonsScope === "off") return;
+
+      const chatId = callbackMessage.chat.id;
+      const isGroup =
+        callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
+      if (inlineButtonsScope === "dm" && isGroup) return;
+      if (inlineButtonsScope === "group" && !isGroup) return;
+
+      const messageThreadId = (callbackMessage as { message_thread_id?: number }).message_thread_id;
+      const isForum = (callbackMessage.chat as { is_forum?: boolean }).is_forum === true;
+      const resolvedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId,
+      });
+      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
+      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+      const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+      const effectiveGroupAllow = normalizeAllowFrom([
+        ...(groupAllowOverride ?? groupAllowFrom ?? []),
+        ...storeAllowFrom,
+      ]);
+      const effectiveDmAllow = normalizeAllowFrom([
+        ...(telegramCfg.allowFrom ?? []),
+        ...storeAllowFrom,
+      ]);
+      const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+      const senderId = callback.from?.id ? String(callback.from.id) : "";
+      const senderUsername = callback.from?.username ?? "";
+
+      if (isGroup) {
+        if (groupConfig?.enabled === false) {
+          logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+          return;
+        }
+        if (topicConfig?.enabled === false) {
+          logVerbose(
+            `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+          );
+          return;
+        }
+        if (typeof groupAllowOverride !== "undefined") {
+          const allowed =
+            senderId &&
+            isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId,
+              senderUsername,
+            });
+          if (!allowed) {
+            logVerbose(
+              `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
+            );
+            return;
+          }
+        }
+        const groupPolicy = telegramCfg.groupPolicy ?? "open";
+        if (groupPolicy === "disabled") {
+          logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
+          return;
+        }
+        if (groupPolicy === "allowlist") {
+          if (!senderId) {
+            logVerbose(`Blocked telegram group message (no sender ID, groupPolicy: allowlist)`);
+            return;
+          }
+          if (!effectiveGroupAllow.hasEntries) {
+            logVerbose(
+              "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
+            );
+            return;
+          }
+          if (
+            !isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId,
+              senderUsername,
+            })
+          ) {
+            logVerbose(
+              `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
+            );
+            return;
+          }
+        }
+        const groupAllowlist = resolveGroupPolicy(chatId);
+        if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+          logger.info(
+            { chatId, title: callbackMessage.chat.title, reason: "not-allowed" },
+            "skipping group message",
+          );
+          return;
+        }
+      }
+
+      if (inlineButtonsScope === "allowlist") {
+        if (!isGroup) {
+          if (dmPolicy === "disabled") return;
+          if (dmPolicy !== "open") {
+            const allowed =
+              effectiveDmAllow.hasWildcard ||
+              (effectiveDmAllow.hasEntries &&
+                isSenderAllowed({
+                  allow: effectiveDmAllow,
+                  senderId,
+                  senderUsername,
+                }));
+            if (!allowed) return;
+          }
+        } else {
+          const allowed =
+            effectiveGroupAllow.hasWildcard ||
+            (effectiveGroupAllow.hasEntries &&
+              isSenderAllowed({
+                allow: effectiveGroupAllow,
+                senderId,
+                senderUsername,
+              }));
+          if (!allowed) return;
+        }
+      }
+
       const syntheticMessage: TelegramMessage = {
         ...callbackMessage,
         from: callback.from,
@@ -191,7 +317,6 @@ export const registerTelegramHandlers = ({
         caption_entities: undefined,
         entities: undefined,
       };
-      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
       const getFile = typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx) : async () => ({});
       await processMessage({ message: syntheticMessage, me: ctx.me, getFile }, [], storeAllowFrom, {
         forceWasMentioned: true,
