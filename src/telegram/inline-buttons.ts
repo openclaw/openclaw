@@ -56,14 +56,11 @@ export function isTelegramInlineButtonsEnabled(params: {
     return resolveTelegramInlineButtonsScope(params) !== "off";
   }
   return accountIds.some(
-    (accountId) =>
-      resolveTelegramInlineButtonsScope({ cfg: params.cfg, accountId }) !== "off",
+    (accountId) => resolveTelegramInlineButtonsScope({ cfg: params.cfg, accountId }) !== "off",
   );
 }
 
-export function resolveTelegramTargetChatType(
-  target: string,
-): "direct" | "group" | "unknown" {
+export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
   const trimmed = target.trim();
   if (!trimmed) return "unknown";
   if (/^-?\d+$/.test(trimmed)) {

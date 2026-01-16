@@ -127,7 +127,8 @@ export function createCanvasTool(): AnyAgentTool {
           return jsonResult({ ok: true });
         }
         case "snapshot": {
-          const formatRaw = typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
+          const formatRaw =
+            typeof params.outputFormat === "string" ? params.outputFormat.toLowerCase() : "png";
           const format = formatRaw === "jpg" || formatRaw === "jpeg" ? "jpeg" : "png";
           const maxWidth =
             typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)

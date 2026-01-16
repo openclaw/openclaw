@@ -63,9 +63,7 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
         agents?: { defaults?: { model?: { primary?: string } } };
       };
 
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe(
-        "vercel-ai-gateway",
-      );
+      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe(
         "vercel-ai-gateway/anthropic/claude-opus-4.5",

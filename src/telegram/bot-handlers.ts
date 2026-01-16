@@ -266,9 +266,7 @@ export const registerTelegramHandlers = ({
               senderUsername,
             })
           ) {
-            logVerbose(
-              `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
-            );
+            logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
             return;
           }
         }

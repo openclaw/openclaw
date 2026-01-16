@@ -121,7 +121,10 @@ function mergeRecord<T>(
   return { ...base, ...override };
 }
 
-function mergeAuthProfileStores(base: AuthProfileStore, override: AuthProfileStore): AuthProfileStore {
+function mergeAuthProfileStores(
+  base: AuthProfileStore,
+  override: AuthProfileStore,
+): AuthProfileStore {
   if (
     Object.keys(override.profiles).length === 0 &&
     !override.order &&
