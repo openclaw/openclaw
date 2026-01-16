@@ -62,24 +62,53 @@ def pick_prompts(count: int) -> list[str]:
     return prompts
 
 
+def get_model_defaults(model: str) -> tuple[str, str]:
+    """Return (default_size, default_quality) for the given model."""
+    if model == "dall-e-2":
+        # quality will be ignored
+        return ("1024x1024", "standard")
+    elif model == "dall-e-3":
+        return ("1024x1024", "standard")
+    else:
+        # GPT image or future models
+        return ("1024x1024", "high")
+
+
 def request_images(
     api_key: str,
     prompt: str,
     model: str,
     size: str,
     quality: str,
+    background: str = "",
+    output_format: str = "",
+    style: str = "",
 ) -> dict:
     url = "https://api.openai.com/v1/images/generations"
-    body = json.dumps(
-        {
-            "model": model,
-            "prompt": prompt,
-            "size": size,
-            "quality": quality,
-            "n": 1,
-            "response_format": "b64_json",
-        }
-    ).encode("utf-8")
+    args = {
+        "model": model,
+        "prompt": prompt,
+        "size": size,
+        "n": 1,
+    }
+
+    # Quality parameter - dall-e-2 doesn't accept this parameter
+    if model != "dall-e-2":
+        args["quality"] = quality
+
+    if model.startswith("dall-e"):
+        args["response_format"] = "b64_json"
+
+    if model.startswith("gpt-image"):
+        if background:
+            args["background"] = background
+        if output_format:
+            args["output_format"] = output_format
+
+    if model == "dall-e-3" and style:
+        args["style"] = style
+
+    body = json.dumps(args).encode("utf-8")
     req = urllib.request.Request(
         url,
         method="POST",
@@ -136,8 +165,11 @@ def main() -> int:
     ap.add_argument("--prompt", help="Single prompt. If omitted, random prompts are generated.")
     ap.add_argument("--count", type=int, default=8, help="How many images to generate.")
     ap.add_argument("--model", default="gpt-image-1", help="Image model id.")
-    ap.add_argument("--size", default="1024x1024", help="Image size (e.g. 1024x1024, 1536x1024).")
-    ap.add_argument("--quality", default="high", help="Image quality (varies by model).")
+    ap.add_argument("--size", default="", help="Image size (e.g. 1024x1024, 1536x1024). Defaults based on model if not specified.")
+    ap.add_argument("--quality", default="", help="Image quality (e.g. high, standard). Defaults based on model if not specified.")
+    ap.add_argument("--background", default="", help="Background transparency (GPT models only): transparent, opaque, or auto.")
+    ap.add_argument("--output-format", default="", help="Output format (GPT models only): png, jpeg, or webp.")
+    ap.add_argument("--style", default="", help="Image style (dall-e-3 only): vivid or natural.")
     ap.add_argument("--out-dir", default="", help="Output directory (default: ./tmp/openai-image-gen-<ts>).")
     args = ap.parse_args()
 
@@ -146,21 +178,46 @@ def main() -> int:
         print("Missing OPENAI_API_KEY", file=sys.stderr)
         return 2
 
+    # Apply model-specific defaults if not specified
+    default_size, default_quality = get_model_defaults(args.model)
+    size = args.size or default_size
+    quality = args.quality or default_quality
+
+    count = args.count
+    if args.model == "dall-e-3" and count > 1:
+        print(f"Warning: dall-e-3 only supports generating 1 image at a time. Reducing count from {count} to 1.", file=sys.stderr)
+        count = 1
+
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else default_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    prompts = [args.prompt] * args.count if args.prompt else pick_prompts(args.count)
+    prompts = [args.prompt] * count if args.prompt else pick_prompts(count)
+
+    # Determine file extension based on output format
+    if args.model.startswith("gpt-image") and args.output_format:
+        file_ext = args.output_format
+    else:
+        file_ext = "png"
 
     items: list[dict] = []
     for idx, prompt in enumerate(prompts, start=1):
         print(f"[{idx}/{len(prompts)}] {prompt}")
-        res = request_images(api_key, prompt, args.model, args.size, args.quality)
+        res = request_images(
+            api_key,
+            prompt,
+            args.model,
+            size,
+            quality,
+            args.background,
+            args.output_format,
+            args.style,
+        )
         b64 = res.get("data", [{}])[0].get("b64_json")
         if not b64:
             raise RuntimeError(f"Unexpected response: {json.dumps(res)[:400]}")
-        png = base64.b64decode(b64)
-        filename = f"{idx:03d}-{slugify(prompt)[:40]}.png"
-        (out_dir / filename).write_bytes(png)
+        image_bytes = base64.b64decode(b64)
+        filename = f"{idx:03d}-{slugify(prompt)[:40]}.{file_ext}"
+        (out_dir / filename).write_bytes(image_bytes)
         items.append({"prompt": prompt, "file": filename})
 
     (out_dir / "prompts.json").write_text(json.dumps(items, indent=2), encoding="utf-8")
