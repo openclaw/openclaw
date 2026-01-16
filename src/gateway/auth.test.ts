@@ -93,6 +93,34 @@ describe("gateway auth", () => {
     expect(missingProxy.reason).toBe("tailscale_proxy_missing");
   });
 
+  it("treats local tailscale serve hostnames as direct", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: { host: "gateway.tailnet-1234.ts.net:443" },
+      } as never,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(res.method).toBe("none");
+  });
+
+  it("does not treat tailscale clients as direct", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      req: {
+        socket: { remoteAddress: "100.64.0.42" },
+        headers: { host: "gateway.tailnet-1234.ts.net" },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("tailscale_user_missing");
+  });
+
   it("allows tailscale identity to satisfy token mode auth", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
