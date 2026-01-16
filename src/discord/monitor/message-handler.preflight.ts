@@ -14,6 +14,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { resolveMentionGating } from "../../channels/mention-gating.js";
 import { sendMessageDiscord } from "../send.js";
 import {
   allowListMatches,
@@ -164,6 +165,12 @@ export async function preflightDiscordMessage(
     !isDirectMessage &&
     (Boolean(botId && message.mentionedUsers?.some((user: User) => user.id === botId)) ||
       matchesMentionPatterns(baseText, mentionRegexes));
+  const implicitMention = Boolean(
+    !isDirectMessage &&
+      botId &&
+      message.referencedMessage?.author?.id &&
+      message.referencedMessage.author.id === botId,
+  );
   if (shouldLogVerbose()) {
     logVerbose(
       `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
@@ -327,10 +334,17 @@ export async function preflightDiscordMessage(
     !hasAnyMention &&
     commandAuthorized &&
     hasControlCommand(baseText, params.cfg);
-  const effectiveWasMentioned = wasMentioned || shouldBypassMention;
   const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+  const mentionGate = resolveMentionGating({
+    requireMention: Boolean(shouldRequireMention),
+    canDetectMention,
+    wasMentioned,
+    implicitMention,
+    shouldBypassMention,
+  });
+  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGuildMessage && shouldRequireMention) {
-    if (botId && !wasMentioned && !shouldBypassMention) {
+    if (botId && mentionGate.shouldSkip) {
       logVerbose(`discord: drop guild message (mention required, botId=${botId})`);
       logger.info(
         {

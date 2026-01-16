@@ -177,6 +177,8 @@ Quick mental model (evaluation order for group messages):
 ## Mention gating (default)
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
+Replying to a bot message counts as an implicit mention (when the channel supports reply metadata). This applies to Telegram, WhatsApp, Slack, Discord, and Microsoft Teams.
+
 ```json5
 {
   channels: {

@@ -10,6 +10,7 @@ import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveMentionGating } from "../channels/mention-gating.js";
 import {
   buildGroupFromLabel,
   buildGroupLabel,
@@ -222,7 +223,7 @@ export const buildTelegramMessageContext = async ({
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
-  const isReplyToBot = botId != null && replyFromId === botId;
+  const implicitMention = botId != null && replyFromId === botId;
   const shouldBypassMention =
     isGroup &&
     requireMention &&
@@ -230,11 +231,17 @@ export const buildTelegramMessageContext = async ({
     !hasAnyMention &&
     commandAuthorized &&
     hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername });
-  const shouldBypassForReplyChain = isGroup && requireMention && isReplyToBot;
-  const effectiveWasMentioned = wasMentioned || shouldBypassMention || shouldBypassForReplyChain;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+  const mentionGate = resolveMentionGating({
+    requireMention: Boolean(requireMention),
+    canDetectMention,
+    wasMentioned,
+    implicitMention: isGroup && Boolean(requireMention) && implicitMention,
+    shouldBypassMention,
+  });
+  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention) {
-    if (!wasMentioned && !shouldBypassMention && !shouldBypassForReplyChain) {
+    if (mentionGate.shouldSkip) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
       return null;
     }
@@ -252,7 +259,7 @@ export const buildTelegramMessageContext = async ({
       if (!isGroup) return false;
       if (!requireMention) return false;
       if (!canDetectMention) return false;
-      return wasMentioned || shouldBypassMention || shouldBypassForReplyChain;
+      return effectiveWasMentioned;
     }
     return false;
   };

@@ -56,10 +56,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     isGroupDm,
     baseText,
     messageText,
-    wasMentioned,
     shouldRequireMention,
     canDetectMention,
-    shouldBypassMention,
     effectiveWasMentioned,
     historyEntry,
     threadChannel,
@@ -94,7 +92,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       if (!isGuildMessage) return false;
       if (!shouldRequireMention) return false;
       if (!canDetectMention) return false;
-      return wasMentioned || shouldBypassMention;
+      return effectiveWasMentioned;
     }
     return false;
   };

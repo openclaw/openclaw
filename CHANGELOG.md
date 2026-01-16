@@ -90,6 +90,7 @@
 - Discord: truncate skill command descriptions for slash command limits. (#1018) — thanks @evalexpr.
 - macOS: resolve gateway token/password using config mode/remote URL, and warn when `launchctl setenv` overrides config. (#1022, #1021) — thanks @kkarimi.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
+- Groups: treat replies to the bot as implicit mentions across supported channels.
 
 ## 2026.1.14-1
 

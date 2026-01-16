@@ -126,6 +126,106 @@ describe("discord tool result dispatch", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   }, 20_000);
 
+  it("accepts guild reply-to-bot messages as implicit mentions", async () => {
+    const { createDiscordMessageHandler } = await import("./monitor.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: "/tmp/clawd",
+        },
+      },
+      session: { store: "/tmp/clawdbot-sessions.json" },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open" },
+          groupPolicy: "open",
+          guilds: { "*": { requireMention: true } },
+        },
+      },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const handler = createDiscordMessageHandler({
+      cfg,
+      discordConfig: cfg.channels.discord,
+      accountId: "default",
+      token: "token",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code: number): never => {
+          throw new Error(`exit ${code}`);
+        },
+      },
+      botUserId: "bot-id",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 10_000,
+      textLimit: 2000,
+      replyToMode: "off",
+      dmEnabled: true,
+      groupDmEnabled: false,
+      guildEntries: { "*": { requireMention: true } },
+    });
+
+    const client = {
+      fetchChannel: vi.fn().mockResolvedValue({
+        type: ChannelType.GuildText,
+        name: "general",
+      }),
+    } as unknown as Client;
+
+    await handler(
+      {
+        message: {
+          id: "m3",
+          content: "following up",
+          channelId: "c1",
+          timestamp: new Date().toISOString(),
+          type: MessageType.Default,
+          attachments: [],
+          embeds: [],
+          mentionedEveryone: false,
+          mentionedUsers: [],
+          mentionedRoles: [],
+          author: { id: "u1", bot: false, username: "Ada" },
+          referencedMessage: {
+            id: "m2",
+            channelId: "c1",
+            content: "bot reply",
+            timestamp: new Date().toISOString(),
+            type: MessageType.Default,
+            attachments: [],
+            embeds: [],
+            mentionedEveryone: false,
+            mentionedUsers: [],
+            mentionedRoles: [],
+            author: { id: "bot-id", bot: true, username: "Clawdbot" },
+          },
+        },
+        author: { id: "u1", bot: false, username: "Ada" },
+        member: { nickname: "Ada" },
+        guild: { id: "g1", name: "Guild" },
+        guild_id: "g1",
+        channel: { id: "c1", type: ChannelType.GuildText },
+        client,
+        data: {
+          id: "m3",
+          content: "following up",
+          channel_id: "c1",
+          guild_id: "g1",
+          type: MessageType.Default,
+          mentions: [],
+        },
+      },
+      client,
+    );
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const payload = dispatchMock.mock.calls[0]?.[0]?.ctx as Record<string, unknown>;
+    expect(payload.WasMentioned).toBe(true);
+  });
+
   it("forks thread sessions and injects starter context", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
     let capturedCtx:

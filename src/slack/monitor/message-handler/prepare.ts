@@ -10,6 +10,7 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import { resolveMentionGating } from "../../../channels/mention-gating.js";
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -172,6 +173,12 @@ export async function prepareSlackMessage(params: {
     (!isDirectMessage &&
       (Boolean(ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`)) ||
         matchesMentionPatterns(message.text ?? "", mentionRegexes)));
+  const implicitMention = Boolean(
+    !isDirectMessage &&
+      ctx.botUserId &&
+      message.thread_ts &&
+      message.parent_user_id === ctx.botUserId,
+  );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
   const senderName =
@@ -215,9 +222,16 @@ export async function prepareSlackMessage(params: {
     commandAuthorized &&
     hasControlCommand(message.text ?? "", cfg);
 
-  const effectiveWasMentioned = wasMentioned || shouldBypassMention;
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
-  if (isRoom && shouldRequireMention && canDetectMention && !wasMentioned && !shouldBypassMention) {
+  const mentionGate = resolveMentionGating({
+    requireMention: Boolean(shouldRequireMention),
+    canDetectMention,
+    wasMentioned,
+    implicitMention,
+    shouldBypassMention,
+  });
+  const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
+  if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping room message");
     return null;
   }
@@ -242,7 +256,7 @@ export async function prepareSlackMessage(params: {
       if (!isRoom) return false;
       if (!shouldRequireMention) return false;
       if (!canDetectMention) return false;
-      return wasMentioned || shouldBypassMention;
+      return effectiveWasMentioned;
     }
     return false;
   };

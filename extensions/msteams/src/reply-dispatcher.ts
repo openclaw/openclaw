@@ -28,6 +28,7 @@ export function createMSTeamsReplyDispatcher(params: {
   context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
+  onSentMessageIds?: (ids: string[]) => void;
 }) {
   const sendTypingIndicator = async () => {
     try {
@@ -46,7 +47,7 @@ export function createMSTeamsReplyDispatcher(params: {
         chunkText: true,
         mediaMode: "split",
       });
-      await sendMSTeamsMessages({
+      const ids = await sendMSTeamsMessages({
         replyStyle: params.replyStyle,
         adapter: params.adapter,
         appId: params.appId,
@@ -62,6 +63,7 @@ export function createMSTeamsReplyDispatcher(params: {
           });
         },
       });
+      if (ids.length > 0) params.onSentMessageIds?.(ids);
     },
     onError: (err, info) => {
       const errMsg = formatUnknownError(err);

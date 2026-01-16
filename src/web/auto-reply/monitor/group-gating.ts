@@ -2,6 +2,7 @@ import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
+import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
@@ -94,7 +95,6 @@ export function applyGroupGating(params: {
     "group mention debug",
   );
   const wasMentioned = mentionDebug.wasMentioned;
-  params.msg.wasMentioned = wasMentioned;
   const activation = resolveGroupActivationFor({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -102,7 +102,25 @@ export function applyGroupGating(params: {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  if (!shouldBypassMention && requireMention && !wasMentioned) {
+  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
+  const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
+  const replySenderE164 = params.msg.replyToSenderE164
+    ? normalizeE164(params.msg.replyToSenderE164)
+    : null;
+  const implicitMention = Boolean(
+    (selfJid && replySenderJid && selfJid === replySenderJid) ||
+      (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+  );
+  const mentionGate = resolveMentionGating({
+    requireMention,
+    canDetectMention: true,
+    wasMentioned,
+    implicitMention,
+    shouldBypassMention,
+  });
+  params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
+  if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
     params.logVerbose(
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );

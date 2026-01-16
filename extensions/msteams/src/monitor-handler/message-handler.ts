@@ -11,6 +11,7 @@ import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../../../../src/auto-reply/reply/history.js";
+import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import {
@@ -42,6 +43,7 @@ import {
 } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
+import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
@@ -74,6 +76,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     text: string;
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
+    implicitMention: boolean;
   };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
@@ -301,8 +304,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     if (!isDirectMessage) {
-      const mentioned = params.wasMentioned;
-      if (requireMention && !mentioned) {
+      const mentionGate = resolveMentionGating({
+        requireMention: Boolean(requireMention),
+        canDetectMention: true,
+        wasMentioned: params.wasMentioned,
+        implicitMention: params.implicitMention,
+        shouldBypassMention: false,
+      });
+      const mentioned = mentionGate.effectiveWasMentioned;
+      if (requireMention && mentionGate.shouldSkip) {
         log.debug("skipping message (mention required)", {
           teamId,
           channelId,
@@ -379,7 +389,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || params.wasMentioned,
+      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
       CommandAuthorized: true,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
@@ -401,6 +411,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       context,
       replyStyle,
       textLimit,
+      onSentMessageIds: (ids) => {
+        for (const id of ids) {
+          recordMSTeamsSentMessage(conversationId, id);
+        }
+      },
     });
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
@@ -480,12 +495,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .filter(Boolean)
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
+      const implicitMention = entries.some((entry) => entry.implicitMention);
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
         text: combinedText,
         attachments: [],
         wasMentioned,
+        implicitMention,
       });
     },
     onError: (err) => {
@@ -501,7 +518,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
     const wasMentioned = wasMSTeamsBotMentioned(activity);
+    const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+    const replyToId = activity.replyToId ?? undefined;
+    const implicitMention = Boolean(
+      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
+    );
 
-    await inboundDebouncer.enqueue({ context, rawText, text, attachments, wasMentioned });
+    await inboundDebouncer.enqueue({
+      context,
+      rawText,
+      text,
+      attachments,
+      wasMentioned,
+      implicitMention,
+    });
   };
 }
