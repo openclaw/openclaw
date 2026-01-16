@@ -47,7 +47,10 @@ export function registerBrowserManageCommands(
             `cdpPort: ${status.cdpPort}`,
             `cdpUrl: ${status.cdpUrl ?? `http://127.0.0.1:${status.cdpPort}`}`,
             `browser: ${status.chosenBrowser ?? "unknown"}`,
+            `detectedBrowser: ${status.detectedBrowser ?? "unknown"}`,
+            `detectedPath: ${status.detectedExecutablePath ?? status.executablePath ?? "auto"}`,
             `profileColor: ${status.color}`,
+            ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );
       } catch (err) {

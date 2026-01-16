@@ -13,6 +13,9 @@ export type BrowserStatus = {
   cdpPort: number;
   cdpUrl?: string;
   chosenBrowser: string | null;
+  detectedBrowser?: string | null;
+  detectedExecutablePath?: string | null;
+  detectError?: string | null;
   userDataDir: string | null;
   color: string;
   headless: boolean;
