@@ -32,7 +32,8 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         handleMessageEnd(ctx, evt as never);
         return;
       case "tool_execution_start":
-        handleToolExecutionStart(ctx, evt as never);
+        // Async handler - awaits typing indicator before emitting tool summaries.
+        void handleToolExecutionStart(ctx, evt as never);
         return;
       case "tool_execution_update":
         handleToolExecutionUpdate(ctx, evt as never);

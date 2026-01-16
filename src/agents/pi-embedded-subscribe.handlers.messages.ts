@@ -118,7 +118,7 @@ export function handleMessageUpdate(
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       },
     });
-    ctx.params.onAgentEvent?.({
+    void ctx.params.onAgentEvent?.({
       stream: "assistant",
       data: {
         text: cleanedText,

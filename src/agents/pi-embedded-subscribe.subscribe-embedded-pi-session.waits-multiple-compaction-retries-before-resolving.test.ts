@@ -54,7 +54,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await waitPromise;
     expect(resolved).toBe(true);
   });
-  it("emits tool summaries at tool start when verbose is on", () => {
+  it("emits tool summaries at tool start when verbose is on", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -79,6 +79,9 @@ describe("subscribeEmbeddedPiSession", () => {
       args: { path: "/tmp/a.txt" },
     });
 
+    // Wait for async handler to complete
+    await Promise.resolve();
+
     expect(onToolResult).toHaveBeenCalledTimes(1);
     const payload = onToolResult.mock.calls[0][0];
     expect(payload.text).toContain("/tmp/a.txt");
@@ -93,7 +96,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
-  it("includes browser action metadata in tool summaries", () => {
+  it("includes browser action metadata in tool summaries", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -117,6 +120,9 @@ describe("subscribeEmbeddedPiSession", () => {
       toolCallId: "tool-browser-1",
       args: { action: "snapshot", targetUrl: "https://example.com" },
     });
+
+    // Wait for async handler to complete
+    await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     const payload = onToolResult.mock.calls[0][0];

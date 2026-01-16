@@ -5,7 +5,7 @@ import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
-import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import {
   applyReplyThreading,
@@ -20,6 +20,8 @@ export function buildReplyPayloads(params: {
   didLogHeartbeatStrip: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
+  /** Payload keys sent directly (not via pipeline) during tool flush. */
+  directlySentBlockKeys?: Set<string>;
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
@@ -98,11 +100,16 @@ export function buildReplyPayloads(params: {
     payloads: replyTaggedPayloads,
     sentTexts: messagingToolSentTexts,
   });
+  // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
     ? []
     : params.blockStreamingEnabled
       ? dedupedPayloads.filter((payload) => !params.blockReplyPipeline?.hasSentPayload(payload))
-      : dedupedPayloads;
+      : params.directlySentBlockKeys?.size
+        ? dedupedPayloads.filter(
+            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyPayloadKey(payload)),
+          )
+        : dedupedPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {

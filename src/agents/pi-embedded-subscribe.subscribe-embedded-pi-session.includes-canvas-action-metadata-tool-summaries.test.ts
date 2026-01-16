@@ -13,7 +13,7 @@ describe("subscribeEmbeddedPiSession", () => {
     { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   ] as const;
 
-  it("includes canvas action metadata in tool summaries", () => {
+  it("includes canvas action metadata in tool summaries", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -37,6 +37,9 @@ describe("subscribeEmbeddedPiSession", () => {
       toolCallId: "tool-canvas-1",
       args: { action: "a2ui_push", jsonlPath: "/tmp/a2ui.jsonl" },
     });
+
+    // Wait for async handler to complete
+    await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     const payload = onToolResult.mock.calls[0][0];
@@ -72,7 +75,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
   });
-  it("emits tool summaries when shouldEmitToolResult overrides verbose", () => {
+  it("emits tool summaries when shouldEmitToolResult overrides verbose", async () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -97,6 +100,9 @@ describe("subscribeEmbeddedPiSession", () => {
       toolCallId: "tool-3",
       args: { path: "/tmp/c.txt" },
     });
+
+    // Wait for async handler to complete
+    await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
