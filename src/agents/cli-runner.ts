@@ -209,7 +209,6 @@ export async function runCliAgent(params: {
 
       // Cleanup suspended processes that have accumulated (regardless of sessionId)
       await cleanupSuspendedCliProcesses(backend);
-
       if (useResume && cliSessionIdToSend) {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
       }
