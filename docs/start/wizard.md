@@ -68,6 +68,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 1) **Existing config detection**
    - If `~/.clawdbot/clawdbot.json` exists, choose **Keep / Modify / Reset**.
+   - Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset**
+     (or pass `--reset`).
    - If the config is invalid or contains legacy keys, the wizard stops and asks
      you to run `clawdbot doctor` before continuing.
    - Reset uses `trash` (never `rm`) and offers scopes:

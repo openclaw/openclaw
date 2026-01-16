@@ -70,8 +70,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [I set `COPILOT_GITHUB_TOKEN`, but models status shows “Shell env: off.” Why?](#i-set-copilot_github_token-but-models-status-shows-shell-env-off-why)
 - [Sessions & multiple chats](#sessions-multiple-chats)
   - [How do I start a fresh conversation?](#how-do-i-start-a-fresh-conversation)
+  - [Do sessions reset automatically if I never send `/new`?](#do-sessions-reset-automatically-if-i-never-send-new)
   - [How do I completely reset Clawdbot but keep it installed?](#how-do-i-completely-reset-clawdbot-but-keep-it-installed)
   - [I’m getting “context too large” errors — how do I reset or compact?](#im-getting-context-too-large-errors-how-do-i-reset-or-compact)
+  - [Why am I getting heartbeat messages every 30 minutes?](#why-am-i-getting-heartbeat-messages-every-30-minutes)
   - [Do I need to add a “bot account” to a WhatsApp group?](#do-i-need-to-add-a-bot-account-to-a-whatsapp-group)
   - [Why doesn’t Clawdbot reply in a group?](#why-doesnt-clawdbot-reply-in-a-group)
   - [Do groups/threads share context with DMs?](#do-groupsthreads-share-context-with-dms)
@@ -108,11 +110,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Logging and debugging](#logging-and-debugging)
   - [Where are logs?](#where-are-logs)
   - [How do I start/stop/restart the Gateway daemon?](#how-do-i-startstoprestart-the-gateway-daemon)
+  - [ELI5: `clawdbot daemon restart` vs `clawdbot gateway`](#eli5-clawdbot-daemon-restart-vs-clawdbot-gateway)
   - [What’s the fastest way to get more details when something fails?](#whats-the-fastest-way-to-get-more-details-when-something-fails)
 - [Media & attachments](#media-attachments)
   - [My skill generated an image/PDF, but nothing was sent](#my-skill-generated-an-imagepdf-but-nothing-was-sent)
 - [Security and access control](#security-and-access-control)
   - [Is it safe to expose Clawdbot to inbound DMs?](#is-it-safe-to-expose-clawdbot-to-inbound-dms)
+  - [I ran `/start` in Telegram but didn’t get a pairing code](#i-ran-start-in-telegram-but-didnt-get-a-pairing-code)
   - [WhatsApp: will it message my contacts? How does pairing work?](#whatsapp-will-it-message-my-contacts-how-does-pairing-work)
 - [Chat commands, aborting tasks, and “it won’t stop”](#chat-commands-aborting-tasks-and-it-wont-stop)
   - [How do I stop/cancel a running task?](#how-do-i-stopcancel-a-running-task)
@@ -849,6 +853,20 @@ See [/concepts/model-providers](/concepts/model-providers) and [/environment](/e
 
 Send `/new` or `/reset` as a standalone message. See [Session management](/concepts/session).
 
+### Do sessions reset automatically if I never send `/new`?
+
+Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
+message starts a fresh session id for that chat key. This does not delete
+transcripts — it just starts a new session.
+
+```json5
+{
+  session: {
+    idleMinutes: 240
+  }
+}
+```
+
 ### How do I completely reset Clawdbot but keep it installed?
 
 Use the reset command:
@@ -896,6 +914,24 @@ If it keeps happening:
 
 Docs: [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning), [Session management](/concepts/session).
 
+### Why am I getting heartbeat messages every 30 minutes?
+
+Heartbeats run every **30m** by default. Tune or disable them:
+
+```json5
+{
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "2h"   // or "0m" to disable
+      }
+    }
+  }
+}
+```
+
+Per-agent overrides use `agents.list[].heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
+
 ### Do I need to add a “bot account” to a WhatsApp group?
 
 No. Clawdbot runs on **your own account**, so if you’re in the group, Clawdbot can see it.
@@ -928,7 +964,16 @@ Direct chats collapse to the main session by default. Groups/channels have their
 
 ### How many workspaces and agents can I create?
 
-No practical limits. Even hundreds of agents should not sweat the machine, but it might get very expensive in terms of tokens. 😊
+No hard limits. Dozens (even hundreds) are fine, but watch for:
+
+- **Disk growth:** sessions + transcripts live under `~/.clawdbot/agents/<agentId>/sessions/`.
+- **Token cost:** more agents means more concurrent model usage.
+- **Ops overhead:** per-agent auth profiles, workspaces, and channel routing.
+
+Tips:
+- Keep one **active** workspace per agent (`agents.defaults.workspace`).
+- Prune old sessions (delete JSONL or store entries) if disk grows.
+- Use `clawdbot doctor` to spot stray workspaces and profile mismatches.
 
 ## Models: defaults, selection, aliases, switching
 
@@ -1402,6 +1447,14 @@ clawdbot daemon restart
 
 If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
 
+### ELI5: `clawdbot daemon restart` vs `clawdbot gateway`
+
+- `clawdbot daemon restart`: restarts the **background service** (launchd/systemd).
+- `clawdbot gateway`: runs the gateway **in the foreground** for this terminal session.
+
+If you installed the daemon, use the daemon commands. Use `clawdbot gateway` when
+you want a one-off, foreground run.
+
 ### What’s the fastest way to get more details when something fails?
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for channel auth, model routing, and RPC errors.
@@ -1418,7 +1471,11 @@ CLI sending:
 clawdbot message send --to +15555550123 --message "Here you go" --media /path/to/file.png
 ```
 
-Note: images are resized/recompressed (max side 2048px) to hit size limits. See [Images](/nodes/images).
+Also check:
+- The target channel supports outbound media and isn’t blocked by allowlists.
+- The file is within the provider’s size limits (images are resized to max 2048px).
+
+See [Images](/nodes/images).
 
 ## Security and access control
 
@@ -1433,6 +1490,19 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.
+
+### I ran `/start` in Telegram but didn’t get a pairing code
+
+Pairing codes are sent **only** when an unknown sender messages the bot and
+`dmPolicy: "pairing"` is enabled. `/start` by itself doesn’t generate a code.
+
+Check pending requests:
+```bash
+clawdbot pairing list telegram
+```
+
+If you want immediate access, allowlist your sender id or set `dmPolicy: "open"`
+for that account.
 
 ### WhatsApp: will it message my contacts? How does pairing work?
 
