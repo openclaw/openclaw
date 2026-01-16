@@ -463,7 +463,7 @@ final class MacNodeModeCoordinator {
         }
     }
 
-    private static func targetFromResult(_ result: NWBrowser.Result) -> BridgeTarget? {
+    nonisolated private static func targetFromResult(_ result: NWBrowser.Result) -> BridgeTarget? {
         let endpoint = result.endpoint
         guard case .service = endpoint else { return nil }
         let stableID = BridgeEndpointID.stableID(endpoint)
@@ -477,7 +477,7 @@ final class MacNodeModeCoordinator {
         return BridgeTarget(endpoint: endpoint, stableID: stableID, tls: tlsParams)
     }
 
-    private static func resolveDiscoveredTLSParams(
+    nonisolated private static func resolveDiscoveredTLSParams(
         stableID: String,
         tlsEnabled: Bool,
         tlsFingerprintSha256: String?) -> MacNodeBridgeTLSParams?
@@ -503,7 +503,7 @@ final class MacNodeModeCoordinator {
         return nil
     }
 
-    private static func resolveManualTLSParams(stableID: String) -> MacNodeBridgeTLSParams? {
+    nonisolated private static func resolveManualTLSParams(stableID: String) -> MacNodeBridgeTLSParams? {
         if let stored = MacNodeBridgeTLSStore.loadFingerprint(stableID: stableID) {
             return MacNodeBridgeTLSParams(
                 required: true,
@@ -519,12 +519,12 @@ final class MacNodeModeCoordinator {
             storeKey: stableID)
     }
 
-    private static func txtValue(_ dict: [String: String], key: String) -> String? {
+    nonisolated private static func txtValue(_ dict: [String: String], key: String) -> String? {
         let raw = dict[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return raw.isEmpty ? nil : raw
     }
 
-    private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
+    nonisolated private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
         guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
         return raw == "1" || raw == "true" || raw == "yes"
     }
