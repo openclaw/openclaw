@@ -1,13 +1,14 @@
 import ClawdbotProtocol
 import Foundation
 
-extension ConnectionsStore {
+extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
         guard self.pollTask == nil else { return }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
             await self.refresh(probe: true)
+            await self.loadConfigSchema()
             await self.loadConfig()
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))

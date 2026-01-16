@@ -10,6 +10,8 @@ import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeE164 } from "../../utils.js";
 import { getChatChannelMeta } from "../registry.js";
+import { SignalConfigSchema } from "../../config/zod-schema.providers-core.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -48,6 +50,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.signal"] },
+  configSchema: buildChannelConfigSchema(SignalConfigSchema),
   config: {
     listAccountIds: (cfg) => listSignalAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSignalAccount({ cfg, accountId }),

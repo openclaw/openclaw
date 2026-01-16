@@ -197,6 +197,7 @@ function createPluginRecord(params: {
     httpHandlers: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
+    configJsonSchema: undefined,
   };
 }
 
@@ -300,6 +301,17 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
         ? ((definition.configSchema as { uiHints?: unknown }).uiHints as Record<
             string,
             PluginConfigUiHint
+          >)
+        : undefined;
+    record.configJsonSchema =
+      definition?.configSchema &&
+      typeof definition.configSchema === "object" &&
+      (definition.configSchema as { jsonSchema?: unknown }).jsonSchema &&
+      typeof (definition.configSchema as { jsonSchema?: unknown }).jsonSchema === "object" &&
+      !Array.isArray((definition.configSchema as { jsonSchema?: unknown }).jsonSchema)
+        ? ((definition.configSchema as { jsonSchema?: unknown }).jsonSchema as Record<
+            string,
+            unknown
           >)
         : undefined;
 
