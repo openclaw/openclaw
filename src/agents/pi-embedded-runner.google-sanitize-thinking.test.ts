@@ -191,10 +191,6 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       { type: "text", text: "hello" },
       { type: "text", text: "ok" },
       {
-        type: "text",
-        text: '[Tool Call: read (ID: call_1)]\nArguments: {\n  "path": "/tmp/foo"\n}',
-      },
-      {
         type: "toolCall",
         id: "call_2",
         name: "read",
