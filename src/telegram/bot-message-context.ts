@@ -17,7 +17,6 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
-  buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
   extractTelegramLocation,
