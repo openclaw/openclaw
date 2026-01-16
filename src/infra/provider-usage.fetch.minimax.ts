@@ -18,6 +18,10 @@ const RESET_KEYS = [
   "resetAt",
   "reset_time",
   "resetTime",
+  "next_reset_at",
+  "nextResetAt",
+  "next_reset_time",
+  "nextResetTime",
   "expires_at",
   "expiresAt",
   "expire_at",
@@ -52,6 +56,14 @@ const USED_KEYS = [
   "usedQuota",
   "used_times",
   "usedTimes",
+  "prompt_used",
+  "promptUsed",
+  "used_prompt",
+  "usedPrompt",
+  "prompts_used",
+  "promptsUsed",
+  "current_interval_usage_count",
+  "currentIntervalUsageCount",
   "consumed",
 ] as const;
 
@@ -65,6 +77,20 @@ const TOTAL_KEYS = [
   "totalQuota",
   "total_times",
   "totalTimes",
+  "prompt_total",
+  "promptTotal",
+  "total_prompt",
+  "totalPrompt",
+  "prompt_limit",
+  "promptLimit",
+  "limit_prompt",
+  "limitPrompt",
+  "prompts_total",
+  "promptsTotal",
+  "total_prompts",
+  "totalPrompts",
+  "current_interval_total_count",
+  "currentIntervalTotalCount",
   "limit",
   "quota",
   "quota_limit",
@@ -87,6 +113,20 @@ const REMAINING_KEYS = [
   "remain_times",
   "remainingTimes",
   "remaining_times",
+  "prompt_remain",
+  "promptRemain",
+  "remain_prompt",
+  "remainPrompt",
+  "prompt_remaining",
+  "promptRemaining",
+  "remaining_prompt",
+  "remainingPrompt",
+  "prompts_remaining",
+  "promptsRemaining",
+  "prompt_left",
+  "promptLeft",
+  "prompts_left",
+  "promptsLeft",
   "left",
 ] as const;
 
@@ -142,6 +182,62 @@ function parseEpoch(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function hasAny(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.some((key) => key in record);
+}
+
+function scoreUsageRecord(record: Record<string, unknown>): number {
+  let score = 0;
+  if (hasAny(record, PERCENT_KEYS)) score += 4;
+  if (hasAny(record, TOTAL_KEYS)) score += 3;
+  if (hasAny(record, USED_KEYS) || hasAny(record, REMAINING_KEYS)) score += 2;
+  if (hasAny(record, RESET_KEYS)) score += 1;
+  if (hasAny(record, PLAN_KEYS)) score += 1;
+  return score;
+}
+
+function collectUsageCandidates(root: Record<string, unknown>): Record<string, unknown>[] {
+  const MAX_SCAN_DEPTH = 4;
+  const MAX_SCAN_NODES = 60;
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const seen = new Set<object>();
+  const candidates: Array<{ record: Record<string, unknown>; score: number; depth: number }> = [];
+  let scanned = 0;
+
+  while (queue.length && scanned < MAX_SCAN_NODES) {
+    const next = queue.shift();
+    if (!next) break;
+    scanned += 1;
+    const { value, depth } = next;
+
+    if (isRecord(value)) {
+      if (seen.has(value)) continue;
+      seen.add(value);
+      const score = scoreUsageRecord(value);
+      if (score > 0) candidates.push({ record: value, score, depth });
+      if (depth < MAX_SCAN_DEPTH) {
+        for (const nested of Object.values(value)) {
+          if (isRecord(nested) || Array.isArray(nested)) {
+            queue.push({ value: nested, depth: depth + 1 });
+          }
+        }
+      }
+      continue;
+    }
+
+    if (Array.isArray(value) && depth < MAX_SCAN_DEPTH) {
+      for (const nested of value) {
+        if (isRecord(nested) || Array.isArray(nested)) {
+          queue.push({ value: nested, depth: depth + 1 });
+        }
+      }
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score || a.depth - b.depth);
+  return candidates.map((candidate) => candidate.record);
 }
 
 function deriveWindowLabel(payload: Record<string, unknown>): string {
@@ -219,7 +315,20 @@ export async function fetchMinimaxUsage(
   }
 
   const payload = isRecord(data.data) ? data.data : data;
-  const usedPercent = deriveUsedPercent(payload);
+  const candidates = collectUsageCandidates(payload);
+  let usageRecord: Record<string, unknown> = payload;
+  let usedPercent: number | null = null;
+  for (const candidate of candidates) {
+    const candidatePercent = deriveUsedPercent(candidate);
+    if (candidatePercent !== null) {
+      usageRecord = candidate;
+      usedPercent = candidatePercent;
+      break;
+    }
+  }
+  if (usedPercent === null) {
+    usedPercent = deriveUsedPercent(payload);
+  }
   if (usedPercent === null) {
     return {
       provider: "minimax",
@@ -230,10 +339,13 @@ export async function fetchMinimaxUsage(
   }
 
   const resetAt =
-    parseEpoch(pickString(payload, RESET_KEYS)) ?? parseEpoch(pickNumber(payload, RESET_KEYS));
+    parseEpoch(pickString(usageRecord, RESET_KEYS)) ??
+    parseEpoch(pickNumber(usageRecord, RESET_KEYS)) ??
+    parseEpoch(pickString(payload, RESET_KEYS)) ??
+    parseEpoch(pickNumber(payload, RESET_KEYS));
   const windows: UsageWindow[] = [
     {
-      label: deriveWindowLabel(payload),
+      label: deriveWindowLabel(usageRecord),
       usedPercent,
       resetAt,
     },
@@ -243,6 +355,6 @@ export async function fetchMinimaxUsage(
     provider: "minimax",
     displayName: PROVIDER_LABELS.minimax,
     windows,
-    plan: pickString(payload, PLAN_KEYS),
+    plan: pickString(usageRecord, PLAN_KEYS) ?? pickString(payload, PLAN_KEYS),
   };
 }
