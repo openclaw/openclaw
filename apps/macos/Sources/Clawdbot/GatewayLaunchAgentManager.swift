@@ -69,7 +69,10 @@ extension GatewayLaunchAgentManager {
     }
 
     private static func readDaemonLoaded() async -> Bool? {
-        let result = await self.runDaemonCommand(["status", "--json", "--no-probe"], timeout: 15, quiet: true)
+        let result = await self.runDaemonCommandResult(
+            ["status", "--json", "--no-probe"],
+            timeout: 15,
+            quiet: true)
         guard result.success, let payload = result.payload else { return nil }
         guard
             let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
