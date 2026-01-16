@@ -4,6 +4,8 @@ import { listChannelPlugins, getChannelPlugin } from "../channels/plugins/index.
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -17,6 +19,55 @@ import {
   reloadOnboardingPluginRegistry,
 } from "./onboarding/plugin-install.js";
 import type { ChannelOnboardingDmPolicy, SetupChannelsOptions } from "./onboarding/types.js";
+
+type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
+
+function formatAccountLabel(accountId: string): string {
+  return accountId === DEFAULT_ACCOUNT_ID ? "default (primary)" : accountId;
+}
+
+async function promptConfiguredAction(params: {
+  prompter: WizardPrompter;
+  label: string;
+  supportsDisable: boolean;
+  supportsDelete: boolean;
+}): Promise<ConfiguredChannelAction> {
+  const { prompter, label, supportsDisable, supportsDelete } = params;
+  const options = [
+    { value: "update", label: "Modify settings" },
+    ...(supportsDisable ? [{ value: "disable", label: "Disable (keeps config)" }] : []),
+    ...(supportsDelete ? [{ value: "delete", label: "Delete config" }] : []),
+    { value: "skip", label: "Skip (leave as-is)" },
+  ] as const;
+  return (await prompter.select({
+    message: `${label} already configured. What do you want to do?`,
+    options,
+    initialValue: "update",
+  })) as ConfiguredChannelAction;
+}
+
+async function promptRemovalAccountId(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+  label: string;
+  channel: ChannelChoice;
+}): Promise<string> {
+  const { cfg, prompter, label, channel } = params;
+  const plugin = getChannelPlugin(channel);
+  if (!plugin) return DEFAULT_ACCOUNT_ID;
+  const accountIds = plugin.config.listAccountIds(cfg).filter(Boolean);
+  const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg, accountIds });
+  if (accountIds.length <= 1) return defaultAccountId;
+  const selected = (await prompter.select({
+    message: `${label} account`,
+    options: accountIds.map((accountId) => ({
+      value: accountId,
+      label: formatAccountLabel(accountId),
+    })),
+    initialValue: defaultAccountId,
+  })) as string;
+  return normalizeAccountId(selected) ?? defaultAccountId;
+}
 
 async function noteChannelPrimer(
   prompter: WizardPrompter,
@@ -207,11 +258,36 @@ export async function setupChannels(
     selection = choice === "__skip__" ? [] : [choice];
   } else {
     const initialSelection = options?.initialSelection ?? [];
-    selection = (await prompter.multiselect({
-      message: "Select channels (Space to toggle, Enter to continue)",
-      options: selectionOptions,
-      initialValues: initialSelection.length ? initialSelection : undefined,
-    })) as ChannelChoice[];
+    const selectionSet = new Set<ChannelChoice>(initialSelection);
+    const doneValue = "__done__" as const;
+
+    const buildOptions = () => [
+      ...selectionOptions.map((opt) => ({
+        value: opt.value,
+        label: `${selectionSet.has(opt.value as ChannelChoice) ? "[x]" : "[ ]"} ${opt.label}`,
+        ...(opt.hint ? { hint: opt.hint } : {}),
+      })),
+      {
+        value: doneValue,
+        label: "Finished",
+        hint: selectionSet.size > 0 ? "Continue with selected channels" : "Skip channels for now",
+      },
+    ];
+
+    while (true) {
+      const choice = (await prompter.select({
+        message: "Select channels (Enter to toggle, choose Finished to continue)",
+        options: buildOptions(),
+      })) as ChannelChoice | typeof doneValue;
+      if (choice === doneValue) break;
+      if (selectionSet.has(choice)) {
+        selectionSet.delete(choice);
+      } else {
+        selectionSet.add(choice);
+      }
+    }
+
+    selection = Array.from(selectionSet);
   }
 
   const catalogById = new Map(catalogEntries.map((entry) => [entry.id as ChannelChoice, entry]));
@@ -239,6 +315,81 @@ export async function setupChannels(
       });
     }
   }
+
+  const updatedSelection: ChannelChoice[] = [];
+  for (const channel of selection) {
+    const status = statusByChannel.get(channel);
+    if (!status?.configured) {
+      updatedSelection.push(channel);
+      continue;
+    }
+
+    const plugin = getChannelPlugin(channel);
+    const adapter = getChannelOnboardingAdapter(channel);
+    const label = plugin?.meta.label ?? channel;
+    const supportsDisable = Boolean(plugin?.config.setAccountEnabled || adapter?.disable);
+    const supportsDelete = Boolean(plugin?.config.deleteAccount);
+    const action = await promptConfiguredAction({
+      prompter,
+      label,
+      supportsDisable,
+      supportsDelete,
+    });
+
+    if (action === "skip") {
+      continue;
+    }
+    if (action === "update") {
+      updatedSelection.push(channel);
+      continue;
+    }
+
+    if (action === "delete" && !supportsDelete) {
+      await prompter.note(`${label} does not support deleting config entries.`, "Remove channel");
+      continue;
+    }
+
+    const shouldPromptAccount =
+      action === "delete" ? Boolean(plugin?.config.deleteAccount) : Boolean(plugin?.config.setAccountEnabled);
+    const accountId = shouldPromptAccount
+      ? await promptRemovalAccountId({
+          cfg: next,
+          prompter,
+          label,
+          channel,
+        })
+      : DEFAULT_ACCOUNT_ID;
+    const resolvedAccountId =
+      normalizeAccountId(accountId) ??
+      (plugin ? resolveChannelDefaultAccountId({ plugin, cfg: next }) : DEFAULT_ACCOUNT_ID);
+    const accountLabel = formatAccountLabel(resolvedAccountId);
+
+    if (action === "delete") {
+      const confirmed = await prompter.confirm({
+        message: `Delete ${label} account "${accountLabel}"?`,
+        initialValue: false,
+      });
+      if (!confirmed) {
+        continue;
+      }
+      if (plugin?.config.deleteAccount) {
+        next = plugin.config.deleteAccount({ cfg: next, accountId: resolvedAccountId });
+      }
+      continue;
+    }
+
+    if (plugin?.config.setAccountEnabled) {
+      next = plugin.config.setAccountEnabled({
+        cfg: next,
+        accountId: resolvedAccountId,
+        enabled: false,
+      });
+    } else if (adapter?.disable) {
+      next = adapter.disable(next);
+    }
+  }
+
+  selection = updatedSelection;
 
   options?.onSelection?.(selection);
 
