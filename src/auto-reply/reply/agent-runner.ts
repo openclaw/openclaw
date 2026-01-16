@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -8,6 +9,7 @@ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
@@ -247,6 +249,8 @@ export async function runReplyAgent(params: {
   };
   const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> => {
     if (!sessionKey || !activeSessionStore || !storePath) return false;
+    const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    const prevSessionId = prevEntry?.sessionId;
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
       ...(activeSessionStore[sessionKey] ?? activeSessionEntry),
@@ -279,6 +283,19 @@ export async function runReplyAgent(params: {
     defaultRuntime.error(
       `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
     );
+    if (prevSessionId) {
+      const transcriptCandidates = new Set<string>();
+      const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
+      if (resolved) transcriptCandidates.add(resolved);
+      transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
+      for (const candidate of transcriptCandidates) {
+        try {
+          fs.unlinkSync(candidate);
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+    }
     return true;
   };
   try {
