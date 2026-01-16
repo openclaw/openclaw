@@ -341,6 +341,15 @@ final class AppState {
         return host
     }
 
+    private static func sanitizeSSHTarget(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ssh ") {
+            return trimmed.replacingOccurrences(of: "ssh ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
     private func startConfigWatcher() {
         let configUrl = ClawdbotConfigFile.url()
         self.configWatcher = ConfigFileWatcher(url: configUrl) { [weak self] in
@@ -406,6 +415,7 @@ final class AppState {
 
         let connectionMode = self.connectionMode
         let remoteTarget = self.remoteTarget
+        let remoteIdentity = self.remoteIdentity
         let desiredMode: String? = switch connectionMode {
         case .local:
             "local"
@@ -435,15 +445,46 @@ final class AppState {
                 changed = true
             }
 
-            if connectionMode == .remote, let host = remoteHost {
+            if connectionMode == .remote {
                 var remote = gateway["remote"] as? [String: Any] ?? [:]
-                let existingUrl = (remote["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-                let port = parsedExisting?.port ?? 18789
-                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-                if existingUrl != desiredUrl {
-                    remote["url"] = desiredUrl
+                var remoteChanged = false
+
+                if let host = remoteHost {
+                    let existingUrl = (remote["url"] as? String)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
+                    let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
+                    let port = parsedExisting?.port ?? 18789
+                    let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
+                    if existingUrl != desiredUrl {
+                        remote["url"] = desiredUrl
+                        remoteChanged = true
+                    }
+                }
+
+                let sanitizedTarget = Self.sanitizeSSHTarget(remoteTarget)
+                if !sanitizedTarget.isEmpty {
+                    if (remote["sshTarget"] as? String) != sanitizedTarget {
+                        remote["sshTarget"] = sanitizedTarget
+                        remoteChanged = true
+                    }
+                } else if remote["sshTarget"] != nil {
+                    remote.removeValue(forKey: "sshTarget")
+                    remoteChanged = true
+                }
+
+                let trimmedIdentity = remoteIdentity.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedIdentity.isEmpty {
+                    if (remote["sshIdentity"] as? String) != trimmedIdentity {
+                        remote["sshIdentity"] = trimmedIdentity
+                        remoteChanged = true
+                    }
+                } else if remote["sshIdentity"] != nil {
+                    remote.removeValue(forKey: "sshIdentity")
+                    remoteChanged = true
+                }
+
+                if remoteChanged {
                     gateway["remote"] = remote
                     changed = true
                 }

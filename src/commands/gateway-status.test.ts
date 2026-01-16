@@ -11,6 +11,7 @@ const resolveGatewayPort = vi.fn(() => 18789);
 const discoverGatewayBeacons = vi.fn(async () => []);
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.10");
 const sshStop = vi.fn(async () => {});
+const resolveSshConfig = vi.fn(async () => null);
 const startSshPortForward = vi.fn(async () => ({
   parsedTarget: { user: "me", host: "studio", port: 22 },
   localPort: 18789,
@@ -92,8 +93,16 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => pickPrimaryTailnetIPv4(),
 }));
 
-vi.mock("../infra/ssh-tunnel.js", () => ({
-  startSshPortForward: (opts: unknown) => startSshPortForward(opts),
+vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/ssh-tunnel.js")>();
+  return {
+    ...actual,
+    startSshPortForward: (opts: unknown) => startSshPortForward(opts),
+  };
+});
+
+vi.mock("../infra/ssh-config.js", () => ({
+  resolveSshConfig: (opts: unknown) => resolveSshConfig(opts),
 }));
 
 vi.mock("../gateway/probe.js", () => ({
@@ -178,5 +187,123 @@ describe("gateway-status command", () => {
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
     const targets = parsed.targets as Array<Record<string, unknown>>;
     expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
+  });
+
+  it("infers SSH target from gateway.remote.url and ssh config", async () => {
+    const runtimeLogs: string[] = [];
+    const runtime = {
+      log: (msg: string) => runtimeLogs.push(msg),
+      error: (_msg: string) => {},
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
+    };
+
+    const originalUser = process.env.USER;
+    try {
+      process.env.USER = "steipete";
+      loadConfig.mockReturnValueOnce({
+        gateway: {
+          mode: "remote",
+          remote: { url: "ws://peters-mac-studio-1.sheep-coho.ts.net:18789", token: "rtok" },
+        },
+      });
+      resolveSshConfig.mockResolvedValueOnce({
+        user: "steipete",
+        host: "peters-mac-studio-1.sheep-coho.ts.net",
+        port: 2222,
+        identityFiles: ["/tmp/id_ed25519"],
+      });
+
+      startSshPortForward.mockClear();
+      const { gatewayStatusCommand } = await import("./gateway-status.js");
+      await gatewayStatusCommand(
+        { timeout: "1000", json: true },
+        runtime as unknown as import("../runtime.js").RuntimeEnv,
+      );
+
+      expect(startSshPortForward).toHaveBeenCalledTimes(1);
+      const call = startSshPortForward.mock.calls[0]?.[0] as {
+        target: string;
+        identity?: string;
+      };
+      expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
+      expect(call.identity).toBe("/tmp/id_ed25519");
+    } finally {
+      process.env.USER = originalUser;
+    }
+  });
+
+  it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
+    const runtimeLogs: string[] = [];
+    const runtime = {
+      log: (msg: string) => runtimeLogs.push(msg),
+      error: (_msg: string) => {},
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
+    };
+
+    const originalUser = process.env.USER;
+    try {
+      process.env.USER = "";
+      loadConfig.mockReturnValueOnce({
+        gateway: {
+          mode: "remote",
+          remote: { url: "ws://studio.example:18789", token: "rtok" },
+        },
+      });
+      resolveSshConfig.mockResolvedValueOnce(null);
+
+      startSshPortForward.mockClear();
+      const { gatewayStatusCommand } = await import("./gateway-status.js");
+      await gatewayStatusCommand(
+        { timeout: "1000", json: true },
+        runtime as unknown as import("../runtime.js").RuntimeEnv,
+      );
+
+      const call = startSshPortForward.mock.calls[0]?.[0] as {
+        target: string;
+      };
+      expect(call.target).toBe("studio.example");
+    } finally {
+      process.env.USER = originalUser;
+    }
+  });
+
+  it("keeps explicit SSH identity even when ssh config provides one", async () => {
+    const runtimeLogs: string[] = [];
+    const runtime = {
+      log: (msg: string) => runtimeLogs.push(msg),
+      error: (_msg: string) => {},
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
+    };
+
+    loadConfig.mockReturnValueOnce({
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://studio.example:18789", token: "rtok" },
+      },
+    });
+    resolveSshConfig.mockResolvedValueOnce({
+      user: "me",
+      host: "studio.example",
+      port: 22,
+      identityFiles: ["/tmp/id_from_config"],
+    });
+
+    startSshPortForward.mockClear();
+    const { gatewayStatusCommand } = await import("./gateway-status.js");
+    await gatewayStatusCommand(
+      { timeout: "1000", json: true, sshIdentity: "/tmp/explicit_id" },
+      runtime as unknown as import("../runtime.js").RuntimeEnv,
+    );
+
+    const call = startSshPortForward.mock.calls[0]?.[0] as {
+      identity?: string;
+    };
+    expect(call.identity).toBe("/tmp/explicit_id");
   });
 });
