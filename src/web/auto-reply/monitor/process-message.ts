@@ -185,7 +185,7 @@ export async function processMessage(params: {
   const responsePrefix =
     resolvedMessages.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
-      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[clawdbot]"
+      ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[clawdbot]")
       : undefined);
 
   // Create mutable context for response prefix template interpolation

@@ -50,6 +50,8 @@ function filterSkillEntries(
 
 const SKILL_COMMAND_MAX_LENGTH = 32;
 const SKILL_COMMAND_FALLBACK = "skill";
+// Discord command descriptions must be ≤100 characters
+const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
 
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = raw
@@ -311,9 +313,7 @@ export function buildWorkspaceSkillCommandSpecs(
     opts?.skillFilter,
     opts?.eligibility,
   );
-  const userInvocable = eligible.filter(
-    (entry) => entry.invocation?.userInvocable !== false,
-  );
+  const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
@@ -324,10 +324,15 @@ export function buildWorkspaceSkillCommandSpecs(
     const base = sanitizeSkillCommandName(entry.skill.name);
     const unique = resolveUniqueSkillCommandName(base, used);
     used.add(unique.toLowerCase());
+    const rawDescription = entry.skill.description?.trim() || entry.skill.name;
+    const description =
+      rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
+        ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
+        : rawDescription;
     specs.push({
       name: unique,
       skillName: entry.skill.name,
-      description: entry.skill.description?.trim() || entry.skill.name,
+      description,
     });
   }
   return specs;
