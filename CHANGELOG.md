@@ -4,7 +4,7 @@
 
 - Heartbeat: tighten prompt guidance + suppress duplicate alerts for 24h. (#980) — thanks @voidserf.
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
-- Onboarding: prompt to modify/disable/delete when reconfiguring existing channel accounts and keep channel selection looping until Finished.
+- Onboarding: switch channels setup to a single-select loop with modify/disable/delete actions per channel.
 - TUI: show provider/model labels for the active session and default model.
 - Heartbeat: add per-agent heartbeat configuration and multi-agent docs example.
 - Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.

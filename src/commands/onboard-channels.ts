@@ -219,116 +219,93 @@ export async function setupChannels(
   ];
   await noteChannelPrimer(prompter, primerChannels);
 
-  const selectionOptions = [
-    ...installedPlugins.map((plugin) => ({
-      id: plugin.id as ChannelChoice,
-      meta: plugin.meta,
-    })),
-    ...catalogEntries.map((entry) => ({
-      id: entry.id as ChannelChoice,
-      meta: entry.meta,
-    })),
-  ].map((entry) => {
-    const meta = entry.meta;
-    const status = statusByChannel.get(entry.id);
-    return {
-      value: meta.id,
-      label: meta.selectionLabel ?? meta.label,
-      ...(status?.selectionHint ? { hint: status.selectionHint } : {}),
-    };
-  });
-
   const quickstartDefault =
     options?.initialSelection?.[0] ?? resolveQuickstartDefault(statusByChannel);
 
-  let selection: ChannelChoice[];
-  if (options?.quickstartDefaults) {
-    const choice = (await prompter.select({
-      message: "Select channel (QuickStart)",
-      options: [
-        ...selectionOptions,
-        {
-          value: "__skip__",
-          label: "Skip for now",
-          hint: "You can add channels later via `clawdbot channels add`",
-        },
-      ],
-      initialValue: quickstartDefault,
-    })) as ChannelChoice | "__skip__";
-    selection = choice === "__skip__" ? [] : [choice];
-  } else {
-    const initialSelection = options?.initialSelection ?? [];
-    const selectionSet = new Set<ChannelChoice>(initialSelection);
-    const doneValue = "__done__" as const;
+  const shouldPromptAccountIds = options?.promptAccountIds === true;
+  const recordAccount = (channel: ChannelChoice, accountId: string) => {
+    options?.onAccountId?.(channel, accountId);
+    const adapter = getChannelOnboardingAdapter(channel);
+    adapter?.onAccountRecorded?.(accountId, options);
+  };
 
-    const buildOptions = () => [
-      ...selectionOptions.map((opt) => ({
-        value: opt.value,
-        label: `${selectionSet.has(opt.value as ChannelChoice) ? "[x]" : "[ ]"} ${opt.label}`,
-        ...(opt.hint ? { hint: opt.hint } : {}),
+  const selection: ChannelChoice[] = [];
+  const addSelection = (channel: ChannelChoice) => {
+    if (!selection.includes(channel)) selection.push(channel);
+  };
+
+  const buildSelectionOptions = (
+    entries: Array<{ id: ChannelChoice; meta: { id: string; label: string; selectionLabel?: string } }>,
+  ) =>
+    entries.map((entry) => {
+      const status = statusByChannel.get(entry.id);
+      return {
+        value: entry.meta.id,
+        label: entry.meta.selectionLabel ?? entry.meta.label,
+        ...(status?.selectionHint ? { hint: status.selectionHint } : {}),
+      };
+    });
+
+  const getChannelEntries = () => {
+    const installed = listChannelPlugins();
+    const installedIds = new Set(installed.map((plugin) => plugin.id));
+    const catalog = listChannelPluginCatalogEntries().filter(
+      (entry) => !installedIds.has(entry.id),
+    );
+    const entries = [
+      ...installed.map((plugin) => ({
+        id: plugin.id as ChannelChoice,
+        meta: plugin.meta,
       })),
-      {
-        value: doneValue,
-        label: "Finished",
-        hint: selectionSet.size > 0 ? "Continue with selected channels" : "Skip channels for now",
-      },
+      ...catalog.map((entry) => ({
+        id: entry.id as ChannelChoice,
+        meta: entry.meta,
+      })),
     ];
+    return {
+      entries,
+      catalog,
+      catalogById: new Map(catalog.map((entry) => [entry.id as ChannelChoice, entry])),
+    };
+  };
 
-    while (true) {
-      const choice = (await prompter.select({
-        message: "Select channels (Enter to toggle, choose Finished to continue)",
-        options: buildOptions(),
-      })) as ChannelChoice | typeof doneValue;
-      if (choice === doneValue) break;
-      if (selectionSet.has(choice)) {
-        selectionSet.delete(choice);
-      } else {
-        selectionSet.add(choice);
-      }
+  const refreshStatus = async (channel: ChannelChoice) => {
+    const adapter = getChannelOnboardingAdapter(channel);
+    if (!adapter) return;
+    const status = await adapter.getStatus({ cfg: next, options, accountOverrides });
+    statusByChannel.set(channel, status);
+  };
+
+  const configureChannel = async (channel: ChannelChoice) => {
+    const adapter = getChannelOnboardingAdapter(channel);
+    if (!adapter) {
+      await prompter.note(`${channel} does not support onboarding yet.`, "Channel setup");
+      return;
     }
-
-    selection = Array.from(selectionSet);
-  }
-
-  const catalogById = new Map(catalogEntries.map((entry) => [entry.id as ChannelChoice, entry]));
-  if (selection.some((channel) => catalogById.has(channel))) {
-    const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
-    for (const channel of selection) {
-      const entry = catalogById.get(channel);
-      if (!entry) continue;
-      const result = await ensureOnboardingPluginInstalled({
-        cfg: next,
-        entry,
-        prompter,
-        runtime,
-        workspaceDir,
-      });
-      next = result.cfg;
-      if (!result.installed) {
-        selection = selection.filter((id) => id !== channel);
-        continue;
-      }
-      reloadOnboardingPluginRegistry({
-        cfg: next,
-        runtime,
-        workspaceDir,
-      });
+    const result = await adapter.configure({
+      cfg: next,
+      runtime,
+      prompter,
+      options,
+      accountOverrides,
+      shouldPromptAccountIds,
+      forceAllowFrom: forceAllowFromChannels.has(channel),
+    });
+    next = result.cfg;
+    if (result.accountId) {
+      recordAccount(channel, result.accountId);
     }
-  }
+    addSelection(channel);
+    await refreshStatus(channel);
+  };
 
-  const updatedSelection: ChannelChoice[] = [];
-  for (const channel of selection) {
-    const status = statusByChannel.get(channel);
-    if (!status?.configured) {
-      updatedSelection.push(channel);
-      continue;
-    }
-
+  const handleConfiguredChannel = async (channel: ChannelChoice, label: string) => {
     const plugin = getChannelPlugin(channel);
     const adapter = getChannelOnboardingAdapter(channel);
-    const label = plugin?.meta.label ?? channel;
-    const supportsDisable = Boolean(plugin?.config.setAccountEnabled || adapter?.disable);
-    const supportsDelete = Boolean(plugin?.config.deleteAccount);
+    const supportsDisable = Boolean(
+      options?.allowDisable && (plugin?.config.setAccountEnabled || adapter?.disable),
+    );
+    const supportsDelete = Boolean(options?.allowDisable && plugin?.config.deleteAccount);
     const action = await promptConfiguredAction({
       prompter,
       label,
@@ -336,21 +313,22 @@ export async function setupChannels(
       supportsDelete,
     });
 
-    if (action === "skip") {
-      continue;
-    }
+    if (action === "skip") return;
     if (action === "update") {
-      updatedSelection.push(channel);
-      continue;
+      await configureChannel(channel);
+      return;
     }
+    if (!options?.allowDisable) return;
 
     if (action === "delete" && !supportsDelete) {
       await prompter.note(`${label} does not support deleting config entries.`, "Remove channel");
-      continue;
+      return;
     }
 
     const shouldPromptAccount =
-      action === "delete" ? Boolean(plugin?.config.deleteAccount) : Boolean(plugin?.config.setAccountEnabled);
+      action === "delete"
+        ? Boolean(plugin?.config.deleteAccount)
+        : Boolean(plugin?.config.setAccountEnabled);
     const accountId = shouldPromptAccount
       ? await promptRemovalAccountId({
           cfg: next,
@@ -369,13 +347,12 @@ export async function setupChannels(
         message: `Delete ${label} account "${accountLabel}"?`,
         initialValue: false,
       });
-      if (!confirmed) {
-        continue;
-      }
+      if (!confirmed) return;
       if (plugin?.config.deleteAccount) {
         next = plugin.config.deleteAccount({ cfg: next, accountId: resolvedAccountId });
       }
-      continue;
+      await refreshStatus(channel);
+      return;
     }
 
     if (plugin?.config.setAccountEnabled) {
@@ -387,17 +364,88 @@ export async function setupChannels(
     } else if (adapter?.disable) {
       next = adapter.disable(next);
     }
-  }
+    await refreshStatus(channel);
+  };
 
-  selection = updatedSelection;
+  const handleChannelChoice = async (channel: ChannelChoice) => {
+    const { catalogById } = getChannelEntries();
+    const catalogEntry = catalogById.get(channel);
+    if (catalogEntry) {
+      const workspaceDir = resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: next,
+        entry: catalogEntry,
+        prompter,
+        runtime,
+        workspaceDir,
+      });
+      next = result.cfg;
+      if (!result.installed) return;
+      reloadOnboardingPluginRegistry({
+        cfg: next,
+        runtime,
+        workspaceDir,
+      });
+      await refreshStatus(channel);
+    }
+
+    const plugin = getChannelPlugin(channel);
+    const label = plugin?.meta.label ?? catalogEntry?.meta.label ?? channel;
+    const status = statusByChannel.get(channel);
+    const configured = status?.configured ?? false;
+    if (configured) {
+      await handleConfiguredChannel(channel, label);
+      return;
+    }
+    await configureChannel(channel);
+  };
+
+  if (options?.quickstartDefaults) {
+    const { entries } = getChannelEntries();
+    const choice = (await prompter.select({
+      message: "Select channel (QuickStart)",
+      options: [
+        ...buildSelectionOptions(entries),
+        {
+          value: "__skip__",
+          label: "Skip for now",
+          hint: "You can add channels later via `clawdbot channels add`",
+        },
+      ],
+      initialValue: quickstartDefault,
+    })) as ChannelChoice | "__skip__";
+    if (choice !== "__skip__") {
+      await handleChannelChoice(choice);
+    }
+  } else {
+    const doneValue = "__done__" as const;
+    const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
+    while (true) {
+      const { entries } = getChannelEntries();
+      const choice = (await prompter.select({
+        message: "Select a channel",
+        options: [
+          ...buildSelectionOptions(entries),
+          {
+            value: doneValue,
+            label: "Finished",
+            hint: selection.length > 0 ? "Done" : "Skip for now",
+          },
+        ],
+        initialValue,
+      })) as ChannelChoice | typeof doneValue;
+      if (choice === doneValue) break;
+      await handleChannelChoice(choice);
+    }
+  }
 
   options?.onSelection?.(selection);
 
   const selectionNotes = new Map<string, string>();
-  for (const plugin of installedPlugins) {
+  for (const plugin of listChannelPlugins()) {
     selectionNotes.set(plugin.id, formatChannelSelectionLine(plugin.meta, formatDocsLink));
   }
-  for (const entry of catalogEntries) {
+  for (const entry of listChannelPluginCatalogEntries()) {
     selectionNotes.set(entry.id, formatChannelSelectionLine(entry.meta, formatDocsLink));
   }
   const selectedLines = selection
@@ -407,50 +455,8 @@ export async function setupChannels(
     await prompter.note(selectedLines.join("\n"), "Selected channels");
   }
 
-  const shouldPromptAccountIds = options?.promptAccountIds === true;
-  const recordAccount = (channel: ChannelChoice, accountId: string) => {
-    options?.onAccountId?.(channel, accountId);
-    const adapter = getChannelOnboardingAdapter(channel);
-    adapter?.onAccountRecorded?.(accountId, options);
-  };
-
-  for (const channel of selection) {
-    const adapter = getChannelOnboardingAdapter(channel);
-    if (!adapter) continue;
-    const result = await adapter.configure({
-      cfg: next,
-      runtime,
-      prompter,
-      options,
-      accountOverrides,
-      shouldPromptAccountIds,
-      forceAllowFrom: forceAllowFromChannels.has(channel),
-    });
-    next = result.cfg;
-    if (result.accountId) {
-      recordAccount(channel, result.accountId);
-    }
-  }
-
   if (!options?.skipDmPolicyPrompt) {
     next = await maybeConfigureDmPolicies({ cfg: next, selection, prompter });
-  }
-
-  if (options?.allowDisable) {
-    for (const [channelId, status] of statusByChannel) {
-      if (selection.includes(channelId)) continue;
-      if (!status.configured) continue;
-      const adapter = getChannelOnboardingAdapter(channelId);
-      if (!adapter?.disable) continue;
-      const meta = getChannelPlugin(channelId)?.meta;
-      const disable = await prompter.confirm({
-        message: `Disable ${meta?.label ?? channelId} channel?`,
-        initialValue: false,
-      });
-      if (disable) {
-        next = adapter.disable(next);
-      }
-    }
   }
 
   return next;
