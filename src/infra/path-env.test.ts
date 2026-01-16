@@ -7,12 +7,12 @@ import { describe, expect, it } from "vitest";
 import { ensureClawdbotCliOnPath } from "./path-env.js";
 
 describe("ensureClawdbotCliOnPath", () => {
-  it("prepends the bundled Relay dir when a sibling clawdbot exists", async () => {
+  it("prepends the bundled app bin dir when a sibling clawdbot exists", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-path-"));
     try {
-      const relayDir = path.join(tmp, "Relay");
-      await fs.mkdir(relayDir, { recursive: true });
-      const cliPath = path.join(relayDir, "clawdbot");
+      const appBinDir = path.join(tmp, "AppBin");
+      await fs.mkdir(appBinDir, { recursive: true });
+      const cliPath = path.join(appBinDir, "clawdbot");
       await fs.writeFile(cliPath, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(cliPath, 0o755);
 
@@ -28,7 +28,7 @@ describe("ensureClawdbotCliOnPath", () => {
           platform: "darwin",
         });
         const updated = process.env.PATH ?? "";
-        expect(updated.split(path.delimiter)[0]).toBe(relayDir);
+        expect(updated.split(path.delimiter)[0]).toBe(appBinDir);
       } finally {
         process.env.PATH = originalPath;
         if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
@@ -65,11 +65,11 @@ describe("ensureClawdbotCliOnPath", () => {
     const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
     const originalMiseDataDir = process.env.MISE_DATA_DIR;
     try {
-      const relayDir = path.join(tmp, "Relay");
-      await fs.mkdir(relayDir, { recursive: true });
-      const relayCli = path.join(relayDir, "clawdbot");
-      await fs.writeFile(relayCli, "#!/bin/sh\necho ok\n", "utf-8");
-      await fs.chmod(relayCli, 0o755);
+      const appBinDir = path.join(tmp, "AppBin");
+      await fs.mkdir(appBinDir, { recursive: true });
+      const appCli = path.join(appBinDir, "clawdbot");
+      await fs.writeFile(appCli, "#!/bin/sh\necho ok\n", "utf-8");
+      await fs.chmod(appCli, 0o755);
 
       const localBinDir = path.join(tmp, "node_modules", ".bin");
       await fs.mkdir(localBinDir, { recursive: true });
@@ -85,7 +85,7 @@ describe("ensureClawdbotCliOnPath", () => {
       delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
 
       ensureClawdbotCliOnPath({
-        execPath: relayCli,
+        execPath: appCli,
         cwd: tmp,
         homeDir: tmp,
         platform: "darwin",
@@ -93,11 +93,11 @@ describe("ensureClawdbotCliOnPath", () => {
 
       const updated = process.env.PATH ?? "";
       const parts = updated.split(path.delimiter);
-      const relayIndex = parts.indexOf(relayDir);
+      const appBinIndex = parts.indexOf(appBinDir);
       const localIndex = parts.indexOf(localBinDir);
       const shimsIndex = parts.indexOf(shimsDir);
-      expect(relayIndex).toBeGreaterThanOrEqual(0);
-      expect(localIndex).toBeGreaterThan(relayIndex);
+      expect(appBinIndex).toBeGreaterThanOrEqual(0);
+      expect(localIndex).toBeGreaterThan(appBinIndex);
       expect(shimsIndex).toBeGreaterThan(localIndex);
     } finally {
       process.env.PATH = originalPath;

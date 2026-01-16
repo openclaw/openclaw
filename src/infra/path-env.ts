@@ -55,7 +55,7 @@ function candidateBinDirs(opts: EnsureClawdbotPathOpts): string[] {
 
   const candidates: string[] = [];
 
-  // Bundled macOS app: `clawdbot` lives in the Relay dir (process.execPath).
+  // Bundled macOS app: `clawdbot` lives next to the executable (process.execPath).
   try {
     const execDir = path.dirname(execPath);
     const siblingClawdbot = path.join(execDir, "clawdbot");

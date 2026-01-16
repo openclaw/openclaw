@@ -29,7 +29,7 @@ function resolveControlUiRoot(): string | null {
     }
   })();
   const candidates = [
-    // Packaged relay: Resources/Relay/control-ui
+    // Packaged app: control-ui lives alongside the executable.
     execDir ? path.resolve(execDir, "control-ui") : null,
     // Running from dist: dist/gateway/control-ui.js -> dist/control-ui
     path.resolve(here, "../control-ui"),
