@@ -240,7 +240,7 @@ It also warns if your configured model is unknown or missing auth.
 
 ### How does Anthropic "setup-token" auth work?
 
-The wizard can run `claude setup-token` on the gateway host (or you run it yourself), then stores the token as an auth profile for the **anthropic** provider. That profile is used for model calls the same way an API key or OAuth profile would be. If you already ran `claude setup-token`, pick **Anthropic token (paste setup-token)** and paste it. More detail: [OAuth](/concepts/oauth).
+`claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. If you run it on the gateway host, the wizard can auto-detect the CLI credentials. If you run it elsewhere, choose **Anthropic token (paste setup-token)** and paste the string. The token is stored as an auth profile for the **anthropic** provider and used like an API key or OAuth profile. More detail: [OAuth](/concepts/oauth).
 
 Clawdbot keeps `auth.profiles["anthropic:claude-cli"].mode` set to `"oauth"` so
 the profile accepts both OAuth and setup-token credentials; older `"token"` mode
@@ -1123,6 +1123,10 @@ can’t find that profile in its auth store.
 - **Sync the Claude Code CLI token on the gateway host**
   - Run `clawdbot models status` (it loads + syncs Claude Code CLI credentials).
   - If it still says missing: run `claude setup-token` (or `clawdbot models auth setup-token --provider anthropic`) and retry.
+- **If the token was created on another machine**
+  - Paste it into the gateway host with `clawdbot models auth paste-token --provider anthropic`.
+- **Check the profile mode**
+  - `auth.profiles["anthropic:claude-cli"].mode` must be `"oauth"` (token mode rejects OAuth credentials).
 - **If you want to use an API key instead**
   - Put `ANTHROPIC_API_KEY` in `~/.clawdbot/.env` on the **gateway host**.
   - Clear any pinned order that forces `anthropic:claude-cli`:

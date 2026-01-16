@@ -43,3 +43,7 @@ clawdbot models auth paste-token
 ```
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `clawdbot plugins list` to see which providers are installed.
+
+Notes:
+- `setup-token` runs `claude setup-token` on the current machine (requires the Claude Code CLI).
+- `paste-token` accepts a token string generated elsewhere.
