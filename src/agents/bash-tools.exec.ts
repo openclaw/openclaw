@@ -262,22 +262,28 @@ export function createExecTool(
         fn();
       };
 
-      const onAbort = () => {
+      // Tool-call abort should not kill backgrounded sessions; timeouts still must.
+      const onAbortSignal = () => {
         if (yielded || session.backgrounded) return;
         killSession(session);
       };
 
-      if (signal?.aborted) onAbort();
+      // Timeouts always terminate, even for backgrounded sessions.
+      const onTimeout = () => {
+        timedOut = true;
+        killSession(session);
+      };
+
+      if (signal?.aborted) onAbortSignal();
       else if (signal) {
-        signal.addEventListener("abort", onAbort, { once: true });
+        signal.addEventListener("abort", onAbortSignal, { once: true });
       }
 
       const effectiveTimeout =
         typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
       if (effectiveTimeout > 0) {
         timeoutTimer = setTimeout(() => {
-          timedOut = true;
-          onAbort();
+          onTimeout();
         }, effectiveTimeout * 1000);
       }
 

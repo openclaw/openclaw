@@ -67,6 +67,7 @@
 - Fix: normalize pairing CLI aliases, allow extension channels, and harden Zalo webhook payload parsing. (#991) — thanks @longmaba.
 - Fix: allow local Tailscale Serve hostnames without treating tailnet clients as direct. (#885) — thanks @oswalpalash.
 - Fix: reset sessions after role-ordering conflicts to recover from consecutive user turns. (#998)
+- Fix: keep background exec aborts from killing backgrounded sessions while honoring timeouts.
 
 ## 2026.1.14-1
 
