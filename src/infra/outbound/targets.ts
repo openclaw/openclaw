@@ -2,6 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -79,9 +80,11 @@ export function resolveOutboundTarget(params: {
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: ClawdbotConfig;
   entry?: SessionEntry;
+  heartbeat?: AgentDefaultsConfig["heartbeat"];
 }): OutboundTarget {
   const { cfg, entry } = params;
-  const rawTarget = cfg.agents?.defaults?.heartbeat?.target;
+  const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
+  const rawTarget = heartbeat?.target;
   let target: HeartbeatTarget = "last";
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
@@ -95,10 +98,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const explicitTo =
-    typeof cfg.agents?.defaults?.heartbeat?.to === "string" &&
-    cfg.agents.defaults.heartbeat.to.trim()
-      ? cfg.agents.defaults.heartbeat.to.trim()
-      : undefined;
+    typeof heartbeat?.to === "string" && heartbeat.to.trim() ? heartbeat.to.trim() : undefined;
 
   const lastChannel =
     entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL

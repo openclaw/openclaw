@@ -22,6 +22,7 @@ type ResolvedAgentConfig = {
   model?: AgentEntry["model"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -89,6 +90,7 @@ export function resolveAgentConfig(
         : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,

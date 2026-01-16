@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
@@ -15,22 +16,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            main: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
@@ -45,6 +30,23 @@ describe("resolveHeartbeatIntervalMs", () => {
         channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastProvider: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
 
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK 🦞" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -75,22 +77,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            main: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
@@ -104,6 +90,23 @@ describe("resolveHeartbeatIntervalMs", () => {
         channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastProvider: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
 
       replySpy.mockResolvedValue({ text: "<b>HEARTBEAT_OK</b>" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -136,22 +139,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     try {
       const originalUpdatedAt = 1000;
       const bumpedUpdatedAt = 2000;
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            main: {
-              sessionId: "sid",
-              updatedAt: originalUpdatedAt,
-              lastProvider: "whatsapp",
-              lastTo: "+1555",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
@@ -165,12 +152,32 @@ describe("resolveHeartbeatIntervalMs", () => {
         channels: { whatsapp: { allowFrom: ["*"] } },
         session: { store: storePath },
       };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: originalUpdatedAt,
+              lastProvider: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
 
       replySpy.mockImplementationOnce(async () => {
         const raw = await fs.readFile(storePath, "utf-8");
-        const parsed = JSON.parse(raw) as { main?: { updatedAt?: number } };
-        if (parsed.main) {
-          parsed.main.updatedAt = bumpedUpdatedAt;
+        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
+        if (parsed[sessionKey]) {
+          parsed[sessionKey] = {
+            ...parsed[sessionKey],
+            updatedAt: bumpedUpdatedAt,
+          };
         }
         await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
         return { text: "" };
@@ -186,10 +193,11 @@ describe("resolveHeartbeatIntervalMs", () => {
         },
       });
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-        main?: { updatedAt?: number };
-      };
-      expect(finalStore.main?.updatedAt).toBe(bumpedUpdatedAt);
+      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { updatedAt?: number } | undefined
+      >;
+      expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -201,11 +209,22 @@ describe("resolveHeartbeatIntervalMs", () => {
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
       await fs.writeFile(
         storePath,
         JSON.stringify(
           {
-            main: {
+            [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
               lastProvider: "whatsapp",
@@ -216,16 +235,6 @@ describe("resolveHeartbeatIntervalMs", () => {
           2,
         ),
       );
-
-      const cfg: ClawdbotConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
 
       replySpy.mockResolvedValue({ text: "Heartbeat alert" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -260,11 +269,22 @@ describe("resolveHeartbeatIntervalMs", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "telegram", to: "123456" },
+          },
+        },
+        channels: { telegram: { botToken: "test-bot-token-123" } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
       await fs.writeFile(
         storePath,
         JSON.stringify(
           {
-            main: {
+            [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
               lastProvider: "telegram",
@@ -275,16 +295,6 @@ describe("resolveHeartbeatIntervalMs", () => {
           2,
         ),
       );
-
-      const cfg: ClawdbotConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { every: "5m", target: "telegram", to: "123456" },
-          },
-        },
-        channels: { telegram: { botToken: "test-bot-token-123" } },
-        session: { store: storePath },
-      };
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -325,22 +335,6 @@ describe("resolveHeartbeatIntervalMs", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "";
     try {
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            main: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastProvider: "telegram",
-              lastTo: "123456",
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
@@ -356,6 +350,23 @@ describe("resolveHeartbeatIntervalMs", () => {
         },
         session: { store: storePath },
       };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastProvider: "telegram",
+              lastTo: "123456",
+            },
+          },
+          null,
+          2,
+        ),
+      );
 
       replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
       const sendTelegram = vi.fn().mockResolvedValue({

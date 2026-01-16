@@ -296,8 +296,9 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
-- **Agent heartbeat** is global (`agents.defaults.heartbeat.*`) and runs in the main session.
-  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
+- **Agent heartbeat** can be configured per agent (`agents.list[].heartbeat`) or globally
+  via `agents.defaults.heartbeat` (fallback when no per-agent entries are set).
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior.
   - Delivery defaults to the last used channel (or configured target).
 
 ## Reconnect behavior
@@ -330,6 +331,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 - `agents.defaults.heartbeat.model` (optional override)
 - `agents.defaults.heartbeat.target`
 - `agents.defaults.heartbeat.to`
+- `agents.list[].heartbeat.*` (per-agent overrides)
 - `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable channel startup when false)
 - `web.heartbeatSeconds`

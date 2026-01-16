@@ -255,6 +255,7 @@ export const AgentEntrySchema = z.object({
   model: AgentModelSchema.optional(),
   memorySearch: MemorySearchSchema,
   humanDelay: HumanDelaySchema.optional(),
+  heartbeat: HeartbeatSchema,
   identity: IdentitySchema,
   groupChat: GroupChatSchema,
   subagents: z
