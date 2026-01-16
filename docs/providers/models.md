@@ -25,6 +25,7 @@ model as `provider/model`.
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Moonshot AI (Kimi)](/providers/moonshot)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)

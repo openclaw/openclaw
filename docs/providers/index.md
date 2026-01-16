@@ -27,6 +27,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Chann
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Moonshot AI (Kimi)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
