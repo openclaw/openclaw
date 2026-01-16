@@ -84,4 +84,47 @@ describe("cron tool", () => {
       payload: { kind: "systemEvent", text: "hello" },
     });
   });
+
+  it("adds recent context for systemEvent reminders when session key is available", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: [{ type: "text", text: "Discussed Q2 budget" }] },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "We agreed to review on Tuesday." }],
+          },
+          { role: "user", content: [{ type: "text", text: "Remind me about the thing at 2pm" }] },
+        ],
+      })
+      .mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "main" });
+    await tool.execute("call3", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { atMs: 123 },
+        payload: { text: "Reminder: the thing." },
+      },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    const historyCall = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(historyCall.method).toBe("chat.history");
+
+    const cronCall = callGatewayMock.mock.calls[1]?.[0] as {
+      method?: string;
+      params?: { payload?: { text?: string } };
+    };
+    expect(cronCall.method).toBe("cron.add");
+    const text = cronCall.params?.payload?.text ?? "";
+    expect(text).toContain("Recent context:");
+    expect(text).toContain("User: Discussed Q2 budget");
+    expect(text).toContain("Assistant: We agreed to review on Tuesday.");
+    expect(text).toContain("User: Remind me about the thing at 2pm");
+  });
 });
