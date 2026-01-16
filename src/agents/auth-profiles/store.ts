@@ -207,6 +207,19 @@ export function ensureAuthProfileStore(
     return asStore;
   }
 
+  // Fallback: inherit auth-profiles from main agent if subagent has none
+  if (agentDir) {
+    const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
+    const mainRaw = loadJsonFile(mainAuthPath);
+    const mainStore = coerceAuthStore(mainRaw);
+    if (mainStore && Object.keys(mainStore.profiles).length > 0) {
+      // Clone main store to subagent directory for auth inheritance
+      saveJsonFile(authPath, mainStore);
+      log.info("inherited auth-profiles from main agent", { agentDir });
+      return mainStore;
+    }
+  }
+
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath(agentDir));
   const legacy = coerceLegacyStore(legacyRaw);
   const store: AuthProfileStore = {
