@@ -159,7 +159,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted. Stopped 0 sub-agents.");
+      expect(text).toBe("⚙️ Agent was aborted.");
       expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith(targetSessionId);
       const store = loadSessionStore(cfg.session.store);
       expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
