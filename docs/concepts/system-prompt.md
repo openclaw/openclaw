@@ -26,6 +26,22 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+## Prompt modes
+
+Clawdbot can render smaller system prompts for sub-agents. The runtime sets a
+`promptMode` for each run (not a user-facing config):
+
+- `full` (default): includes all sections above.
+- `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **Clawdbot
+  Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
+  **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, Workspace,
+  Sandbox, Current Date & Time (when known), Runtime, and injected context stay
+  available.
+- `none`: returns only the base identity line.
+
+When `promptMode=minimal`, extra injected prompts are labeled **Subagent
+Context** instead of **Group Chat Context**.
+
 ## Workspace bootstrap injection
 
 Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:

@@ -123,4 +123,54 @@ describe("subagent registry persistence", () => {
     );
     expect(match).toBeFalsy();
   });
+
+  it("retries cleanup announce after a failed announce", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-subagent-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const persisted = {
+      version: 1,
+      runs: {
+        "run-3": {
+          runId: "run-3",
+          childSessionKey: "agent:main:subagent:three",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "retry announce",
+          cleanup: "keep",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 2,
+        },
+      },
+    };
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+
+    announceSpy.mockResolvedValueOnce(false);
+    vi.resetModules();
+    const mod1 = await import("./subagent-registry.js");
+    mod1.initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(announceSpy).toHaveBeenCalledTimes(1);
+    const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupHandled?: boolean; cleanupCompletedAt?: number }>;
+    };
+    expect(afterFirst.runs["run-3"].cleanupHandled).toBe(false);
+    expect(afterFirst.runs["run-3"].cleanupCompletedAt).toBeUndefined();
+
+    announceSpy.mockResolvedValueOnce(true);
+    vi.resetModules();
+    const mod2 = await import("./subagent-registry.js");
+    mod2.initSubagentRegistry();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(announceSpy).toHaveBeenCalledTimes(2);
+    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
+      runs: Record<string, { cleanupCompletedAt?: number }>;
+    };
+    expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeDefined();
+  });
 });

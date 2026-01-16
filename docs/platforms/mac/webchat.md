@@ -24,8 +24,8 @@ agent (with a session switcher for other sessions).
 
 ## How it’s wired
 
-- Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort` and
-  events `chat`, `agent`, `presence`, `tick`, `health`.
+- Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort`,
+  `chat.inject` and events `chat`, `agent`, `presence`, `tick`, `health`.
 - Session: defaults to the primary session (`main`, or `global` when scope is
   global). The UI can switch between sessions.
 - Onboarding uses a dedicated session to keep first‑run setup separate.
