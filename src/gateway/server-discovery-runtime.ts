@@ -11,6 +11,7 @@ export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
   bridgePort?: number;
+  bridgeTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -27,6 +28,8 @@ export async function startGatewayDiscovery(params: {
       gatewayPort: params.port,
       bridgePort: params.bridgePort,
       canvasPort: params.canvasPort,
+      bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
+      bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
       sshPort,
       tailnetDns,
       cliPath: resolveBonjourCliPath(),
@@ -51,6 +54,8 @@ export async function startGatewayDiscovery(params: {
           displayName: formatBonjourInstanceName(params.machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
+          bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
+          bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
           tailnetDns,
           sshPort,
           cliPath: resolveBonjourCliPath(),

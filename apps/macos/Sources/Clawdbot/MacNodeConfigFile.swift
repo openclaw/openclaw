@@ -32,6 +32,7 @@ enum MacNodeConfigFile {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         } catch {
             self.logger.error("mac node config save failed: \(error.localizedDescription, privacy: .public)")
         }

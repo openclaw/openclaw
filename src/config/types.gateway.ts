@@ -11,6 +11,20 @@ export type BridgeConfig = {
    * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost on gateway)
    */
   bind?: BridgeBindMode;
+  tls?: BridgeTlsConfig;
+};
+
+export type BridgeTlsConfig = {
+  /** Enable TLS for the node bridge server. */
+  enabled?: boolean;
+  /** Auto-generate a self-signed cert if cert/key are missing (default: true). */
+  autoGenerate?: boolean;
+  /** PEM certificate path for the bridge server. */
+  certPath?: string;
+  /** PEM private key path for the bridge server. */
+  keyPath?: string;
+  /** Optional PEM CA bundle for TLS clients (mTLS or custom roots). */
+  caPath?: string;
 };
 
 export type WideAreaDiscoveryConfig = {

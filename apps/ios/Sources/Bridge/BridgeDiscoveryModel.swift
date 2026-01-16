@@ -23,6 +23,8 @@ final class BridgeDiscoveryModel {
         var gatewayPort: Int?
         var bridgePort: Int?
         var canvasPort: Int?
+        var tlsEnabled: Bool
+        var tlsFingerprintSha256: String?
         var cliPath: String?
     }
 
@@ -90,6 +92,8 @@ final class BridgeDiscoveryModel {
                                 gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
                                 bridgePort: Self.txtIntValue(txt, key: "bridgePort"),
                                 canvasPort: Self.txtIntValue(txt, key: "canvasPort"),
+                                tlsEnabled: Self.txtBoolValue(txt, key: "bridgeTls"),
+                                tlsFingerprintSha256: Self.txtValue(txt, key: "bridgeTlsSha256"),
                                 cliPath: Self.txtValue(txt, key: "cliPath"))
                         default:
                             return nil
@@ -213,5 +217,10 @@ final class BridgeDiscoveryModel {
     private static func txtIntValue(_ dict: [String: String], key: String) -> Int? {
         guard let raw = self.txtValue(dict, key: key) else { return nil }
         return Int(raw)
+    }
+
+    private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
+        guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
+        return raw == "1" || raw == "true" || raw == "yes"
     }
 }

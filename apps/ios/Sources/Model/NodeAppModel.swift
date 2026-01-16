@@ -205,6 +205,7 @@ final class NodeAppModel {
     func connectToBridge(
         endpoint: NWEndpoint,
         bridgeStableID: String,
+        tls: BridgeTLSParams?,
         hello: BridgeHello)
     {
         self.bridgeTask?.cancel()
@@ -232,6 +233,7 @@ final class NodeAppModel {
                     try await self.bridge.connect(
                         endpoint: endpoint,
                         hello: hello,
+                        tls: tls,
                         onConnected: { [weak self] serverName, mainSessionKey in
                             guard let self else { return }
                             await MainActor.run {

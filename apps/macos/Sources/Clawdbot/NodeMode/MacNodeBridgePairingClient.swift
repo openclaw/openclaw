@@ -11,10 +11,39 @@ actor MacNodeBridgePairingClient {
         endpoint: NWEndpoint,
         hello: BridgeHello,
         silent: Bool,
+        tls: MacNodeBridgeTLSParams? = nil,
+        onStatus: (@Sendable (String) -> Void)? = nil) async throws -> String
+    {
+        do {
+            return try await self.pairAndHelloOnce(
+                endpoint: endpoint,
+                hello: hello,
+                silent: silent,
+                tls: tls,
+                onStatus: onStatus)
+        } catch {
+            if let tls, !tls.required {
+                return try await self.pairAndHelloOnce(
+                    endpoint: endpoint,
+                    hello: hello,
+                    silent: silent,
+                    tls: nil,
+                    onStatus: onStatus)
+            }
+            throw error
+        }
+    }
+
+    private func pairAndHelloOnce(
+        endpoint: NWEndpoint,
+        hello: BridgeHello,
+        silent: Bool,
+        tls: MacNodeBridgeTLSParams?,
         onStatus: (@Sendable (String) -> Void)? = nil) async throws -> String
     {
         self.lineBuffer = Data()
-        let connection = NWConnection(to: endpoint, using: .tcp)
+        let params = self.makeParameters(tls: tls)
+        let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.clawdbot.macos.bridge-client")
         defer { connection.cancel() }
         try await AsyncTimeout.withTimeout(
@@ -162,6 +191,18 @@ actor MacNodeBridgePairingClient {
             if chunk.isEmpty { return nil }
             self.lineBuffer.append(chunk)
         }
+    }
+
+    private func makeParameters(tls: MacNodeBridgeTLSParams?) -> NWParameters {
+        let tcpOptions = NWProtocolTCP.Options()
+        if let tlsOptions = makeMacNodeTLSOptions(tls) {
+            let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+            params.includePeerToPeer = true
+            return params
+        }
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        return params
     }
 
     private func startAndWaitForReady(

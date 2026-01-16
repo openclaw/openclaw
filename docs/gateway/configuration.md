@@ -2732,12 +2732,29 @@ Bind modes:
 - `loopback`: `127.0.0.1` (local only)
 - `auto`: prefer tailnet IP if present, else `lan`
 
+TLS:
+- `bridge.tls.enabled`: enable TLS for bridge connections (TLS-only when enabled).
+- `bridge.tls.autoGenerate`: generate a self-signed cert when no cert/key are present (default: true).
+- `bridge.tls.certPath` / `bridge.tls.keyPath`: PEM paths for the bridge certificate + private key.
+- `bridge.tls.caPath`: optional PEM CA bundle (custom roots or future mTLS).
+
+When TLS is enabled, the Gateway advertises `bridgeTls=1` and `bridgeTlsSha256` in discovery TXT
+records so nodes can pin the certificate. Manual connections use trust-on-first-use if no
+fingerprint is stored yet.
+Auto-generated certs require `openssl` on PATH; if generation fails, the bridge will not start.
+
 ```json5
 {
   bridge: {
     enabled: true,
     port: 18790,
-    bind: "tailnet"
+    bind: "tailnet",
+    tls: {
+      enabled: true,
+      // Uses ~/.clawdbot/bridge/tls/bridge-{cert,key}.pem when omitted.
+      // certPath: "~/.clawdbot/bridge/tls/bridge-cert.pem",
+      // keyPath: "~/.clawdbot/bridge/tls/bridge-key.pem"
+    }
   }
 }
 ```

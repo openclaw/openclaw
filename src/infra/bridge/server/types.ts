@@ -1,3 +1,5 @@
+import type { TlsOptions } from "node:tls";
+
 import type { NodePairingPendingRequest } from "../../node-pairing.js";
 
 export type BridgeHelloFrame = {
@@ -122,6 +124,7 @@ export type NodeBridgeClientInfo = {
 export type NodeBridgeServerOpts = {
   host: string;
   port: number; // 0 = ephemeral
+  tls?: TlsOptions;
   pairingBaseDir?: string;
   canvasHostPort?: number;
   canvasHostHost?: string;

@@ -73,7 +73,17 @@ async function writeJSONAtomic(filePath: string, value: unknown) {
   await fs.mkdir(dir, { recursive: true });
   const tmp = `${filePath}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(value, null, 2), "utf8");
+  try {
+    await fs.chmod(tmp, 0o600);
+  } catch {
+    // best-effort; ignore on platforms without chmod
+  }
   await fs.rename(tmp, filePath);
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch {
+    // best-effort; ignore on platforms without chmod
+  }
 }
 
 function pruneExpiredPending(

@@ -12,6 +12,8 @@ export type GatewayBonjourBeacon = {
   bridgePort?: number;
   gatewayPort?: number;
   sshPort?: number;
+  bridgeTls?: boolean;
+  bridgeTlsFingerprintSha256?: string;
   cliPath?: string;
   txt?: Record<string, string>;
 };
@@ -206,6 +208,11 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   beacon.bridgePort = parseIntOrNull(txt.bridgePort);
   beacon.gatewayPort = parseIntOrNull(txt.gatewayPort);
   beacon.sshPort = parseIntOrNull(txt.sshPort);
+  if (txt.bridgeTls) {
+    const raw = txt.bridgeTls.trim().toLowerCase();
+    beacon.bridgeTls = raw === "1" || raw === "true" || raw === "yes";
+  }
+  if (txt.bridgeTlsSha256) beacon.bridgeTlsFingerprintSha256 = txt.bridgeTlsSha256;
 
   if (!beacon.displayName) beacon.displayName = decodedInstanceName;
   return beacon;

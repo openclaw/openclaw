@@ -147,6 +147,16 @@ class SecurePrefs(context: Context) {
     prefs.edit { putString(key, token.trim()) }
   }
 
+  fun loadBridgeTlsFingerprint(stableId: String): String? {
+    val key = "bridge.tls.$stableId"
+    return prefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveBridgeTlsFingerprint(stableId: String, fingerprint: String) {
+    val key = "bridge.tls.$stableId"
+    prefs.edit { putString(key, fingerprint.trim()) }
+  }
+
   private fun loadOrCreateInstanceId(): String {
     val existing = prefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing

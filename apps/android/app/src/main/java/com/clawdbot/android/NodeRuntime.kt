@@ -16,6 +16,7 @@ import com.clawdbot.android.bridge.BridgeDiscovery
 import com.clawdbot.android.bridge.BridgeEndpoint
 import com.clawdbot.android.bridge.BridgePairingClient
 import com.clawdbot.android.bridge.BridgeSession
+import com.clawdbot.android.bridge.BridgeTlsParams
 import com.clawdbot.android.node.CameraCaptureManager
 import com.clawdbot.android.node.LocationCaptureManager
 import com.clawdbot.android.BuildConfig
@@ -159,6 +160,9 @@ class NodeRuntime(context: Context) {
       },
       onInvoke = { req ->
         handleInvoke(req.command, req.paramsJson)
+      },
+      onTlsFingerprint = { stableId, fingerprint ->
+        prefs.saveBridgeTlsFingerprint(stableId, fingerprint)
       },
     )
 
@@ -488,12 +492,17 @@ class NodeRuntime(context: Context) {
     scope.launch {
       _statusText.value = "Connecting…"
       val storedToken = prefs.loadBridgeToken()
+      val tls = resolveTlsParams(endpoint)
       val resolved =
         if (storedToken.isNullOrBlank()) {
           _statusText.value = "Pairing…"
           BridgePairingClient().pairAndHello(
             endpoint = endpoint,
             hello = buildPairingHello(token = null),
+            tls = tls,
+            onTlsFingerprint = { fingerprint ->
+              prefs.saveBridgeTlsFingerprint(endpoint.stableId, fingerprint)
+            },
           )
         } else {
           BridgePairingClient.PairResult(ok = true, token = storedToken.trim())
@@ -510,6 +519,7 @@ class NodeRuntime(context: Context) {
       session.connect(
         endpoint = endpoint,
         hello = buildSessionHello(token = authToken),
+        tls = tls,
       )
     }
   }
@@ -554,6 +564,41 @@ class NodeRuntime(context: Context) {
 
   fun disconnect() {
     session.disconnect()
+  }
+
+  private fun resolveTlsParams(endpoint: BridgeEndpoint): BridgeTlsParams? {
+    val stored = prefs.loadBridgeTlsFingerprint(endpoint.stableId)
+    val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
+    val manual = endpoint.stableId.startsWith("manual|")
+
+    if (hinted) {
+      return BridgeTlsParams(
+        required = true,
+        expectedFingerprint = endpoint.tlsFingerprintSha256 ?: stored,
+        allowTOFU = stored == null,
+        stableId = endpoint.stableId,
+      )
+    }
+
+    if (!stored.isNullOrBlank()) {
+      return BridgeTlsParams(
+        required = true,
+        expectedFingerprint = stored,
+        allowTOFU = false,
+        stableId = endpoint.stableId,
+      )
+    }
+
+    if (manual) {
+      return BridgeTlsParams(
+        required = false,
+        expectedFingerprint = null,
+        allowTOFU = true,
+        stableId = endpoint.stableId,
+      )
+    }
+
+    return null
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {

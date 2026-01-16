@@ -84,7 +84,7 @@ Schema:
 Notes:
 - `allowlist` entries are JSON-encoded argv arrays.
 - Choosing “Always Allow” in the prompt adds that command to the allowlist.
-- Allowlisted runs ignore `PATH` overrides; other env vars are merged with the app’s environment.
+- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`) and then merged with the app’s environment.
 
 ## Deep links
 

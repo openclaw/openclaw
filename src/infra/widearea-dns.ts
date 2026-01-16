@@ -71,6 +71,8 @@ export type WideAreaBridgeZoneOpts = {
   displayName: string;
   tailnetIPv4: string;
   tailnetIPv6?: string;
+  bridgeTlsEnabled?: boolean;
+  bridgeTlsFingerprintSha256?: string;
   instanceLabel?: string;
   hostLabel?: string;
   tailnetDns?: string;
@@ -90,6 +92,12 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
   ];
   if (typeof opts.gatewayPort === "number" && opts.gatewayPort > 0) {
     txt.push(`gatewayPort=${opts.gatewayPort}`);
+  }
+  if (opts.bridgeTlsEnabled) {
+    txt.push(`bridgeTls=1`);
+    if (opts.bridgeTlsFingerprintSha256) {
+      txt.push(`bridgeTlsSha256=${opts.bridgeTlsFingerprintSha256}`);
+    }
   }
   if (opts.tailnetDns?.trim()) {
     txt.push(`tailnetDns=${opts.tailnetDns.trim()}`);

@@ -10,6 +10,8 @@ data class BridgeEndpoint(
   val gatewayPort: Int? = null,
   val bridgePort: Int? = null,
   val canvasPort: Int? = null,
+  val tlsEnabled: Boolean = false,
+  val tlsFingerprintSha256: String? = null,
 ) {
   companion object {
     fun manual(host: String, port: Int): BridgeEndpoint =
@@ -18,6 +20,8 @@ data class BridgeEndpoint(
         name = "$host:$port",
         host = host,
         port = port,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
       )
   }
 }
