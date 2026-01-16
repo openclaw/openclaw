@@ -12,6 +12,7 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
+import { zaloPlugin } from "./channel.js";
 import { loadCoreChannelDeps } from "./core-bridge.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import type { CoreConfig } from "./types.js";
@@ -176,8 +177,12 @@ export async function handleZaloWebhookRequest(
     return true;
   }
 
-  const payload = body.value as { ok?: boolean; result?: ZaloUpdate };
-  if (!payload?.ok || !payload.result) {
+  // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }
+  const raw = body.value as Record<string, unknown>;
+  const update: ZaloUpdate | undefined =
+    raw.ok === true && raw.result ? (raw.result as ZaloUpdate) : (raw as ZaloUpdate);
+
+  if (!update?.event_name) {
     res.statusCode = 400;
     res.end("invalid payload");
     return true;
@@ -185,7 +190,7 @@ export async function handleZaloWebhookRequest(
 
   target.statusSink?.({ lastInboundAt: Date.now() });
   processUpdate(
-    payload.result,
+    update,
     target.token,
     target.account,
     target.config,
@@ -445,6 +450,7 @@ async function processMessageWithPipeline(params: {
             channel: "zalo",
             id: senderId,
             meta: { name: senderName ?? undefined },
+            pairingAdapter: zaloPlugin.pairing,
           });
 
           if (created) {

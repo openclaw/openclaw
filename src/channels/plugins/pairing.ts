@@ -53,8 +53,11 @@ export async function notifyPairingApproved(params: {
   id: string;
   cfg: ClawdbotConfig;
   runtime?: RuntimeEnv;
+  /** Extension channels can pass their adapter directly to bypass registry lookup. */
+  pairingAdapter?: ChannelPairingAdapter;
 }): Promise<void> {
-  const adapter = requirePairingAdapter(params.channelId);
+  // Extensions may provide adapter directly to bypass ESM module isolation
+  const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
   if (!adapter.notifyApproval) return;
   await adapter.notifyApproval({
     cfg: params.cfg,

@@ -8,11 +8,10 @@ const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
-const requirePairingAdapter = vi.fn((channel: string) => ({
+const getPairingAdapter = vi.fn((channel: string) => ({
   idLabel: pairingIdLabels[channel] ?? "userId",
 }));
 const listPairingChannels = vi.fn(() => ["telegram", "discord"]);
-const resolvePairingChannel = vi.fn((raw: string) => raw);
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests,
@@ -21,9 +20,8 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 vi.mock("../channels/plugins/pairing.js", () => ({
   listPairingChannels,
-  resolvePairingChannel,
   notifyPairingApproved,
-  requirePairingAdapter,
+  getPairingAdapter,
 }));
 
 vi.mock("../config/config.js", () => ({

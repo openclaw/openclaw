@@ -30,6 +30,11 @@ export type CoreChannelDeps = {
     channel: string;
     id: string;
     meta?: { name?: string };
+    pairingAdapter?: {
+      idLabel: string;
+      normalizeAllowEntry?: (entry: string) => string;
+      notifyApproval?: (params: { cfg: unknown; id: string; runtime?: unknown }) => Promise<void>;
+    };
   }) => Promise<{ code: string; created: boolean }>;
   fetchRemoteMedia: (params: { url: string }) => Promise<{ buffer: Buffer; contentType?: string }>;
   saveMediaBuffer: (
