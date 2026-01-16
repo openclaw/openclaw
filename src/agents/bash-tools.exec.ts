@@ -263,6 +263,7 @@ export function createExecTool(
       };
 
       const onAbort = () => {
+        if (yielded || session.backgrounded) return;
         killSession(session);
       };
 
