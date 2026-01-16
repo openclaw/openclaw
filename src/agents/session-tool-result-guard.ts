@@ -16,7 +16,9 @@ function stripFinalTagsFromAssistant(message: Extract<AgentMessage, { role: "ass
   const content = message.content;
   if (typeof content === "string") {
     const cleaned = stripFinalTagsFromText(content);
-    return cleaned === content ? message : ({ ...message, content: cleaned } as AgentMessage);
+    return cleaned === content
+      ? message
+      : ({ ...message, content: cleaned } as unknown as AgentMessage);
   }
   if (!Array.isArray(content)) return message;
 
