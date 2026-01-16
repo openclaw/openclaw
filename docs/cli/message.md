@@ -44,7 +44,7 @@ Target formats (`--to`):
 
 - `send`
   - Channels: WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams
-  - Required: `--to`, `--message`
+  - Required: `--to`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons` (requires `"inlineButtons"` in `channels.telegram.capabilities` or `channels.telegram.accounts.<id>.capabilities`)
   - Telegram only: `--thread-id` (forum topic id)

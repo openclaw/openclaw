@@ -37,6 +37,7 @@ export const dispatchTelegramMessage = async ({
     route,
     skillFilter,
     sendTyping,
+    sendRecordVoice,
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
@@ -144,6 +145,7 @@ export const dispatchTelegramMessage = async ({
           replyToMode,
           textLimit,
           messageThreadId: resolvedThreadId,
+          onVoiceRecording: sendRecordVoice,
         });
         didSendReply = true;
       },

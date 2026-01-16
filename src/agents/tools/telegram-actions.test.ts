@@ -221,6 +221,43 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("allows media-only messages without content", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        mediaUrl: "https://example.com/note.ogg",
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "123456",
+      "",
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: "https://example.com/note.ogg",
+      }),
+    );
+  });
+
+  it("requires content when no mediaUrl is provided", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/content required/i);
+  });
+
   it("respects sendMessage gating", async () => {
     const cfg = {
       channels: {

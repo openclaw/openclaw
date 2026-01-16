@@ -19,6 +19,7 @@ const usageMocks = vi.hoisted(() => ({
     providers: [],
   }),
   formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
+  formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
 
@@ -97,6 +98,16 @@ describe("trigger handling", () => {
   it("filters usage summary to the current model provider", async () => {
     await withTempHome(async (home) => {
       usageMocks.loadProviderUsageSummary.mockClear();
+      usageMocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            windows: [],
+          },
+        ],
+      });
 
       const res = await getReplyFromConfig(
         {

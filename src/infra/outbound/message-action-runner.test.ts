@@ -37,6 +37,37 @@ describe("runMessageAction context isolation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("allows media-only send when target matches current channel", async () => {
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        to: "#C123",
+        media: "https://example.com/note.ogg",
+      },
+      toolContext: { currentChannelId: "C123" },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("requires message when no media hint is provided", async () => {
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: {
+          channel: "slack",
+          to: "#C123",
+        },
+        toolContext: { currentChannelId: "C123" },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/message required/i);
+  });
+
   it("blocks send when target differs from current channel", async () => {
     await expect(
       runMessageAction({

@@ -9,7 +9,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .requiredOption("-m, --message <text>", "Message body"),
+            .option("-m, --message <text>", "Message body (required unless --media is set)"),
         )
         .option(
           "--media <path-or-url>",

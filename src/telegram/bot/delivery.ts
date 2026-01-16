@@ -25,12 +25,19 @@ export async function deliverReplies(params: {
   replyToMode: ReplyToMode;
   textLimit: number;
   messageThreadId?: number;
+  /** Callback invoked before sending a voice message to switch typing indicator. */
+  onVoiceRecording?: () => Promise<void> | void;
 }) {
   const { replies, chatId, runtime, bot, replyToMode, textLimit, messageThreadId } = params;
   const threadParams = buildTelegramThreadParams(messageThreadId);
   let hasReplied = false;
   for (const reply of replies) {
-    if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
+    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    if (!reply?.text && !hasMedia) {
+      if (reply?.audioAsVoice) {
+        logVerbose("telegram reply has audioAsVoice without media/text; skipping");
+        continue;
+      }
       runtime.error?.(danger("reply missing text/media"));
       continue;
     }
@@ -99,6 +106,8 @@ export async function deliverReplies(params: {
         });
         if (useVoice) {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
+          // Switch typing indicator to record_voice before sending.
+          await params.onVoiceRecording?.();
           await bot.api.sendVoice(chatId, file, {
             ...mediaParams,
           });
