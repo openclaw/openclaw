@@ -87,6 +87,14 @@ final class GatewayProcessManager {
             self.status = .stopped
             return
         }
+        // Many surfaces can call `setActive(true)` in quick succession (startup, Canvas, health checks).
+        // Avoid spawning multiple concurrent "start" tasks that can thrash launchd and flap the port.
+        switch self.status {
+        case .starting, .running, .attachedExisting:
+            return
+        case .stopped, .failed:
+            break
+        }
         self.status = .starting
         self.logger.debug("gateway start requested")
 
