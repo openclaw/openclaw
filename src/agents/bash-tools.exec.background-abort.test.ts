@@ -50,7 +50,7 @@ test("background exec still times out after tool signal abort", async () => {
   const result = await tool.execute(
     "toolcall",
     {
-      command: "node -e \"setTimeout(() => {}, 5000)\"",
+      command: 'node -e "setTimeout(() => {}, 5000)"',
       background: true,
       timeout: 0.2,
     },
@@ -85,7 +85,7 @@ test("yielded background exec is not killed when tool signal aborts", async () =
 
   const result = await tool.execute(
     "toolcall",
-    { command: "node -e \"setTimeout(() => {}, 5000)\"", yieldMs: 5 },
+    { command: 'node -e "setTimeout(() => {}, 5000)"', yieldMs: 5 },
     abortController.signal,
   );
 
@@ -112,7 +112,7 @@ test("yielded background exec still times out", async () => {
   const tool = createExecTool({ allowBackground: true, backgroundMs: 10 });
 
   const result = await tool.execute("toolcall", {
-    command: "node -e \"setTimeout(() => {}, 5000)\"",
+    command: 'node -e "setTimeout(() => {}, 5000)"',
     yieldMs: 5,
     timeout: 0.2,
   });

@@ -124,9 +124,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         cfg,
       })
     : [];
-  const commandSpecs = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
-    : [];
+  const commandSpecs = nativeEnabled ? listNativeCommandSpecsForConfig(cfg, { skillCommands }) : [];
   const commands = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,

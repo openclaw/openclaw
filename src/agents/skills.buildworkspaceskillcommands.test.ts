@@ -61,4 +61,32 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(names).toEqual(["hello_world", "hello_world_2", "help_2"]);
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });
+
+  it("truncates descriptions longer than 100 characters for Discord compatibility", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    const longDescription =
+      "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "long-desc"),
+      name: "long-desc",
+      description: longDescription,
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "short-desc"),
+      name: "short-desc",
+      description: "Short description",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    const longCmd = commands.find((entry) => entry.skillName === "long-desc");
+    const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
+
+    expect(longCmd?.description.length).toBeLessThanOrEqual(100);
+    expect(longCmd?.description.endsWith("…")).toBe(true);
+    expect(shortCmd?.description).toBe("Short description");
+  });
 });
