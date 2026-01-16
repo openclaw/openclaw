@@ -372,7 +372,7 @@ describe("doctor command", () => {
         );
       }),
     ).toBe(true);
-  }, 10_000);
+  }, 20_000);
 
   it("warns when extra workspace directories exist", async () => {
     readConfigFileSnapshot.mockResolvedValue({

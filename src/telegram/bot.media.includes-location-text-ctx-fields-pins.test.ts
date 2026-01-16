@@ -99,7 +99,7 @@ describe("telegram inbound media", () => {
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<typeof vi.fn>;
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
 
       onSpy.mockReset();
       replySpy.mockReset();
@@ -143,7 +143,7 @@ describe("telegram inbound media", () => {
     async () => {
       const { createTelegramBot } = await import("./bot.js");
       const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = replyModule.getReplyFromConfig as unknown as ReturnType<typeof vi.fn>;
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
 
       onSpy.mockReset();
       replySpy.mockReset();
