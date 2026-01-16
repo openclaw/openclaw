@@ -21,3 +21,14 @@ clawdbot doctor --repair
 clawdbot doctor --deep
 ```
 
+## macOS: `launchctl` env overrides
+
+If you previously ran `launchctl setenv CLAWDBOT_GATEWAY_TOKEN ...` (or `...PASSWORD`), that value overrides your config file and can cause persistent “unauthorized” errors.
+
+```bash
+launchctl getenv CLAWDBOT_GATEWAY_TOKEN
+launchctl getenv CLAWDBOT_GATEWAY_PASSWORD
+
+launchctl unsetenv CLAWDBOT_GATEWAY_TOKEN
+launchctl unsetenv CLAWDBOT_GATEWAY_PASSWORD
+```

@@ -3,6 +3,13 @@ import Testing
 @testable import Clawdbot
 
 @Suite struct GatewayEndpointStoreTests {
+    private func makeDefaults() -> UserDefaults {
+        let suiteName = "GatewayEndpointStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
+    }
+
     @Test func resolveGatewayTokenPrefersEnvAndFallsBackToLaunchd() {
         let snapshot = LaunchAgentPlistSnapshot(
             programArguments: [],
@@ -65,5 +72,71 @@ import Testing
             env: [:],
             launchdSnapshot: snapshot)
         #expect(password == "launchd-pass")
+    }
+
+    @Test func connectionModeResolverPrefersConfigModeOverDefaults() {
+        let defaults = self.makeDefaults()
+        defaults.set("remote", forKey: connectionModeKey)
+
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": " local ",
+            ],
+        ]
+
+        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        #expect(resolved.mode == .local)
+    }
+
+    @Test func connectionModeResolverTrimsConfigMode() {
+        let defaults = self.makeDefaults()
+        defaults.set("local", forKey: connectionModeKey)
+
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": " remote ",
+            ],
+        ]
+
+        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        #expect(resolved.mode == .remote)
+    }
+
+    @Test func connectionModeResolverFallsBackToDefaultsWhenMissingConfig() {
+        let defaults = self.makeDefaults()
+        defaults.set("remote", forKey: connectionModeKey)
+
+        let resolved = ConnectionModeResolver.resolve(root: [:], defaults: defaults)
+        #expect(resolved.mode == .remote)
+    }
+
+    @Test func connectionModeResolverFallsBackToDefaultsOnUnknownConfig() {
+        let defaults = self.makeDefaults()
+        defaults.set("local", forKey: connectionModeKey)
+
+        let root: [String: Any] = [
+            "gateway": [
+                "mode": "staging",
+            ],
+        ]
+
+        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        #expect(resolved.mode == .local)
+    }
+
+    @Test func connectionModeResolverPrefersRemoteURLWhenModeMissing() {
+        let defaults = self.makeDefaults()
+        defaults.set("local", forKey: connectionModeKey)
+
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": " ws://umbrel:18789 ",
+                ],
+            ],
+        ]
+
+        let resolved = ConnectionModeResolver.resolve(root: root, defaults: defaults)
+        #expect(resolved.mode == .remote)
     }
 }
