@@ -1,4 +1,5 @@
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
+import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
@@ -14,6 +15,7 @@ import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
 import { isAntigravityClaude } from "../pi-embedded-helpers/google.js";
+import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
@@ -80,17 +82,36 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
   return violations;
 }
 
+export function sanitizeToolsForGoogle<TSchemaType extends TSchema = TSchema, TResult = unknown>(
+  params: {
+    tools: AgentTool<TSchemaType, TResult>[];
+    provider: string;
+  },
+): AgentTool<TSchemaType, TResult>[] {
+  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+    return params.tools;
+  }
+  return params.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") return tool;
+    return {
+      ...tool,
+      parameters: cleanToolSchemaForGemini(tool.parameters as Record<string, unknown>) as TSchemaType,
+    };
+  });
+}
+
 export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
   if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
     return;
   }
   const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);
+  const tools = sanitizeToolsForGoogle(params);
   log.info("google tool schema snapshot", {
     provider: params.provider,
-    toolCount: params.tools.length,
+    toolCount: tools.length,
     tools: toolNames,
   });
-  for (const [index, tool] of params.tools.entries()) {
+  for (const [index, tool] of tools.entries()) {
     const violations = findUnsupportedSchemaKeywords(tool.parameters, `${tool.name}.parameters`);
     if (violations.length > 0) {
       log.warn("google tool schema has unsupported keywords", {
