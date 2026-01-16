@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.1.15 (unreleased)
+## 2026.1.15
 
 ### Highlights
 - Plugins: add provider auth registry + `clawdbot models auth login` for plugin-driven OAuth/API key flows.
