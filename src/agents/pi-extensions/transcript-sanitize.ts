@@ -41,11 +41,13 @@ function sanitizeAssistantTextBlocks(messages: AgentMessage[]): AgentMessage[] {
     });
 
     // Remove empty text blocks after sanitization
-    const filteredContent = newContent.filter(
-      (block) => typeof block === "object" &&
-                 ((block as { text?: unknown }).text !== "") &&
-                 ((block as { text?: unknown }).text !== undefined),
-    );
+    const filteredContent = newContent.filter((block) => {
+      // Keep all non-text blocks (tool_use, tool_result, images, etc.)
+      if ((block as { type?: unknown }).type !== "text") return true;  
+      // Only filter text blocks
+      const textBlock = block as { text: string };
+      return textBlock.text !== "" && textBlock.text !== undefined;
+    });
 
     return {
       ...assistantMsg,
