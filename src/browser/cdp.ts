@@ -16,6 +16,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     if (cdpPort) ws.port = cdpPort;
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
   }
+  if (cdp.protocol === "https:" && ws.protocol === "ws:") {
+    ws.protocol = "wss:";
+  }
   if (!ws.username && !ws.password && (cdp.username || cdp.password)) {
     ws.username = cdp.username;
     ws.password = cdp.password;

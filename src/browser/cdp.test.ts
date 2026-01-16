@@ -173,4 +173,12 @@ describe("cdp", () => {
     );
     expect(normalized).toBe("wss://user:pass@example.com/devtools/browser/ABC?token=abc");
   });
+
+  it("upgrades ws to wss when CDP uses https", () => {
+    const normalized = normalizeCdpWsUrl(
+      "ws://production-sfo.browserless.io",
+      "https://production-sfo.browserless.io?token=abc",
+    );
+    expect(normalized).toBe("wss://production-sfo.browserless.io/?token=abc");
+  });
 });
