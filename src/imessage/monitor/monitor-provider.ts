@@ -16,9 +16,10 @@ import {
 } from "../../auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import {
-  buildHistoryContextFromMap,
+  buildPendingHistoryContextFromMap,
   clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntry,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
@@ -260,6 +261,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
     const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
+    const attachments = includeAttachments ? (message.attachments ?? []) : [];
+    const firstAttachment = attachments?.find((entry) => entry?.original_path && !entry?.missing);
+    const mediaPath = firstAttachment?.original_path ?? undefined;
+    const mediaType = firstAttachment?.mime_type ?? undefined;
+    const kind = mediaKindFromMime(mediaType ?? undefined);
+    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
+    const bodyText = messageText || placeholder;
+    if (!bodyText) return;
+    const createdAt = message.created_at ? Date.parse(message.created_at) : undefined;
+    const historyKey = isGroup
+      ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
+      : undefined;
     const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
     const requireMention = resolveChannelGroupRequireMention({
       cfg,
@@ -290,23 +303,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const effectiveWasMentioned = mentioned || shouldBypassMention;
     if (isGroup && requireMention && canDetectMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);
+      if (historyKey && historyLimit > 0) {
+        recordPendingHistoryEntry({
+          historyMap: groupHistories,
+          historyKey,
+          limit: historyLimit,
+          entry: {
+            sender: normalizeIMessageHandle(sender),
+            body: bodyText,
+            timestamp: createdAt,
+            messageId: message.id ? String(message.id) : undefined,
+          },
+        });
+      }
       return;
     }
-
-    const attachments = includeAttachments ? (message.attachments ?? []) : [];
-    const firstAttachment = attachments?.find((entry) => entry?.original_path && !entry?.missing);
-    const mediaPath = firstAttachment?.original_path ?? undefined;
-    const mediaType = firstAttachment?.mime_type ?? undefined;
-    const kind = mediaKindFromMime(mediaType ?? undefined);
-    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
-    const bodyText = messageText || placeholder;
-    if (!bodyText) return;
 
     const chatTarget = formatIMessageChatTarget(chatId);
     const fromLabel = isGroup
       ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
       : `${normalizeIMessageHandle(sender)} id:${sender}`;
-    const createdAt = message.created_at ? Date.parse(message.created_at) : undefined;
     const body = formatAgentEnvelope({
       channel: "iMessage",
       from: fromLabel,
@@ -314,20 +330,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       body: bodyText,
     });
     let combinedBody = body;
-    const historyKey = isGroup
-      ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
-      : undefined;
     if (isGroup && historyKey && historyLimit > 0) {
-      combinedBody = buildHistoryContextFromMap({
+      combinedBody = buildPendingHistoryContextFromMap({
         historyMap: groupHistories,
         historyKey,
         limit: historyLimit,
-        entry: {
-          sender: normalizeIMessageHandle(sender),
-          body: bodyText,
-          timestamp: createdAt,
-          messageId: message.id ? String(message.id) : undefined,
-        },
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -393,8 +400,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    let didSendReply = false;
-
     // Create mutable context for response prefix template interpolation
     let prefixContext: ResponsePrefixContext = {
       identityName: resolveIdentityName(cfg, route.agentId),
@@ -414,7 +419,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           maxBytes: mediaMaxBytes,
           textLimit,
         });
-        didSendReply = true;
       },
       onError: (err, info) => {
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
@@ -440,12 +444,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     if (!queuedFinal) {
-      if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+      if (isGroup && historyKey && historyLimit > 0) {
         clearHistoryEntries({ historyMap: groupHistories, historyKey });
       }
       return;
     }
-    if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+    if (isGroup && historyKey && historyLimit > 0) {
       clearHistoryEntries({ historyMap: groupHistories, historyKey });
     }
   }

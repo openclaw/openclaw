@@ -23,12 +23,12 @@ export function buildHistoryContext(params: {
   );
 }
 
-export function appendHistoryEntry(params: {
-  historyMap: Map<string, HistoryEntry[]>;
+export function appendHistoryEntry<T extends HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
   historyKey: string;
-  entry: HistoryEntry;
+  entry: T;
   limit: number;
-}): HistoryEntry[] {
+}): T[] {
   const { historyMap, historyKey, entry } = params;
   if (params.limit <= 0) return [];
   const history = historyMap.get(historyKey) ?? [];
@@ -36,6 +36,34 @@ export function appendHistoryEntry(params: {
   while (history.length > params.limit) history.shift();
   historyMap.set(historyKey, history);
   return history;
+}
+
+export function recordPendingHistoryEntry<T extends HistoryEntry>(params: {
+  historyMap: Map<string, T[]>;
+  historyKey: string;
+  entry: T;
+  limit: number;
+}): T[] {
+  return appendHistoryEntry(params);
+}
+
+export function buildPendingHistoryContextFromMap(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey: string;
+  limit: number;
+  currentMessage: string;
+  formatEntry: (entry: HistoryEntry) => string;
+  lineBreak?: string;
+}): string {
+  if (params.limit <= 0) return params.currentMessage;
+  const entries = params.historyMap.get(params.historyKey) ?? [];
+  return buildHistoryContextFromEntries({
+    entries,
+    currentMessage: params.currentMessage,
+    formatEntry: params.formatEntry,
+    lineBreak: params.lineBreak,
+    excludeLast: false,
+  });
 }
 
 export function buildHistoryContextFromMap(params: {

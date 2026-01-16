@@ -14,7 +14,10 @@ import {
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntries,
+} from "../../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -72,16 +75,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let combinedBody = body;
     const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey && deps.historyLimit > 0) {
-      combinedBody = buildHistoryContextFromMap({
+      combinedBody = buildPendingHistoryContextFromMap({
         historyMap: deps.groupHistories,
         historyKey,
         limit: deps.historyLimit,
-        entry: {
-          sender: entry.senderName,
-          body: entry.bodyText,
-          timestamp: entry.timestamp ?? undefined,
-          messageId: entry.messageId,
-        },
         currentMessage: combinedBody,
         formatEntry: (historyEntry) =>
           formatAgentEnvelope({
@@ -150,8 +147,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    let didSendReply = false;
-
     // Create mutable context for response prefix template interpolation
     let prefixContext: ResponsePrefixContext = {
       identityName: resolveIdentityName(deps.cfg, route.agentId),
@@ -172,7 +167,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
         });
-        didSendReply = true;
       },
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
@@ -196,12 +190,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     if (!queuedFinal) {
-      if (entry.isGroup && historyKey && deps.historyLimit > 0 && didSendReply) {
+      if (entry.isGroup && historyKey && deps.historyLimit > 0) {
         clearHistoryEntries({ historyMap: deps.groupHistories, historyKey });
       }
       return;
     }
-    if (entry.isGroup && historyKey && deps.historyLimit > 0 && didSendReply) {
+    if (entry.isGroup && historyKey && deps.historyLimit > 0) {
       clearHistoryEntries({ historyMap: deps.groupHistories, historyKey });
     }
   }

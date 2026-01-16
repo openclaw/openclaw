@@ -76,10 +76,9 @@ export async function processMessage(params: {
 
   if (params.msg.chatType === "group") {
     const history = params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? [];
-    const historyWithoutCurrent = history.length > 0 ? history.slice(0, -1) : [];
-    if (historyWithoutCurrent.length > 0) {
+    if (history.length > 0) {
       const lineBreak = "\\n";
-      const historyText = historyWithoutCurrent
+      const historyText = history
         .map((m) => {
           const bodyWithId = m.id ? `${m.body}\n[message_id: ${m.id}]` : m.body;
           return formatAgentEnvelope({
@@ -299,14 +298,14 @@ export async function processMessage(params: {
   });
 
   if (!queuedFinal) {
-    if (shouldClearGroupHistory && didSendReply) {
+    if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }
     logVerbose("Skipping auto-reply: silent token or no text/media returned from resolver");
     return false;
   }
 
-  if (shouldClearGroupHistory && didSendReply) {
+  if (shouldClearGroupHistory) {
     params.groupHistories.set(params.groupHistoryKey, []);
   }
 
