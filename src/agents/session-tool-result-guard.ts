@@ -5,6 +5,39 @@ import { makeMissingToolResult } from "./session-transcript-repair.js";
 
 type ToolCall = { id: string; name?: string };
 
+const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+
+function stripFinalTagsFromText(text: string): string {
+  if (!text) return text;
+  return text.replace(FINAL_TAG_RE, "");
+}
+
+function stripFinalTagsFromAssistant(message: Extract<AgentMessage, { role: "assistant" }>) {
+  const content = message.content;
+  if (typeof content === "string") {
+    const cleaned = stripFinalTagsFromText(content);
+    return cleaned === content ? message : ({ ...message, content: cleaned } as AgentMessage);
+  }
+  if (!Array.isArray(content)) return message;
+
+  let changed = false;
+  const next = content.map((block) => {
+    if (!block || typeof block !== "object") return block;
+    const record = block as { type?: unknown; text?: unknown };
+    if (record.type === "text" && typeof record.text === "string") {
+      const cleaned = stripFinalTagsFromText(record.text);
+      if (cleaned !== record.text) {
+        changed = true;
+        return { ...record, text: cleaned };
+      }
+    }
+    return block;
+  });
+
+  if (!changed) return message;
+  return { ...message, content: next } as AgentMessage;
+}
+
 function extractAssistantToolCalls(msg: Extract<AgentMessage, { role: "assistant" }>): ToolCall[] {
   const content = msg.content;
   if (!Array.isArray(content)) return [];
@@ -56,9 +89,13 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
       return originalAppend(message as never);
     }
 
+    const sanitized =
+      role === "assistant"
+        ? stripFinalTagsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>)
+        : message;
     const toolCalls =
       role === "assistant"
-        ? extractAssistantToolCalls(message as Extract<AgentMessage, { role: "assistant" }>)
+        ? extractAssistantToolCalls(sanitized as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     // If previous tool calls are still pending, flush before non-tool results.
@@ -70,7 +107,7 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
       flushPendingToolResults();
     }
 
-    const result = originalAppend(message as never);
+    const result = originalAppend(sanitized as never);
 
     if (toolCalls.length > 0) {
       for (const call of toolCalls) {
