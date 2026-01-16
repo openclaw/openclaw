@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 /**
@@ -214,7 +215,8 @@ export function extractAssistantText(msg: AssistantMessage): string {
         )
         .filter(Boolean)
     : [];
-  return blocks.join("\n").trim();
+  const extracted = blocks.join("\n").trim();
+  return sanitizeUserFacingText(extracted);
 }
 
 export function extractAssistantThinking(msg: AssistantMessage): string {

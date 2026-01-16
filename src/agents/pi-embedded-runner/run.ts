@@ -256,6 +256,27 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // Handle role ordering errors with a user-friendly message
+            if (/incorrect role information|roles must alternate/i.test(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Message ordering conflict - please try again. " +
+                      "If this persists, use /new to start a fresh session.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                },
+              };
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
               await markAuthProfileFailure({
@@ -339,14 +360,15 @@ export async function runEmbeddedPiAgent(
             if (rotated) continue;
 
             if (fallbackConfigured) {
+              // Prefer formatted error message (user-friendly) over raw errorMessage
               const message =
-                lastAssistant?.errorMessage?.trim() ||
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant, {
                       cfg: params.config,
                       sessionKey: params.sessionKey ?? params.sessionId,
                     })
-                  : "") ||
+                  : undefined) ||
+                lastAssistant?.errorMessage?.trim() ||
                 (timedOut
                   ? "LLM request timed out."
                   : rateLimitFailure

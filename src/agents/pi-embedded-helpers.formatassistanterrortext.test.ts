@@ -33,6 +33,12 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("handles JSON-wrapped role errors", () => {
+    const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Message ordering conflict");
+    expect(result).not.toContain("400");
+  });
   it("suppresses raw error JSON payloads that are not otherwise classified", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
