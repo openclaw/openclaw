@@ -15,6 +15,13 @@ Clawdbot supports “subscription auth” via OAuth for providers that offer it 
 - how we **reuse external CLI tokens** (Claude Code / Codex CLI)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
+Clawdbot also supports **provider plugins** that ship their own OAuth or API‑key
+flows. Run them via:
+
+```bash
+clawdbot models auth login --provider <id>
+```
+
 ## The token sink (why it exists)
 
 OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.

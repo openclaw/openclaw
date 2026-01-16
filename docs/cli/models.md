@@ -37,6 +37,9 @@ clawdbot models fallbacks list
 
 ```bash
 clawdbot models auth add
+clawdbot models auth login --provider <id>
 clawdbot models auth setup-token
 clawdbot models auth paste-token
 ```
+`models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
+`clawdbot plugins list` to see which providers are installed.
