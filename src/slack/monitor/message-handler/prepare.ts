@@ -175,9 +175,9 @@ export async function prepareSlackMessage(params: {
         matchesMentionPatterns(message.text ?? "", mentionRegexes)));
   const implicitMention = Boolean(
     !isDirectMessage &&
-      ctx.botUserId &&
-      message.thread_ts &&
-      message.parent_user_id === ctx.botUserId,
+    ctx.botUserId &&
+    message.thread_ts &&
+    message.parent_user_id === ctx.botUserId,
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;

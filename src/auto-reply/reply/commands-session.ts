@@ -6,7 +6,12 @@ import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../inf
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { formatAbortReplyText, isAbortTrigger, setAbortMemory, stopSubagentsForRequester } from "./abort.js";
+import {
+  formatAbortReplyText,
+  isAbortTrigger,
+  setAbortMemory,
+  stopSubagentsForRequester,
+} from "./abort.js";
 import { clearSessionQueues } from "./queue.js";
 import type { CommandHandler } from "./commands-types.js";
 

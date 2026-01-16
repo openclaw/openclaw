@@ -167,9 +167,9 @@ export async function preflightDiscordMessage(
       matchesMentionPatterns(baseText, mentionRegexes));
   const implicitMention = Boolean(
     !isDirectMessage &&
-      botId &&
-      message.referencedMessage?.author?.id &&
-      message.referencedMessage.author.id === botId,
+    botId &&
+    message.referencedMessage?.author?.id &&
+    message.referencedMessage.author.id === botId,
   );
   if (shouldLogVerbose()) {
     logVerbose(

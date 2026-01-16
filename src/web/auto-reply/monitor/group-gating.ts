@@ -110,7 +110,7 @@ export function applyGroupGating(params: {
     : null;
   const implicitMention = Boolean(
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
-      (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+    (selfE164 && replySenderE164 && selfE164 === replySenderE164),
   );
   const mentionGate = resolveMentionGating({
     requireMention,

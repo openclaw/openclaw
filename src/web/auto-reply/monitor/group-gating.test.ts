@@ -16,7 +16,9 @@ describe("applyGroupGating", () => {
   it("treats reply-to-bot as implicit mention", () => {
     const groupHistories = new Map();
     const result = applyGroupGating({
-      cfg: baseConfig as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+      cfg: baseConfig as unknown as ReturnType<
+        typeof import("../../../config/config.js").loadConfig
+      >,
       msg: {
         id: "m1",
         from: "123@g.us",
