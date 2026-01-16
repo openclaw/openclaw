@@ -190,14 +190,7 @@ actor CameraController {
     }
 
     func listDevices() -> [CameraDeviceInfo] {
-        let types: [AVCaptureDevice.DeviceType] = [
-            .builtInWideAngleCamera,
-        ]
-        let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: types,
-            mediaType: .video,
-            position: .unspecified)
-        return session.devices.map { device in
+        return Self.discoverVideoDevices().map { device in
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
@@ -232,7 +225,7 @@ actor CameraController {
         deviceId: String?) -> AVCaptureDevice?
     {
         if let deviceId, !deviceId.isEmpty {
-            if let match = AVCaptureDevice.devices(for: .video).first(where: { $0.uniqueID == deviceId }) {
+            if let match = Self.discoverVideoDevices().first(where: { $0.uniqueID == deviceId }) {
                 return match
             }
         }
@@ -250,6 +243,24 @@ actor CameraController {
         case .back: "back"
         default: "unspecified"
         }
+    }
+
+    private nonisolated static func discoverVideoDevices() -> [AVCaptureDevice] {
+        let types: [AVCaptureDevice.DeviceType] = [
+            .builtInWideAngleCamera,
+            .builtInUltraWideCamera,
+            .builtInTelephotoCamera,
+            .builtInDualCamera,
+            .builtInDualWideCamera,
+            .builtInTripleCamera,
+            .builtInTrueDepthCamera,
+            .builtInLiDARDepthCamera,
+        ]
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: types,
+            mediaType: .video,
+            position: .unspecified)
+        return session.devices
     }
 
     nonisolated static func clampQuality(_ quality: Double?) -> Double {

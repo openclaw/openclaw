@@ -212,7 +212,7 @@ class BridgeSession(
       connectWithSocket(endpoint, hello, null)
     }
 
-  private fun connectWithSocket(endpoint: BridgeEndpoint, hello: Hello, tls: BridgeTlsParams?) {
+  private suspend fun connectWithSocket(endpoint: BridgeEndpoint, hello: Hello, tls: BridgeTlsParams?) {
     val socket =
       createBridgeSocket(tls) { fingerprint ->
         onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
@@ -260,15 +260,15 @@ class BridgeSession(
         else -> throw IllegalStateException("unexpected bridge response")
       }
 
-        while (scope.isActive) {
-          val line = reader.readLine() ?: break
-          val frame = json.parseToJsonElement(line).asObjectOrNull() ?: continue
-          when (frame["type"].asStringOrNull()) {
-            "event" -> {
-              val event = frame["event"].asStringOrNull() ?: return@withContext
-              val payload = frame["payloadJSON"].asStringOrNull()
-              onEvent(event, payload)
-            }
+      while (scope.isActive) {
+        val line = reader.readLine() ?: break
+        val frame = json.parseToJsonElement(line).asObjectOrNull() ?: continue
+        when (frame["type"].asStringOrNull()) {
+          "event" -> {
+            val event = frame["event"].asStringOrNull() ?: continue
+            val payload = frame["payloadJSON"].asStringOrNull()
+            onEvent(event, payload)
+          }
             "ping" -> {
               val id = frame["id"].asStringOrNull() ?: ""
               conn.sendJson(buildJsonObject { put("type", JsonPrimitive("pong")); put("id", JsonPrimitive(id)) })
@@ -314,20 +314,20 @@ class BridgeSession(
                 },
               )
             }
-            "invoke-res" -> {
-              // gateway->node only (ignore)
-            }
+          "invoke-res" -> {
+            // gateway->node only (ignore)
           }
         }
-      } finally {
-        currentConnection = null
-        for ((_, waiter) in pending) {
-          waiter.cancel()
-        }
-        pending.clear()
-        conn.closeQuietly()
       }
+    } finally {
+      currentConnection = null
+      for ((_, waiter) in pending) {
+        waiter.cancel()
+      }
+      pending.clear()
+      conn.closeQuietly()
     }
+  }
 
   private fun buildHelloJson(hello: Hello): JsonObject =
     buildJsonObject {
