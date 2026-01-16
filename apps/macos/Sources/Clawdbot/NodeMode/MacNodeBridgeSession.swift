@@ -460,7 +460,7 @@ actor MacNodeBridgeSession {
         do {
             try await self.send(response)
         } catch {
-            await self.logInvokeSendFailure(error)
+            self.logInvokeSendFailure(error)
         }
     }
 
