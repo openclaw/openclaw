@@ -10,10 +10,36 @@ actor BridgeClient {
     func pairAndHello(
         endpoint: NWEndpoint,
         hello: BridgeHello,
+        tls: BridgeTLSParams? = nil,
+        onStatus: (@Sendable (String) -> Void)? = nil) async throws -> String
+    {
+        do {
+            return try await self.pairAndHelloOnce(
+                endpoint: endpoint,
+                hello: hello,
+                tls: tls,
+                onStatus: onStatus)
+        } catch {
+            if let tls, !tls.required {
+                return try await self.pairAndHelloOnce(
+                    endpoint: endpoint,
+                    hello: hello,
+                    tls: nil,
+                    onStatus: onStatus)
+            }
+            throw error
+        }
+    }
+
+    private func pairAndHelloOnce(
+        endpoint: NWEndpoint,
+        hello: BridgeHello,
+        tls: BridgeTLSParams?,
         onStatus: (@Sendable (String) -> Void)? = nil) async throws -> String
     {
         self.lineBuffer = Data()
-        let connection = NWConnection(to: endpoint, using: .tcp)
+        let params = self.makeParameters(tls: tls)
+        let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.clawdbot.ios.bridge-client")
         defer { connection.cancel() }
         try await self.withTimeout(seconds: 8, purpose: "connect") {
@@ -140,6 +166,18 @@ actor BridgeClient {
             if chunk.isEmpty { return nil }
             self.lineBuffer.append(chunk)
         }
+    }
+
+    private func makeParameters(tls: BridgeTLSParams?) -> NWParameters {
+        if let tlsOptions = makeBridgeTLSOptions(tls) {
+            let tcpOptions = NWProtocolTCP.Options()
+            let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+            params.includePeerToPeer = true
+            return params
+        }
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        return params
     }
 
     private struct TimeoutError: LocalizedError, Sendable {

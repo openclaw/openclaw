@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import os from "node:os";
+import tls from "node:tls";
 
 import { resolveCanvasHostUrl } from "../../canvas-host-url.js";
 
@@ -47,7 +48,8 @@ export async function startNodeBridgeServer(opts: NodeBridgeServerOpts): Promise
   const loopbackHost = "127.0.0.1";
 
   const listeners: Array<{ host: string; server: net.Server }> = [];
-  const primary = net.createServer(onConnection);
+  const createServer = () => (opts.tls ? tls.createServer(opts.tls, onConnection) : net.createServer(onConnection));
+  const primary = createServer();
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error) => reject(err);
     primary.once("error", onError);
@@ -65,7 +67,7 @@ export async function startNodeBridgeServer(opts: NodeBridgeServerOpts): Promise
   const port = typeof address === "object" && address ? address.port : opts.port;
 
   if (shouldAlsoListenOnLoopback(opts.host)) {
-    const loopback = net.createServer(onConnection);
+    const loopback = createServer();
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: Error) => reject(err);

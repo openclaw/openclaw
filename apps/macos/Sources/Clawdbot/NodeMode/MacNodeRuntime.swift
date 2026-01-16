@@ -455,14 +455,7 @@ actor MacNodeRuntime {
             }
         }
 
-        var env = params.env
-        if wasAllowlisted, let overrides = env {
-            var merged = ProcessInfo.processInfo.environment
-            for (key, value) in overrides where key != "PATH" {
-                merged[key] = value
-            }
-            env = merged
-        }
+        let env = Self.sanitizedEnv(params.env)
 
         if params.needsScreenRecording == true {
             let authorized = await PermissionManager
@@ -569,6 +562,35 @@ actor MacNodeRuntime {
 
     private nonisolated static func systemRunPolicy() -> SystemRunPolicy {
         SystemRunPolicy.load()
+    }
+
+    private static let blockedEnvKeys: Set<String> = [
+        "PATH",
+        "NODE_OPTIONS",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "PERL5LIB",
+        "PERL5OPT",
+        "RUBYOPT",
+    ]
+
+    private static let blockedEnvPrefixes: [String] = [
+        "DYLD_",
+        "LD_",
+    ]
+
+    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
+        guard let overrides else { return nil }
+        var merged = ProcessInfo.processInfo.environment
+        for (rawKey, value) in overrides {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { continue }
+            let upper = key.uppercased()
+            if blockedEnvKeys.contains(upper) { continue }
+            if blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
+            merged[key] = value
+        }
+        return merged
     }
 
     private nonisolated static func locationMode() -> ClawdbotLocationMode {

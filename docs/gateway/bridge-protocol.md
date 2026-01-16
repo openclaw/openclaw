@@ -28,7 +28,11 @@ If you are building an operator client (CLI, web UI, automations), use the
 ## Transport
 
 - TCP, one JSON object per line (JSONL).
+- Optional TLS (when `bridge.tls.enabled` is true).
 - Gateway owns the listener (default `18790`).
+
+When TLS is enabled, discovery TXT records include `bridgeTls=1` plus
+`bridgeTlsSha256` so nodes can pin the certificate.
 
 ## Handshake + pairing
 

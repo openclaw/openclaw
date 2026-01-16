@@ -171,6 +171,15 @@ export const ClawdbotSchema = z
         bind: z
           .union([z.literal("auto"), z.literal("lan"), z.literal("tailnet"), z.literal("loopback")])
           .optional(),
+        tls: z
+          .object({
+            enabled: z.boolean().optional(),
+            autoGenerate: z.boolean().optional(),
+            certPath: z.string().optional(),
+            keyPath: z.string().optional(),
+            caPath: z.string().optional(),
+          })
+          .optional(),
       })
       .optional(),
     discovery: z

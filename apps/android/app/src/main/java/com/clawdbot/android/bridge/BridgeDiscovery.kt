@@ -143,6 +143,8 @@ class BridgeDiscovery(
         val gatewayPort = txtInt(resolved, "gatewayPort")
         val bridgePort = txtInt(resolved, "bridgePort")
         val canvasPort = txtInt(resolved, "canvasPort")
+        val tlsEnabled = txtBool(resolved, "bridgeTls")
+        val tlsFingerprint = txt(resolved, "bridgeTlsSha256")
         val id = stableId(serviceName, "local.")
         localById[id] =
           BridgeEndpoint(
@@ -155,6 +157,8 @@ class BridgeDiscovery(
             gatewayPort = gatewayPort,
             bridgePort = bridgePort,
             canvasPort = canvasPort,
+            tlsEnabled = tlsEnabled,
+            tlsFingerprintSha256 = tlsFingerprint,
           )
         publish()
       }
@@ -209,6 +213,11 @@ class BridgeDiscovery(
     return txt(info, key)?.toIntOrNull()
   }
 
+  private fun txtBool(info: NsdServiceInfo, key: String): Boolean {
+    val raw = txt(info, key)?.trim()?.lowercase() ?: return false
+    return raw == "1" || raw == "true" || raw == "yes"
+  }
+
   private suspend fun refreshUnicast(domain: String) {
     val ptrName = "${serviceType}${domain}"
     val ptrMsg = lookupUnicastMessage(ptrName, Type.PTR) ?: return
@@ -252,6 +261,8 @@ class BridgeDiscovery(
       val gatewayPort = txtIntValue(txt, "gatewayPort")
       val bridgePort = txtIntValue(txt, "bridgePort")
       val canvasPort = txtIntValue(txt, "canvasPort")
+      val tlsEnabled = txtBoolValue(txt, "bridgeTls")
+      val tlsFingerprint = txtValue(txt, "bridgeTlsSha256")
       val id = stableId(instanceName, domain)
       next[id] =
         BridgeEndpoint(
@@ -264,6 +275,8 @@ class BridgeDiscovery(
           gatewayPort = gatewayPort,
           bridgePort = bridgePort,
           canvasPort = canvasPort,
+          tlsEnabled = tlsEnabled,
+          tlsFingerprintSha256 = tlsFingerprint,
         )
     }
 
@@ -472,6 +485,11 @@ class BridgeDiscovery(
 
   private fun txtIntValue(records: List<TXTRecord>, key: String): Int? {
     return txtValue(records, key)?.toIntOrNull()
+  }
+
+  private fun txtBoolValue(records: List<TXTRecord>, key: String): Boolean {
+    val raw = txtValue(records, key)?.trim()?.lowercase() ?: return false
+    return raw == "1" || raw == "true" || raw == "yes"
   }
 
   private fun decodeDnsTxtString(raw: String): String {

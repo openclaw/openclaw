@@ -35,6 +35,7 @@ class BridgeSession(
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: suspend (InvokeRequest) -> InvokeResult,
+  private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
 ) {
   data class Hello(
     val nodeId: String,
@@ -66,11 +67,17 @@ class BridgeSession(
   @Volatile private var canvasHostUrl: String? = null
   @Volatile private var mainSessionKey: String? = null
 
-  private var desired: Pair<BridgeEndpoint, Hello>? = null
+  private data class DesiredConnection(
+    val endpoint: BridgeEndpoint,
+    val hello: Hello,
+    val tls: BridgeTlsParams?,
+  )
+
+  private var desired: DesiredConnection? = null
   private var job: Job? = null
 
-  fun connect(endpoint: BridgeEndpoint, hello: Hello) {
-    desired = endpoint to hello
+  fun connect(endpoint: BridgeEndpoint, hello: Hello, tls: BridgeTlsParams? = null) {
+    desired = DesiredConnection(endpoint, hello, tls)
     if (job == null) {
       job = scope.launch(Dispatchers.IO) { runLoop() }
     }
@@ -78,7 +85,7 @@ class BridgeSession(
 
   suspend fun updateHello(hello: Hello) {
     val target = desired ?: return
-    desired = target.first to hello
+    desired = target.copy(hello = hello)
     val conn = currentConnection ?: return
     conn.sendJson(buildHelloJson(hello))
   }
@@ -165,10 +172,10 @@ class BridgeSession(
         continue
       }
 
-      val (endpoint, hello) = target
+      val (endpoint, hello, tls) = target
       try {
         onDisconnected(if (attempt == 0) "Connecting…" else "Reconnecting…")
-        connectOnce(endpoint, hello)
+        connectOnce(endpoint, hello, tls)
         attempt = 0
       } catch (err: Throwable) {
         attempt += 1
@@ -192,50 +199,66 @@ class BridgeSession(
     return InvokeResult.error(code = "UNAVAILABLE", message = msg)
   }
 
-  private suspend fun connectOnce(endpoint: BridgeEndpoint, hello: Hello) =
+  private suspend fun connectOnce(endpoint: BridgeEndpoint, hello: Hello, tls: BridgeTlsParams?) =
     withContext(Dispatchers.IO) {
-      val socket = Socket()
-      socket.tcpNoDelay = true
-      socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 8_000)
-      socket.soTimeout = 0
-
-      val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
-      val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
-
-      val conn = Connection(socket, reader, writer, writeLock)
-      currentConnection = conn
-
-      try {
-        conn.sendJson(buildHelloJson(hello))
-
-        val firstLine = reader.readLine() ?: throw IllegalStateException("bridge closed connection")
-        val first = json.parseToJsonElement(firstLine).asObjectOrNull()
-          ?: throw IllegalStateException("unexpected bridge response")
-        when (first["type"].asStringOrNull()) {
-          "hello-ok" -> {
-            val name = first["serverName"].asStringOrNull() ?: "Bridge"
-            val rawCanvasUrl = first["canvasHostUrl"].asStringOrNull()?.trim()?.ifEmpty { null }
-            val rawMainSessionKey = first["mainSessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
-            canvasHostUrl = normalizeCanvasHostUrl(rawCanvasUrl, endpoint)
-            mainSessionKey = rawMainSessionKey
-            if (BuildConfig.DEBUG) {
-              // Local JVM unit tests use android.jar stubs; Log.d can throw "not mocked".
-              runCatching {
-                android.util.Log.d(
-                  "ClawdbotBridge",
-                  "canvasHostUrl resolved=${canvasHostUrl ?: "none"} (raw=${rawCanvasUrl ?: "none"})",
-                )
-              }
-            }
-            onConnected(name, conn.remoteAddress, rawMainSessionKey)
-          }
-          "error" -> {
-            val code = first["code"].asStringOrNull() ?: "UNAVAILABLE"
-            val msg = first["message"].asStringOrNull() ?: "connect failed"
-            throw IllegalStateException("$code: $msg")
-          }
-          else -> throw IllegalStateException("unexpected bridge response")
+      if (tls != null) {
+        try {
+          connectWithSocket(endpoint, hello, tls)
+          return@withContext
+        } catch (err: Throwable) {
+          if (tls.required) throw err
         }
+      }
+      connectWithSocket(endpoint, hello, null)
+    }
+
+  private fun connectWithSocket(endpoint: BridgeEndpoint, hello: Hello, tls: BridgeTlsParams?) {
+    val socket =
+      createBridgeSocket(tls) { fingerprint ->
+        onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
+      }
+    socket.tcpNoDelay = true
+    socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 8_000)
+    socket.soTimeout = 0
+    startTlsHandshakeIfNeeded(socket)
+
+    val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+    val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
+
+    val conn = Connection(socket, reader, writer, writeLock)
+    currentConnection = conn
+
+    try {
+      conn.sendJson(buildHelloJson(hello))
+
+      val firstLine = reader.readLine() ?: throw IllegalStateException("bridge closed connection")
+      val first = json.parseToJsonElement(firstLine).asObjectOrNull()
+        ?: throw IllegalStateException("unexpected bridge response")
+      when (first["type"].asStringOrNull()) {
+        "hello-ok" -> {
+          val name = first["serverName"].asStringOrNull() ?: "Bridge"
+          val rawCanvasUrl = first["canvasHostUrl"].asStringOrNull()?.trim()?.ifEmpty { null }
+          val rawMainSessionKey = first["mainSessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
+          canvasHostUrl = normalizeCanvasHostUrl(rawCanvasUrl, endpoint)
+          mainSessionKey = rawMainSessionKey
+          if (BuildConfig.DEBUG) {
+            // Local JVM unit tests use android.jar stubs; Log.d can throw "not mocked".
+            runCatching {
+              android.util.Log.d(
+                "ClawdbotBridge",
+                "canvasHostUrl resolved=${canvasHostUrl ?: "none"} (raw=${rawCanvasUrl ?: "none"})",
+              )
+            }
+          }
+          onConnected(name, conn.remoteAddress, rawMainSessionKey)
+        }
+        "error" -> {
+          val code = first["code"].asStringOrNull() ?: "UNAVAILABLE"
+          val msg = first["message"].asStringOrNull() ?: "connect failed"
+          throw IllegalStateException("$code: $msg")
+        }
+        else -> throw IllegalStateException("unexpected bridge response")
+      }
 
         while (scope.isActive) {
           val line = reader.readLine() ?: break

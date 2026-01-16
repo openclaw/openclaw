@@ -36,6 +36,7 @@ actor MacNodeBridgeSession {
     func connect(
         endpoint: NWEndpoint,
         hello: BridgeHello,
+        tls: MacNodeBridgeTLSParams? = nil,
         onConnected: (@Sendable (String, String?) async -> Void)? = nil,
         onDisconnected: (@Sendable (String) async -> Void)? = nil,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)
@@ -44,15 +45,35 @@ actor MacNodeBridgeSession {
         await self.disconnect()
         self.disconnectHandler = onDisconnected
         self.state = .connecting
+        do {
+            try await self.connectOnce(
+                endpoint: endpoint,
+                hello: hello,
+                tls: tls,
+                onConnected: onConnected,
+                onInvoke: onInvoke)
+        } catch {
+            if let tls, !tls.required {
+                try await self.connectOnce(
+                    endpoint: endpoint,
+                    hello: hello,
+                    tls: nil,
+                    onConnected: onConnected,
+                    onInvoke: onInvoke)
+                return
+            }
+            throw error
+        }
+    }
 
-        let params = NWParameters.tcp
-        params.includePeerToPeer = true
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 30
-        tcpOptions.keepaliveInterval = 15
-        tcpOptions.keepaliveCount = 3
-        params.defaultProtocolStack.transportProtocol = tcpOptions
+    private func connectOnce(
+        endpoint: NWEndpoint,
+        hello: BridgeHello,
+        tls: MacNodeBridgeTLSParams?,
+        onConnected: (@Sendable (String, String?) async -> Void)? = nil,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+    {
+        let params = self.makeParameters(tls: tls)
         let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.clawdbot.macos.bridge-session")
         self.connection = connection
@@ -260,6 +281,25 @@ actor MacNodeBridgeSession {
         } catch {
             await self.failRPC(id: id, error: error)
         }
+    }
+
+    private func makeParameters(tls: MacNodeBridgeTLSParams?) -> NWParameters {
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.enableKeepalive = true
+        tcpOptions.keepaliveIdle = 30
+        tcpOptions.keepaliveInterval = 15
+        tcpOptions.keepaliveCount = 3
+
+        if let tlsOptions = makeMacNodeTLSOptions(tls) {
+            let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+            params.includePeerToPeer = true
+            return params
+        }
+
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        params.defaultProtocolStack.transportProtocol = tcpOptions
+        return params
     }
 
     private func failRPC(id: String, error: Error) async {

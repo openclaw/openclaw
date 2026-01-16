@@ -1,5 +1,6 @@
 import type { NodeBridgeServer } from "../infra/bridge/server.js";
 import { startNodeBridgeServer } from "../infra/bridge/server.js";
+import type { BridgeTlsRuntime } from "../infra/bridge/server/tls.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../infra/skills-remote.js";
@@ -23,6 +24,7 @@ export async function startGatewayNodeBridge(params: {
   bridgeEnabled: boolean;
   bridgePort: number;
   bridgeHost: string | null;
+  bridgeTls?: BridgeTlsRuntime;
   machineDisplayName: string;
   canvasHostPort?: number;
   canvasHostHost?: string;
@@ -111,6 +113,7 @@ export async function startGatewayNodeBridge(params: {
       const started = await startNodeBridgeServer({
         host: params.bridgeHost,
         port: params.bridgePort,
+        tls: params.bridgeTls?.tlsOptions,
         serverName: params.machineDisplayName,
         canvasHostPort: params.canvasHostPort,
         canvasHostHost: params.canvasHostHost,
@@ -158,7 +161,8 @@ export async function startGatewayNodeBridge(params: {
         },
       });
       if (started.port > 0) {
-        params.logBridge.info(`listening on tcp://${params.bridgeHost}:${started.port} (node)`);
+        const scheme = params.bridgeTls?.enabled ? "tls" : "tcp";
+        params.logBridge.info(`listening on ${scheme}://${params.bridgeHost}:${started.port} (node)`);
         return { bridge: started, nodePresenceTimers };
       }
     } catch (err) {

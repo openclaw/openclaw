@@ -69,15 +69,42 @@ actor BridgeSession {
     func connect(
         endpoint: NWEndpoint,
         hello: BridgeHello,
+        tls: BridgeTLSParams? = nil,
         onConnected: (@Sendable (String, String?) async -> Void)? = nil,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)
         async throws
     {
         await self.disconnect()
         self.state = .connecting
+        do {
+            try await self.connectOnce(
+                endpoint: endpoint,
+                hello: hello,
+                tls: tls,
+                onConnected: onConnected,
+                onInvoke: onInvoke)
+        } catch {
+            if let tls, !tls.required {
+                try await self.connectOnce(
+                    endpoint: endpoint,
+                    hello: hello,
+                    tls: nil,
+                    onConnected: onConnected,
+                    onInvoke: onInvoke)
+                return
+            }
+            throw error
+        }
+    }
 
-        let params = NWParameters.tcp
-        params.includePeerToPeer = true
+    private func connectOnce(
+        endpoint: NWEndpoint,
+        hello: BridgeHello,
+        tls: BridgeTLSParams?,
+        onConnected: (@Sendable (String, String?) async -> Void)?,
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+    {
+        let params = self.makeParameters(tls: tls)
         let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.clawdbot.ios.bridge-session")
         self.connection = connection
@@ -253,6 +280,18 @@ actor BridgeSession {
         } catch {
             await self.failRPC(id: id, error: error)
         }
+    }
+
+    private func makeParameters(tls: BridgeTLSParams?) -> NWParameters {
+        if let tlsOptions = makeBridgeTLSOptions(tls) {
+            let tcpOptions = NWProtocolTCP.Options()
+            let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+            params.includePeerToPeer = true
+            return params
+        }
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        return params
     }
 
     private func timeoutRPC(id: String) async {

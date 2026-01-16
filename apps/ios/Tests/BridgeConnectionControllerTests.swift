@@ -27,6 +27,7 @@ private actor MockBridgePairingClient: BridgePairingClient {
     func pairAndHello(
         endpoint: NWEndpoint,
         hello: BridgeHello,
+        tls: BridgeTLSParams?,
         onStatus: (@Sendable (String) -> Void)?) async throws -> String
     {
         self.lastToken = hello.token
@@ -244,6 +245,8 @@ private func withKeychainValues<T>(
             gatewayPort: 18789,
             bridgePort: 18790,
             canvasPort: 18793,
+            tlsEnabled: false,
+            tlsFingerprintSha256: nil,
             cliPath: nil)
         let mock = MockBridgePairingClient(resultToken: "new-token")
         let account = "bridge-token.ios-test"
@@ -292,6 +295,8 @@ private func withKeychainValues<T>(
             gatewayPort: 18789,
             bridgePort: 18790,
             canvasPort: 18793,
+            tlsEnabled: false,
+            tlsFingerprintSha256: nil,
             cliPath: nil)
         let bridgeB = BridgeDiscoveryModel.DiscoveredBridge(
             name: "Gateway B",
@@ -303,6 +308,8 @@ private func withKeychainValues<T>(
             gatewayPort: 28789,
             bridgePort: 28790,
             canvasPort: 28793,
+            tlsEnabled: false,
+            tlsFingerprintSha256: nil,
             cliPath: nil)
 
         let mock = MockBridgePairingClient(resultToken: "token-ok")
