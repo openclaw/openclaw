@@ -90,7 +90,12 @@ Add whatever else you want the assistant to know about your local toolchain.
 
 const DEFAULT_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md
 
-Keep this file empty unless you want a tiny checklist. Keep it small.
+Optional: keep a tiny checklist for heartbeat runs.
+
+Guidance (to avoid nagging):
+- Only report items that are truly new or changed.
+- Do not invent tasks from old chat context.
+- If nothing needs attention, reply HEARTBEAT_OK.
 `;
 
 const DEFAULT_BOOTSTRAP_TEMPLATE = `# BOOTSTRAP.md - First Run Ritual (delete after)
