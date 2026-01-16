@@ -66,6 +66,6 @@ Different models support different parameter values. The script automatically se
 
 ## Output
 
-- `*.png` images
+- `*.png`, `*.jpeg`, or `*.webp` images (output format depends on model + `--output-format`)
 - `prompts.json` (prompt → file mapping)
 - `index.html` (thumbnail gallery)

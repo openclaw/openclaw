@@ -68,7 +68,7 @@ def get_model_defaults(model: str) -> tuple[str, str]:
         # quality will be ignored
         return ("1024x1024", "standard")
     elif model == "dall-e-3":
-        return ("1024x1024", "hd")
+        return ("1024x1024", "standard")
     else:
         # GPT image or future models
         return ("1024x1024", "high")
