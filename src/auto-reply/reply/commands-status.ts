@@ -168,6 +168,7 @@ export async function buildStatusReply(params: {
         const formatted = formatUsageWindowSummary(snapshot, {
           now: Date.now(),
           maxWindows: 2,
+          includeResets: true,
         });
         if (formatted) usageByProvider.set(snapshot.provider, formatted);
       }

@@ -175,6 +175,41 @@ describe("provider usage loading", () => {
     expect(mockFetch).toHaveBeenCalled();
   });
 
+  it("prefers MiniMax count-based usage when percent looks inverted", async () => {
+    const makeResponse = (status: number, body: unknown): Response => {
+      const payload = typeof body === "string" ? body : JSON.stringify(body);
+      const headers = typeof body === "string" ? undefined : { "Content-Type": "application/json" };
+      return new Response(payload, { status, headers });
+    };
+
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.minimax.io/v1/coding_plan/remains")) {
+        return makeResponse(200, {
+          base_resp: { status_code: 0, status_msg: "ok" },
+          data: {
+            prompt_limit: 200,
+            prompt_remain: 150,
+            usage_percent: 75,
+            next_reset_time: "2026-01-07T05:00:00Z",
+          },
+        });
+      }
+      return makeResponse(404, "not found");
+    });
+
+    const summary = await loadProviderUsageSummary({
+      now: Date.UTC(2026, 0, 7, 0, 0, 0),
+      auth: [{ provider: "minimax", token: "token-1b" }],
+      fetch: mockFetch,
+    });
+
+    const minimax = summary.providers.find((p) => p.provider === "minimax");
+    expect(minimax?.windows[0]?.usedPercent).toBe(25);
+    expect(mockFetch).toHaveBeenCalled();
+  });
+
   it("handles MiniMax model_remains usage payloads", async () => {
     const makeResponse = (status: number, body: unknown): Response => {
       const payload = typeof body === "string" ? body : JSON.stringify(body);

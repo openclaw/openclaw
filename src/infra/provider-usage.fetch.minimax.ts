@@ -249,21 +249,32 @@ function deriveWindowLabel(payload: Record<string, unknown>): string {
 }
 
 function deriveUsedPercent(payload: Record<string, unknown>): number | null {
-  const percentRaw = pickNumber(payload, PERCENT_KEYS);
-  if (percentRaw !== undefined) {
-    const normalized = percentRaw <= 1 ? percentRaw * 100 : percentRaw;
-    return clampPercent(normalized);
+  const total = pickNumber(payload, TOTAL_KEYS);
+  let used = pickNumber(payload, USED_KEYS);
+  const remaining = pickNumber(payload, REMAINING_KEYS);
+  if (used === undefined && remaining !== undefined && total !== undefined) {
+    used = total - remaining;
   }
 
-  const total = pickNumber(payload, TOTAL_KEYS);
-  if (!total || total <= 0) return null;
-  let used = pickNumber(payload, USED_KEYS);
-  if (used === undefined) {
-    const remaining = pickNumber(payload, REMAINING_KEYS);
-    if (remaining !== undefined) used = total - remaining;
+  const fromCounts =
+    total && total > 0 && used !== undefined && Number.isFinite(used)
+      ? clampPercent((used / total) * 100)
+      : null;
+
+  const percentRaw = pickNumber(payload, PERCENT_KEYS);
+  if (percentRaw !== undefined) {
+    const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
+    if (fromCounts !== null) {
+      const inverted = clampPercent(100 - normalized);
+      if (Math.abs(normalized - fromCounts) <= 1 || Math.abs(inverted - fromCounts) <= 1) {
+        return fromCounts;
+      }
+      return fromCounts;
+    }
+    return normalized;
   }
-  if (used === undefined || !Number.isFinite(used)) return null;
-  return clampPercent((used / total) * 100);
+
+  return fromCounts;
 }
 
 export async function fetchMinimaxUsage(
