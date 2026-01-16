@@ -219,6 +219,10 @@ export const buildTelegramMessageContext = async ({
     groupConfig?.requireMention,
     baseRequireMention,
   );
+  // Reply-chain detection: replying to a bot message acts like an implicit mention.
+  const botId = primaryCtx.me?.id;
+  const replyFromId = msg.reply_to_message?.from?.id;
+  const isReplyToBot = botId != null && replyFromId === botId;
   const shouldBypassMention =
     isGroup &&
     requireMention &&
@@ -226,10 +230,11 @@ export const buildTelegramMessageContext = async ({
     !hasAnyMention &&
     commandAuthorized &&
     hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername });
-  const effectiveWasMentioned = wasMentioned || shouldBypassMention;
+  const shouldBypassForReplyChain = isGroup && requireMention && isReplyToBot;
+  const effectiveWasMentioned = wasMentioned || shouldBypassMention || shouldBypassForReplyChain;
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
   if (isGroup && requireMention && canDetectMention) {
-    if (!wasMentioned && !shouldBypassMention) {
+    if (!wasMentioned && !shouldBypassMention && !shouldBypassForReplyChain) {
       logger.info({ chatId, reason: "no-mention" }, "skipping group message");
       return null;
     }
@@ -247,7 +252,7 @@ export const buildTelegramMessageContext = async ({
       if (!isGroup) return false;
       if (!requireMention) return false;
       if (!canDetectMention) return false;
-      return wasMentioned || shouldBypassMention;
+      return wasMentioned || shouldBypassMention || shouldBypassForReplyChain;
     }
     return false;
   };

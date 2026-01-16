@@ -6,7 +6,7 @@ export type TelegramStreamMode = "off" | "partial" | "block";
 
 export type TelegramContext = {
   message: TelegramMessage;
-  me?: { username?: string };
+  me?: { id?: number; username?: string };
   getFile: () => Promise<{
     file_path?: string;
   }>;
