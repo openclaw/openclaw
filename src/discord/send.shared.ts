@@ -252,6 +252,7 @@ async function sendDiscordText(
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
+  embeds?: unknown[],
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -265,7 +266,11 @@ async function sendDiscordText(
     const res = (await request(
       () =>
         rest.post(Routes.channelMessages(channelId), {
-          body: { content: chunks[0], message_reference: messageReference },
+          body: {
+            content: chunks[0],
+            message_reference: messageReference,
+            ...(embeds?.length ? { embeds } : {}),
+          },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
     )) as { id: string; channel_id: string };
@@ -280,6 +285,7 @@ async function sendDiscordText(
           body: {
             content: chunk,
             message_reference: isFirst ? messageReference : undefined,
+            ...(isFirst && embeds?.length ? { embeds } : {}),
           },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
@@ -300,6 +306,7 @@ async function sendDiscordMedia(
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
+  embeds?: unknown[],
 ) {
   const media = await loadWebMedia(mediaUrl);
   const chunks = text
@@ -316,6 +323,7 @@ async function sendDiscordMedia(
         body: {
           content: caption || undefined,
           message_reference: messageReference,
+          ...(embeds?.length ? { embeds } : {}),
           files: [
             {
               data: media.buffer,

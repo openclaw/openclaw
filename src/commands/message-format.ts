@@ -238,6 +238,34 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
+  if (result.kind === "broadcast") {
+    const results = result.payload.results ?? [];
+    const rows = results.map((entry) => ({
+      Channel: resolveChannelLabel(entry.channel),
+      Target: shortenText(entry.to, 36),
+      Status: entry.ok ? "ok" : "error",
+      Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
+    }));
+    const okCount = results.filter((entry) => entry.ok).length;
+    const total = results.length;
+    const headingLine = ok(
+      `✅ Broadcast complete (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+    );
+    return [
+      headingLine,
+      renderTable({
+        width: opts.width,
+        columns: [
+          { key: "Channel", header: "Channel", minWidth: 10 },
+          { key: "Target", header: "Target", minWidth: 12, flex: true },
+          { key: "Status", header: "Status", minWidth: 6 },
+          { key: "Error", header: "Error", minWidth: 20, flex: true },
+        ],
+        rows: rows.slice(0, 50),
+      }).trimEnd(),
+    ];
+  }
+
   if (result.kind === "send") {
     if (result.handledBy === "core" && result.sendResult) {
       const send = result.sendResult;

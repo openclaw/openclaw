@@ -9,7 +9,11 @@ import {
   collectDiscordAuditChannelIds,
 } from "../../discord/audit.js";
 import { probeDiscord } from "../../discord/probe.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
+import {
+  listGuildChannelsDiscord,
+  sendMessageDiscord,
+  sendPollDiscord,
+} from "../../discord/send.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
@@ -208,6 +212,31 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         .slice(0, limit && limit > 0 ? limit : undefined)
         .map((id) => ({ kind: "group", id }) as const);
       return groups;
+    },
+    listGroupsLive: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveDiscordAccount({ cfg, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const guildIds = Object.keys(account.config.guilds ?? {}).filter((id) => /^\d+$/.test(id));
+      const rows: Array<{ kind: "group"; id: string; name?: string; raw?: unknown }> = [];
+      for (const guildId of guildIds) {
+        const channels = await listGuildChannelsDiscord(guildId, {
+          accountId: account.accountId,
+        });
+        for (const channel of channels) {
+          const name = typeof channel.name === "string" ? channel.name : undefined;
+          if (q && name && !name.toLowerCase().includes(q)) continue;
+          rows.push({
+            kind: "group",
+            id: `channel:${channel.id}`,
+            name: name ?? undefined,
+            raw: channel,
+          });
+        }
+      }
+      const filtered = q ? rows.filter((row) => row.name?.toLowerCase().includes(q)) : rows;
+      const limited =
+        typeof limit === "number" && limit > 0 ? filtered.slice(0, limit) : filtered;
+      return limited;
     },
   },
   actions: discordMessageActions,

@@ -233,7 +233,21 @@ export type ChannelDirectoryAdapter = {
     limit?: number | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
   listGroups?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (params: {
     cfg: ClawdbotConfig;
     accountId?: string | null;
     query?: string | null;

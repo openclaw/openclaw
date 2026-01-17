@@ -26,6 +26,7 @@ const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MessageToolCommonSchema = {
   channel: Type.Optional(Type.String()),
   to: Type.Optional(Type.String()),
+  targets: Type.Optional(Type.Array(Type.String())),
   message: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
   buttons: Type.Optional(
@@ -127,6 +128,7 @@ type MessageToolOptions = {
   agentSessionKey?: string;
   config?: ClawdbotConfig;
   currentChannelId?: string;
+  currentChannelProvider?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
@@ -175,11 +177,13 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const toolContext =
         options?.currentChannelId ||
+        options?.currentChannelProvider ||
         options?.currentThreadTs ||
         options?.replyToMode ||
         options?.hasRepliedRef
           ? {
               currentChannelId: options?.currentChannelId,
+              currentChannelProvider: options?.currentChannelProvider,
               currentThreadTs: options?.currentThreadTs,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,

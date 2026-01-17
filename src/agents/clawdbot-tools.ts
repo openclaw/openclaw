@@ -83,6 +83,7 @@ export function createClawdbotTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
       currentChannelId: options?.currentChannelId,
+      currentChannelProvider: options?.agentChannel,
       currentThreadTs: options?.currentThreadTs,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,

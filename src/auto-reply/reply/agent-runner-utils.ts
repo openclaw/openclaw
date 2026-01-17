@@ -32,7 +32,7 @@ export function buildThreadingToolContext(params: {
       : provider === "imessage" && sessionCtx.ChatType === "direct"
         ? (sessionCtx.From ?? sessionCtx.To)
         : sessionCtx.To;
-  return (
+  const context =
     dock.threading.buildToolContext({
       cfg: config,
       accountId: sessionCtx.AccountId,
@@ -44,8 +44,11 @@ export function buildThreadingToolContext(params: {
         MessageThreadId: sessionCtx.MessageThreadId,
       },
       hasRepliedRef,
-    }) ?? {}
-  );
+    }) ?? {};
+  return {
+    ...context,
+    currentChannelProvider: provider,
+  };
 }
 
 export const isBunFetchSocketError = (message?: string) =>
