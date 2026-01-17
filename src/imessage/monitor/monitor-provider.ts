@@ -383,8 +383,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     const chatTarget = formatIMessageChatTarget(chatId);
-    // For groups: use chat name or just "Group" (channel "iMessage" is already shown)
-    // For DMs: show sender, only add id: suffix if raw differs from normalized
+    // For groups: use chat name or just "Group" (channel "iMessage" is already shown).
+    // For DMs: keep headers compact; only add id: suffix if raw differs from normalized.
     const fromLabel = isGroup
       ? `${message.chat_name || "Group"} id:${chatId ?? "unknown"}`
       : senderNormalized === sender

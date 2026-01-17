@@ -65,8 +65,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
-    // For groups: use group name or just "Group" (channel "Signal" is already shown)
-    // For DMs: show sender, only add id: suffix if display differs from name
+    // For groups: use group name or just "Group" (channel "Signal" is already shown).
+    // For DMs: keep headers compact; only add id: suffix if display differs from name.
     const fromLabel = entry.isGroup
       ? `${entry.groupName || "Group"} id:${entry.groupId}`
       : entry.senderName === entry.senderDisplay
