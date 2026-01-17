@@ -351,6 +351,19 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
+function resolveAnnounceOrigin(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  fallbackAccountId?: string;
+}) {
+  return normalizeDeliveryContext({
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId ?? params.fallbackAccountId,
+  });
+}
+
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   triggerMessage: string;
@@ -381,10 +394,11 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = normalizeDeliveryContext({
+    const origin = resolveAnnounceOrigin({
       channel: entry?.lastChannel,
       to: entry?.lastTo,
-      accountId: entry?.lastAccountId ?? params.requesterAccountId,
+      accountId: entry?.lastAccountId,
+      fallbackAccountId: params.requesterAccountId,
     });
     enqueueAnnounce(
       canonicalKey,
@@ -624,7 +638,7 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     // Send to main agent - it will respond in its own voice
-    const directOrigin = normalizeDeliveryContext({
+    const directOrigin = resolveAnnounceOrigin({
       channel: params.requesterChannel,
       accountId: params.requesterAccountId,
     });

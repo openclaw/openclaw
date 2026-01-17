@@ -191,4 +191,85 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.to).toBe("+1555");
     expect(call?.params?.accountId).toBe("kev");
   });
+
+  it("uses requester accountId for direct announce when not queued", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct",
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "whatsapp",
+      requesterAccountId: "acct-123",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("whatsapp");
+    expect(call?.params?.accountId).toBe("acct-123");
+  });
+
+  it("splits collect-mode announces when accountId differs", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-789",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-a",
+      requesterSessionKey: "main",
+      requesterAccountId: "acct-a",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-b",
+      requesterSessionKey: "main",
+      requesterAccountId: "acct-b",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    await new Promise((r) => setTimeout(r, 5));
+
+    const accountIds = agentSpy.mock.calls.map(
+      (call) => (call[0] as { params?: Record<string, unknown> }).params?.accountId,
+    );
+    expect(accountIds).toContain("acct-a");
+    expect(accountIds).toContain("acct-b");
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+  });
 });
