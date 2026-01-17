@@ -14,6 +14,9 @@ test("encodeKeySequence maps common keys and modifiers", () => {
 
   const shiftTab = encodeKeySequence({ keys: ["S-Tab"] });
   expect(shiftTab.data).toBe("\x1b[Z");
+
+  const kpEnter = encodeKeySequence({ keys: ["KPEnter"] });
+  expect(kpEnter.data).toBe("\x1bOM");
 });
 
 test("encodeKeySequence supports hex + literal with warnings", () => {
