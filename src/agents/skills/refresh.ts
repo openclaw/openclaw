@@ -125,6 +125,13 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Cla
       stabilityThreshold: debounceMs,
       pollInterval: 100,
     },
+    // Avoid FD exhaustion on macOS when a workspace contains huge trees.
+    // This watcher only needs to react to skill changes.
+    ignored: [
+      /(^|[\\/])\../, // dotfiles (includes .git)
+      /(^|[\\/])node_modules([\\/]|$)/,
+      /(^|[\\/])dist([\\/]|$)/,
+    ],
   });
 
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
