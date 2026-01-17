@@ -187,49 +187,10 @@ struct ConfigSnapshot: Codable {
     let issues: [Issue]?
 }
 
-struct DiscordGuildChannelForm: Identifiable {
-    let id = UUID()
-    var key: String
-    var allow: Bool
-    var requireMention: Bool
-
-    init(key: String = "", allow: Bool = true, requireMention: Bool = false) {
-        self.key = key
-        self.allow = allow
-        self.requireMention = requireMention
-    }
-}
-
-struct DiscordGuildForm: Identifiable {
-    let id = UUID()
-    var key: String
-    var slug: String
-    var requireMention: Bool
-    var reactionNotifications: String
-    var users: String
-    var channels: [DiscordGuildChannelForm]
-
-    init(
-        key: String = "",
-        slug: String = "",
-        requireMention: Bool = false,
-        reactionNotifications: String = "own",
-        users: String = "",
-        channels: [DiscordGuildChannelForm] = [])
-    {
-        self.key = key
-        self.slug = slug
-        self.requireMention = requireMention
-        self.reactionNotifications = reactionNotifications
-        self.users = users
-        self.channels = channels
-    }
-}
-
 @MainActor
 @Observable
-final class ConnectionsStore {
-    static let shared = ConnectionsStore()
+final class ChannelsStore {
+    static let shared = ChannelsStore()
 
     var snapshot: ChannelsStatusSnapshot?
     var lastError: String?
@@ -240,75 +201,21 @@ final class ConnectionsStore {
     var whatsappLoginQrDataUrl: String?
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
-
-    var telegramToken: String = ""
-    var telegramRequireMention = true
-    var telegramAllowFrom: String = ""
-    var telegramProxy: String = ""
-    var telegramWebhookUrl: String = ""
-    var telegramWebhookSecret: String = ""
-    var telegramWebhookPath: String = ""
     var telegramBusy = false
-    var discordEnabled = true
-    var discordToken: String = ""
-    var discordDmEnabled = true
-    var discordAllowFrom: String = ""
-    var discordGroupEnabled = false
-    var discordGroupChannels: String = ""
-    var discordMediaMaxMb: String = ""
-    var discordHistoryLimit: String = ""
-    var discordTextChunkLimit: String = ""
-    var discordReplyToMode: String = "off"
-    var discordGuilds: [DiscordGuildForm] = []
-    var discordActionReactions = true
-    var discordActionStickers = true
-    var discordActionPolls = true
-    var discordActionPermissions = true
-    var discordActionMessages = true
-    var discordActionThreads = true
-    var discordActionPins = true
-    var discordActionSearch = true
-    var discordActionMemberInfo = true
-    var discordActionRoleInfo = true
-    var discordActionChannelInfo = true
-    var discordActionVoiceStatus = true
-    var discordActionEvents = true
-    var discordActionRoles = false
-    var discordActionModeration = false
-    var discordSlashEnabled = false
-    var discordSlashName: String = ""
-    var discordSlashSessionPrefix: String = ""
-    var discordSlashEphemeral = true
-    var signalEnabled = true
-    var signalAccount: String = ""
-    var signalHttpUrl: String = ""
-    var signalHttpHost: String = ""
-    var signalHttpPort: String = ""
-    var signalCliPath: String = ""
-    var signalAutoStart = true
-    var signalReceiveMode: String = ""
-    var signalIgnoreAttachments = false
-    var signalIgnoreStories = false
-    var signalSendReadReceipts = false
-    var signalAllowFrom: String = ""
-    var signalMediaMaxMb: String = ""
-    var imessageEnabled = true
-    var imessageCliPath: String = ""
-    var imessageDbPath: String = ""
-    var imessageService: String = "auto"
-    var imessageRegion: String = ""
-    var imessageAllowFrom: String = ""
-    var imessageIncludeAttachments = false
-    var imessageMediaMaxMb: String = ""
+
     var configStatus: String?
     var isSavingConfig = false
+    var configSchemaLoading = false
+    var configSchema: ConfigSchemaNode?
+    var configUiHints: [String: ConfigUiHint] = [:]
+    var configDraft: [String: Any] = [:]
+    var configDirty = false
 
     let interval: TimeInterval = 45
     let isPreview: Bool
     var pollTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
-    var configHash: String?
 
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
         self.isPreview = isPreview

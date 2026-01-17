@@ -3,12 +3,14 @@ import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../../../src/channels/plugins/config-helpers.js";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
 import { formatPairingApproveHint } from "../../../src/channels/plugins/helpers.js";
 import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
 import { applyAccountNameToChannelSection } from "../../../src/channels/plugins/setup-helpers.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
 
 import { matrixMessageActions } from "./actions.js";
+import { MatrixConfigSchema } from "./config-schema.js";
 import { resolveMatrixGroupRequireMention } from "./group-mentions.js";
 import type { CoreConfig } from "./types.js";
 import {
@@ -95,6 +97,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["channels.matrix"] },
+  configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
     listAccountIds: (cfg) => listMatrixAccountIds(cfg as CoreConfig),
     resolveAccount: (cfg, accountId) =>

@@ -169,7 +169,7 @@ export function renderOverview(props: OverviewProps) {
               ${authHint ?? ""}
             </div>`
           : html`<div class="callout" style="margin-top: 14px;">
-              Use Connections to link WhatsApp, Telegram, Discord, Signal, or iMessage.
+              Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
             </div>`}
       </div>
     </section>

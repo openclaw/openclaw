@@ -74,8 +74,8 @@ export function resolveTelegramAccount(params: {
   if (primary.tokenSource !== "none") return primary;
 
   // If accountId is omitted, prefer a configured account token over failing on
-  // the implicit "default" account. This keeps env-based setups working (env
-  // still wins) while making config-only tokens work for things like heartbeats.
+  // the implicit "default" account. This keeps env-based setups working while
+  // making config-only tokens work for things like heartbeats.
   const fallbackId = resolveDefaultTelegramAccountId(params.cfg);
   if (fallbackId === primary.accountId) return primary;
   const fallback = resolve(fallbackId);

@@ -11,6 +11,7 @@ import {
 import { applyLegacyMigrations } from "../config/legacy.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { buildConfigSchema } from "../config/schema.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { loadClawdbotPlugins } from "../plugins/loader.js";
 import {
   ErrorCodes,
@@ -114,11 +115,14 @@ export const handleConfigBridgeMethods: BridgeMethodHandler = async (
           name: plugin.name,
           description: plugin.description,
           configUiHints: plugin.configUiHints,
+          configSchema: plugin.configJsonSchema,
         })),
-        channels: pluginRegistry.channels.map((entry) => ({
-          id: entry.plugin.id,
-          label: entry.plugin.meta.label,
-          description: entry.plugin.meta.blurb,
+        channels: listChannelPlugins().map((entry) => ({
+          id: entry.id,
+          label: entry.meta.label,
+          description: entry.meta.blurb,
+          configSchema: entry.configSchema?.schema,
+          configUiHints: entry.configSchema?.uiHints,
         })),
       });
       return { ok: true, payloadJSON: JSON.stringify(schema) };

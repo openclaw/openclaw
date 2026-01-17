@@ -45,14 +45,14 @@ describe("chat focus mode", () => {
     await app.updateComplete;
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
 
-    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/connections"]');
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
     expect(link).not.toBeNull();
     link?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
     );
 
     await app.updateComplete;
-    expect(app.tab).toBe("connections");
+    expect(app.tab).toBe("channels");
     expect(shell?.classList.contains("shell--chat-focus")).toBe(false);
 
     const chatLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/chat"]');

@@ -32,7 +32,7 @@ Details: [Plugins](/plugin)
 2) Configure credentials:
    - Env: `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` (or `MATRIX_PASSWORD`)
    - Or config: `channels.matrix.*`
-   - Config takes precedence over env; env is fallback.
+   - If both are set, config takes precedence.
 3) Restart the gateway (or finish onboarding).
 4) DM access defaults to pairing; approve the pairing code on first contact.
 

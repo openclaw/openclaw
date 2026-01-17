@@ -73,8 +73,10 @@ export function renderNode(params: {
     const allLiterals = literals.every((v) => v !== undefined);
 
     if (allLiterals && literals.length > 0) {
+      const resolvedValue = value ?? schema.default;
       const currentIndex = literals.findIndex(
-        (lit) => lit === value || String(lit) === String(value),
+        (lit) =>
+          lit === resolvedValue || String(lit) === String(resolvedValue),
       );
       return html`
         <label class="field">
@@ -101,8 +103,10 @@ export function renderNode(params: {
 
   if (schema.enum) {
     const options = schema.enum;
+    const resolvedValue = value ?? schema.default;
     const currentIndex = options.findIndex(
-      (opt) => opt === value || String(opt) === String(value),
+      (opt) =>
+        opt === resolvedValue || String(opt) === String(resolvedValue),
     );
     const unset = "__unset__";
     return html`
@@ -128,7 +132,11 @@ export function renderNode(params: {
   }
 
   if (type === "object") {
-    const obj = (value ?? {}) as Record<string, unknown>;
+    const fallback = value ?? schema.default;
+    const obj =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback)
+        ? (fallback as Record<string, unknown>)
+        : {};
     const props = schema.properties ?? {};
     const entries = Object.entries(props);
     const sorted = entries.sort((a, b) => {
@@ -184,7 +192,11 @@ export function renderNode(params: {
         <div class="muted">Unsupported array schema. Use Raw.</div>
       </div>`;
     }
-    const arr = Array.isArray(value) ? value : [];
+    const arr = Array.isArray(value)
+      ? value
+      : Array.isArray(schema.default)
+        ? schema.default
+        : [];
     return html`
       <div class="field" style="margin-top: 12px;">
         ${showLabel ? html`<span>${label}</span>` : nothing}
@@ -235,13 +247,19 @@ export function renderNode(params: {
   }
 
   if (type === "boolean") {
+    const displayValue =
+      typeof value === "boolean"
+        ? value
+        : typeof schema.default === "boolean"
+          ? schema.default
+          : false;
     return html`
       <label class="field">
         ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <input
           type="checkbox"
-          .checked=${Boolean(value)}
+          .checked=${displayValue}
           ?disabled=${disabled}
           @change=${(e: Event) =>
             onPatch(path, (e.target as HTMLInputElement).checked)}
@@ -251,13 +269,14 @@ export function renderNode(params: {
   }
 
   if (type === "number" || type === "integer") {
+    const displayValue = value ?? schema.default;
     return html`
       <label class="field">
         ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <input
           type="number"
-          .value=${value == null ? "" : String(value)}
+          .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
@@ -272,6 +291,7 @@ export function renderNode(params: {
   if (type === "string") {
     const isSensitive = hint?.sensitive ?? isSensitivePath(path);
     const placeholder = hint?.placeholder ?? (isSensitive ? "••••" : "");
+    const displayValue = value ?? schema.default ?? "";
     return html`
       <label class="field">
         ${showLabel ? html`<span>${label}</span>` : nothing}
@@ -279,7 +299,7 @@ export function renderNode(params: {
         <input
           type=${isSensitive ? "password" : "text"}
           placeholder=${placeholder}
-          .value=${value == null ? "" : String(value)}
+          .value=${displayValue == null ? "" : String(displayValue)}
           ?disabled=${disabled}
           @input=${(e: Event) =>
             onPatch(path, (e.target as HTMLInputElement).value)}

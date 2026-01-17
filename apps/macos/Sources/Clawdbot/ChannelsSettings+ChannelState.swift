@@ -1,6 +1,7 @@
+import ClawdbotProtocol
 import SwiftUI
 
-extension ConnectionsSettings {
+extension ChannelsSettings {
     private func channelStatus<T: Decodable>(
         _ id: String,
         as type: T.Type) -> T?
@@ -242,16 +243,18 @@ extension ConnectionsSettings {
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
-    var isTelegramTokenLocked: Bool {
-        self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)?.tokenSource == "env"
-    }
-
-    var isDiscordTokenLocked: Bool {
-        self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)?.tokenSource == "env"
-    }
-
-    var orderedChannels: [ConnectionChannel] {
-        ConnectionChannel.allCases.sorted { lhs, rhs in
+    var orderedChannels: [ChannelItem] {
+        let fallback = ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"]
+        let order = self.store.snapshot?.channelOrder ?? fallback
+        let channels = order.enumerated().map { index, id in
+            ChannelItem(
+                id: id,
+                title: self.resolveChannelTitle(id),
+                detailTitle: self.resolveChannelDetailTitle(id),
+                systemImage: self.resolveChannelSystemImage(id),
+                sortOrder: index)
+        }
+        return channels.sorted { lhs, rhs in
             let lhsEnabled = self.channelEnabled(lhs)
             let rhsEnabled = self.channelEnabled(rhs)
             if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
@@ -259,11 +262,11 @@ extension ConnectionsSettings {
         }
     }
 
-    var enabledChannels: [ConnectionChannel] {
+    var enabledChannels: [ChannelItem] {
         self.orderedChannels.filter { self.channelEnabled($0) }
     }
 
-    var availableChannels: [ConnectionChannel] {
+    var availableChannels: [ChannelItem] {
         self.orderedChannels.filter { !self.channelEnabled($0) }
     }
 
@@ -277,143 +280,183 @@ extension ConnectionsSettings {
         }
     }
 
-    func channelEnabled(_ channel: ConnectionChannel) -> Bool {
-        switch channel {
-        case .whatsapp:
-            guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
-            else { return false }
-            return status.configured || status.linked || status.running
-        case .telegram:
-            guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-            else { return false }
-            return status.configured || status.running
-        case .discord:
-            guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
-            else { return false }
-            return status.configured || status.running
-        case .signal:
-            guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
-            else { return false }
-            return status.configured || status.running
-        case .imessage:
-            guard let status = self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)
-            else { return false }
-            return status.configured || status.running
-        }
+    func channelEnabled(_ channel: ChannelItem) -> Bool {
+        let status = self.channelStatusDictionary(channel.id)
+        let configured = status?["configured"]?.boolValue ?? false
+        let running = status?["running"]?.boolValue ?? false
+        let connected = status?["connected"]?.boolValue ?? false
+        let accountActive = self.store.snapshot?.channelAccounts[channel.id]?.contains(
+            where: { $0.configured == true || $0.running == true || $0.connected == true }) ?? false
+        return configured || running || connected || accountActive
     }
 
     @ViewBuilder
-    func channelSection(_ channel: ConnectionChannel) -> some View {
-        switch channel {
-        case .whatsapp:
+    func channelSection(_ channel: ChannelItem) -> some View {
+        if channel.id == "whatsapp" {
             self.whatsAppSection
-        case .telegram:
-            self.telegramSection
-        case .discord:
-            self.discordSection
-        case .signal:
-            self.signalSection
-        case .imessage:
-            self.imessageSection
+        } else {
+            self.genericChannelSection(channel)
         }
     }
 
-    func channelTint(_ channel: ConnectionChannel) -> Color {
-        switch channel {
-        case .whatsapp:
-            self.whatsAppTint
-        case .telegram:
-            self.telegramTint
-        case .discord:
-            self.discordTint
-        case .signal:
-            self.signalTint
-        case .imessage:
-            self.imessageTint
+    func channelTint(_ channel: ChannelItem) -> Color {
+        switch channel.id {
+        case "whatsapp":
+            return self.whatsAppTint
+        case "telegram":
+            return self.telegramTint
+        case "discord":
+            return self.discordTint
+        case "signal":
+            return self.signalTint
+        case "imessage":
+            return self.imessageTint
+        default:
+            if self.channelHasError(channel) { return .orange }
+            if self.channelEnabled(channel) { return .green }
+            return .secondary
         }
     }
 
-    func channelSummary(_ channel: ConnectionChannel) -> String {
-        switch channel {
-        case .whatsapp:
-            self.whatsAppSummary
-        case .telegram:
-            self.telegramSummary
-        case .discord:
-            self.discordSummary
-        case .signal:
-            self.signalSummary
-        case .imessage:
-            self.imessageSummary
+    func channelSummary(_ channel: ChannelItem) -> String {
+        switch channel.id {
+        case "whatsapp":
+            return self.whatsAppSummary
+        case "telegram":
+            return self.telegramSummary
+        case "discord":
+            return self.discordSummary
+        case "signal":
+            return self.signalSummary
+        case "imessage":
+            return self.imessageSummary
+        default:
+            if self.channelHasError(channel) { return "Error" }
+            if self.channelEnabled(channel) { return "Active" }
+            return "Not configured"
         }
     }
 
-    func channelDetails(_ channel: ConnectionChannel) -> String? {
-        switch channel {
-        case .whatsapp:
-            self.whatsAppDetails
-        case .telegram:
-            self.telegramDetails
-        case .discord:
-            self.discordDetails
-        case .signal:
-            self.signalDetails
-        case .imessage:
-            self.imessageDetails
+    func channelDetails(_ channel: ChannelItem) -> String? {
+        switch channel.id {
+        case "whatsapp":
+            return self.whatsAppDetails
+        case "telegram":
+            return self.telegramDetails
+        case "discord":
+            return self.discordDetails
+        case "signal":
+            return self.signalDetails
+        case "imessage":
+            return self.imessageDetails
+        default:
+            let status = self.channelStatusDictionary(channel.id)
+            if let err = status?["lastError"]?.stringValue, !err.isEmpty {
+                return "Error: \(err)"
+            }
+            return nil
         }
     }
 
-    func channelLastCheckText(_ channel: ConnectionChannel) -> String {
+    func channelLastCheckText(_ channel: ChannelItem) -> String {
         guard let date = self.channelLastCheck(channel) else { return "never" }
         return relativeAge(from: date)
     }
 
-    func channelLastCheck(_ channel: ConnectionChannel) -> Date? {
-        switch channel {
-        case .whatsapp:
+    func channelLastCheck(_ channel: ChannelItem) -> Date? {
+        switch channel.id {
+        case "whatsapp":
             guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
             else { return nil }
             return self.date(fromMs: status.lastEventAt ?? status.lastMessageAt ?? status.lastConnectedAt)
-        case .telegram:
+        case "telegram":
             return self
                 .date(fromMs: self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)?
                     .lastProbeAt)
-        case .discord:
+        case "discord":
             return self
                 .date(fromMs: self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)?
                     .lastProbeAt)
-        case .signal:
+        case "signal":
             return self
                 .date(fromMs: self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)?.lastProbeAt)
-        case .imessage:
+        case "imessage":
             return self
                 .date(fromMs: self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)?
                     .lastProbeAt)
+        default:
+            let status = self.channelStatusDictionary(channel.id)
+            if let probeAt = status?["lastProbeAt"]?.doubleValue {
+                return self.date(fromMs: probeAt)
+            }
+            if let accounts = self.store.snapshot?.channelAccounts[channel.id] {
+                let last = accounts.compactMap { $0.lastInboundAt ?? $0.lastOutboundAt }.max()
+                return self.date(fromMs: last)
+            }
+            return nil
         }
     }
 
-    func channelHasError(_ channel: ConnectionChannel) -> Bool {
-        switch channel {
-        case .whatsapp:
+    func channelHasError(_ channel: ChannelItem) -> Bool {
+        switch channel.id {
+        case "whatsapp":
             guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.lastDisconnect?.loggedOut == true
-        case .telegram:
+        case "telegram":
             guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case .discord:
+        case "discord":
             guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case .signal:
+        case "signal":
             guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case .imessage:
+        case "imessage":
             guard let status = self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)
             else { return false }
             return status.lastError?.isEmpty == false || status.probe?.ok == false
+        default:
+            let status = self.channelStatusDictionary(channel.id)
+            return status?["lastError"]?.stringValue?.isEmpty == false
         }
+    }
+
+    private func resolveChannelTitle(_ id: String) -> String {
+        if let label = self.store.snapshot?.channelLabels[id], !label.isEmpty {
+            return label
+        }
+        return id.prefix(1).uppercased() + id.dropFirst()
+    }
+
+    private func resolveChannelDetailTitle(_ id: String) -> String {
+        switch id {
+        case "whatsapp": return "WhatsApp Web"
+        case "telegram": return "Telegram Bot"
+        case "discord": return "Discord Bot"
+        case "slack": return "Slack Bot"
+        case "signal": return "Signal REST"
+        case "imessage": return "iMessage"
+        default: return self.resolveChannelTitle(id)
+        }
+    }
+
+    private func resolveChannelSystemImage(_ id: String) -> String {
+        switch id {
+        case "whatsapp": return "message"
+        case "telegram": return "paperplane"
+        case "discord": return "bubble.left.and.bubble.right"
+        case "slack": return "number"
+        case "signal": return "antenna.radiowaves.left.and.right"
+        case "imessage": return "message.fill"
+        default: return "message"
+        }
+    }
+
+    private func channelStatusDictionary(_ id: String) -> [String: AnyCodable]? {
+        self.store.snapshot?.channels[id]?.dictionaryValue
     }
 }

@@ -42,6 +42,7 @@ export type ClawdbotPluginConfigSchema = {
   parse?: (value: unknown) => unknown;
   validate?: (value: unknown) => PluginConfigValidation;
   uiHints?: Record<string, PluginConfigUiHint>;
+  jsonSchema?: Record<string, unknown>;
 };
 
 export type ClawdbotPluginToolContext = {

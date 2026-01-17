@@ -1,8 +1,10 @@
-import type { ChannelDock, ChannelPlugin } from "../../src/channels/plugins/types.js";
-import type { ChannelAccountSnapshot } from "../../src/channels/plugins/types.js";
+import type { ChannelAccountSnapshot } from "../../../src/channels/plugins/types.js";
+import type { ChannelDock, ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
 
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount, type ResolvedZaloAccount } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";
+import { ZaloConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -81,6 +83,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.zalo"] },
+  configSchema: buildChannelConfigSchema(ZaloConfigSchema),
   config: {
     listAccountIds: (cfg) => listZaloAccountIds(cfg as CoreConfig),
     resolveAccount: (cfg, accountId) => resolveZaloAccount({ cfg: cfg as CoreConfig, accountId }),

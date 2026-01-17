@@ -13,7 +13,7 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 2) Set the token:
    - Env: `TELEGRAM_BOT_TOKEN=...`
    - Or config: `channels.telegram.botToken: "..."`.
-   - If both are set, config wins; env is fallback.
+   - If both are set, config takes precedence (env fallback is default-account only).
 3) Start the gateway.
 4) DM access is pairing by default; approve the pairing code on first contact.
 
@@ -61,7 +61,8 @@ Example:
 }
 ```
 
-Env option: `TELEGRAM_BOT_TOKEN=...` (works for the default account; used only when config is missing).
+Env option: `TELEGRAM_BOT_TOKEN=...` (works for the default account).
+If both env and config are set, config takes precedence.
 
 Multi-account support: use `channels.telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 

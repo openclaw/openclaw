@@ -21,17 +21,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import {
-  defaultDiscordActions,
-  defaultSlackActions,
-  type ChatQueueItem,
-  type CronFormState,
-  type DiscordForm,
-  type IMessageForm,
-  type SlackForm,
-  type SignalForm,
-  type TelegramForm,
-} from "./ui-types";
+import { type ChatQueueItem, type CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
 import {
@@ -66,15 +56,12 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat";
 import {
-  handleDiscordSave as handleDiscordSaveInternal,
-  handleIMessageSave as handleIMessageSaveInternal,
-  handleSignalSave as handleSignalSaveInternal,
-  handleSlackSave as handleSlackSaveInternal,
-  handleTelegramSave as handleTelegramSaveInternal,
+  handleChannelConfigReload as handleChannelConfigReloadInternal,
+  handleChannelConfigSave as handleChannelConfigSaveInternal,
   handleWhatsAppLogout as handleWhatsAppLogoutInternal,
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
-} from "./app-connections";
+} from "./app-channels";
 
 declare global {
   interface Window {
@@ -143,91 +130,6 @@ export class ClawdbotApp extends LitElement {
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
   @state() whatsappBusy = false;
-  @state() telegramForm: TelegramForm = {
-    token: "",
-    requireMention: true,
-    groupsWildcardEnabled: false,
-    allowFrom: "",
-    proxy: "",
-    webhookUrl: "",
-    webhookSecret: "",
-    webhookPath: "",
-  };
-  @state() telegramSaving = false;
-  @state() telegramTokenLocked = false;
-  @state() telegramConfigStatus: string | null = null;
-  @state() discordForm: DiscordForm = {
-    enabled: true,
-    token: "",
-    dmEnabled: true,
-    allowFrom: "",
-    groupEnabled: false,
-    groupChannels: "",
-    mediaMaxMb: "",
-    historyLimit: "",
-    textChunkLimit: "",
-    guilds: [],
-    actions: { ...defaultDiscordActions },
-    slashEnabled: false,
-    slashName: "",
-    slashSessionPrefix: "",
-    slashEphemeral: true,
-  };
-  @state() discordSaving = false;
-  @state() discordTokenLocked = false;
-  @state() discordConfigStatus: string | null = null;
-  @state() slackForm: SlackForm = {
-    enabled: true,
-    botToken: "",
-    appToken: "",
-    dmEnabled: true,
-    allowFrom: "",
-    groupEnabled: false,
-    groupChannels: "",
-    mediaMaxMb: "",
-    textChunkLimit: "",
-    reactionNotifications: "own",
-    reactionAllowlist: "",
-    slashEnabled: false,
-    slashName: "",
-    slashSessionPrefix: "",
-    slashEphemeral: true,
-    actions: { ...defaultSlackActions },
-    channels: [],
-  };
-  @state() slackSaving = false;
-  @state() slackTokenLocked = false;
-  @state() slackAppTokenLocked = false;
-  @state() slackConfigStatus: string | null = null;
-  @state() signalForm: SignalForm = {
-    enabled: true,
-    account: "",
-    httpUrl: "",
-    httpHost: "",
-    httpPort: "",
-    cliPath: "",
-    autoStart: true,
-    receiveMode: "",
-    ignoreAttachments: false,
-    ignoreStories: false,
-    sendReadReceipts: false,
-    allowFrom: "",
-    mediaMaxMb: "",
-  };
-  @state() signalSaving = false;
-  @state() signalConfigStatus: string | null = null;
-  @state() imessageForm: IMessageForm = {
-    enabled: true,
-    cliPath: "",
-    dbPath: "",
-    service: "auto",
-    region: "",
-    allowFrom: "",
-    includeAttachments: false,
-    mediaMaxMb: "",
-  };
-  @state() imessageSaving = false;
-  @state() imessageConfigStatus: string | null = null;
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
@@ -439,24 +341,12 @@ export class ClawdbotApp extends LitElement {
     await handleWhatsAppLogoutInternal(this);
   }
 
-  async handleTelegramSave() {
-    await handleTelegramSaveInternal(this);
+  async handleChannelConfigSave() {
+    await handleChannelConfigSaveInternal(this);
   }
 
-  async handleDiscordSave() {
-    await handleDiscordSaveInternal(this);
-  }
-
-  async handleSlackSave() {
-    await handleSlackSaveInternal(this);
-  }
-
-  async handleSignalSave() {
-    await handleSignalSaveInternal(this);
-  }
-
-  async handleIMessageSave() {
-    await handleIMessageSaveInternal(this);
+  async handleChannelConfigReload() {
+    await handleChannelConfigReloadInternal(this);
   }
 
   // Sidebar handlers for tool output viewing

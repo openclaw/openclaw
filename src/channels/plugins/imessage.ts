@@ -9,6 +9,8 @@ import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
+import { IMessageConfigSchema } from "../../config/zod-schema.providers-core.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
@@ -44,6 +46,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["channels.imessage"] },
+  configSchema: buildChannelConfigSchema(IMessageConfigSchema),
   config: {
     listAccountIds: (cfg) => listIMessageAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
