@@ -83,6 +83,5 @@ export {
   listTelegramDirectoryPeersFromConfig,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
-  type DirectoryConfigParams,
 } from "./directory-config.js";
 export type { ChannelId, ChannelPlugin } from "./types.js";
