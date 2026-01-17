@@ -227,7 +227,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      if (result.toolResult) return result.toolResult;
+      if ("toolResult" in result && result.toolResult) return result.toolResult;
       return jsonResult(result.payload);
     },
   };

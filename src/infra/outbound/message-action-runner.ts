@@ -445,9 +445,9 @@ export async function runMessageAction(
         : null;
     const useTextMarker = !(channel === "discord" && marker?.discordEmbeds?.length);
     if (useTextMarker && (marker?.prefix || marker?.suffix)) {
-      const base = params.message ?? "";
-      params.message = `${marker?.prefix ?? ""}${base}${marker?.suffix ?? ""}`;
-      message = params.message;
+      const merged = `${marker?.prefix ?? ""}${message}${marker?.suffix ?? ""}`;
+      params.message = merged;
+      message = merged;
     }
 
     const mediaUrl = readStringParam(params, "media", { trim: false });

@@ -1,4 +1,0 @@
-{
-  "$schema": "https://json.schemastore.org/oxlintrc",
-  "extends": ["recommended"]
-}
