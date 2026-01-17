@@ -35,10 +35,12 @@ describe("healthCommand (coverage)", () => {
       durationMs: 5,
       channels: {
         whatsapp: {
+          accountId: "default",
           linked: true,
           authAgeMs: 5 * 60_000,
         },
         telegram: {
+          accountId: "default",
           configured: true,
           probe: {
             ok: true,
@@ -48,6 +50,7 @@ describe("healthCommand (coverage)", () => {
           },
         },
         discord: {
+          accountId: "default",
           configured: false,
         },
       },
@@ -58,6 +61,29 @@ describe("healthCommand (coverage)", () => {
         discord: "Discord",
       },
       heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [
+        {
+          agentId: "main",
+          isDefault: true,
+          heartbeat: {
+            enabled: true,
+            every: "1m",
+            everyMs: 60_000,
+            prompt: "hi",
+            target: "last",
+            ackMaxChars: 160,
+          },
+          sessions: {
+            path: "/tmp/sessions.json",
+            count: 2,
+            recent: [
+              { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
+              { key: "foo", updatedAt: null, age: null },
+            ],
+          },
+        },
+      ],
       sessions: {
         path: "/tmp/sessions.json",
         count: 2,

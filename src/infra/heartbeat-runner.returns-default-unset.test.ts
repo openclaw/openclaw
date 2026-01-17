@@ -12,6 +12,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import {
+  isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -78,6 +79,30 @@ describe("resolveHeartbeatPrompt", () => {
       agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
     };
     expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
+  });
+});
+
+describe("isHeartbeatEnabledForAgent", () => {
+  it("enables only explicit heartbeat agents when configured", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("falls back to default agent when no explicit heartbeat entries", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
   });
 });
 
@@ -214,6 +239,21 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 });
 
 describe("runHeartbeatOnce", () => {
+  it("skips when agent heartbeat is not enabled", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+
+    const res = await runHeartbeatOnce({ cfg, agentId: "main" });
+    expect(res.status).toBe("skipped");
+    if (res.status === "skipped") {
+      expect(res.reason).toBe("disabled");
+    }
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
