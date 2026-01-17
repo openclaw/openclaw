@@ -104,7 +104,12 @@ describe("trigger handling", () => {
           {
             provider: "anthropic",
             displayName: "Anthropic",
-            windows: [],
+            windows: [
+              {
+                label: "5h",
+                usedPercent: 20,
+              },
+            ],
           },
         ],
       });
