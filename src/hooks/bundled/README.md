@@ -1,6 +1,6 @@
-# Bundled Internal Hooks
+# Bundled Hooks
 
-This directory contains internal hooks that ship with Clawdbot. These hooks are automatically discovered and can be enabled/disabled via CLI or configuration.
+This directory contains hooks that ship with Clawdbot. These hooks are automatically discovered and can be enabled/disabled via CLI or configuration.
 
 ## Available Hooks
 
@@ -53,7 +53,7 @@ session-memory/
 ---
 name: my-hook
 description: "Short description"
-homepage: https://docs.clawd.bot/hooks/my-hook
+homepage: https://docs.clawd.bot/hooks#my-hook
 metadata:
   { "clawdbot": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
@@ -161,9 +161,9 @@ interface InternalHookEvent {
 Example handler:
 
 ```typescript
-import type { InternalHookHandler } from "../../src/hooks/internal-hooks.js";
+import type { HookHandler } from "../../src/hooks/hooks.js";
 
-const myHandler: InternalHookHandler = async (event) => {
+const myHandler: HookHandler = async (event) => {
   if (event.type !== "command" || event.action !== "new") {
     return;
   }
@@ -190,4 +190,4 @@ Test your hooks by:
 
 ## Documentation
 
-Full documentation: https://docs.clawd.bot/internal-hooks
+Full documentation: https://docs.clawd.bot/hooks

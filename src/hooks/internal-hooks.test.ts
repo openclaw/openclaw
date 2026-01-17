@@ -9,7 +9,7 @@ import {
   type InternalHookEvent,
 } from "./internal-hooks.js";
 
-describe("internal-hooks", () => {
+describe("hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
   });
@@ -131,7 +131,7 @@ describe("internal-hooks", () => {
       expect(errorHandler).toHaveBeenCalled();
       expect(successHandler).toHaveBeenCalled();
       expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Internal hook error"),
+        expect.stringContaining("Hook error"),
         expect.stringContaining("Handler failed"),
       );
 

@@ -43,7 +43,7 @@ describe("loader", () => {
   });
 
   describe("loadInternalHooks", () => {
-    it("should return 0 when internal hooks are not enabled", async () => {
+    it("should return 0 when hooks are not enabled", async () => {
       const cfg: ClawdbotConfig = {
         hooks: {
           internal: {
@@ -170,7 +170,7 @@ describe("loader", () => {
       const count = await loadInternalHooks(cfg, tmpDir);
       expect(count).toBe(0);
       expect(consoleError).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to load internal hook handler"),
+        expect.stringContaining("Failed to load hook handler"),
         expect.any(String),
       );
 

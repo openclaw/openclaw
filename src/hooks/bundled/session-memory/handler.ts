@@ -11,7 +11,7 @@ import os from "node:os";
 import type { ClawdbotConfig } from "../../../config/config.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
-import type { InternalHookHandler } from "../../internal-hooks.js";
+import type { HookHandler } from "../../hooks.js";
 
 /**
  * Read recent messages from session file for slug generation
@@ -57,7 +57,7 @@ async function getRecentSessionContent(sessionFilePath: string): Promise<string 
 /**
  * Save session context to memory when /new command is triggered
  */
-const saveSessionToMemory: InternalHookHandler = async (event) => {
+const saveSessionToMemory: HookHandler = async (event) => {
   // Only trigger on 'new' command
   if (event.type !== "command" || event.action !== "new") {
     return;

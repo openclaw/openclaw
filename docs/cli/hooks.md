@@ -1,16 +1,16 @@
 ---
-summary: "CLI reference for `clawdbot hooks` (internal hooks)"
+summary: "CLI reference for `clawdbot hooks` (agent hooks)"
 read_when:
-  - You want to manage internal agent hooks
-  - You want to install or update internal hooks
+  - You want to manage agent hooks
+  - You want to install or update hooks
 ---
 
 # `clawdbot hooks`
 
-Manage internal agent hooks (event-driven automations for commands like `/new`, `/reset`, etc.).
+Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, etc.).
 
 Related:
-- Internal Hooks: [Internal Agent Hooks](/internal-hooks)
+- Hooks: [Hooks](/hooks)
 
 ## List All Hooks
 
@@ -18,7 +18,7 @@ Related:
 clawdbot hooks list
 ```
 
-List all discovered internal hooks from workspace, managed, and bundled directories.
+List all discovered hooks from workspace, managed, and bundled directories.
 
 **Options:**
 - `--eligible`: Show only eligible hooks (requirements met)
@@ -28,7 +28,7 @@ List all discovered internal hooks from workspace, managed, and bundled director
 **Example output:**
 
 ```
-Internal Hooks (2/2 ready)
+Hooks (2/2 ready)
 
 Ready:
   📝 command-logger ✓ - Log all command events to a centralized audit file
@@ -82,7 +82,7 @@ Details:
   Source: clawdbot-bundled
   Path: /path/to/clawdbot/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/clawdbot/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.clawd.bot/internal-hooks#session-memory
+  Homepage: https://docs.clawd.bot/hooks#session-memory
   Events: command:new
 
 Requirements:
@@ -103,7 +103,7 @@ Show summary of hook eligibility status (how many are ready vs. not ready).
 **Example output:**
 
 ```
-Internal Hooks Status
+Hooks Status
 
 Total hooks: 2
 Ready: 2
@@ -228,7 +228,7 @@ clawdbot hooks enable session-memory
 
 **Output:** `~/clawd/memory/YYYY-MM-DD-slug.md`
 
-**See:** [session-memory documentation](/internal-hooks#session-memory)
+**See:** [session-memory documentation](/hooks#session-memory)
 
 ### command-logger
 
@@ -255,4 +255,4 @@ cat ~/.clawdbot/logs/commands.log | jq .
 grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 ```
 
-**See:** [command-logger documentation](/internal-hooks#command-logger)
+**See:** [command-logger documentation](/hooks#command-logger)

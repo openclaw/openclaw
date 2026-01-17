@@ -1,5 +1,5 @@
 /**
- * Example internal hook handler: Log all commands to a file
+ * Example hook handler: Log all commands to a file
  *
  * This handler demonstrates how to create a hook that logs all command events
  * to a centralized log file for audit/debugging purposes.
@@ -26,12 +26,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { InternalHookHandler } from "../../internal-hooks.js";
+import type { HookHandler } from "../../hooks.js";
 
 /**
  * Log all command events to a file
  */
-const logCommand: InternalHookHandler = async (event) => {
+const logCommand: HookHandler = async (event) => {
   // Only trigger on command events
   if (event.type !== "command") {
     return;
