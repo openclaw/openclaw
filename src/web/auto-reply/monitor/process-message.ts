@@ -22,6 +22,7 @@ import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
+import { normalizeChatType } from "../../../channels/chat-type.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -197,8 +198,10 @@ export async function processMessage(params: {
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: {
       Body: combinedBody,
+      BodyForAgent: combinedBody,
       RawBody: params.msg.body,
       CommandBody: params.msg.body,
+      BodyForCommands: params.msg.body,
       From: params.msg.from,
       To: params.msg.to,
       SessionKey: params.route.sessionKey,
@@ -210,7 +213,8 @@ export async function processMessage(params: {
       MediaPath: params.msg.mediaPath,
       MediaUrl: params.msg.mediaUrl,
       MediaType: params.msg.mediaType,
-      ChatType: params.msg.chatType,
+      ChatType: normalizeChatType(params.msg.chatType) ?? params.msg.chatType,
+      ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
       GroupSubject: params.msg.groupSubject,
       GroupMembers: formatGroupMembers({
         participants: params.msg.groupParticipants,

@@ -7,7 +7,12 @@ export type SessionScope = "per-sender" | "global";
 
 export type SessionChannelId = ChannelId | "webchat";
 
-export type SessionChatType = "direct" | "group" | "room";
+export type SessionChatType =
+  | "direct"
+  | "group"
+  | "channel"
+  // Legacy alias for "channel".
+  | "room";
 
 export type SessionEntry = {
   /**

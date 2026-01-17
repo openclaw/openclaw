@@ -9,6 +9,11 @@ export type OriginatingChannelType = ChannelId | InternalMessageChannel;
 export type MsgContext = {
   Body?: string;
   /**
+   * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
+   * Should use real newlines (`\n`), not escaped `\\n`.
+   */
+  BodyForAgent?: string;
+  /**
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
@@ -17,6 +22,11 @@ export type MsgContext = {
    * Prefer for command detection; RawBody is treated as legacy alias.
    */
   CommandBody?: string;
+  /**
+   * Command parsing body. Prefer this over CommandBody/RawBody when set.
+   * Should be the "clean" text (no history/sender context).
+   */
+  BodyForCommands?: string;
   CommandArgs?: CommandArgs;
   From?: string;
   To?: string;
@@ -46,6 +56,8 @@ export type MsgContext = {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Human label for envelope headers (conversation label, not sender). */
+  ConversationLabel?: string;
   GroupSubject?: string;
   GroupRoom?: string;
   GroupSpace?: string;

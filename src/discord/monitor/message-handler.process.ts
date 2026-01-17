@@ -221,13 +221,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const ctxPayload = {
     Body: combinedBody,
+    BodyForAgent: combinedBody,
     RawBody: baseText,
     CommandBody: baseText,
+    BodyForCommands: baseText,
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "group",
+    ChatType: isDirectMessage ? "direct" : "channel",
+    ConversationLabel: fromLabel,
     SenderName: data.member?.nickname ?? author.globalName ?? author.username,
     SenderId: author.id,
     SenderUsername: author.username,

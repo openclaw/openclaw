@@ -18,6 +18,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { resolveConversationLabel } from "../../channels/conversation-label.js";
 
 import type { ResolvedSlackAccount } from "../accounts.js";
 
@@ -337,14 +338,27 @@ export function registerSlackMonitorSlashCommands(params: {
 
       const ctxPayload = {
         Body: prompt,
+        BodyForAgent: prompt,
         CommandArgs: commandArgs,
+        BodyForCommands: prompt,
         From: isDirectMessage
           ? `slack:${command.user_id}`
           : isRoom
             ? `slack:channel:${command.channel_id}`
             : `slack:group:${command.channel_id}`,
         To: `slash:${command.user_id}`,
-        ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
+        ChatType: isDirectMessage ? "direct" : "channel",
+        ConversationLabel:
+          resolveConversationLabel({
+            ChatType: isDirectMessage ? "direct" : "channel",
+            SenderName: senderName,
+            GroupSubject: isRoomish ? roomLabel : undefined,
+            From: isDirectMessage
+              ? `slack:${command.user_id}`
+              : isRoom
+                ? `slack:channel:${command.channel_id}`
+                : `slack:group:${command.channel_id}`,
+          }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
         GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
         SenderName: senderName,

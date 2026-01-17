@@ -110,7 +110,9 @@ const formatAge = (ms: number | null | undefined) => {
 function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
   if (key === "global") return "global";
   if (key === "unknown") return "unknown";
-  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (entry?.chatType === "group" || entry?.chatType === "channel" || entry?.chatType === "room") {
+    return "group";
+  }
   if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }

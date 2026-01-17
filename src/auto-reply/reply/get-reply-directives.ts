@@ -120,12 +120,18 @@ export async function resolveReplyDirectives(params: {
   // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
   // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
   const commandSource =
+    sessionCtx.BodyForCommands ??
     sessionCtx.CommandBody ??
     sessionCtx.RawBody ??
     sessionCtx.Transcript ??
     sessionCtx.BodyStripped ??
     sessionCtx.Body ??
+    ctx.BodyForCommands ??
+    ctx.CommandBody ??
+    ctx.RawBody ??
     "";
+  const promptSource = sessionCtx.BodyForAgent ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const commandText = commandSource || promptSource;
   const command = buildCommandContext({
     ctx,
     cfg,
@@ -162,7 +168,7 @@ export async function resolveReplyDirectives(params: {
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   const allowStatusDirective = allowTextCommands && command.isAuthorizedSender;
-  let parsedDirectives = parseInlineDirectives(commandSource, {
+  let parsedDirectives = parseInlineDirectives(commandText, {
     modelAliases: configuredAliases,
     allowStatusDirective,
   });
@@ -253,6 +259,7 @@ export async function resolveReplyDirectives(params: {
     cleanedBody = stripInlineStatus(cleanedBody).cleaned;
   }
 
+  sessionCtx.BodyForAgent = cleanedBody;
   sessionCtx.Body = cleanedBody;
   sessionCtx.BodyStripped = cleanedBody;
 
@@ -402,7 +409,7 @@ export async function resolveReplyDirectives(params: {
   return {
     kind: "continue",
     result: {
-      commandSource,
+    commandSource: commandText,
       command,
       allowTextCommands,
       skillCommands,

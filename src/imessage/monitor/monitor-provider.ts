@@ -389,13 +389,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const imessageTo = (isGroup ? chatTarget : undefined) || `imessage:${sender}`;
     const ctxPayload = {
       Body: combinedBody,
+      BodyForAgent: combinedBody,
       RawBody: bodyText,
       CommandBody: bodyText,
+      BodyForCommands: bodyText,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
       To: imessageTo,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
+      ConversationLabel: fromLabel,
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
       GroupMembers: isGroup ? (message.participants ?? []).filter(Boolean).join(", ") : undefined,
       SenderName: senderNormalized,

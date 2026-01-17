@@ -14,6 +14,7 @@ import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
+import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -330,7 +331,13 @@ export async function prepareSlackMessage(params: {
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
 
-  const envelopeFrom = isDirectMessage ? senderName : roomLabel;
+  const envelopeFrom =
+    resolveConversationLabel({
+      ChatType: isDirectMessage ? "direct" : "channel",
+      SenderName: senderName,
+      GroupSubject: isRoomish ? roomLabel : undefined,
+      From: slackFrom,
+    }) ?? (isDirectMessage ? senderName : roomLabel);
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
   const body = formatAgentEnvelope({
     channel: "Slack",
@@ -399,13 +406,16 @@ export async function prepareSlackMessage(params: {
 
   const ctxPayload = {
     Body: combinedBody,
+    BodyForAgent: combinedBody,
     RawBody: rawBody,
     CommandBody: rawBody,
+    BodyForCommands: rawBody,
     From: slackFrom,
     To: slackTo,
     SessionKey: sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
+    ChatType: isDirectMessage ? "direct" : "channel",
+    ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
     SenderName: senderName,

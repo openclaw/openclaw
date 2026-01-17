@@ -136,6 +136,6 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     legacyKey,
     channel: resolvedProvider,
     id: id || raw || from,
-    chatType: resolvedKind === "channel" ? "room" : "group",
+    chatType: resolvedKind === "channel" ? "channel" : "group",
   };
 }

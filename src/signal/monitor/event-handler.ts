@@ -104,8 +104,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
     const ctxPayload = {
       Body: combinedBody,
+      BodyForAgent: combinedBody,
       RawBody: entry.bodyText,
       CommandBody: entry.bodyText,
+      BodyForCommands: entry.bodyText,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -113,6 +115,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: entry.isGroup ? "group" : "direct",
+      ConversationLabel: fromLabel,
       GroupSubject: entry.isGroup ? (entry.groupName ?? undefined) : undefined,
       SenderName: entry.senderName,
       SenderId: entry.senderDisplay,

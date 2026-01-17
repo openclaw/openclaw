@@ -183,13 +183,16 @@ async function processMessage(
 
   const ctxPayload = {
     Body: body,
+    BodyForAgent: body,
     RawBody: rawBody,
     CommandBody: rawBody,
+    BodyForCommands: rawBody,
     From: isGroup ? `group:${chatId}` : `zalouser:${senderId}`,
     To: `zalouser:${chatId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
+    ConversationLabel: fromLabel,
     SenderName: senderName || undefined,
     SenderId: senderId,
     Provider: "zalouser",

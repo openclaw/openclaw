@@ -569,16 +569,20 @@ async function dispatchDiscordCommandInteraction(params: {
       id: isDirectMessage ? user.id : channelId,
     },
   });
+  const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ctxPayload = {
     Body: prompt,
+    BodyForAgent: prompt,
     CommandBody: prompt,
+    BodyForCommands: prompt,
     CommandArgs: commandArgs,
     From: isDirectMessage ? `discord:${user.id}` : `group:${channelId}`,
     To: `slash:${user.id}`,
     SessionKey: `agent:${route.agentId}:${sessionPrefix}:${user.id}`,
     CommandTargetSessionKey: route.sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "group",
+    ChatType: isDirectMessage ? "direct" : isGroupDm ? "group" : "channel",
+    ConversationLabel: conversationLabel,
     GroupSubject: isGuild ? interaction.guild?.name : undefined,
     GroupSystemPrompt: isGuild
       ? (() => {
