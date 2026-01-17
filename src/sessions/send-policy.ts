@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -27,7 +28,7 @@ function deriveChannelFromKey(key?: string) {
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   if (!key) return undefined;
   if (key.startsWith("group:") || key.includes(":group:")) return "group";
-  if (key.includes(":channel:")) return "room";
+  if (key.includes(":channel:")) return "channel";
   return undefined;
 }
 
@@ -50,8 +51,8 @@ export function resolveSendPolicy(params: {
     normalizeMatchValue(params.entry?.lastChannel) ??
     deriveChannelFromKey(params.sessionKey);
   const chatType =
-    normalizeMatchValue(params.chatType ?? params.entry?.chatType) ??
-    normalizeMatchValue(deriveChatTypeFromKey(params.sessionKey));
+    normalizeChatType(params.chatType ?? params.entry?.chatType) ??
+    normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
   const sessionKey = params.sessionKey ?? "";
 
   let allowedMatch = false;
@@ -60,7 +61,7 @@ export function resolveSendPolicy(params: {
     const action = normalizeSendPolicy(rule.action) ?? "allow";
     const match = rule.match ?? {};
     const matchChannel = normalizeMatchValue(match.channel);
-    const matchChatType = normalizeMatchValue(match.chatType);
+    const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeMatchValue(match.keyPrefix);
 
     if (matchChannel && matchChannel !== channel) continue;

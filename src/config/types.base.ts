@@ -41,7 +41,7 @@ export type HumanDelayConfig = {
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
-  chatType?: "direct" | "group" | "room";
+  chatType?: "direct" | "group" | "channel" | "room";
   keyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
