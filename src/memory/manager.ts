@@ -8,6 +8,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import {
   createEmbeddingProvider,
@@ -45,6 +46,8 @@ type MemoryIndexMeta = {
 
 const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
+
+const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 
@@ -314,7 +317,9 @@ export class MemoryIndexManager {
     if (!minutes || minutes <= 0 || this.intervalTimer) return;
     const ms = minutes * 60 * 1000;
     this.intervalTimer = setInterval(() => {
-      void this.sync({ reason: "interval" });
+      void this.sync({ reason: "interval" }).catch((err) => {
+        log.warn(`memory sync failed (interval): ${String(err)}`);
+      });
     }, ms);
   }
 
@@ -323,7 +328,9 @@ export class MemoryIndexManager {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      void this.sync({ reason: "watch" });
+      void this.sync({ reason: "watch" }).catch((err) => {
+        log.warn(`memory sync failed (watch): ${String(err)}`);
+      });
     }, this.settings.sync.watchDebounceMs);
   }
 
