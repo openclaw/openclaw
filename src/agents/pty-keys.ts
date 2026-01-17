@@ -51,6 +51,22 @@ const namedKeyMap = new Map<string, string>([
   ["f10", `${ESC}[21~`],
   ["f11", `${ESC}[23~`],
   ["f12", `${ESC}[24~`],
+  ["kp/", `${ESC}Oo`],
+  ["kp*", `${ESC}Oj`],
+  ["kp-", `${ESC}Om`],
+  ["kp+", `${ESC}Ok`],
+  ["kp7", `${ESC}Ow`],
+  ["kp8", `${ESC}Ox`],
+  ["kp9", `${ESC}Oy`],
+  ["kp4", `${ESC}Ot`],
+  ["kp5", `${ESC}Ou`],
+  ["kp6", `${ESC}Ov`],
+  ["kp1", `${ESC}Oq`],
+  ["kp2", `${ESC}Or`],
+  ["kp3", `${ESC}Os`],
+  ["kp0", `${ESC}Op`],
+  ["kp.", `${ESC}On`],
+  ["kpenter", `${ESC}OM`],
 ]);
 
 const modifiableNamedKeys = new Set([
