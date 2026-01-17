@@ -1,4 +1,76 @@
-import type { AgentElevatedAllowFromConfig } from "./types.base.js";
+import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+
+export type MediaUnderstandingScopeMatch = {
+  channel?: string;
+  chatType?: "direct" | "group" | "room";
+  keyPrefix?: string;
+};
+
+export type MediaUnderstandingScopeRule = {
+  action: SessionSendPolicyAction;
+  match?: MediaUnderstandingScopeMatch;
+};
+
+export type MediaUnderstandingScopeConfig = {
+  default?: SessionSendPolicyAction;
+  rules?: MediaUnderstandingScopeRule[];
+};
+
+export type MediaUnderstandingCapability = "image" | "audio" | "video";
+
+export type MediaUnderstandingModelConfig = {
+  /** provider API id (e.g. openai, google). */
+  provider?: string;
+  /** Model id for provider-based understanding. */
+  model?: string;
+  /** Optional capability tags for shared model lists. */
+  capabilities?: MediaUnderstandingCapability[];
+  /** Use a CLI command instead of provider API. */
+  type?: "provider" | "cli";
+  /** CLI binary (required when type=cli). */
+  command?: string;
+  /** CLI args (template-enabled). */
+  args?: string[];
+  /** Optional prompt override for this model entry. */
+  prompt?: string;
+  /** Optional max output characters for this model entry. */
+  maxChars?: number;
+  /** Optional max bytes for this model entry. */
+  maxBytes?: number;
+  /** Optional timeout override (seconds) for this model entry. */
+  timeoutSeconds?: number;
+  /** Optional language hint for audio transcription. */
+  language?: string;
+  /** Auth profile id to use for this provider. */
+  profile?: string;
+  /** Preferred profile id if multiple are available. */
+  preferredProfile?: string;
+};
+
+export type MediaUnderstandingConfig = {
+  /** Enable media understanding when models are configured. */
+  enabled?: boolean;
+  /** Optional scope gating for understanding. */
+  scope?: MediaUnderstandingScopeConfig;
+  /** Default max bytes to send. */
+  maxBytes?: number;
+  /** Default max output characters. */
+  maxChars?: number;
+  /** Default prompt. */
+  prompt?: string;
+  /** Default timeout (seconds). */
+  timeoutSeconds?: number;
+  /** Default language hint (audio). */
+  language?: string;
+  /** Ordered model list (fallbacks in order). */
+  models?: MediaUnderstandingModelConfig[];
+};
+
+export type MediaToolsConfig = {
+  image?: MediaUnderstandingConfig;
+  audio?: MediaUnderstandingConfig;
+  video?: MediaUnderstandingConfig;
+};
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
@@ -127,13 +199,7 @@ export type ToolsConfig = {
       };
     };
   };
-  audio?: {
-    transcription?: {
-      /** CLI args (template-enabled). */
-      args?: string[];
-      timeoutSeconds?: number;
-    };
-  };
+  media?: MediaToolsConfig;
   /** Message tool configuration. */
   message?: {
     /**

@@ -56,7 +56,7 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = { command: rawExecutable, type: "cli" };
   if (args.length > 0) result.args = args;
   if (timeoutSeconds !== undefined) result.timeoutSeconds = timeoutSeconds;
   return result;

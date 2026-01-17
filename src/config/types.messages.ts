@@ -47,7 +47,7 @@ export type BroadcastConfig = {
 };
 
 export type AudioConfig = {
-  /** @deprecated Use tools.audio.transcription instead. */
+  /** @deprecated Use tools.media.audio.models instead. */
   transcription?: {
     // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
     command: string[];

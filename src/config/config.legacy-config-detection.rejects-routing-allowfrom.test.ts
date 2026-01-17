@@ -65,7 +65,7 @@ describe("legacy config detection", () => {
     expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@clawd"]);
     expect(res.config?.routing?.groupChat?.mentionPatterns).toBeUndefined();
   });
-  it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/audio", async () => {
+  it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/media", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
     const res = migrateLegacyConfig({
@@ -80,7 +80,7 @@ describe("legacy config detection", () => {
     });
     expect(res.changes).toContain("Moved routing.agentToAgent → tools.agentToAgent.");
     expect(res.changes).toContain("Moved routing.queue → messages.queue.");
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.audio.transcription.");
+    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
     expect(res.config?.tools?.agentToAgent).toEqual({
       enabled: true,
       allow: ["main"],
@@ -89,9 +89,16 @@ describe("legacy config detection", () => {
       mode: "queue",
       cap: 3,
     });
-    expect(res.config?.tools?.audio?.transcription).toEqual({
-      args: ["--model", "base"],
-      timeoutSeconds: 2,
+    expect(res.config?.tools?.media?.audio).toEqual({
+      enabled: true,
+      models: [
+        {
+          command: "whisper",
+          type: "cli",
+          args: ["--model", "base"],
+          timeoutSeconds: 2,
+        },
+      ],
     });
     expect(res.config?.routing).toBeUndefined();
   });

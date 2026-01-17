@@ -69,7 +69,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "transcribeAudio"],
     message:
-      "routing.transcribeAudio was moved; use tools.audio.transcription instead (auto-migrated on load).",
+      "routing.transcribeAudio was moved; use tools.media.audio.models instead (auto-migrated on load).",
   },
   {
     path: ["telegram", "requireMention"],

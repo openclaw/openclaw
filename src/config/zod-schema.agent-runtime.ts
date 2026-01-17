@@ -5,7 +5,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
-  ToolsAudioTranscriptionSchema,
+  ToolsMediaSchema,
 } from "./zod-schema.core.js";
 
 export const HeartbeatSchema = z
@@ -283,11 +283,7 @@ export const ToolsSchema = z
     deny: z.array(z.string()).optional(),
     byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
     web: ToolsWebSchema,
-    audio: z
-      .object({
-        transcription: ToolsAudioTranscriptionSchema,
-      })
-      .optional(),
+    media: ToolsMediaSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

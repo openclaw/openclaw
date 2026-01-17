@@ -240,10 +240,68 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const ToolsAudioTranscriptionSchema = z
+export const MediaUnderstandingScopeSchema = z
   .object({
+    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+    rules: z
+      .array(
+        z.object({
+          action: z.union([z.literal("allow"), z.literal("deny")]),
+          match: z
+            .object({
+              channel: z.string().optional(),
+              chatType: z
+                .union([z.literal("direct"), z.literal("group"), z.literal("room")])
+                .optional(),
+              keyPrefix: z.string().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .optional(),
+  })
+  .optional();
+
+export const MediaUnderstandingCapabilitiesSchema = z
+  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
+  .optional();
+
+export const MediaUnderstandingModelSchema = z
+  .object({
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    capabilities: MediaUnderstandingCapabilitiesSchema,
+    type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
+    command: z.string().optional(),
     args: z.array(z.string()).optional(),
+    prompt: z.string().optional(),
+    maxChars: z.number().int().positive().optional(),
+    maxBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    language: z.string().optional(),
+    profile: z.string().optional(),
+    preferredProfile: z.string().optional(),
+  })
+  .optional();
+
+export const ToolsMediaUnderstandingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxBytes: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    prompt: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    language: z.string().optional(),
+    models: z.array(MediaUnderstandingModelSchema).optional(),
+  })
+  .optional();
+
+export const ToolsMediaSchema = z
+  .object({
+    image: ToolsMediaUnderstandingSchema.optional(),
+    audio: ToolsMediaUnderstandingSchema.optional(),
+    video: ToolsMediaUnderstandingSchema.optional(),
   })
   .optional();
 

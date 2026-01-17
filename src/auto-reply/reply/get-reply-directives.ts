@@ -122,6 +122,7 @@ export async function resolveReplyDirectives(params: {
   const commandSource =
     sessionCtx.CommandBody ??
     sessionCtx.RawBody ??
+    sessionCtx.Transcript ??
     sessionCtx.BodyStripped ??
     sessionCtx.Body ??
     "";
