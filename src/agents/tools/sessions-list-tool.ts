@@ -17,33 +17,9 @@ import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-  type SessionKind,
+  type SessionListRow,
   stripToolMessages,
 } from "./sessions-helpers.js";
-
-type SessionListRow = {
-  key: string;
-  kind: SessionKind;
-  channel: string;
-  label?: string;
-  displayName?: string;
-  deliveryContext?: { channel?: string; to?: string; accountId?: string };
-  updatedAt?: number | null;
-  sessionId?: string;
-  model?: string;
-  contextTokens?: number | null;
-  totalTokens?: number | null;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  sendPolicy?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  transcriptPath?: string;
-  messages?: unknown[];
-};
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
