@@ -19,6 +19,7 @@ import {
   sliceLogLines,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { encodeKeySequence, encodePaste } from "./pty-keys.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -29,6 +30,15 @@ const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
   data: Type.Optional(Type.String({ description: "Data to write for write" })),
+  keys: Type.Optional(
+    Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
+  ),
+  hex: Type.Optional(
+    Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" }),
+  ),
+  literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
+  text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
+  bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
   eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
   offset: Type.Optional(Type.Number({ description: "Log offset" })),
   limit: Type.Optional(Type.Number({ description: "Log length" })),
@@ -48,13 +58,18 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description: "Manage running exec sessions: list, poll, log, write, kill.",
+    description: "Manage running exec sessions: list, poll, log, write, send-keys, paste, kill.",
     parameters: processSchema,
     execute: async (_toolCallId, args) => {
       const params = args as {
-        action: "list" | "poll" | "log" | "write" | "kill" | "clear" | "remove";
+        action: "list" | "poll" | "log" | "write" | "send-keys" | "paste" | "kill" | "clear" | "remove";
         sessionId?: string;
         data?: string;
+        keys?: string[];
+        hex?: string[];
+        literal?: string;
+        text?: string;
+        bracketed?: boolean;
         eof?: boolean;
         offset?: number;
         limit?: number;
@@ -330,6 +345,148 @@ export function createProcessTool(
                 text: `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
                   params.eof ? " (stdin closed)" : ""
                 }.`,
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: params.sessionId,
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            },
+          };
+        }
+
+        case "send-keys": {
+          if (!scopedSession) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No active session found for ${params.sessionId}`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (!scopedSession.backgrounded) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
+          if (!stdin || stdin.destroyed) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} stdin is not writable.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const { data, warnings } = encodeKeySequence({
+            keys: params.keys,
+            hex: params.hex,
+            literal: params.literal,
+          });
+          if (!data) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No key data provided.",
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          await new Promise<void>((resolve, reject) => {
+            stdin.write(data, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `Sent ${data.length} bytes to session ${params.sessionId}.` +
+                  (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: params.sessionId,
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            },
+          };
+        }
+
+        case "paste": {
+          if (!scopedSession) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No active session found for ${params.sessionId}`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (!scopedSession.backgrounded) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
+          if (!stdin || stdin.destroyed) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} stdin is not writable.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const payload = encodePaste(params.text ?? "", params.bracketed !== false);
+          if (!payload) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "No paste text provided.",
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          await new Promise<void>((resolve, reject) => {
+            stdin.write(payload, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,
               },
             ],
             details: {

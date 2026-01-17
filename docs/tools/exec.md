@@ -39,6 +39,18 @@ Background + poll:
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
 
+Send keys (tmux-style):
+```json
+{"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Enter"]}
+{"tool":"process","action":"send-keys","sessionId":"<id>","keys":["C-c"]}
+{"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Up","Up","Enter"]}
+```
+
+Paste (bracketed by default):
+```json
+{"tool":"process","action":"paste","sessionId":"<id>","text":"line1\nline2\n"}
+```
+
 ## apply_patch (experimental)
 
 `apply_patch` is a subtool of `exec` for structured multi-file edits.
