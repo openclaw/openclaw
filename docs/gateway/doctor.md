@@ -112,6 +112,7 @@ Current migrations:
 - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.audio.transcription`
+- `bindings[].match.accountID` → `bindings[].match.accountId`
 - `identity` → `agents.list[].identity`
 - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
