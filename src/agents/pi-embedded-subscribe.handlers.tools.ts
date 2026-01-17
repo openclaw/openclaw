@@ -12,8 +12,6 @@ import {
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
 
-const TOOL_OUTPUT_ALLOWLIST = new Set(["exec", "bash", "process"]);
-
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
   if (normalized !== "exec" && normalized !== "bash") return meta;
@@ -202,11 +200,7 @@ export function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  if (
-    ctx.params.onToolResult &&
-    ctx.shouldEmitToolOutput() &&
-    TOOL_OUTPUT_ALLOWLIST.has(toolName.trim().toLowerCase())
-  ) {
+  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);

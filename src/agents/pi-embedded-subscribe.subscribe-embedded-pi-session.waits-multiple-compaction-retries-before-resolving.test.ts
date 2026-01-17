@@ -178,5 +178,19 @@ describe("subscribeEmbeddedPiSession", () => {
     const output = onToolResult.mock.calls[1][0];
     expect(output.text).toContain("hello");
     expect(output.text).toContain("```txt");
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-read-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "file data" }] },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(3);
+    const readOutput = onToolResult.mock.calls[2][0];
+    expect(readOutput.text).toContain("file data");
   });
 });
