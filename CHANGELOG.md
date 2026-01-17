@@ -5,7 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.17 (Unreleased)
 
 ### Changes
-- TBD.
+- macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 
 ## 2026.1.16-2
 
