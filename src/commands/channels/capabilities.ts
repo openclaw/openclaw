@@ -45,12 +45,25 @@ type ChannelCapabilitiesReport = {
   support?: ChannelCapabilities;
   actions?: string[];
   probe?: unknown;
-  scopes?: SlackScopesResult;
+  slackScopes?: Array<{
+    tokenType: "bot" | "user";
+    result: SlackScopesResult;
+  }>;
   target?: DiscordTargetSummary;
   channelPermissions?: DiscordPermissionsReport;
 };
 
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+
+const TEAMS_GRAPH_PERMISSION_HINTS: Record<string, string> = {
+  "ChannelMessage.Read.All": "channel history",
+  "Chat.Read.All": "chat history",
+  "Channel.ReadBasic.All": "channel list",
+  "Team.ReadBasic.All": "team list",
+  "TeamsActivity.Read.All": "teams activity",
+  "Sites.Read.All": "files (SharePoint)",
+  "Files.Read.All": "files (OneDrive)",
+};
 
 function normalizeTimeout(raw: unknown, fallback = 10_000) {
   const value = typeof raw === "string" ? Number(raw) : Number(raw);
@@ -185,8 +198,16 @@ function formatProbeLines(channelId: string, probe: unknown): string[] {
       if (graph.ok === false) {
         lines.push(`Graph: ${theme.error(graph.error ?? "failed")}`);
       } else if (roles.length > 0 || scopes.length > 0) {
-        if (roles.length > 0) lines.push(`Graph roles: ${roles.join(", ")}`);
-        if (scopes.length > 0) lines.push(`Graph scopes: ${scopes.join(", ")}`);
+        const formatPermission = (permission: string) => {
+          const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
+          return hint ? `${permission} (${hint})` : permission;
+        };
+        if (roles.length > 0) {
+          lines.push(`Graph roles: ${roles.map(formatPermission).join(", ")}`);
+        }
+        if (scopes.length > 0) {
+          lines.push(`Graph scopes: ${scopes.map(formatPermission).join(", ")}`);
+        }
       } else if (graph.ok === true) {
         lines.push("Graph: ok");
       }
@@ -302,14 +323,31 @@ async function resolveChannelReports(params: {
       }
     }
 
-    let scopes: SlackScopesResult | undefined;
+    let slackScopes: ChannelCapabilitiesReport["slackScopes"];
     if (plugin.id === "slack" && configured && enabled) {
-      const token = (resolvedAccount as { botToken?: string }).botToken?.trim();
-      if (!token) {
-        scopes = { ok: false, error: "Slack bot token missing." };
+      const botToken = (resolvedAccount as { botToken?: string }).botToken?.trim();
+      const userToken = (
+        resolvedAccount as { config?: { userToken?: string } }
+      ).config?.userToken?.trim();
+      const scopeReports: NonNullable<ChannelCapabilitiesReport["slackScopes"]> = [];
+      if (botToken) {
+        scopeReports.push({
+          tokenType: "bot",
+          result: await fetchSlackScopes(botToken, timeoutMs),
+        });
       } else {
-        scopes = await fetchSlackScopes(token, timeoutMs);
+        scopeReports.push({
+          tokenType: "bot",
+          result: { ok: false, error: "Slack bot token missing." },
+        });
       }
+      if (userToken) {
+        scopeReports.push({
+          tokenType: "user",
+          result: await fetchSlackScopes(userToken, timeoutMs),
+        });
+      }
+      slackScopes = scopeReports;
     }
 
     let discordTarget: DiscordTargetSummary | undefined;
@@ -337,7 +375,7 @@ async function resolveChannelReports(params: {
       target: discordTarget,
       channelPermissions: discordPermissions,
       actions,
-      scopes,
+      slackScopes,
     });
   }
   return reports;
@@ -425,12 +463,15 @@ export async function channelsCapabilitiesCommand(
     } else if (report.configured && report.enabled) {
       lines.push(theme.muted("Probe: unavailable"));
     }
-    if (report.channel === "slack" && report.scopes) {
-      if (report.scopes.ok && report.scopes.scopes?.length) {
-        const source = report.scopes.source ? ` (${report.scopes.source})` : "";
-        lines.push(`Scopes${source}: ${report.scopes.scopes.join(", ")}`);
-      } else if (report.scopes.error) {
-        lines.push(`Scopes: ${theme.error(report.scopes.error)}`);
+    if (report.channel === "slack" && report.slackScopes) {
+      for (const entry of report.slackScopes) {
+        const source = entry.result.source ? ` (${entry.result.source})` : "";
+        const label = entry.tokenType === "user" ? "User scopes" : "Bot scopes";
+        if (entry.result.ok && entry.result.scopes?.length) {
+          lines.push(`${label}${source}: ${entry.result.scopes.join(", ")}`);
+        } else if (entry.result.error) {
+          lines.push(`${label}: ${theme.error(entry.result.error)}`);
+        }
       }
     }
     if (report.channel === "discord" && report.channelPermissions) {
