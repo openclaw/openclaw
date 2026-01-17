@@ -59,6 +59,27 @@ export function formatInboundEnvelope(params: {
   });
 }
 
+export function formatInboundFromLabel(params: {
+  isGroup: boolean;
+  groupLabel?: string;
+  groupId?: string;
+  directLabel: string;
+  directId?: string;
+  groupFallback?: string;
+}): string {
+  // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
+  if (params.isGroup) {
+    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
+    const id = params.groupId?.trim();
+    return id ? `${label} id:${id}` : label;
+  }
+
+  const directLabel = params.directLabel.trim();
+  const directId = params.directId?.trim();
+  if (!directId || directId === directLabel) return directLabel;
+  return `${directLabel} id:${directId}`;
+}
+
 export function formatThreadStarterEnvelope(params: {
   channel: string;
   author?: string;
