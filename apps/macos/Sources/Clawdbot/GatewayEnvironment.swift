@@ -105,6 +105,7 @@ enum GatewayEnvironment {
             }
         }
         let expected = self.expectedGatewayVersion()
+        let expectedString = self.expectedGatewayVersionString()
 
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
@@ -115,8 +116,8 @@ enum GatewayEnvironment {
                 kind: .missingNode,
                 nodeVersion: nil,
                 gatewayVersion: nil,
-                requiredGateway: expected?.description,
-                message: RuntimeLocator.describeFailure(err))
+                    requiredGateway: expectedString,
+                    message: RuntimeLocator.describeFailure(err))
         case let .success(runtime):
             let gatewayBin = CommandResolver.clawdbotExecutable()
 
@@ -125,7 +126,7 @@ enum GatewayEnvironment {
                     kind: .missingGateway,
                     nodeVersion: runtime.version.description,
                     gatewayVersion: nil,
-                    requiredGateway: expected?.description,
+                    requiredGateway: expectedString,
                     message: "clawdbot CLI not found in PATH; install the CLI.")
             }
 
@@ -133,13 +134,14 @@ enum GatewayEnvironment {
                 ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
 
             if let expected, let installed, !installed.compatible(with: expected) {
+                let expectedText = expectedString ?? expected.description
                 return GatewayEnvironmentStatus(
-                    kind: .incompatible(found: installed.description, required: expected.description),
+                    kind: .incompatible(found: installed.description, required: expectedText),
                     nodeVersion: runtime.version.description,
                     gatewayVersion: installed.description,
-                    requiredGateway: expected.description,
+                    requiredGateway: expectedText,
                     message: """
-                    Gateway version \(installed.description) is incompatible with app \(expected.description);
+                    Gateway version \(installed.description) is incompatible with app \(expectedText);
                     install or update the global package.
                     """)
             }
@@ -157,7 +159,7 @@ enum GatewayEnvironment {
                 kind: .ok,
                 nodeVersion: runtime.version.description,
                 gatewayVersion: gatewayVersionText,
-                requiredGateway: expected?.description,
+                requiredGateway: expectedString,
                 message: "Node \(runtime.version.description); gateway \(gatewayVersionText) \(gatewayLabelText)")
         }
     }
