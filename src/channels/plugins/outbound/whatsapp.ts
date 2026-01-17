@@ -27,7 +27,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         return {
           ok: false,
           error: new Error(
-            "Delivering to WhatsApp requires --to <E.164|group JID> or channels.whatsapp.allowFrom[0]",
+            "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
           ),
         };
       }
@@ -52,7 +52,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     return {
       ok: false,
       error: new Error(
-        "Delivering to WhatsApp requires --to <E.164|group JID> or channels.whatsapp.allowFrom[0]",
+        "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
       ),
     };
   },

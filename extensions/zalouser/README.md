@@ -88,7 +88,7 @@ clawdbot channels login --channel zalouser
 ### Send a Message
 
 ```bash
-clawdbot message send --channel zalouser --to <threadId> --message "Hello from Clawdbot!"
+clawdbot message send --channel zalouser --target <threadId> --message "Hello from Clawdbot!"
 ```
 
 ## Configuration
@@ -152,10 +152,10 @@ zca account label <profile> "Work Account"
 
 ```bash
 # Text
-clawdbot message send --channel zalouser --to <threadId> --message "message"
+clawdbot message send --channel zalouser --target <threadId> --message "message"
 
 # Media (URL)
-clawdbot message send --channel zalouser --to <threadId> --message "caption" --media-url "https://example.com/img.jpg"
+clawdbot message send --channel zalouser --target <threadId> --message "caption" --media-url "https://example.com/img.jpg"
 ```
 
 ### Listener
@@ -188,7 +188,7 @@ Use `--profile` or `-p` to work with multiple accounts:
 
 ```bash
 clawdbot channels login --channel zalouser --account work
-clawdbot message send --channel zalouser --account work --to <id> --message "Hello"
+clawdbot message send --channel zalouser --account work --target <id> --message "Hello"
 ZCA_PROFILE=work zca listen
 ```
 

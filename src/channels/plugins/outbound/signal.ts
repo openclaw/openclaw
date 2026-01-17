@@ -13,7 +13,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
       return {
         ok: false,
         error: new Error(
-          "Delivering to Signal requires --to <E.164|group:ID|signal:group:ID|signal:+E.164>",
+          "Delivering to Signal requires target <E.164|group:ID|signal:group:ID|signal:+E.164>",
         ),
       };
     }

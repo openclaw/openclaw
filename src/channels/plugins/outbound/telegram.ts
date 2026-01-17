@@ -27,7 +27,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error("Delivering to Telegram requires --to <chatId>"),
+        error: new Error("Delivering to Telegram requires target <chatId>"),
       };
     }
     return { ok: true, to: trimmed };
