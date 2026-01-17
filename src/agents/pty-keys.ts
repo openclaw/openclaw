@@ -12,6 +12,10 @@ type Modifiers = {
   shift: boolean;
 };
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const namedKeyMap = new Map<string, string>([
   ["enter", CR],
   ["return", CR],
@@ -231,8 +235,9 @@ function xtermModifier(mods: Modifiers): number {
 }
 
 function applyXtermModifier(sequence: string, modifier: number): string | null {
-  const csiNumber = /^\x1b\[(\d+)([~A-Z])$/;
-  const csiArrow = /^\x1b\[(A|B|C|D|H|F)$/;
+  const escPattern = escapeRegExp(ESC);
+  const csiNumber = new RegExp(`^${escPattern}\\[(\\d+)([~A-Z])$`);
+  const csiArrow = new RegExp(`^${escPattern}\\[(A|B|C|D|H|F)$`);
 
   const numberMatch = sequence.match(csiNumber);
   if (numberMatch) {

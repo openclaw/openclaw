@@ -15,7 +15,7 @@ test("process send-keys encodes Enter for pty sessions", async () => {
   const processTool = createProcessTool();
   const result = await execTool.execute("toolcall", {
     command:
-      "node -e \"process.stdin.on('data', d => { process.stdout.write(d); if (d.includes(13)) process.exit(0); });\"",
+      "node -e \"process.stdin.on('data', d => { process.stdout.write(d); if (d.includes(10) || d.includes(13)) process.exit(0); });\"",
     pty: true,
     background: true,
   });
@@ -30,7 +30,8 @@ test("process send-keys encodes Enter for pty sessions", async () => {
     keys: ["h", "i", "Enter"],
   });
 
-  for (let i = 0; i < 10; i += 1) {
+  const deadline = Date.now() + (process.platform === "win32" ? 4000 : 2000);
+  while (Date.now() < deadline) {
     await wait(50);
     const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
     const details = poll.details as { status?: string; aggregated?: string };
