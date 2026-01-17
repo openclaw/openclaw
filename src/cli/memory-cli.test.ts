@@ -26,6 +26,7 @@ describe("memory cli", () => {
   it("prints vector status when available", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
     getMemorySearchManager.mockResolvedValueOnce({
       manager: {
         status: () => ({
@@ -44,6 +45,7 @@ describe("memory cli", () => {
             dims: 1024,
           },
         }),
+        close,
       },
     });
 
@@ -56,11 +58,13 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
+    expect(close).toHaveBeenCalled();
   });
 
   it("prints vector error when unavailable", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
     getMemorySearchManager.mockResolvedValueOnce({
       manager: {
         status: () => ({
@@ -78,6 +82,7 @@ describe("memory cli", () => {
             loadError: "load failed",
           },
         }),
+        close,
       },
     });
 
@@ -89,5 +94,6 @@ describe("memory cli", () => {
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
+    expect(close).toHaveBeenCalled();
   });
 });

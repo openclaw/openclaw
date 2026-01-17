@@ -1,4 +1,3 @@
-import chalk from "chalk";
 import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -6,7 +5,7 @@ import { loadConfig } from "../config/config.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -42,42 +41,72 @@ export function registerMemoryCli(program: Command) {
         defaultRuntime.log(error ?? "Memory search disabled.");
         return;
       }
-      const status = manager.status();
-      if (opts.json) {
-        defaultRuntime.log(JSON.stringify(status, null, 2));
-        return;
-      }
-      const lines = [
-        `${chalk.bold.cyan("Memory Search")} (${agentId})`,
-        `Provider: ${status.provider} (requested: ${status.requestedProvider})`,
-        status.fallback ? chalk.yellow(`Fallback: ${status.fallback.from}`) : null,
-        status.sources?.length ? `Sources: ${status.sources.join(", ")}` : null,
-        `Files: ${status.files}`,
-        `Chunks: ${status.chunks}`,
-        `Dirty: ${status.dirty ? "yes" : "no"}`,
-        `Index: ${status.dbPath}`,
-      ].filter(Boolean) as string[];
-      if (status.vector) {
-        const vectorState = status.vector.enabled
-          ? status.vector.available
-            ? "ready"
-            : "unavailable"
-          : "disabled";
-        lines.push(`Vector: ${vectorState}`);
-        if (status.vector.dims) {
-          lines.push(`Vector dims: ${status.vector.dims}`);
+      try {
+        const status = manager.status();
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(status, null, 2));
+          return;
         }
-        if (status.vector.extensionPath) {
-          lines.push(`Vector path: ${status.vector.extensionPath}`);
+        const rich = isRich();
+        const heading = (text: string) => colorize(rich, theme.heading, text);
+        const muted = (text: string) => colorize(rich, theme.muted, text);
+        const info = (text: string) => colorize(rich, theme.info, text);
+        const success = (text: string) => colorize(rich, theme.success, text);
+        const warn = (text: string) => colorize(rich, theme.warn, text);
+        const accent = (text: string) => colorize(rich, theme.accent, text);
+        const label = (text: string) => muted(`${text}:`);
+        const lines = [
+          `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
+          `${label("Provider")} ${info(status.provider)} ${muted(
+            `(requested: ${status.requestedProvider})`,
+          )}`,
+          `${label("Model")} ${info(status.model)}`,
+          status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
+          `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
+          `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
+          `${label("Store")} ${info(status.dbPath)}`,
+          `${label("Workspace")} ${info(status.workspaceDir)}`,
+        ].filter(Boolean) as string[];
+        if (status.sourceCounts?.length) {
+          lines.push(label("By source"));
+          for (const entry of status.sourceCounts) {
+            const counts = `${entry.files} files · ${entry.chunks} chunks`;
+            lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+          }
         }
-        if (status.vector.loadError) {
-          lines.push(chalk.yellow(`Vector error: ${status.vector.loadError}`));
+        if (status.fallback) {
+          lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
         }
+        if (status.vector) {
+          const vectorState = status.vector.enabled
+            ? status.vector.available
+              ? "ready"
+              : "unavailable"
+            : "disabled";
+          const vectorColor =
+            vectorState === "ready"
+              ? theme.success
+              : vectorState === "unavailable"
+                ? theme.warn
+                : theme.muted;
+          lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+          if (status.vector.dims) {
+            lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
+          }
+          if (status.vector.extensionPath) {
+            lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
+          }
+          if (status.vector.loadError) {
+            lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+          }
+        }
+        if (status.fallback?.reason) {
+          lines.push(muted(status.fallback.reason));
+        }
+        defaultRuntime.log(lines.join("\n"));
+      } finally {
+        await manager.close();
       }
-      if (status.fallback?.reason) {
-        lines.push(chalk.gray(status.fallback.reason));
-      }
-      defaultRuntime.log(lines.join("\n"));
     });
 
   memory
@@ -100,6 +129,8 @@ export function registerMemoryCli(program: Command) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error(`Memory index failed: ${message}`);
         process.exitCode = 1;
+      } finally {
+        await manager.close();
       }
     });
 
@@ -140,6 +171,8 @@ export function registerMemoryCli(program: Command) {
           defaultRuntime.error(`Memory search failed: ${message}`);
           process.exitCode = 1;
           return;
+        } finally {
+          await manager.close();
         }
         if (opts.json) {
           defaultRuntime.log(JSON.stringify({ results }, null, 2));
@@ -149,12 +182,17 @@ export function registerMemoryCli(program: Command) {
           defaultRuntime.log("No matches.");
           return;
         }
+        const rich = isRich();
         const lines: string[] = [];
         for (const result of results) {
           lines.push(
-            `${chalk.green(result.score.toFixed(3))} ${result.path}:${result.startLine}-${result.endLine}`,
+            `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
+              rich,
+              theme.accent,
+              `${result.path}:${result.startLine}-${result.endLine}`,
+            )}`,
           );
-          lines.push(chalk.gray(result.snippet));
+          lines.push(colorize(rich, theme.muted, result.snippet));
           lines.push("");
         }
         defaultRuntime.log(lines.join("\n").trim());

@@ -297,6 +297,7 @@ export class MemoryIndexManager {
     model: string;
     requestedProvider: string;
     sources: MemorySource[];
+    sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
     fallback?: { from: string; reason?: string };
     vector?: {
       enabled: boolean;
@@ -317,6 +318,35 @@ export class MemoryIndexManager {
       .get(...sourceFilter.params) as {
       c: number;
     };
+    const sourceCounts = (() => {
+      const sources = Array.from(this.sources);
+      if (sources.length === 0) return [];
+      const bySource = new Map<MemorySource, { files: number; chunks: number }>();
+      for (const source of sources) {
+        bySource.set(source, { files: 0, chunks: 0 });
+      }
+      const fileRows = this.db
+        .prepare(
+          `SELECT source, COUNT(*) as c FROM files WHERE 1=1${sourceFilter.sql} GROUP BY source`,
+        )
+        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+      for (const row of fileRows) {
+        const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
+        entry.files = row.c ?? 0;
+        bySource.set(row.source, entry);
+      }
+      const chunkRows = this.db
+        .prepare(
+          `SELECT source, COUNT(*) as c FROM chunks WHERE 1=1${sourceFilter.sql} GROUP BY source`,
+        )
+        .all(...sourceFilter.params) as Array<{ source: MemorySource; c: number }>;
+      for (const row of chunkRows) {
+        const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
+        entry.chunks = row.c ?? 0;
+        bySource.set(row.source, entry);
+      }
+      return sources.map((source) => ({ source, ...bySource.get(source)! }));
+    })();
     return {
       files: files?.c ?? 0,
       chunks: chunks?.c ?? 0,
@@ -327,6 +357,7 @@ export class MemoryIndexManager {
       model: this.provider.model,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
+      sourceCounts,
       fallback: this.fallbackReason ? { from: "local", reason: this.fallbackReason } : undefined,
       vector: {
         enabled: this.vector.enabled,
