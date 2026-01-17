@@ -8,13 +8,12 @@ describe("normalizeChatType", () => {
     expect(normalizeChatType("dm")).toBe("direct");
     expect(normalizeChatType("group")).toBe("group");
     expect(normalizeChatType("channel")).toBe("channel");
-    expect(normalizeChatType("room")).toBe("channel");
   });
 
   it("returns undefined for empty/unknown values", () => {
     expect(normalizeChatType(undefined)).toBeUndefined();
     expect(normalizeChatType("")).toBeUndefined();
     expect(normalizeChatType("nope")).toBeUndefined();
+    expect(normalizeChatType("room")).toBeUndefined();
   });
 });
-

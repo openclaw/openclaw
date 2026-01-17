@@ -10,9 +10,7 @@ export type SessionChannelId = ChannelId | "webchat";
 export type SessionChatType =
   | "direct"
   | "group"
-  | "channel"
-  // Legacy alias for "channel".
-  | "room";
+  | "channel";
 
 export type SessionEntry = {
   /**
