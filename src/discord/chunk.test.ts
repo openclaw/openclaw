@@ -63,6 +63,27 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("preserves whitespace when splitting long lines", () => {
+    const text = Array.from({ length: 40 }, () => "word").join(" ");
+    const chunks = chunkDiscordText(text, { maxChars: 20, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("preserves mixed whitespace across chunk boundaries", () => {
+    const text = "alpha  beta\tgamma   delta epsilon  zeta";
+    const chunks = chunkDiscordText(text, { maxChars: 12, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("keeps leading whitespace when splitting long lines", () => {
+    const text = "    indented line with words that force splits";
+    const chunks = chunkDiscordText(text, { maxChars: 14, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;
