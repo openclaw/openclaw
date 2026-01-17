@@ -4,6 +4,7 @@ import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
 const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
+const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
 
 function clampTtl(value: number | undefined) {
   if (!value || Number.isNaN(value)) return DEFAULT_JOB_TTL_MS;
@@ -33,9 +34,12 @@ export interface ProcessSession {
   startedAt: number;
   cwd?: string;
   maxOutputChars: number;
+  pendingMaxOutputChars?: number;
   totalOutputChars: number;
   pendingStdout: string[];
   pendingStderr: string[];
+  pendingStdoutChars: number;
+  pendingStderrChars: number;
   aggregated: string;
   tail: string;
   exitCode?: number | null;
@@ -95,8 +99,25 @@ export function deleteSession(id: string) {
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
   session.pendingStdout ??= [];
   session.pendingStderr ??= [];
+  session.pendingStdoutChars ??= sumPendingChars(session.pendingStdout);
+  session.pendingStderrChars ??= sumPendingChars(session.pendingStderr);
   const buffer = stream === "stdout" ? session.pendingStdout : session.pendingStderr;
+  const bufferChars = stream === "stdout" ? session.pendingStdoutChars : session.pendingStderrChars;
+  const pendingCap = Math.min(
+    session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
+    session.maxOutputChars,
+  );
   buffer.push(chunk);
+  let pendingChars = bufferChars + chunk.length;
+  if (pendingChars > pendingCap) {
+    session.truncated = true;
+    pendingChars = capPendingBuffer(buffer, pendingChars, pendingCap);
+  }
+  if (stream === "stdout") {
+    session.pendingStdoutChars = pendingChars;
+  } else {
+    session.pendingStderrChars = pendingChars;
+  }
   session.totalOutputChars += chunk.length;
   const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
   session.truncated =
@@ -110,6 +131,8 @@ export function drainSession(session: ProcessSession) {
   const stderr = session.pendingStderr.join("");
   session.pendingStdout = [];
   session.pendingStderr = [];
+  session.pendingStdoutChars = 0;
+  session.pendingStderrChars = 0;
   return { stdout, stderr };
 }
 
@@ -153,6 +176,32 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
 export function tail(text: string, max = 2000) {
   if (text.length <= max) return text;
   return text.slice(text.length - max);
+}
+
+function sumPendingChars(buffer: string[]) {
+  let total = 0;
+  for (const chunk of buffer) total += chunk.length;
+  return total;
+}
+
+function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
+  if (pendingChars <= cap) return pendingChars;
+  const last = buffer.at(-1);
+  if (last && last.length >= cap) {
+    buffer.length = 0;
+    buffer.push(last.slice(last.length - cap));
+    return cap;
+  }
+  while (buffer.length && pendingChars - buffer[0].length >= cap) {
+    pendingChars -= buffer[0].length;
+    buffer.shift();
+  }
+  if (buffer.length && pendingChars > cap) {
+    const overflow = pendingChars - cap;
+    buffer[0] = buffer[0].slice(overflow);
+    pendingChars = cap;
+  }
+  return pendingChars;
 }
 
 export function trimWithCap(text: string, max: number) {

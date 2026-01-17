@@ -37,6 +37,12 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
   1_000,
   150_000,
 );
+const DEFAULT_PENDING_MAX_OUTPUT = clampNumber(
+  readEnvInt("CLAWDBOT_BASH_PENDING_MAX_OUTPUT_CHARS"),
+  30_000,
+  1_000,
+  150_000,
+);
 const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
@@ -189,6 +195,7 @@ export function createExecTool(
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
+      const pendingMaxOutput = DEFAULT_PENDING_MAX_OUTPUT;
       const startedAt = Date.now();
       const sessionId = createSessionSlug();
       const warnings: string[] = [];
@@ -350,9 +357,12 @@ export function createExecTool(
         startedAt,
         cwd: workdir,
         maxOutputChars: maxOutput,
+        pendingMaxOutputChars: pendingMaxOutput,
         totalOutputChars: 0,
         pendingStdout: [],
         pendingStderr: [],
+        pendingStdoutChars: 0,
+        pendingStderrChars: 0,
         aggregated: "",
         tail: "",
         exited: false,
