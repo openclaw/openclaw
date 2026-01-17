@@ -3,7 +3,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -67,7 +67,7 @@ function inferProviderFromSessionKey(params: {
   const candidate = parts[0]?.trim().toLowerCase();
   if (!candidate) return undefined;
   if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
-  return normalizeChannelId(candidate) ?? undefined;
+  return normalizeAnyChannelId(candidate) ?? undefined;
 }
 
 function resolveActiveChannel(params: {
@@ -98,7 +98,7 @@ function resolveActiveChannel(params: {
     .trim()
     .toLowerCase();
   if (candidate === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
-  const normalized = normalizeChannelId(candidate);
+  const normalized = normalizeAnyChannelId(candidate);
   if (normalized) return normalized;
   return inferProviderFromSessionKey({
     cfg: params.cfg,

@@ -41,6 +41,7 @@ import {
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordText } from "../chunk.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -529,7 +530,17 @@ async function dispatchDiscordCommandInteraction(params: {
           userTag: formatDiscordUserTag(user),
         })
       : false;
-    commandAuthorized = useAccessGroups ? ownerOk || userOk : hasUserAllowlist ? userOk : true;
+    const authorizers = useAccessGroups
+      ? [
+          { configured: ownerAllowList != null, allowed: ownerOk },
+          { configured: hasUserAllowlist, allowed: userOk },
+        ]
+      : [{ configured: hasUserAllowlist, allowed: userOk }];
+    commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups,
+      authorizers,
+      modeWhenAccessGroupsOff: "configured",
+    });
     if (!commandAuthorized) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return;

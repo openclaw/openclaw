@@ -1,7 +1,7 @@
 import type { ChannelDock } from "../channels/dock.js";
 import { getChannelDock, listChannelDocks } from "../channels/dock.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import { normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { MsgContext } from "./templating.js";
 
@@ -16,15 +16,15 @@ export type CommandAuthorization = {
 
 function resolveProviderFromContext(ctx: MsgContext, cfg: ClawdbotConfig): ChannelId | undefined {
   const direct =
-    normalizeChannelId(ctx.Provider) ??
-    normalizeChannelId(ctx.Surface) ??
-    normalizeChannelId(ctx.OriginatingChannel);
+    normalizeAnyChannelId(ctx.Provider) ??
+    normalizeAnyChannelId(ctx.Surface) ??
+    normalizeAnyChannelId(ctx.OriginatingChannel);
   if (direct) return direct;
   const candidates = [ctx.From, ctx.To]
     .filter((value): value is string => Boolean(value?.trim()))
     .flatMap((value) => value.split(":").map((part) => part.trim()));
   for (const candidate of candidates) {
-    const normalized = normalizeChannelId(candidate);
+    const normalized = normalizeAnyChannelId(candidate);
     if (normalized) return normalized;
   }
   const configured = listChannelDocks()

@@ -31,6 +31,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -400,11 +401,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
+    const ownerAllowedForCommands = isSignalSenderAllowed(sender, effectiveDmAllow);
+    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
     const commandAuthorized = isGroup
-      ? effectiveGroupAllow.length > 0
-        ? isSignalSenderAllowed(sender, effectiveGroupAllow)
-        : true
+      ? resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups,
+          authorizers: [
+            { configured: effectiveDmAllow.length > 0, allowed: ownerAllowedForCommands },
+            { configured: effectiveGroupAllow.length > 0, allowed: groupAllowedForCommands },
+          ],
+        })
       : dmAllowed;
+    if (isGroup && hasControlCommand(messageText, deps.cfg) && !commandAuthorized) {
+      logVerbose(`signal: drop control command from unauthorized sender ${senderDisplay}`);
+      return;
+    }
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;

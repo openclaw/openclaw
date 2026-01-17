@@ -14,7 +14,6 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
 } from "../../discord/send.js";
-import { resolveNativeCommandsEnabled } from "../../config/commands.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
@@ -120,7 +119,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };
     },
-    collectWarnings: ({ cfg, account }) => {
+    collectWarnings: ({ account }) => {
       const warnings: string[] = [];
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
       const guildEntries = account.config.guilds ?? {};
@@ -135,33 +134,6 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         } else {
           warnings.push(
             `- Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
-          );
-        }
-      }
-
-      const nativeCommandsEnabled = resolveNativeCommandsEnabled({
-        providerId: "discord",
-        providerSetting: account.config.commands?.native,
-        globalSetting: cfg.commands?.native,
-      });
-      if (nativeCommandsEnabled && guildsConfigured) {
-        const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
-          if (!guild || typeof guild !== "object") return false;
-          if (Array.isArray(guild.users) && guild.users.length > 0) return true;
-          const channels = guild.channels;
-          if (!channels || typeof channels !== "object") return false;
-          return Object.values(channels).some(
-            (channel) =>
-              Boolean(channel) &&
-              typeof channel === "object" &&
-              Array.isArray(channel.users) &&
-              channel.users.length > 0,
-          );
-        });
-
-        if (!hasAnyUserAllowlist) {
-          warnings.push(
-            `- Discord slash commands: no users allowlist configured; this allows any user in allowed guild channels to invoke /… commands. Set channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).`,
           );
         }
       }

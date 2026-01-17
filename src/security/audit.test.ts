@@ -226,56 +226,171 @@ describe("security audit", () => {
   });
 
   it("flags Discord native commands without a guild user allowlist", async () => {
-    const cfg: ClawdbotConfig = {
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                general: { allow: true },
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-discord-"));
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
               },
             },
           },
         },
-      },
-    };
+      };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins: [discordPlugin],
-    });
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
 
-    const finding = res.findings.find((f) => f.detail.includes("Discord slash commands"));
-    expect(finding?.severity).toBe("critical");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.commands.native.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
+  });
+
+  it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-discord-open-"));
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        commands: { useAccessGroups: false },
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.commands.native.unrestricted",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
   });
 
   it("flags Slack slash commands without a channel users allowlist", async () => {
-    const cfg: ClawdbotConfig = {
-      channels: {
-        slack: {
-          enabled: true,
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          groupPolicy: "open",
-          slashCommand: { enabled: true },
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-slack-"));
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
         },
-      },
-    };
+      };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: false,
-      includeChannelSecurity: true,
-      plugins: [slackPlugin],
-    });
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [slackPlugin],
+      });
 
-    const finding = res.findings.find((f) => f.detail.includes("Slack slash commands"));
-    expect(finding?.severity).toBe("critical");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.no_allowlists",
+            severity: "warn",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
+  });
+
+  it("flags Slack slash commands when access-group enforcement is disabled", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-slack-open-"));
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        commands: { useAccessGroups: false },
+        channels: {
+          slack: {
+            enabled: true,
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            groupPolicy: "open",
+            slashCommand: { enabled: true },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [slackPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.slack.commands.slash.useAccessGroups_off",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
   });
 
   it("flags Telegram group commands without a sender allowlist", async () => {

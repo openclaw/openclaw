@@ -15,6 +15,7 @@ import {
 } from "../../../../../src/auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../../../../../src/auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../../../../src/channels/command-gating.js";
 import { loadConfig } from "../../../../../src/config/config.js";
 import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
@@ -294,17 +295,26 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         text: bodyText,
         mentionRegexes,
       });
-      const commandAuthorized =
-        (!allowlistOnly && effectiveAllowFrom.length === 0) ||
-        resolveMatrixAllowListMatches({
-          allowList: effectiveAllowFrom,
-          userId: senderId,
-          userName: senderName,
-        });
       const allowTextCommands = shouldHandleTextCommands({
         cfg,
         surface: "matrix",
       });
+      const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+      const senderAllowedForCommands = resolveMatrixAllowListMatches({
+        allowList: effectiveAllowFrom,
+        userId: senderId,
+        userName: senderName,
+      });
+      const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+        useAccessGroups,
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        ],
+      });
+      if (isRoom && allowTextCommands && hasControlCommand(bodyText, cfg) && !commandAuthorized) {
+        logVerbose(`matrix: drop control command from unauthorized sender ${senderId}`);
+        return;
+      }
       const shouldRequireMention = isRoom
         ? roomConfigInfo.config?.autoReply === true
           ? false

@@ -19,6 +19,7 @@ import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../../channels/command-gating.js";
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -238,7 +239,13 @@ export async function prepareSlackMessage(params: {
           userName: senderName,
         })
       : false;
-  const commandAuthorized = ownerAuthorized || channelCommandAuthorized;
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups: ctx.useAccessGroups,
+    authorizers: [
+      { configured: allowFromLower.length > 0, allowed: ownerAuthorized },
+      { configured: channelUsersAllowlistConfigured, allowed: channelCommandAuthorized },
+    ],
+  });
 
   if (
     allowTextCommands &&

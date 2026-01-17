@@ -43,6 +43,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { probeIMessage } from "../probe.js";
@@ -322,8 +323,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       overrideOrder: "before-config",
     });
     const canDetectMention = mentionRegexes.length > 0;
-    const commandAuthorized = isGroup
-      ? effectiveGroupAllowFrom.length > 0
+    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+    const ownerAllowedForCommands =
+      effectiveDmAllowFrom.length > 0
+        ? isAllowedIMessageSender({
+            allowFrom: effectiveDmAllowFrom,
+            sender,
+            chatId: chatId ?? undefined,
+            chatGuid,
+            chatIdentifier,
+          })
+        : false;
+    const groupAllowedForCommands =
+      effectiveGroupAllowFrom.length > 0
         ? isAllowedIMessageSender({
             allowFrom: effectiveGroupAllowFrom,
             sender,
@@ -331,8 +343,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             chatGuid,
             chatIdentifier,
           })
-        : true
+        : false;
+    const commandAuthorized = isGroup
+      ? resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups,
+          authorizers: [
+            { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+            { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+          ],
+        })
       : dmAuthorized;
+    if (isGroup && hasControlCommand(messageText, cfg) && !commandAuthorized) {
+      logVerbose(`imessage: drop control command from unauthorized sender ${sender}`);
+      return;
+    }
     const shouldBypassMention =
       isGroup &&
       requireMention &&

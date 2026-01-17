@@ -16,11 +16,13 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
+import { isControlCommandMessage } from "../../../auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
+import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -41,6 +43,47 @@ export type GroupHistoryEntry = {
   id?: string;
   senderJid?: string;
 };
+
+function normalizeAllowFromE164(values: Array<string | number> | undefined): string[] {
+  const list = Array.isArray(values) ? values : [];
+  return list
+    .map((entry) => String(entry).trim())
+    .filter((entry) => entry && entry !== "*")
+    .map((entry) => normalizeE164(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+async function resolveWhatsAppCommandAuthorized(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+}): Promise<boolean> {
+  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  if (!useAccessGroups) return true;
+
+  const isGroup = params.msg.chatType === "group";
+  const senderE164 = normalizeE164(
+    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
+  );
+  if (!senderE164) return false;
+
+  const configuredAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
+  const configuredGroupAllowFrom =
+    params.cfg.channels?.whatsapp?.groupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+
+  if (isGroup) {
+    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) return false;
+    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) return true;
+    return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
+  }
+
+  const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
+  const combinedAllowFrom = Array.from(new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]));
+  const allowFrom =
+    combinedAllowFrom.length > 0 ? combinedAllowFrom : params.msg.selfE164 ? [params.msg.selfE164] : [];
+  if (allowFrom.some((v) => String(v).trim() === "*")) return true;
+  return normalizeAllowFromE164(allowFrom).includes(senderE164);
+}
 
 export async function processMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -180,6 +223,9 @@ export async function processMessage(params: {
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
+  const commandAuthorized = isControlCommandMessage(params.msg.body, params.cfg)
+    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
+    : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   const resolvedMessages = resolveEffectiveMessagesConfig(params.cfg, params.route.agentId);
   const isSelfChat =
@@ -224,6 +270,7 @@ export async function processMessage(params: {
       SenderName: params.msg.senderName,
       SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
       SenderE164: params.msg.senderE164,
+      CommandAuthorized: commandAuthorized,
       WasMentioned: params.msg.wasMentioned,
       ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
       Provider: "whatsapp",

@@ -14,6 +14,7 @@ import {
   type HistoryEntry,
 } from "../../../../src/auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import {
@@ -125,11 +126,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
     const storedAllowFrom = await readChannelAllowFromStore("msteams").catch(() => []);
+    const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
     // Check DM policy for direct messages.
+    const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
+    const effectiveDmAllowFrom = [...dmAllowFrom.map((v) => String(v)), ...storedAllowFrom];
     if (isDirectMessage && msteamsCfg) {
       const dmPolicy = msteamsCfg.dmPolicy ?? "pairing";
-      const allowFrom = msteamsCfg.allowFrom ?? [];
+      const allowFrom = dmAllowFrom;
 
       if (dmPolicy === "disabled") {
         log.debug("dropping dm (dms disabled)");
@@ -172,13 +176,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    if (!isDirectMessage && msteamsCfg) {
-      const groupPolicy = msteamsCfg.groupPolicy ?? "allowlist";
-      const groupAllowFrom =
-        msteamsCfg.groupAllowFrom ??
-        (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []);
-      const effectiveGroupAllowFrom = [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom];
+    const groupPolicy = !isDirectMessage && msteamsCfg ? (msteamsCfg.groupPolicy ?? "allowlist") : "disabled";
+    const groupAllowFrom =
+      !isDirectMessage && msteamsCfg
+        ? (msteamsCfg.groupAllowFrom ??
+          (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []))
+        : [];
+    const effectiveGroupAllowFrom =
+      !isDirectMessage && msteamsCfg
+        ? [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom]
+        : [];
 
+    if (!isDirectMessage && msteamsCfg) {
       if (groupPolicy === "disabled") {
         log.debug("dropping group message (groupPolicy: disabled)", {
           conversationId,
@@ -207,6 +216,30 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
       }
+    }
+
+    const ownerAllowedForCommands = isMSTeamsGroupAllowed({
+      groupPolicy: "allowlist",
+      allowFrom: effectiveDmAllowFrom,
+      senderId,
+      senderName,
+    });
+    const groupAllowedForCommands = isMSTeamsGroupAllowed({
+      groupPolicy: "allowlist",
+      allowFrom: effectiveGroupAllowFrom,
+      senderId,
+      senderName,
+    });
+    const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+      useAccessGroups,
+      authorizers: [
+        { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+        { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
+      ],
+    });
+    if (hasControlCommand(text, cfg) && !commandAuthorized) {
+      logVerbose(`msteams: drop control command from unauthorized sender ${senderId}`);
+      return;
     }
 
     // Build conversation reference for proactive replies.
@@ -400,7 +433,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
 	      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
-	      CommandAuthorized: true,
+	      CommandAuthorized: commandAuthorized,
 	      OriginatingChannel: "msteams" as const,
 	      OriginatingTo: teamsTo,
 	      ...mediaPayload,

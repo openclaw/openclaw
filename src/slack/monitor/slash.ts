@@ -20,6 +20,7 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 
 import type { ResolvedSlackAccount } from "../accounts.js";
 
@@ -293,15 +294,21 @@ export function registerSlackMonitorSlashCommands(params: {
         id: command.user_id,
         name: senderName,
       });
-      if (isRoomish && ctx.useAccessGroups && !(ownerAllowed || channelUserAllowed)) {
-        await respond({
-          text: "You are not authorized to use this command.",
-          response_type: "ephemeral",
-        });
-        return;
-      }
       if (isRoomish) {
-        commandAuthorized = ctx.useAccessGroups ? ownerAllowed || channelUserAllowed : true;
+        commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+          useAccessGroups: ctx.useAccessGroups,
+          authorizers: [
+            { configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed },
+            { configured: channelUsersAllowlistConfigured, allowed: channelUserAllowed },
+          ],
+        });
+        if (ctx.useAccessGroups && !commandAuthorized) {
+          await respond({
+            text: "You are not authorized to use this command.",
+            response_type: "ephemeral",
+          });
+          return;
+        }
       }
 
       if (commandDefinition && supportsInteractiveArgMenus) {

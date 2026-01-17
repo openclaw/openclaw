@@ -119,14 +119,6 @@ export async function tryFastAbortFromMessage(params: {
   cfg: ClawdbotConfig;
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
-  const commandAuthorized = ctx.CommandAuthorized ?? true;
-  const auth = resolveCommandAuthorization({
-    ctx,
-    cfg,
-    commandAuthorized,
-  });
-  if (!auth.isAuthorizedSender) return { handled: false, aborted: false };
-
   const targetKey = resolveAbortTargetKey(ctx);
   const agentId = resolveSessionAgentId({
     sessionKey: targetKey ?? ctx.SessionKey ?? "",
@@ -139,6 +131,14 @@ export async function tryFastAbortFromMessage(params: {
   const normalized = normalizeCommandBody(stripped);
   const abortRequested = normalized === "/stop" || isAbortTrigger(stripped);
   if (!abortRequested) return { handled: false, aborted: false };
+
+  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const auth = resolveCommandAuthorization({
+    ctx,
+    cfg,
+    commandAuthorized,
+  });
+  if (!auth.isAuthorizedSender) return { handled: false, aborted: false };
 
   const abortKey = targetKey ?? auth.from ?? auth.to;
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
