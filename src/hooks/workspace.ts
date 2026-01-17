@@ -48,7 +48,11 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
-function loadHookFromDir(params: { hookDir: string; source: string; nameHint?: string }): Hook | null {
+function loadHookFromDir(params: {
+  hookDir: string;
+  source: string;
+  nameHint?: string;
+}): Hook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
   if (!fs.existsSync(hookMdPath)) return null;
 

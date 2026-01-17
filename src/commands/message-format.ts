@@ -243,10 +243,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
-      Target: shortenText(
-        formatTargetDisplay({ channel: entry.channel, target: entry.to }),
-        36,
-      ),
+      Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
       Status: entry.ok ? "ok" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));

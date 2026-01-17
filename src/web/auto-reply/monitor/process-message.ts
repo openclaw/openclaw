@@ -78,9 +78,15 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const storeAllowFrom = await readChannelAllowFromStore("whatsapp").catch(() => []);
-  const combinedAllowFrom = Array.from(new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]));
+  const combinedAllowFrom = Array.from(
+    new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
+  );
   const allowFrom =
-    combinedAllowFrom.length > 0 ? combinedAllowFrom : params.msg.selfE164 ? [params.msg.selfE164] : [];
+    combinedAllowFrom.length > 0
+      ? combinedAllowFrom
+      : params.msg.selfE164
+        ? [params.msg.selfE164]
+        : [];
   if (allowFrom.some((v) => String(v).trim() === "*")) return true;
   return normalizeAllowFromE164(allowFrom).includes(senderE164);
 }

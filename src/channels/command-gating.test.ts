@@ -70,4 +70,3 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
     ).toBe(true);
   });
 });
-

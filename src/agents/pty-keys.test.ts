@@ -1,6 +1,11 @@
 import { expect, test } from "vitest";
 
-import { BRACKETED_PASTE_END, BRACKETED_PASTE_START, encodeKeySequence, encodePaste } from "./pty-keys.js";
+import {
+  BRACKETED_PASTE_END,
+  BRACKETED_PASTE_START,
+  encodeKeySequence,
+  encodePaste,
+} from "./pty-keys.js";
 
 test("encodeKeySequence maps common keys and modifiers", () => {
   const enter = encodeKeySequence({ keys: ["Enter"] });

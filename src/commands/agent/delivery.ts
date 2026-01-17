@@ -51,7 +51,9 @@ export async function deliverAgentCommandResult(params: {
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
 
   const targetMode =
-    opts.deliveryTargetMode ?? deliveryPlan.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
+    opts.deliveryTargetMode ??
+    deliveryPlan.deliveryTargetMode ??
+    (opts.to ? "explicit" : "implicit");
   const resolvedAccountId = deliveryPlan.resolvedAccountId;
   const resolved =
     deliver && isDeliveryChannelKnown && deliveryChannel

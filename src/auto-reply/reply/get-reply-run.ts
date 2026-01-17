@@ -297,9 +297,7 @@ export async function runPreparedReply(
     abortKey: command.abortKey,
     messageId: sessionCtx.MessageSid,
   });
-  const isGroupSession =
-    sessionEntry?.chatType === "group" ||
-    sessionEntry?.chatType === "channel";
+  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   prefixedBodyBase = await prependSystemEvents({
     cfg,

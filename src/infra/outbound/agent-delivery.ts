@@ -9,7 +9,11 @@ import {
   normalizeMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets.js";
+import {
+  resolveOutboundTarget,
+  resolveSessionDeliveryTarget,
+  type SessionDeliveryTarget,
+} from "./targets.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { OutboundTargetResolution } from "./targets.js";
 

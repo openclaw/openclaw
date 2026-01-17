@@ -100,7 +100,9 @@ function buildModelDecision(params: {
 
 function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const total = decision.attachments.length;
-  const success = decision.attachments.filter((entry) => entry.chosen?.outcome === "success").length;
+  const success = decision.attachments.filter(
+    (entry) => entry.chosen?.outcome === "success",
+  ).length;
   const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
   const provider = chosen?.provider?.trim();
   const model = chosen?.model?.trim();
@@ -355,7 +357,10 @@ async function runAttachmentEntries(params: {
   cache: MediaAttachmentCache;
   entries: MediaUnderstandingModelConfig[];
   config?: MediaUnderstandingConfig;
-}): Promise<{ output: MediaUnderstandingOutput | null; attempts: MediaUnderstandingModelDecision[] }> {
+}): Promise<{
+  output: MediaUnderstandingOutput | null;
+  attempts: MediaUnderstandingModelDecision[];
+}> {
   const { entries, capability } = params;
   const attempts: MediaUnderstandingModelDecision[] = [];
   for (const entry of entries) {

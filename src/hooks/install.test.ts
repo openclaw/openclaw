@@ -62,7 +62,7 @@ describe("installHooksFromArchive", () => {
         "---",
         "name: zip-hook",
         "description: Zip hook",
-        "metadata: {\"clawdbot\":{\"events\":[\"command:new\"]}}",
+        'metadata: {"clawdbot":{"events":["command:new"]}}',
         "---",
         "",
         "# Zip Hook",
@@ -82,9 +82,7 @@ describe("installHooksFromArchive", () => {
     expect(result.hookPackId).toBe("zip-hooks");
     expect(result.hooks).toContain("zip-hook");
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "zip-hooks"));
-    expect(
-      fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md")),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md"))).toBe(true);
   });
 
   it("installs hook packs from tar archives", async () => {
@@ -109,7 +107,7 @@ describe("installHooksFromArchive", () => {
         "---",
         "name: tar-hook",
         "description: Tar hook",
-        "metadata: {\"clawdbot\":{\"events\":[\"command:new\"]}}",
+        'metadata: {"clawdbot":{"events":["command:new"]}}',
         "---",
         "",
         "# Tar Hook",
@@ -148,7 +146,7 @@ describe("installHooksFromPath", () => {
         "---",
         "name: my-hook",
         "description: My hook",
-        "metadata: {\"clawdbot\":{\"events\":[\"command:new\"]}}",
+        'metadata: {"clawdbot":{"events":["command:new"]}}',
         "---",
         "",
         "# My Hook",

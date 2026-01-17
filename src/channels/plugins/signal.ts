@@ -18,10 +18,7 @@ import {
 } from "./config-helpers.js";
 import { formatPairingApproveHint } from "./helpers.js";
 import { resolveChannelMediaMaxBytes } from "./media-limits.js";
-import {
-  looksLikeSignalTargetId,
-  normalizeSignalMessagingTarget,
-} from "./normalize-target.js";
+import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize-target.js";
 import { signalOnboardingAdapter } from "./onboarding/signal.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {

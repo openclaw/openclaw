@@ -79,9 +79,7 @@ export async function loadInternalHooks(
         // Register for all events listed in metadata
         const events = entry.clawdbot?.events ?? [];
         if (events.length === 0) {
-          console.warn(
-            `Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`,
-          );
+          console.warn(`Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`);
           continue;
         }
 
@@ -126,9 +124,7 @@ export async function loadInternalHooks(
       const handler = mod[exportName];
 
       if (typeof handler !== "function") {
-        console.error(
-          `Hook error: Handler '${exportName}' from ${modulePath} is not a function`,
-        );
+        console.error(`Hook error: Handler '${exportName}' from ${modulePath} is not a function`);
         continue;
       }
 

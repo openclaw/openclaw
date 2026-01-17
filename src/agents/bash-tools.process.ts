@@ -33,9 +33,7 @@ const processSchema = Type.Object({
   keys: Type.Optional(
     Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
   ),
-  hex: Type.Optional(
-    Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" }),
-  ),
+  hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
   literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
   text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
   bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
@@ -121,10 +119,7 @@ export function createProcessTool(
           .sort((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            return `${s.sessionId} ${pad(
-              s.status,
-              9,
-            )} ${formatDuration(s.runtimeMs)} :: ${label}`;
+            return `${s.sessionId} ${pad(s.status, 9)} ${formatDuration(s.runtimeMs)} :: ${label}`;
           });
         return {
           content: [

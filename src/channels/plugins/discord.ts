@@ -26,10 +26,7 @@ import {
 } from "./config-helpers.js";
 import { resolveDiscordGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import {
-  looksLikeDiscordTargetId,
-  normalizeDiscordMessagingTarget,
-} from "./normalize-target.js";
+import { looksLikeDiscordTargetId, normalizeDiscordMessagingTarget } from "./normalize-target.js";
 import { discordOnboardingAdapter } from "./onboarding/discord.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {

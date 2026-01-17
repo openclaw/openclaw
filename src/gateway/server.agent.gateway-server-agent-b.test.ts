@@ -230,19 +230,19 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-    test("agent uses webchat for internal runs when last provider is webchat", async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main-webchat-internal",
-            updatedAt: Date.now(),
-            lastChannel: "webchat",
-            lastTo: "+1555",
-          },
+  test("agent uses webchat for internal runs when last provider is webchat", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-webchat-internal",
+          updatedAt: Date.now(),
+          lastChannel: "webchat",
+          lastTo: "+1555",
         },
-      });
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);

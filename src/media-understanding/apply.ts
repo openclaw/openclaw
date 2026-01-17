@@ -78,10 +78,7 @@ export async function applyMediaUnderstanding(params: {
     }
 
     if (decisions.length > 0) {
-      ctx.MediaUnderstandingDecisions = [
-        ...(ctx.MediaUnderstandingDecisions ?? []),
-        ...decisions,
-      ];
+      ctx.MediaUnderstandingDecisions = [...(ctx.MediaUnderstandingDecisions ?? []), ...decisions];
     }
 
     if (outputs.length > 0) {

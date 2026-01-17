@@ -97,9 +97,8 @@ describe("hooks install (e2e)", () => {
     expect(installResult.ok).toBe(true);
     if (!installResult.ok) return;
 
-    const { clearInternalHooks, createInternalHookEvent, triggerInternalHook } = await import(
-      "./internal-hooks.js"
-    );
+    const { clearInternalHooks, createInternalHookEvent, triggerInternalHook } =
+      await import("./internal-hooks.js");
     const { loadInternalHooks } = await import("./loader.js");
 
     clearInternalHooks();

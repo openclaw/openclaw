@@ -134,7 +134,9 @@ async function installHookPackageFromDir(params: {
     };
   }
 
-  const hooksDir = params.hooksDir ? resolveUserPath(params.hooksDir) : path.join(CONFIG_DIR, "hooks");
+  const hooksDir = params.hooksDir
+    ? resolveUserPath(params.hooksDir)
+    : path.join(CONFIG_DIR, "hooks");
   await fs.mkdir(hooksDir, { recursive: true });
 
   const targetDir = resolveHookInstallDir(hookPackId, hooksDir);
@@ -232,7 +234,9 @@ async function installHookFromDir(params: {
     };
   }
 
-  const hooksDir = params.hooksDir ? resolveUserPath(params.hooksDir) : path.join(CONFIG_DIR, "hooks");
+  const hooksDir = params.hooksDir
+    ? resolveUserPath(params.hooksDir)
+    : path.join(CONFIG_DIR, "hooks");
   await fs.mkdir(hooksDir, { recursive: true });
 
   const targetDir = resolveHookInstallDir(hookName, hooksDir);

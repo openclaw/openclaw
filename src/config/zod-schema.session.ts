@@ -39,11 +39,7 @@ export const SessionSchema = z
                 .object({
                   channel: z.string().optional(),
                   chatType: z
-                    .union([
-                      z.literal("direct"),
-                      z.literal("group"),
-                      z.literal("channel"),
-                    ])
+                    .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
                     .optional(),
                   keyPrefix: z.string().optional(),
                 })

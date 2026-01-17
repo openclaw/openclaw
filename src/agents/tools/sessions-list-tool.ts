@@ -150,12 +150,12 @@ export function createSessionsListTool(opts?: {
             : undefined;
         const deliveryChannel =
           typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined;
-        const deliveryTo =
-          typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
+        const deliveryTo = typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
         const deliveryAccountId =
           typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
         const lastChannel =
-          deliveryChannel ?? (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
+          deliveryChannel ??
+          (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
         const lastAccountId =
           deliveryAccountId ??
           (typeof entry.lastAccountId === "string" ? entry.lastAccountId : undefined);

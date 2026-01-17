@@ -110,8 +110,8 @@ export const registerTelegramNativeCommands = ({
 
   if (allCommands.length > 0) {
     bot.api.setMyCommands(allCommands).catch((err) => {
-        runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
-      });
+      runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
+    });
 
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");

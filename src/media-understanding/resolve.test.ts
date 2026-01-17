@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  resolveEntriesWithActiveFallback,
-  resolveModelEntries,
-} from "./resolve.js";
+import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
 
 const providerRegistry = new Map([
   ["openai", { capabilities: ["image"] }],

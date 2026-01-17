@@ -21,4 +21,3 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
   }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
-

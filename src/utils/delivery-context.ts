@@ -19,7 +19,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   if (!context) return undefined;
   const channel =
     typeof context.channel === "string"
-      ? normalizeMessageChannel(context.channel) ?? context.channel.trim()
+      ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
       : undefined;
   const to = typeof context.to === "string" ? context.to.trim() : undefined;
   const accountId = normalizeAccountId(context.accountId);
@@ -31,9 +31,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   };
 }
 
-export function normalizeSessionDeliveryFields(
-  source?: DeliveryContextSessionSource,
-): {
+export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   deliveryContext?: DeliveryContext;
   lastChannel?: string;
   lastTo?: string;

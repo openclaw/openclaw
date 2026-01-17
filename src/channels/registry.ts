@@ -129,7 +129,9 @@ export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
   if (!registry) return null;
 
   const hit = registry.channels.find((entry) => {
-    const id = String(entry.plugin.id ?? "").trim().toLowerCase();
+    const id = String(entry.plugin.id ?? "")
+      .trim()
+      .toLowerCase();
     if (id && id === key) return true;
     return (entry.plugin.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === key);
   });

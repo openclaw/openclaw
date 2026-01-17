@@ -61,10 +61,7 @@ export async function withTimeout<T>(
   }
 }
 
-async function extractZip(params: {
-  archivePath: string;
-  destDir: string;
-}): Promise<void> {
+async function extractZip(params: { archivePath: string; destDir: string }): Promise<void> {
   const buffer = await fs.readFile(params.archivePath);
   const zip = await JSZip.loadAsync(buffer);
   const entries = Object.values(zip.files);

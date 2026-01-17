@@ -474,10 +474,8 @@ async function collectChannelSecurityFindings(params: {
 
     if (plugin.id === "discord") {
       const discordCfg =
-        (account as { config?: Record<string, unknown> } | null)?.config ?? ({} as Record<
-          string,
-          unknown
-        >);
+        (account as { config?: Record<string, unknown> } | null)?.config ??
+        ({} as Record<string, unknown>);
       const nativeEnabled = resolveNativeCommandsEnabled({
         providerId: "discord",
         providerSetting: coerceNativeSetting(
@@ -516,15 +514,20 @@ async function collectChannelSecurityFindings(params: {
           normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
 
         const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-        if (!useAccessGroups && groupPolicy !== "disabled" && guildsConfigured && !hasAnyUserAllowlist) {
+        if (
+          !useAccessGroups &&
+          groupPolicy !== "disabled" &&
+          guildsConfigured &&
+          !hasAnyUserAllowlist
+        ) {
           findings.push({
             checkId: "channels.discord.commands.native.unrestricted",
             severity: "critical",
             title: "Discord slash commands are unrestricted",
             detail:
-              'commands.useAccessGroups=false disables sender allowlists for Discord slash commands unless a per-guild/channel users allowlist is configured; with no users allowlist, any user in allowed guild channels can invoke /… commands.',
+              "commands.useAccessGroups=false disables sender allowlists for Discord slash commands unless a per-guild/channel users allowlist is configured; with no users allowlist, any user in allowed guild channels can invoke /… commands.",
             remediation:
-              'Set commands.useAccessGroups=true (recommended), or configure channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).',
+              "Set commands.useAccessGroups=true (recommended), or configure channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).",
           });
         } else if (
           useAccessGroups &&
@@ -540,7 +543,7 @@ async function collectChannelSecurityFindings(params: {
             detail:
               "Discord slash commands are enabled, but neither an owner allowFrom list nor any per-guild/channel users allowlist is configured; /… commands will be rejected for everyone.",
             remediation:
-              'Add your user id to channels.discord.dm.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.',
+              "Add your user id to channels.discord.dm.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
           });
         }
       }
@@ -567,7 +570,7 @@ async function collectChannelSecurityFindings(params: {
       const slashCommandEnabled =
         nativeEnabled ||
         nativeSkillsEnabled ||
-        ((slackCfg.slashCommand as { enabled?: unknown } | undefined)?.enabled === true);
+        (slackCfg.slashCommand as { enabled?: unknown } | undefined)?.enabled === true;
       if (slashCommandEnabled) {
         const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
         if (!useAccessGroups) {
@@ -580,7 +583,8 @@ async function collectChannelSecurityFindings(params: {
             remediation: "Set commands.useAccessGroups=true (recommended).",
           });
         } else {
-          const dmAllowFromRaw = (account as { dm?: { allowFrom?: unknown } } | null)?.dm?.allowFrom;
+          const dmAllowFromRaw = (account as { dm?: { allowFrom?: unknown } } | null)?.dm
+            ?.allowFrom;
           const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
           const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
           const ownerAllowFromConfigured =

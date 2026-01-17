@@ -121,9 +121,7 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedAudio).toBe(true);
     expect(ctx.Transcript).toBe("transcribed text");
-    expect(ctx.Body).toBe(
-      "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
-    );
+    expect(ctx.Body).toBe("[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text");
     expect(ctx.CommandBody).toBe("/capture status");
     expect(ctx.RawBody).toBe("/capture status");
     expect(ctx.BodyForCommands).toBe("/capture status");

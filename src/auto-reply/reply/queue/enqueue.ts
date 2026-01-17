@@ -1,7 +1,4 @@
-import {
-  applyQueueDropPolicy,
-  shouldSkipQueueItem,
-} from "../../../utils/queue-helpers.js";
+import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
