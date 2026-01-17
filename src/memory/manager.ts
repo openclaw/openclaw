@@ -25,6 +25,7 @@ import {
   hashText,
   isMemoryPath,
   listMemoryFiles,
+  type MemoryChunk,
   type MemoryFileEntry,
   normalizeRelPath,
   parseEmbedding,
@@ -63,6 +64,8 @@ const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
+const EMBEDDING_BATCH_MAX_TOKENS = 8000;
+const EMBEDDING_APPROX_CHARS_PER_TOKEN = 2;
 
 const log = createSubsystemLogger("memory");
 
@@ -857,13 +860,59 @@ export class MemoryIndexManager {
     }
   }
 
+  private estimateEmbeddingTokens(text: string): number {
+    if (!text) return 0;
+    return Math.ceil(text.length / EMBEDDING_APPROX_CHARS_PER_TOKEN);
+  }
+
+  private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
+    const batches: MemoryChunk[][] = [];
+    let current: MemoryChunk[] = [];
+    let currentTokens = 0;
+
+    for (const chunk of chunks) {
+      const estimate = this.estimateEmbeddingTokens(chunk.text);
+      const wouldExceed =
+        current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
+      if (wouldExceed) {
+        batches.push(current);
+        current = [];
+        currentTokens = 0;
+      }
+      if (current.length === 0 && estimate > EMBEDDING_BATCH_MAX_TOKENS) {
+        batches.push([chunk]);
+        continue;
+      }
+      current.push(chunk);
+      currentTokens += estimate;
+    }
+
+    if (current.length > 0) {
+      batches.push(current);
+    }
+    return batches;
+  }
+
+  private async embedChunksInBatches(chunks: MemoryChunk[]): Promise<number[][]> {
+    if (chunks.length === 0) return [];
+    const batches = this.buildEmbeddingBatches(chunks);
+    const embeddings: number[][] = [];
+    for (const batch of batches) {
+      const batchEmbeddings = await this.provider.embedBatch(batch.map((chunk) => chunk.text));
+      for (let i = 0; i < batch.length; i += 1) {
+        embeddings.push(batchEmbeddings[i] ?? []);
+      }
+    }
+    return embeddings;
+  }
+
   private async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
     const chunks = chunkMarkdown(content, this.settings.chunking);
-    const embeddings = await this.provider.embedBatch(chunks.map((chunk) => chunk.text));
+    const embeddings = await this.embedChunksInBatches(chunks);
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();

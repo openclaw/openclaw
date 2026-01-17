@@ -16,6 +16,7 @@ Docs: https://docs.clawd.bot
 - CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
 - Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
 - Memory: probe sqlite-vec availability in `clawdbot memory status`.
+- Memory: split embedding batches to avoid OpenAI token limits during indexing.
 
 ## 2026.1.16-2
 
