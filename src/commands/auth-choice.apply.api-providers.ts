@@ -216,7 +216,7 @@ export async function applyAuthChoiceApiProviders(
     await params.prompter.note(
       [
         "Kimi Code uses a dedicated endpoint and API key.",
-        "Get your API key at: https://www.kimi.com/code/en"
+        "Get your API key at: https://www.kimi.com/code/en",
       ].join("\n"),
       "Kimi Code",
     );
@@ -242,7 +242,7 @@ export async function applyAuthChoiceApiProviders(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "kimi-code:default",
       provider: "kimi-code",
-      mode: "api_key"
+      mode: "api_key",
     });
     {
       const applied = await applyDefaultModelChoice({
@@ -253,7 +253,7 @@ export async function applyAuthChoiceApiProviders(
         applyProviderConfig: applyKimiCodeProviderConfig,
         noteDefault: KIMI_CODE_MODEL_REF,
         noteAgentModel,
-        prompter: params.prompter
+        prompter: params.prompter,
       });
       nextConfig = applied.config;
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;

@@ -210,9 +210,9 @@ function buildKimiCodeProvider(): ProviderConfig {
         contextWindow: KIMI_CODE_CONTEXT_WINDOW,
         maxTokens: KIMI_CODE_MAX_TOKENS,
         headers: KIMI_CODE_HEADERS,
-        compat: KIMI_CODE_COMPAT
-      }
-    ]
+        compat: KIMI_CODE_COMPAT,
+      },
+    ],
   };
 }
 
@@ -224,9 +224,7 @@ function buildSyntheticProvider(): ProviderConfig {
   };
 }
 
-export function resolveImplicitProviders(params: {
-  agentDir: string;
-}): ModelsConfig["providers"] {
+export function resolveImplicitProviders(params: { agentDir: string }): ModelsConfig["providers"] {
   const providers: Record<string, ProviderConfig> = {};
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
