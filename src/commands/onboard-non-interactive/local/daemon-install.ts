@@ -69,12 +69,24 @@ export async function installGatewayDaemonNonInteractive(params: {
         ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
         : undefined,
   });
-  await service.install({
-    env: process.env,
-    stdout: process.stdout,
-    programArguments,
-    workingDirectory,
-    environment,
-  });
+  try {
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+  } catch (err) {
+    runtime.error(`Gateway daemon install failed: ${String(err)}`);
+    if (process.platform === "win32") {
+      runtime.log(
+        "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install.",
+      );
+    } else {
+      runtime.log("Tip: rerun `clawdbot daemon install` after fixing the error.");
+    }
+    return;
+  }
   await ensureSystemdUserLingerNonInteractive({ runtime });
 }

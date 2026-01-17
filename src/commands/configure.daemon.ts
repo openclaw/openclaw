@@ -72,6 +72,7 @@ export async function maybeInstallDaemon(params: {
   }
 
   if (shouldInstall) {
+    let installError: unknown | null = null;
     await withProgress(
       { label: "Gateway daemon", indeterminate: true, delayMs: 0 },
       async (progress) => {
@@ -117,16 +118,33 @@ export async function maybeInstallDaemon(params: {
         });
 
         progress.setLabel("Installing Gateway daemon…");
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
-        });
-        progress.setLabel("Gateway daemon installed.");
+        try {
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+          progress.setLabel("Gateway daemon installed.");
+        } catch (err) {
+          installError = err;
+          progress.setLabel("Gateway daemon install failed.");
+        }
       },
     );
+    if (installError) {
+      note(`Gateway daemon install failed: ${String(installError)}`, "Gateway");
+      if (process.platform === "win32") {
+        note(
+          "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install.",
+          "Gateway",
+        );
+      } else {
+        note("Tip: rerun `clawdbot daemon install` after fixing the error.", "Gateway");
+      }
+      return;
+    }
     shouldCheckLinger = true;
   }
 
