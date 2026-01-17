@@ -11,7 +11,7 @@ import {
 } from "../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { formatInboundEnvelope } from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope, formatInboundFromLabel } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -383,13 +383,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     const chatTarget = formatIMessageChatTarget(chatId);
-    // For groups: use chat name or just "Group" (channel "iMessage" is already shown).
-    // For DMs: keep headers compact; only add id: suffix if raw differs from normalized.
-    const fromLabel = isGroup
-      ? `${message.chat_name || "Group"} id:${chatId ?? "unknown"}`
-      : senderNormalized === sender
-        ? senderNormalized
-        : `${senderNormalized} id:${sender}`;
+    const fromLabel = formatInboundFromLabel({
+      isGroup,
+      groupLabel: message.chat_name ?? undefined,
+      groupId: chatId !== undefined ? String(chatId) : "unknown",
+      groupFallback: "Group",
+      directLabel: senderNormalized,
+      directId: sender,
+    });
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,
