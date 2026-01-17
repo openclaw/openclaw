@@ -18,6 +18,7 @@ import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
+  deliveryContextFromSession,
   deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -96,6 +97,7 @@ type AnnounceQueueItem = {
   enqueuedAt: number;
   sessionKey: string;
   origin?: DeliveryContext;
+  originKey?: string;
 };
 
 type AnnounceQueueState = {
@@ -180,7 +182,9 @@ function enqueueAnnounce(
     }
   }
 
-  queue.items.push(item);
+  const origin = normalizeDeliveryContext(item.origin);
+  const originKey = deliveryContextKey(origin);
+  queue.items.push({ ...item, origin, originKey });
   return true;
 }
 
@@ -229,17 +233,14 @@ function hasCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   const keys = new Set<string>();
   let hasUnkeyed = false;
   for (const item of items) {
-    const origin = normalizeDeliveryContext(item.origin);
-    if (!origin) {
+    if (!item.origin) {
       hasUnkeyed = true;
       continue;
     }
-    if (!origin.channel || !origin.to) {
+    if (!item.originKey) {
       return true;
     }
-    const key = deliveryContextKey(origin);
-    if (!key) return true;
-    keys.add(key);
+    keys.add(item.originKey);
   }
   if (keys.size === 0) return false;
   if (hasUnkeyed) return true;
@@ -382,14 +383,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = mergeDeliveryContext(
-      {
-        channel: entry?.lastChannel,
-        to: entry?.lastTo,
-        accountId: entry?.lastAccountId,
-      },
-      params.requesterOrigin,
-    );
+    const origin = mergeDeliveryContext(deliveryContextFromSession(entry), params.requesterOrigin);
     enqueueAnnounce(
       canonicalKey,
       {
@@ -633,11 +627,7 @@ export async function runSubagentAnnounceFlow(params: {
     let directOrigin = requesterOrigin;
     if (!directOrigin) {
       const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-      directOrigin = normalizeDeliveryContext({
-        channel: entry?.lastChannel ?? entry?.channel,
-        to: entry?.lastTo,
-        accountId: entry?.lastAccountId,
-      });
+      directOrigin = deliveryContextFromSession(entry);
     }
     await callGateway({
       method: "agent",
