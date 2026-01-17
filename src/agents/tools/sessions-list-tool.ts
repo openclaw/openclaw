@@ -167,9 +167,21 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const lastChannel = typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
+        const deliveryContext =
+          entry.deliveryContext && typeof entry.deliveryContext === "object"
+            ? (entry.deliveryContext as Record<string, unknown>)
+            : undefined;
+        const deliveryChannel =
+          typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined;
+        const deliveryTo =
+          typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined;
+        const deliveryAccountId =
+          typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined;
+        const lastChannel =
+          deliveryChannel ?? (typeof entry.lastChannel === "string" ? entry.lastChannel : undefined);
         const lastAccountId =
-          typeof entry.lastAccountId === "string" ? entry.lastAccountId : undefined;
+          deliveryAccountId ??
+          (typeof entry.lastAccountId === "string" ? entry.lastAccountId : undefined);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -201,7 +213,7 @@ export function createSessionsListTool(opts?: {
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
           sendPolicy: typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
           lastChannel,
-          lastTo: typeof entry.lastTo === "string" ? entry.lastTo : undefined,
+          lastTo: deliveryTo ?? (typeof entry.lastTo === "string" ? entry.lastTo : undefined),
           lastAccountId,
           transcriptPath,
         };

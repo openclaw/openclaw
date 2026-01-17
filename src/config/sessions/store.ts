@@ -332,24 +332,19 @@ export async function updateLastRoute(params: {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
     const now = Date.now();
-    const trimmedAccountId = accountId?.trim();
-    const resolvedAccountId =
-      trimmedAccountId && trimmedAccountId.length > 0
-        ? trimmedAccountId
-        : existing?.lastAccountId ?? existing?.deliveryContext?.accountId;
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
-        channel: channel ?? existing?.lastChannel,
-        to,
-        accountId: resolvedAccountId,
+        channel: channel ?? existing?.lastChannel ?? existing?.deliveryContext?.channel,
+        to: to ?? existing?.lastTo ?? existing?.deliveryContext?.to,
+        accountId: accountId ?? existing?.lastAccountId ?? existing?.deliveryContext?.accountId,
       },
     });
     const next = mergeSessionEntry(existing, {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
-      lastChannel: normalized.lastChannel ?? channel,
-      lastTo: normalized.lastTo ?? (to?.trim() ? to.trim() : undefined),
-      lastAccountId: normalized.lastAccountId ?? resolvedAccountId,
+      lastChannel: normalized.lastChannel,
+      lastTo: normalized.lastTo,
+      lastAccountId: normalized.lastAccountId,
     });
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);

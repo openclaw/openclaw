@@ -21,6 +21,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -401,6 +402,7 @@ export function listSessionsFromStore(params: {
               key,
             })
           : undefined);
+      const deliveryFields = normalizeSessionDeliveryFields(entry);
       return {
         key,
         kind: classifySessionKey(key, entry),
@@ -427,9 +429,10 @@ export function listSessionsFromStore(params: {
         modelProvider: entry?.modelProvider,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        lastAccountId: entry?.lastAccountId,
+        deliveryContext: deliveryFields.deliveryContext,
+        lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+        lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+        lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
       } satisfies GatewaySessionRow;
     })
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
