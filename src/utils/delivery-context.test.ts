@@ -42,6 +42,9 @@ describe("delivery context helpers", () => {
       "whatsapp|+1555|",
     );
     expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
+    expect(
+      deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" }),
+    ).toBe("whatsapp|+1555|acct-1");
   });
 
   it("derives delivery context from a session entry", () => {
@@ -56,6 +59,17 @@ describe("delivery context helpers", () => {
       channel: "whatsapp",
       to: "+1777",
       accountId: "acct-9",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "telegram",
+        lastTo: " 123 ",
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "123",
+      accountId: undefined,
     });
   });
 });

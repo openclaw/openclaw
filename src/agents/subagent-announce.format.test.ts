@@ -192,6 +192,59 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.accountId).toBe("kev");
   });
 
+  it("splits collect-mode queues when accountId differs", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-acc-split",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "collect",
+        queueDebounceMs: 80,
+      },
+    };
+
+    await Promise.all([
+      runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test-a",
+        childRunId: "run-a",
+        requesterSessionKey: "main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { accountId: "acct-a" },
+        task: "do thing",
+        timeoutMs: 1000,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+      }),
+      runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test-b",
+        childRunId: "run-b",
+        requesterSessionKey: "main",
+        requesterDisplayKey: "main",
+        requesterOrigin: { accountId: "acct-b" },
+        task: "do thing",
+        timeoutMs: 1000,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: 10,
+        endedAt: 20,
+        outcome: { status: "ok" },
+      }),
+    ]);
+
+    await new Promise((r) => setTimeout(r, 120));
+    expect(agentSpy).toHaveBeenCalledTimes(2);
+    const accountIds = agentSpy.mock.calls.map(
+      (call) => (call?.[0] as { params?: { accountId?: string } })?.params?.accountId,
+    );
+    expect(accountIds).toEqual(expect.arrayContaining(["acct-a", "acct-b"]));
+  });
+
   it("uses requester origin for direct announce when not queued", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
