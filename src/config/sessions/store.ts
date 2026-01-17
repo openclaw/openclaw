@@ -4,6 +4,8 @@ import path from "node:path";
 
 import JSON5 from "json5";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { normalizeAccountId } from "../../utils/account-id.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -39,6 +41,35 @@ function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
 
 function invalidateSessionStoreCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
+}
+
+function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+  const normalizedLastChannel = normalizeMessageChannel(entry.lastChannel) ?? undefined;
+  const normalizedLastTo = typeof entry.lastTo === "string" ? entry.lastTo.trim() : undefined;
+  const normalizedLastAccountId = normalizeAccountId(entry.lastAccountId);
+  if (
+    normalizedLastChannel === entry.lastChannel &&
+    normalizedLastTo === entry.lastTo &&
+    normalizedLastAccountId === entry.lastAccountId
+  ) {
+    return entry;
+  }
+  return {
+    ...entry,
+    lastChannel: normalizedLastChannel,
+    lastTo: normalizedLastTo || undefined,
+    lastAccountId: normalizedLastAccountId,
+  };
+}
+
+function normalizeSessionStore(store: Record<string, SessionEntry>): void {
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry) continue;
+    const normalized = normalizeSessionEntryDelivery(entry);
+    if (normalized !== entry) {
+      store[key] = normalized;
+    }
+  }
 }
 
 export function clearSessionStoreCacheForTest(): void {
@@ -113,6 +144,8 @@ async function saveSessionStoreUnlocked(
 ): Promise<void> {
   // Invalidate cache on write to ensure consistency
   invalidateSessionStoreCache(storePath);
+
+  normalizeSessionStore(store);
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);

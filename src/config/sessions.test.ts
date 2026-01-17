@@ -157,6 +157,27 @@ describe("sessions", () => {
     expect(store["agent:main:two"]?.sessionId).toBe("sess-2");
   });
 
+  it("normalizes last route fields on write", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:main"] = {
+        sessionId: "sess-normalized",
+        updatedAt: 1,
+        lastChannel: " WhatsApp ",
+        lastTo: " +1555 ",
+        lastAccountId: " acct-1 ",
+      };
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store["agent:main:main"]?.lastChannel).toBe("whatsapp");
+    expect(store["agent:main:main"]?.lastTo).toBe("+1555");
+    expect(store["agent:main:main"]?.lastAccountId).toBe("acct-1");
+  });
+
   it("updateSessionStore keeps deletions when concurrent writes happen", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
