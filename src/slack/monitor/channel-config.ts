@@ -1,5 +1,6 @@
 import type { SlackReactionNotificationMode } from "../../config/config.js";
 import type { SlackMessageEvent } from "../types.js";
+import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "../../channels/channel-config.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -77,31 +78,17 @@ export function resolveSlackChannelConfig(params: {
   const keys = Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
-  const candidates = [
+  const candidates = buildChannelKeyCandidates(
     channelId,
-    channelName ? `#${directName}` : "",
+    channelName ? `#${directName}` : undefined,
     directName,
     normalizedName,
-  ].filter(Boolean);
-
-  let matched:
-    | {
-        enabled?: boolean;
-        allow?: boolean;
-        requireMention?: boolean;
-        allowBots?: boolean;
-        users?: Array<string | number>;
-        skills?: string[];
-        systemPrompt?: string;
-      }
-    | undefined;
-  for (const candidate of candidates) {
-    if (candidate && entries[candidate]) {
-      matched = entries[candidate];
-      break;
-    }
-  }
-  const fallback = entries["*"];
+  );
+  const { entry: matched, wildcardEntry: fallback } = resolveChannelEntryMatch({
+    entries,
+    keys: candidates,
+    wildcardKey: "*",
+  });
 
   const requireMentionDefault = defaultRequireMention ?? true;
   if (keys.length === 0) {

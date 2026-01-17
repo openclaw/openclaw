@@ -553,6 +553,7 @@ async function dispatchDiscordCommandInteraction(params: {
         parentId: threadParentId,
         parentName: threadParentName,
         parentSlug: threadParentSlug,
+        scope: isThreadChannel ? "thread" : "channel",
       })
     : null;
   if (channelConfig?.enabled === false) {

@@ -249,6 +249,7 @@ export async function preflightDiscordMessage(
         parentId: threadParentId ?? undefined,
         parentName: threadParentName ?? undefined,
         parentSlug: threadParentSlug,
+        scope: threadChannel ? "thread" : "channel",
       })
     : null;
   if (isGuildMessage && channelConfig?.enabled === false) {

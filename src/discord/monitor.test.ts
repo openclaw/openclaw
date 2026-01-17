@@ -9,6 +9,7 @@ import {
   normalizeDiscordSlug,
   registerDiscordListener,
   resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordReplyTarget,
   resolveDiscordShouldRequireMention,
@@ -159,6 +160,46 @@ describe("discord guild/channel resolution", () => {
       channelSlug: "random",
     });
     expect(channel?.allowed).toBe(false);
+  });
+
+  it("inherits parent config for thread channels", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        general: { allow: true },
+        random: { allow: false },
+      },
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-123",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "999",
+      parentName: "random",
+      parentSlug: "random",
+      scope: "thread",
+    });
+    expect(thread?.allowed).toBe(false);
+  });
+
+  it("does not match thread name/slug when resolving allowlists", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        general: { allow: true },
+        random: { allow: false },
+      },
+    };
+    const thread = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-999",
+      channelName: "general",
+      channelSlug: "general",
+      parentId: "999",
+      parentName: "random",
+      parentSlug: "random",
+      scope: "thread",
+    });
+    expect(thread?.allowed).toBe(false);
   });
 });
 
