@@ -217,15 +217,15 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
-    'command',
-    'stop',
-    abortTarget.key ?? params.sessionKey ?? '',
+    "command",
+    "stop",
+    abortTarget.key ?? params.sessionKey ?? "",
     {
       sessionEntry: abortTarget.entry ?? params.sessionEntry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,
-    }
+    },
   );
   await triggerInternalHook(hookEvent);
 

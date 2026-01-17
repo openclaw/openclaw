@@ -5,7 +5,7 @@
  * like command processing, session lifecycle, etc.
  */
 
-export type InternalHookEventType = 'command' | 'session' | 'agent';
+export type InternalHookEventType = "command" | "session" | "agent";
 
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, etc.) */
@@ -46,10 +46,7 @@ const handlers = new Map<string, InternalHookHandler[]>();
  * });
  * ```
  */
-export function registerInternalHook(
-  eventKey: string,
-  handler: InternalHookHandler
-): void {
+export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
   }
@@ -62,10 +59,7 @@ export function registerInternalHook(
  * @param eventKey - Event key the handler was registered for
  * @param handler - The handler function to remove
  */
-export function unregisterInternalHook(
-  eventKey: string,
-  handler: InternalHookHandler
-): void {
+export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
   const eventHandlers = handlers.get(eventKey);
   if (!eventHandlers) {
     return;
@@ -124,7 +118,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     } catch (err) {
       console.error(
         `Internal hook error [${event.type}:${event.action}]:`,
-        err instanceof Error ? err.message : String(err)
+        err instanceof Error ? err.message : String(err),
       );
     }
   }
@@ -142,7 +136,7 @@ export function createInternalHookEvent(
   type: InternalHookEventType,
   action: string,
   sessionKey: string,
-  context: Record<string, unknown> = {}
+  context: Record<string, unknown> = {},
 ): InternalHookEvent {
   return {
     type,

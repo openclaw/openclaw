@@ -98,7 +98,9 @@ export async function startGatewaySidecars(params: {
     clearInternalHooks();
     const loadedCount = await loadInternalHooks(params.cfg, params.defaultWorkspaceDir);
     if (loadedCount > 0) {
-      params.logHooks.info(`loaded ${loadedCount} internal hook handler${loadedCount > 1 ? 's' : ''}`);
+      params.logHooks.info(
+        `loaded ${loadedCount} internal hook handler${loadedCount > 1 ? "s" : ""}`,
+      );
     }
   } catch (err) {
     params.logHooks.error(`failed to load internal hooks: ${String(err)}`);

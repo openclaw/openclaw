@@ -13,6 +13,7 @@ Automatically saves session context to memory when you issue `/new`.
 **Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/clawd`)
 
 **Enable**:
+
 ```bash
 clawdbot hooks internal enable session-memory
 ```
@@ -26,6 +27,7 @@ Logs all command events to a centralized audit file.
 **Output**: `~/.clawdbot/logs/commands.log`
 
 **Enable**:
+
 ```bash
 clawdbot hooks internal enable command-logger
 ```
@@ -38,6 +40,7 @@ Each hook is a directory containing:
 - **handler.ts**: The hook handler function (default export)
 
 Example structure:
+
 ```
 session-memory/
 ├── HOOK.md          # Metadata + docs
@@ -51,9 +54,9 @@ session-memory/
 name: my-hook
 description: "Short description"
 homepage: https://docs.clawd.bot/hooks/my-hook
-metadata: {"clawdbot":{"emoji":"🔗","events":["command:new"],"requires":{"bins":["node"]}}}
+metadata:
+  { "clawdbot": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
-
 # Hook Title
 
 Documentation goes here...
@@ -83,21 +86,25 @@ Custom hooks follow the same structure as bundled hooks.
 ## Managing Hooks
 
 List all hooks:
+
 ```bash
 clawdbot hooks internal list
 ```
 
 Show hook details:
+
 ```bash
 clawdbot hooks internal info session-memory
 ```
 
 Check hook status:
+
 ```bash
 clawdbot hooks internal check
 ```
 
 Enable/disable:
+
 ```bash
 clawdbot hooks internal enable session-memory
 clawdbot hooks internal disable command-logger
@@ -142,30 +149,30 @@ Hook handlers receive an `InternalHookEvent` object:
 
 ```typescript
 interface InternalHookEvent {
-  type: 'command' | 'session' | 'agent';
-  action: string;              // e.g., 'new', 'reset', 'stop'
+  type: "command" | "session" | "agent";
+  action: string; // e.g., 'new', 'reset', 'stop'
   sessionKey: string;
   context: Record<string, unknown>;
   timestamp: Date;
-  messages: string[];          // Push messages here to send to user
+  messages: string[]; // Push messages here to send to user
 }
 ```
 
 Example handler:
 
 ```typescript
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
+import type { InternalHookHandler } from "../../src/hooks/internal-hooks.js";
 
 const myHandler: InternalHookHandler = async (event) => {
-  if (event.type !== 'command' || event.action !== 'new') {
+  if (event.type !== "command" || event.action !== "new") {
     return;
   }
 
   // Your logic here
-  console.log('New command triggered!');
+  console.log("New command triggered!");
 
   // Optionally send message to user
-  event.messages.push('✨ Hook executed!');
+  event.messages.push("✨ Hook executed!");
 };
 
 export default myHandler;

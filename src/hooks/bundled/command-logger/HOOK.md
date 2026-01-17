@@ -2,7 +2,15 @@
 name: command-logger
 description: "Log all command events to a centralized audit file"
 homepage: https://docs.clawd.bot/internal-hooks#command-logger
-metadata: {"clawdbot":{"emoji":"📝","events":["command"],"install":[{"id":"bundled","kind":"bundled","label":"Bundled with Clawdbot"}]}}
+metadata:
+  {
+    "clawdbot":
+      {
+        "emoji": "📝",
+        "events": ["command"],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Clawdbot" }],
+      },
+  }
 ---
 
 # Command Logger Hook
@@ -44,6 +52,7 @@ No requirements - this hook works out of the box on all platforms.
 ## Configuration
 
 No configuration needed. The hook automatically:
+
 - Creates the log directory if it doesn't exist
 - Appends to the log file (doesn't overwrite)
 - Handles errors silently without disrupting command execution
@@ -75,6 +84,7 @@ Or via config:
 The hook does not automatically rotate logs. To manage log size, you can:
 
 1. **Manual rotation**:
+
    ```bash
    mv ~/.clawdbot/logs/commands.log ~/.clawdbot/logs/commands.log.old
    ```
@@ -94,16 +104,19 @@ The hook does not automatically rotate logs. To manage log size, you can:
 ## Viewing Logs
 
 View recent commands:
+
 ```bash
 tail -n 20 ~/.clawdbot/logs/commands.log
 ```
 
 Pretty-print with jq:
+
 ```bash
 cat ~/.clawdbot/logs/commands.log | jq .
 ```
 
 Filter by action:
+
 ```bash
 grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 ```

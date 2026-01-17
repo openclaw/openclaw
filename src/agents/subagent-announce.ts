@@ -16,10 +16,7 @@ import {
 } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
-} from "./pi-embedded.js";
+import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatDurationShort(valueMs?: number) {
@@ -111,7 +108,10 @@ type AnnounceQueueState = {
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
-function getAnnounceQueue(key: string, settings: { mode: QueueMode; debounceMs?: number; cap?: number; dropPolicy?: QueueDropPolicy }) {
+function getAnnounceQueue(
+  key: string,
+  settings: { mode: QueueMode; debounceMs?: number; cap?: number; dropPolicy?: QueueDropPolicy },
+) {
   const existing = ANNOUNCE_QUEUES.get(key);
   if (existing) {
     existing.mode = settings.mode;
@@ -131,8 +131,7 @@ function getAnnounceQueue(key: string, settings: { mode: QueueMode; debounceMs?:
     draining: false,
     lastEnqueuedAt: 0,
     mode: settings.mode,
-    debounceMs:
-      typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : 1000,
+    debounceMs: typeof settings.debounceMs === "number" ? Math.max(0, settings.debounceMs) : 1000,
     cap: typeof settings.cap === "number" && settings.cap > 0 ? Math.floor(settings.cap) : 20,
     dropPolicy: settings.dropPolicy ?? "summarize",
     droppedCount: 0,
@@ -341,9 +340,7 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
     ? canonicalKey.split(":").slice(2).join(":")
     : undefined;
   const entry =
-    store[canonicalKey] ??
-    store[requesterSessionKey] ??
-    (legacyKey ? store[legacyKey] : undefined);
+    store[canonicalKey] ?? store[requesterSessionKey] ?? (legacyKey ? store[legacyKey] : undefined);
   return { cfg, entry, canonicalKey };
 }
 

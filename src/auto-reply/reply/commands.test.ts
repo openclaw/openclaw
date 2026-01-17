@@ -155,9 +155,7 @@ describe("handleCommands internal hooks", () => {
 
     await handleCommands(params);
 
-    expect(spy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "command", action: "new" }),
-    );
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "command", action: "new" }));
     spy.mockRestore();
   });
 });
