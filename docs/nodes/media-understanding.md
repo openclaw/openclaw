@@ -256,6 +256,15 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 }
 ```
 
+## Status output
+When media understanding runs, `/status` includes a short summary line:
+
+```
+📎 Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)
+```
+
+This shows per‑capability outcomes and the chosen provider/model when applicable.
+
 ## Notes
 - Understanding is **best‑effort**. Errors do not block replies.
 - Attachments are still passed to models even when understanding is disabled.

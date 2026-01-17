@@ -41,4 +41,69 @@ describe("buildInboundMediaNote", () => {
     });
     expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
   });
+
+  it("only suppresses attachments when media understanding succeeded", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      MediaUnderstandingDecisions: [
+        {
+          capability: "image",
+          outcome: "skipped",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "skipped",
+                  reason: "maxBytes: too large",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(note).toBe(
+      [
+        "[media attached: 2 files]",
+        "[media attached 1/2: /tmp/a.png | https://example.com/a.png]",
+        "[media attached 2/2: /tmp/b.png | https://example.com/b.png]",
+      ].join("\n"),
+    );
+  });
+
+  it("suppresses attachments when media understanding succeeds via decisions", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      MediaUnderstandingDecisions: [
+        {
+          capability: "image",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "success",
+                  provider: "openai",
+                  model: "gpt-5.2",
+                },
+              ],
+              chosen: {
+                type: "provider",
+                outcome: "success",
+                provider: "openai",
+                model: "gpt-5.2",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+  });
 });
