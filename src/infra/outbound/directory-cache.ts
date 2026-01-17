@@ -39,6 +39,12 @@ export class DirectoryCache<T> {
     this.cache.set(key, { value, fetchedAt: Date.now() });
   }
 
+  clearMatching(match: (key: string) => boolean): void {
+    for (const key of this.cache.keys()) {
+      if (match(key)) this.cache.delete(key);
+    }
+  }
+
   clear(cfg?: ClawdbotConfig): void {
     this.cache.clear();
     if (cfg) this.lastConfigRef = cfg;

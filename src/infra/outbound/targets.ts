@@ -73,7 +73,7 @@ export function resolveOutboundTarget(params: {
   }
   return {
     ok: false,
-    error: new Error(`Delivering to ${plugin.meta.label} requires --to`),
+    error: new Error(`Delivering to ${plugin.meta.label} requires a destination`),
   };
 }
 

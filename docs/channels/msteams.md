@@ -447,7 +447,7 @@ By default, Clawdbot only downloads media from Microsoft/Teams hostnames. Overri
 ## Polls (Adaptive Cards)
 Clawdbot sends Teams polls as Adaptive Cards (there is no native Teams poll API).
 
-- CLI: `clawdbot message poll --channel msteams --to conversation:<id> ...`
+- CLI: `clawdbot message poll --channel msteams --target conversation:<id> ...`
 - Votes are recorded by the gateway in `~/.clawdbot/msteams-polls.json`.
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries yet (inspect the store file if needed).

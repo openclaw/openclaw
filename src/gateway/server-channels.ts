@@ -3,6 +3,7 @@ import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channel
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -93,6 +94,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const startAccount = plugin?.gateway?.startAccount;
     if (!startAccount) return;
     const cfg = loadConfig();
+    resetDirectoryCache({ channel: channelId, accountId });
     const store = getStore(channelId);
     const accountIds = accountId ? [accountId] : plugin.config.listAccountIds(cfg);
     if (accountIds.length === 0) return;

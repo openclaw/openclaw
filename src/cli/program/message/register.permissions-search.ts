@@ -5,11 +5,10 @@ import type { MessageCliHelpers } from "./helpers.js";
 export function registerMessagePermissionsCommand(message: Command, helpers: MessageCliHelpers) {
   helpers
     .withMessageBase(
-      helpers.withMessageTarget(
+      helpers.withRequiredMessageTarget(
         message.command("permissions").description("Fetch channel permissions"),
       ),
     )
-    .option("--channel-id <id>", "Channel id (defaults to --to)")
     .action(async (opts) => {
       await helpers.runMessageAction("permissions", opts);
     });

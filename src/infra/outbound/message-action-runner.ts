@@ -13,13 +13,10 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import {
-  listConfiguredMessageChannels,
-  resolveMessageChannelSelection,
-} from "./channel-selection.js";
+import { listConfiguredMessageChannels, resolveMessageChannelSelection } from "./channel-selection.js";
+import { applyTargetToParams } from "./channel-target.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import { sendMessage, sendPoll } from "./message.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -27,7 +24,9 @@ import {
   enforceCrossContextPolicy,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
-import { resolveMessagingTarget } from "./target-resolver.js";
+import { executePollAction, executeSendAction } from "./outbound-send-service.js";
+import { actionRequiresTarget } from "./message-action-spec.js";
+import { resolveChannelTarget } from "./target-resolver.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -195,7 +194,7 @@ async function resolveActionTarget(params: {
 }): Promise<void> {
   const toRaw = typeof params.args.to === "string" ? params.args.to.trim() : "";
   if (toRaw) {
-    const resolved = await resolveMessagingTarget({
+    const resolved = await resolveChannelTarget({
       cfg: params.cfg,
       channel: params.channel,
       input: toRaw,
@@ -210,7 +209,7 @@ async function resolveActionTarget(params: {
   const channelIdRaw =
     typeof params.args.channelId === "string" ? params.args.channelId.trim() : "";
   if (channelIdRaw) {
-    const resolved = await resolveMessagingTarget({
+    const resolved = await resolveChannelTarget({
       cfg: params.cfg,
       channel: params.channel,
       input: channelIdRaw,
@@ -237,7 +236,6 @@ type ResolvedActionContext = {
   gateway?: MessageActionRunnerGateway;
   input: RunMessageActionParams;
 };
-
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) return undefined;
   return {
@@ -281,7 +279,7 @@ async function handleBroadcastAction(
   for (const targetChannel of targetChannels) {
     for (const target of rawTargets) {
       try {
-        const resolved = await resolveMessagingTarget({
+        const resolved = await resolveChannelTarget({
           cfg: input.cfg,
           channel: targetChannel,
           input: target,
@@ -293,7 +291,7 @@ async function handleBroadcastAction(
           params: {
             ...params,
             channel: targetChannel,
-            to: resolved.target.to,
+            target: resolved.target.to,
           },
         });
         results.push({
@@ -326,11 +324,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
   const action: ChannelMessageActionName = "send";
   const to = readStringParam(params, "to", { required: true });
-  // Allow message to be omitted when sending media-only (e.g., voice notes)
   const mediaHint = readStringParam(params, "media", { trim: false });
   let message =
     readStringParam(params, "message", {
-      required: !mediaHint, // Only require message if no media hint
+      required: !mediaHint,
       allowEmpty: true,
     }) ?? "";
 
@@ -364,50 +361,29 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mediaUrl = readStringParam(params, "media", { trim: false });
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const bestEffort = readBooleanParam(params, "bestEffort");
-  if (!dryRun) {
-    const handled = await dispatchChannelMessageAction({
-      channel,
-      action,
+  const send = await executeSendAction({
+    ctx: {
       cfg,
+      channel,
       params,
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
+      deps: input.deps,
       dryRun,
-    });
-    if (handled) {
-      return {
-        kind: "send",
-        channel,
-        action,
-        to,
-        handledBy: "plugin",
-        payload: extractToolPayload(handled),
-        toolResult: handled,
-        dryRun,
-      };
-    }
-  }
-
-  const result: MessageSendResult = await sendMessage({
-    cfg,
+      mirror:
+        input.sessionKey && !dryRun
+          ? {
+              sessionKey: input.sessionKey,
+              agentId: input.agentId,
+            }
+          : undefined,
+    },
     to,
-    content: message,
+    message,
     mediaUrl: mediaUrl || undefined,
-    channel: channel || undefined,
-    accountId: accountId ?? undefined,
     gifPlayback,
-    dryRun,
     bestEffort: bestEffort ?? undefined,
-    deps: input.deps,
-    gateway,
-    mirror:
-      input.sessionKey && !dryRun
-        ? {
-            sessionKey: input.sessionKey,
-            agentId: input.agentId,
-          }
-        : undefined,
   });
 
   return {
@@ -415,9 +391,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     channel,
     action,
     to,
-    handledBy: "core",
-    payload: result,
-    sendResult: result,
+    handledBy: send.handledBy,
+    payload: send.payload,
+    toolResult: send.toolResult,
+    sendResult: send.sendResult,
     dryRun,
   };
 }
@@ -458,41 +435,21 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     });
   }
 
-  if (!dryRun) {
-    const handled = await dispatchChannelMessageAction({
-      channel,
-      action,
+  const poll = await executePollAction({
+    ctx: {
       cfg,
+      channel,
       params,
       accountId: accountId ?? undefined,
       gateway,
       toolContext: input.toolContext,
       dryRun,
-    });
-    if (handled) {
-      return {
-        kind: "poll",
-        channel,
-        action,
-        to,
-        handledBy: "plugin",
-        payload: extractToolPayload(handled),
-        toolResult: handled,
-        dryRun,
-      };
-    }
-  }
-
-  const result: MessagePollResult = await sendPoll({
-    cfg,
+    },
     to,
     question,
     options,
     maxSelections,
     durationHours: durationHours ?? undefined,
-    channel,
-    dryRun,
-    gateway,
   });
 
   return {
@@ -500,9 +457,10 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     channel,
     action,
     to,
-    handledBy: "core",
-    payload: result,
-    pollResult: result,
+    handledBy: poll.handledBy,
+    payload: poll.payload,
+    toolResult: poll.toolResult,
+    pollResult: poll.pollResult,
     dryRun,
   };
 }
@@ -558,6 +516,16 @@ export async function runMessageAction(
   const action = input.action;
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
+  }
+
+  applyTargetToParams({ action, args: params });
+  if (actionRequiresTarget(action)) {
+    const hasTarget =
+      (typeof params.to === "string" && params.to.trim()) ||
+      (typeof params.channelId === "string" && params.channelId.trim());
+    if (!hasTarget) {
+      throw new Error(`Action ${action} requires a target.`);
+    }
   }
 
   const channel = await resolveChannel(cfg, params);

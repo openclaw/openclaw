@@ -6,14 +6,13 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
 
   helpers
     .withMessageBase(
-      helpers.withMessageTarget(
+      helpers.withRequiredMessageTarget(
         thread
           .command("create")
           .description("Create a thread")
           .requiredOption("--thread-name <name>", "Thread name"),
       ),
     )
-    .option("--channel-id <id>", "Channel id (defaults to --to)")
     .option("--message-id <id>", "Message id (optional)")
     .option("--auto-archive-min <n>", "Thread auto-archive minutes")
     .action(async (opts) => {

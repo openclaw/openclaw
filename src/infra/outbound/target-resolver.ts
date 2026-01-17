@@ -23,8 +23,33 @@ export type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
+export async function resolveChannelTarget(params: {
+  cfg: ClawdbotConfig;
+  channel: ChannelId;
+  input: string;
+  accountId?: string | null;
+  preferredKind?: TargetResolveKind;
+  runtime?: RuntimeEnv;
+}): Promise<ResolveMessagingTargetResult> {
+  return resolveMessagingTarget(params);
+}
+
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
+
+export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: string | null }) {
+  if (!params?.channel) {
+    directoryCache.clear();
+    return;
+  }
+  const channelKey = params.channel;
+  const accountKey = params.accountId ?? "default";
+  directoryCache.clearMatching((key) => {
+    if (!key.startsWith(`${channelKey}:`)) return false;
+    if (!params.accountId) return true;
+    return key.startsWith(`${channelKey}:${accountKey}:`);
+  });
+}
 
 function normalizeQuery(value: string): string {
   return value.trim().toLowerCase();

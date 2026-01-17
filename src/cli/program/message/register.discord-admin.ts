@@ -40,10 +40,9 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
   const channel = message.command("channel").description("Channel actions");
   helpers
     .withMessageBase(
-      channel
-        .command("info")
-        .description("Fetch channel info")
-        .requiredOption("--channel-id <id>", "Channel id"),
+      helpers.withRequiredMessageTarget(
+        channel.command("info").description("Fetch channel info"),
+      ),
     )
     .action(async (opts) => {
       await helpers.runMessageAction("channel-info", opts);

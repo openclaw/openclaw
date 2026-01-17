@@ -20,7 +20,7 @@ runtime on the current machine.
 - Output:
   - default: prints reply text (plus `MEDIA:<url>` lines)
   - `--json`: prints structured payload + metadata
-- Optional delivery back to a channel with `--deliver` + `--channel` (target formats match `clawdbot message --to`).
+- Optional delivery back to a channel with `--deliver` + `--channel` (target formats match `clawdbot message --target`).
 
 If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
 

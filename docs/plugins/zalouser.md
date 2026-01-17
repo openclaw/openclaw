@@ -65,7 +65,7 @@ Channel config lives under `channels.zalouser` (not `plugins.entries.*`):
 clawdbot channels login --channel zalouser
 clawdbot channels logout --channel zalouser
 clawdbot channels status --probe
-clawdbot message send --channel zalouser --to <threadId> --message "Hello from Clawdbot"
+clawdbot message send --channel zalouser --target <threadId> --message "Hello from Clawdbot"
 clawdbot directory peers list --channel zalouser --query "name"
 ```
 

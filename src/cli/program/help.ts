@@ -10,7 +10,7 @@ const EXAMPLES = [
     "Link personal WhatsApp Web and show QR + connection logs.",
   ],
   [
-    'clawdbot message send --to +15555550123 --message "Hi" --json',
+    'clawdbot message send --target +15555550123 --message "Hi" --json',
     "Send via your web session and print JSON result.",
   ],
   ["clawdbot gateway --port 18789", "Run the WebSocket Gateway locally."],
@@ -22,7 +22,7 @@ const EXAMPLES = [
     "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
   ],
   [
-    'clawdbot message send --channel telegram --to @mychat --message "Hi"',
+    'clawdbot message send --channel telegram --target @mychat --message "Hi"',
     "Send via your Telegram bot.",
   ],
 ] as const;

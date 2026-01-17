@@ -11,6 +11,7 @@
 
 ### Breaking
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
+- **BREAKING:** `clawdbot message` and message tool now require `target` (dropping `to`/`channelId` for destinations).
 
 ### Changes
 - Tools: improve `web_fetch` extraction using Readability (with fallback).

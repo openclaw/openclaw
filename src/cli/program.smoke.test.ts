@@ -56,7 +56,7 @@ describe("cli program (smoke)", () => {
 
   it("runs message with required options", async () => {
     const program = buildProgram();
-    await program.parseAsync(["message", "send", "--to", "+1", "--message", "hi"], {
+    await program.parseAsync(["message", "send", "--target", "+1", "--message", "hi"], {
       from: "user",
     });
     expect(messageCommand).toHaveBeenCalled();

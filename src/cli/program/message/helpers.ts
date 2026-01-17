@@ -25,9 +25,9 @@ export function createMessageCliHelpers(
       .option("--verbose", "Verbose logging", false);
 
   const withMessageTarget = (command: Command) =>
-    command.option("-t, --to <dest>", CHANNEL_TARGET_DESCRIPTION);
+    command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
   const withRequiredMessageTarget = (command: Command) =>
-    command.requiredOption("-t, --to <dest>", CHANNEL_TARGET_DESCRIPTION);
+    command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
 
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
     setVerbose(Boolean(opts.verbose));

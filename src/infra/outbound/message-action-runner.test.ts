@@ -27,7 +27,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "slack",
-        to: "#C12345678",
+        target: "#C12345678",
         message: "hi",
       },
       toolContext: { currentChannelId: "C12345678" },
@@ -43,7 +43,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "slack",
-        to: "#C12345678",
+        target: "#C12345678",
         media: "https://example.com/note.ogg",
       },
       toolContext: { currentChannelId: "C12345678" },
@@ -60,7 +60,7 @@ describe("runMessageAction context isolation", () => {
         action: "send",
         params: {
           channel: "slack",
-          to: "#C12345678",
+        target: "#C12345678",
         },
         toolContext: { currentChannelId: "C12345678" },
         dryRun: true,
@@ -74,7 +74,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "slack",
-        to: "channel:C99999999",
+        target: "channel:C99999999",
         message: "hi",
       },
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
@@ -90,7 +90,7 @@ describe("runMessageAction context isolation", () => {
       action: "thread-reply",
       params: {
         channel: "slack",
-        channelId: "C99999999",
+        target: "C99999999",
         message: "hi",
       },
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
@@ -106,7 +106,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "whatsapp",
-        to: "group:123@g.us",
+        target: "group:123@g.us",
         message: "hi",
       },
       toolContext: { currentChannelId: "123@g.us" },
@@ -122,7 +122,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "whatsapp",
-        to: "456@g.us",
+        target: "456@g.us",
         message: "hi",
       },
       toolContext: { currentChannelId: "123@g.us", currentChannelProvider: "whatsapp" },
@@ -138,7 +138,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "imessage",
-        to: "imessage:+15551234567",
+        target: "imessage:+15551234567",
         message: "hi",
       },
       toolContext: { currentChannelId: "imessage:+15551234567" },
@@ -154,7 +154,7 @@ describe("runMessageAction context isolation", () => {
       action: "send",
       params: {
         channel: "imessage",
-        to: "imessage:+15551230000",
+        target: "imessage:+15551230000",
         message: "hi",
       },
       toolContext: {
@@ -174,7 +174,7 @@ describe("runMessageAction context isolation", () => {
         action: "send",
         params: {
           channel: "telegram",
-          to: "telegram:@ops",
+          target: "telegram:@ops",
           message: "hi",
         },
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
@@ -201,7 +201,7 @@ describe("runMessageAction context isolation", () => {
         action: "send",
         params: {
           channel: "slack",
-          to: "channel:C99999999",
+          target: "channel:C99999999",
           message: "hi",
         },
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
