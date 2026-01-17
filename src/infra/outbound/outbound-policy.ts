@@ -1,4 +1,4 @@
-import { normalizeTargetForProvider } from "../../agents/pi-embedded-messaging.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 import type {
   ChannelId,
   ChannelMessageActionName,

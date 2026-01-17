@@ -11,10 +11,12 @@ export type DirectoryCacheKey = {
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;
   source: "cache" | "live";
+  signature?: string | null;
 };
 
 export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
-  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}`;
+  const signature = key.signature ?? "default";
+  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}`;
 }
 
 export class DirectoryCache<T> {

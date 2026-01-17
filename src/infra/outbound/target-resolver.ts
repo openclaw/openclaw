@@ -1,4 +1,3 @@
-import { normalizeTargetForProvider } from "../../agents/pi-embedded-messaging.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelDirectoryEntry,
@@ -7,8 +6,13 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { normalizeChannelTargetInput } from "./channel-target.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+import {
+  buildTargetResolverSignature,
+  normalizeChannelTargetInput,
+  normalizeTargetForProvider,
+} from "./target-normalization.js";
+import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
 
 export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
@@ -223,11 +227,13 @@ async function getDirectoryEntries(params: {
   runtime?: RuntimeEnv;
   preferLiveOnMiss?: boolean;
 }): Promise<ChannelDirectoryEntry[]> {
+  const signature = buildTargetResolverSignature(params.channel);
   const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
     source: "cache",
+    signature,
   });
   const cached = directoryCache.get(cacheKey, params.cfg);
   if (cached) return cached;
@@ -249,6 +255,7 @@ async function getDirectoryEntries(params: {
     accountId: params.accountId,
     kind: params.kind,
     source: "live",
+    signature,
   });
   const liveEntries = await listDirectoryEntries({
     cfg: params.cfg,
@@ -276,6 +283,9 @@ export async function resolveMessagingTarget(params: {
   if (!raw) {
     return { ok: false, error: new Error("Target is required") };
   }
+  const plugin = getChannelPlugin(params.channel);
+  const providerLabel = plugin?.meta?.label ?? params.channel;
+  const hint = plugin?.messaging?.targetHint;
   const kind = detectTargetKind(raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
   if (looksLikeTargetId({ channel: params.channel, raw, normalized })) {
@@ -316,13 +326,13 @@ export async function resolveMessagingTarget(params: {
   if (match.kind === "ambiguous") {
     return {
       ok: false,
-      error: new Error(`Ambiguous target "${raw}". Provide a unique name or an explicit id.`),
+      error: ambiguousTargetError(providerLabel, raw, hint),
       candidates: match.entries,
     };
   }
   return {
     ok: false,
-    error: new Error(`Unknown target "${raw}" for ${params.channel}.`),
+    error: unknownTargetError(providerLabel, raw, hint),
   };
 }
 
