@@ -19,7 +19,11 @@ import {
 } from "./status.format.js";
 import { resolveGatewayProbeAuth } from "./status.gateway-probe.js";
 import { scanStatus } from "./status.scan.js";
-import { formatUpdateOneLiner } from "./status.update.js";
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  resolveUpdateAvailability,
+} from "./status.update.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { statusAllCommand } from "./status-all.js";
 
@@ -228,6 +232,9 @@ export async function statusCommand(
       ? `${summary.sessions.paths.length} stores`
       : (summary.sessions.paths[0] ?? "unknown");
 
+  const updateAvailability = resolveUpdateAvailability(update);
+  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
@@ -242,7 +249,7 @@ export async function statusCommand(
     },
     {
       Item: "Update",
-      Value: formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""),
+      Value: updateAvailability.available ? warn(`available · ${updateLine}`) : updateLine,
     },
     { Item: "Gateway", Value: gatewayValue },
     { Item: "Daemon", Value: daemonValue },
@@ -456,6 +463,11 @@ export async function statusCommand(
   runtime.log("FAQ: https://docs.clawd.bot/faq");
   runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
   runtime.log("");
+  const updateHint = formatUpdateAvailableHint(update);
+  if (updateHint) {
+    runtime.log(theme.warn(updateHint));
+    runtime.log("");
+  }
   runtime.log("Next steps:");
   runtime.log("  Need to share?      clawdbot status --all");
   runtime.log("  Need to debug live? clawdbot logs --follow");
