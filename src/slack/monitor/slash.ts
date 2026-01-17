@@ -10,6 +10,7 @@ import {
 } from "../../auto-reply/commands-registry.js";
 import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -336,11 +337,11 @@ export function registerSlackMonitorSlashCommands(params: {
       const groupSystemPrompt =
         systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 
-      const ctxPayload = {
+      const ctxPayload = finalizeInboundContext({
         Body: prompt,
-        BodyForAgent: prompt,
+        RawBody: prompt,
+        CommandBody: prompt,
         CommandArgs: commandArgs,
-        BodyForCommands: prompt,
         From: isDirectMessage
           ? `slack:${command.user_id}`
           : isRoom
@@ -375,7 +376,7 @@ export function registerSlackMonitorSlashCommands(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "slack" as const,
         OriginatingTo: `user:${command.user_id}`,
-      };
+      });
 
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,

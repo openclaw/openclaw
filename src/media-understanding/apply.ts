@@ -1,7 +1,10 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { ensureClawdbotModelsJson } from "../agents/models-config.js";
+import { minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type {
@@ -449,6 +452,7 @@ export async function applyMediaUnderstanding(params: {
         ctx.RawBody = originalUserText;
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
+      finalizeInboundContext(ctx, { forceBodyForAgent: true, forceBodyForCommands: true });
     }
 
     return {

@@ -378,6 +378,12 @@ describe("monitorIMessageProvider", () => {
     closeResolve?.();
     await run;
 
+    expect(replyMock).toHaveBeenCalledOnce();
+    const ctx = replyMock.mock.calls[0]?.[0] as { Body?: string; ChatType?: string };
+    expect(ctx.ChatType).toBe("group");
+    expect(String(ctx.Body ?? "")).toContain("[from:");
+    expect(String(ctx.Body ?? "")).toContain("+15550002222");
+
     expect(sendMock).toHaveBeenCalledWith(
       "chat_id:42",
       "yo",

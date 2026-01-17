@@ -30,6 +30,7 @@ import type {
   NativeCommandSpec,
 } from "../../auto-reply/commands-registry.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig, loadConfig } from "../../config/config.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -570,11 +571,10 @@ async function dispatchDiscordCommandInteraction(params: {
     },
   });
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: prompt,
-    BodyForAgent: prompt,
+    RawBody: prompt,
     CommandBody: prompt,
-    BodyForCommands: prompt,
     CommandArgs: commandArgs,
     From: isDirectMessage ? `discord:${user.id}` : `group:${channelId}`,
     To: `slash:${user.id}`,
@@ -607,7 +607,7 @@ async function dispatchDiscordCommandInteraction(params: {
     Timestamp: Date.now(),
     CommandAuthorized: commandAuthorized,
     CommandSource: "native" as const,
-  };
+  });
 
   let didReply = false;
   await dispatchReplyWithDispatcher({

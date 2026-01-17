@@ -16,13 +16,13 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
+import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
-import { normalizeChatType } from "../../../channels/chat-type.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -196,12 +196,10 @@ export async function processMessage(params: {
   };
 
   const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: {
+    ctx: finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: combinedBody,
       RawBody: params.msg.body,
       CommandBody: params.msg.body,
-      BodyForCommands: params.msg.body,
       From: params.msg.from,
       To: params.msg.to,
       SessionKey: params.route.sessionKey,
@@ -213,7 +211,7 @@ export async function processMessage(params: {
       MediaPath: params.msg.mediaPath,
       MediaUrl: params.msg.mediaUrl,
       MediaType: params.msg.mediaType,
-      ChatType: normalizeChatType(params.msg.chatType) ?? params.msg.chatType,
+      ChatType: params.msg.chatType,
       ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
       GroupSubject: params.msg.groupSubject,
       GroupMembers: formatGroupMembers({
@@ -230,7 +228,7 @@ export async function processMessage(params: {
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: params.msg.from,
-    },
+    }),
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {

@@ -6,6 +6,7 @@ import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntry,
 } from "../../../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../../auto-reply/reply/mentions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
@@ -404,12 +405,10 @@ export async function prepareSlackMessage(params: {
     }
   }
 
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: combinedBody,
     RawBody: rawBody,
     CommandBody: rawBody,
-    BodyForCommands: rawBody,
     From: slackFrom,
     To: slackTo,
     SessionKey: sessionKey,
@@ -435,7 +434,7 @@ export async function prepareSlackMessage(params: {
     CommandAuthorized: commandAuthorized,
     OriginatingChannel: "slack" as const,
     OriginatingTo: slackTo,
-  } satisfies Record<string, unknown>;
+  }) satisfies Record<string, unknown>;
 
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) return null;

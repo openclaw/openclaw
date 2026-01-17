@@ -17,6 +17,7 @@ import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
@@ -73,6 +74,8 @@ export async function getReplyFromConfig(
     log: defaultRuntime.log,
   });
   opts?.onTypingController?.(typing);
+
+  finalizeInboundContext(ctx);
 
   await applyMediaUnderstanding({
     ctx,

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ResolvedZaloAccount } from "./accounts.js";
+import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import {
   ZaloApiError,
   deleteWebhook,
@@ -506,12 +507,10 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: body,
-    BodyForAgent: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    BodyForCommands: rawBody,
     From: isGroup ? `group:${chatId}` : `zalo:${senderId}`,
     To: `zalo:${chatId}`,
     SessionKey: route.sessionKey,
@@ -528,7 +527,7 @@ async function processMessageWithPipeline(params: {
     MediaUrl: mediaPath,
     OriginatingChannel: "zalo",
     OriginatingTo: `zalo:${chatId}`,
-  };
+  });
 
   await deps.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,

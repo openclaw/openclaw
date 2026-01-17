@@ -8,6 +8,7 @@ import { hasControlCommand } from "../../../../../src/auto-reply/command-detecti
 import { shouldHandleTextCommands } from "../../../../../src/auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../../../../../src/auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../../../../src/auto-reply/reply/dispatch-from-config.js";
+import { finalizeInboundContext } from "../../../../../src/auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -354,16 +355,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       });
 
       const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
-      const ctxPayload = {
-        Body: body,
-        BodyForAgent: body,
-        RawBody: bodyText,
-        CommandBody: bodyText,
-        BodyForCommands: bodyText,
-        From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
-        To: `room:${roomId}`,
-        SessionKey: route.sessionKey,
-        AccountId: route.accountId,
+	      const ctxPayload = finalizeInboundContext({
+	        Body: body,
+	        RawBody: bodyText,
+	        CommandBody: bodyText,
+	        From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
+	        To: `room:${roomId}`,
+	        SessionKey: route.sessionKey,
+	        AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
@@ -382,11 +381,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
-        CommandAuthorized: commandAuthorized,
-        CommandSource: "text" as const,
-        OriginatingChannel: "matrix" as const,
-        OriginatingTo: `room:${roomId}`,
-      };
+	        CommandAuthorized: commandAuthorized,
+	        CommandSource: "text" as const,
+	        OriginatingChannel: "matrix" as const,
+	        OriginatingTo: `room:${roomId}`,
+	      });
 
       if (isDirectMessage) {
         const storePath = resolveStorePath(cfg.session?.store, {

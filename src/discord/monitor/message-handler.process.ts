@@ -14,6 +14,7 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
 } from "../../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
@@ -219,12 +220,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     return;
   }
 
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: combinedBody,
     RawBody: baseText,
     CommandBody: baseText,
-    BodyForCommands: baseText,
     From: effectiveFrom,
     To: effectiveTo,
     SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
@@ -253,7 +252,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
-  };
+  });
 
   if (isDirectMessage) {
     const sessionCfg = cfg.session;
