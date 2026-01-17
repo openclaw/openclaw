@@ -126,7 +126,7 @@ describe("web auto-reply", () => {
           sharp(buf, {
             raw: { width: opts.width, height: opts.height, channels: 3 },
           })
-            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
+            .jpeg({ quality: 90 })
             .toBuffer(),
       },
       {
