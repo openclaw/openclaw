@@ -335,6 +335,7 @@ For fine-grained control, use these tags in agent responses:
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `agent:<agentId>:slack:channel:<channelId>` sessions.
 - Slash commands use `agent:<agentId>:slack:slash:<userId>` sessions (prefix configurable via `channels.slack.slashCommand.sessionPrefix`).
+- If Slack doesn’t provide `channel_type`, Clawdbot infers it from the channel ID prefix (`D`, `C`, `G`) and defaults to `channel` to keep session keys stable.
 - Native command registration uses `commands.native` (global default `"auto"` → Slack off) and can be overridden per-workspace with `channels.slack.commands.native`. Text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
 - Full command list + config: [Slash commands](/tools/slash-commands)
 
