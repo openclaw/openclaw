@@ -360,6 +360,19 @@ To force a voice note bubble in agent replies, include this tag anywhere in the 
 
 The tag is stripped from the delivered text. Other channels ignore this tag.
 
+For message tool sends, set `asVoice: true` with a voice-compatible audio `media` URL
+(`message` is optional when media is present):
+
+```json5
+{
+  "action": "send",
+  "channel": "telegram",
+  "to": "123456789",
+  "media": "https://example.com/voice.ogg",
+  "asVoice": true
+}
+```
+
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
 Clawdbot uses Bot API `sendMessageDraft` (not real messages) and then sends the
