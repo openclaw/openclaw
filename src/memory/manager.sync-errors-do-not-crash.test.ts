@@ -24,7 +24,7 @@ vi.mock("./embeddings.js", () => {
         model: "mock-embed",
         embedQuery: async () => [0, 0, 0],
         embedBatch: async () => {
-          throw new Error("openai embeddings failed: 429 insufficient_quota");
+          throw new Error("openai embeddings failed: 400 bad request");
         },
       },
     }),

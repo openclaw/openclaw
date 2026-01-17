@@ -14,6 +14,12 @@ export type ResolvedMemorySearchConfig = {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
+    batch?: {
+      enabled: boolean;
+      wait: boolean;
+      pollIntervalMs: number;
+      timeoutMinutes: number;
+    };
   };
   experimental: {
     sessionMemory: boolean;
@@ -89,11 +95,24 @@ function mergeConfig(
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
   const hasRemote = Boolean(defaults?.remote || overrides?.remote);
+  const batch = {
+    enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? false,
+    wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
+    pollIntervalMs:
+      overrides?.remote?.batch?.pollIntervalMs ??
+      defaults?.remote?.batch?.pollIntervalMs ??
+      5000,
+    timeoutMinutes:
+      overrides?.remote?.batch?.timeoutMinutes ??
+      defaults?.remote?.batch?.timeoutMinutes ??
+      60,
+  };
   const remote = hasRemote
     ? {
         baseUrl: overrides?.remote?.baseUrl ?? defaults?.remote?.baseUrl,
         apiKey: overrides?.remote?.apiKey ?? defaults?.remote?.apiKey,
         headers: overrides?.remote?.headers ?? defaults?.remote?.headers,
+        batch,
       }
     : undefined;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "openai";

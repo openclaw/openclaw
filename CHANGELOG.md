@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.17-3
+
+### Changes
+- Memory: add OpenAI Batch API indexing for embeddings when configured.
+
 ## 2026.1.17-2
 
 ### Changes
