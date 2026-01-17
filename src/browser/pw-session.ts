@@ -389,3 +389,106 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
   if (!cur) return;
   await cur.browser.close().catch(() => {});
 }
+
+/**
+ * List all pages/tabs from the persistent Playwright connection.
+ * Used for remote profiles where HTTP-based /json/list is ephemeral.
+ */
+export async function listPagesViaPlaywright(opts: {
+  cdpUrl: string;
+}): Promise<
+  Array<{
+    targetId: string;
+    title: string;
+    url: string;
+    type: string;
+  }>
+> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const pages = await getAllPages(browser);
+  const results: Array<{
+    targetId: string;
+    title: string;
+    url: string;
+    type: string;
+  }> = [];
+
+  for (const page of pages) {
+    const tid = await pageTargetId(page).catch(() => null);
+    if (tid) {
+      results.push({
+        targetId: tid,
+        title: await page.title().catch(() => ""),
+        url: page.url(),
+        type: "page",
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Create a new page/tab using the persistent Playwright connection.
+ * Used for remote profiles where HTTP-based /json/new is ephemeral.
+ * Returns the new page's targetId and metadata.
+ */
+export async function createPageViaPlaywright(opts: {
+  cdpUrl: string;
+  url: string;
+}): Promise<{
+  targetId: string;
+  title: string;
+  url: string;
+  type: string;
+}> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const contexts = browser.contexts();
+  // Use the first context if available, otherwise this is a fresh connection
+  // and we need to use the default context that Browserless provides
+  let context = contexts[0];
+  if (!context) {
+    // For Browserless over CDP, there should be at least one context
+    // If not, we can try accessing pages directly from contexts
+    throw new Error("No browser context available for creating a new page");
+  }
+
+  const page = await context.newPage();
+  ensurePageState(page);
+
+  // Navigate to the URL
+  const targetUrl = opts.url.trim() || "about:blank";
+  if (targetUrl !== "about:blank") {
+    await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
+      // Navigation might fail for some URLs, but page is still created
+    });
+  }
+
+  // Get the targetId for this page
+  const tid = await pageTargetId(page).catch(() => null);
+  if (!tid) {
+    throw new Error("Failed to get targetId for new page");
+  }
+
+  return {
+    targetId: tid,
+    title: await page.title().catch(() => ""),
+    url: page.url(),
+    type: "page",
+  };
+}
+
+/**
+ * Close a page/tab by targetId using the persistent Playwright connection.
+ * Used for remote profiles where HTTP-based /json/close is ephemeral.
+ */
+export async function closePageByTargetIdViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId: string;
+}): Promise<void> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId);
+  if (!page) {
+    throw new Error("tab not found");
+  }
+  await page.close();
+}
