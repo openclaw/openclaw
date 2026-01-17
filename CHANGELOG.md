@@ -36,6 +36,7 @@
 - Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
 - WhatsApp: scope self-chat response prefix; inject pending-only group history and clear after any processed message.
 - Agents: drop unsigned Gemini tool calls and avoid JSON Schema `format` keyword collisions.
+- Agents: avoid duplicate sends by replying with `NO_REPLY` after `message` tool sends.
 - Auth: inherit/merge sub-agent auth profiles from the main agent.
 - Gateway: resolve local auth for security probe and validate gateway token/password file modes. (#1011, #1022) — thanks @ivanrvpereira, @kkarimi.
 - Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
