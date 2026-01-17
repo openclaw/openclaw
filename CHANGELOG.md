@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 - Memory: parallelize embedding indexing with rate-limit retries.
 - Memory: split overly long lines to keep embeddings under token limits.
 - Memory: skip empty chunks to avoid invalid embedding inputs.
+- Sessions: fall back to session labels when listing display names. (#1124) — thanks @abdaraxus.
 
 ## 2026.1.17-1
 

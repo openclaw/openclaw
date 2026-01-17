@@ -800,31 +800,35 @@ export class MemoryIndexManager {
     }
   }
 
+  private createSyncProgress(
+    onProgress: (update: MemorySyncProgressUpdate) => void,
+  ): MemorySyncProgressState {
+    const state: MemorySyncProgressState = {
+      completed: 0,
+      total: 0,
+      label: undefined,
+      report: (update) => {
+        if (update.label) state.label = update.label;
+        const label =
+          update.total > 0 && state.label
+            ? `${state.label} ${update.completed}/${update.total}`
+            : state.label;
+        onProgress({
+          completed: update.completed,
+          total: update.total,
+          label,
+        });
+      },
+    };
+    return state;
+  }
+
   private async runSync(params?: {
     reason?: string;
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progress: MemorySyncProgressState | null = params?.progress
-      ? {
-          completed: 0,
-          total: 0,
-          label: undefined,
-          report: (update) => {
-            if (!params.progress) return;
-            if (update.label) progress.label = update.label;
-            const label =
-              update.total > 0 && progress.label
-                ? `${progress.label} ${update.completed}/${update.total}`
-                : progress.label;
-            params.progress({
-              completed: update.completed,
-              total: update.total,
-              label,
-            });
-          },
-        }
-      : null;
+    const progress = params?.progress ? this.createSyncProgress(params.progress) : null;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =

@@ -392,7 +392,8 @@ export function listSessionsFromStore(params: {
               id,
               key,
             })
-          : undefined);
+          : undefined) ??
+        entry?.label;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       return {
         key,
