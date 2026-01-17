@@ -77,7 +77,8 @@ export function enforceCrossContextPolicy(params: {
   if (params.cfg.tools?.message?.allowCrossContextSend) return;
 
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider = params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
+  const allowWithinProvider =
+    params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
   const allowAcrossProviders =
     params.cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
 
@@ -132,7 +133,7 @@ export async function buildCrossContextDecoration(params: {
 
   const adapter = getChannelMessageAdapter(params.channel);
   const embeds = adapter.supportsEmbeds
-    ? adapter.buildCrossContextEmbeds?.(originLabel) ?? undefined
+    ? (adapter.buildCrossContextEmbeds?.(originLabel) ?? undefined)
     : undefined;
 
   return { prefix, suffix, embeds };

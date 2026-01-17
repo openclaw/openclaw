@@ -7,10 +7,7 @@ export function registerMessageBroadcastCommand(message: Command, helpers: Messa
     .withMessageBase(
       message.command("broadcast").description("Broadcast a message to multiple targets"),
     )
-    .requiredOption(
-      "--targets <target...>",
-      CHANNEL_TARGETS_DESCRIPTION,
-    )
+    .requiredOption("--targets <target...>", CHANNEL_TARGETS_DESCRIPTION)
     .option("--message <text>", "Message to send")
     .option("--media <url>", "Media URL")
     .action(async (options: Record<string, unknown>) => {

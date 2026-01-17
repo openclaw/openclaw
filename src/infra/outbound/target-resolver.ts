@@ -31,7 +31,10 @@ function normalizeQuery(value: string): string {
 }
 
 function stripTargetPrefixes(value: string): string {
-  return value.replace(/^(channel|group|user):/i, "").replace(/^[@#]/, "").trim();
+  return value
+    .replace(/^(channel|group|user):/i, "")
+    .replace(/^[@#]/, "")
+    .trim();
 }
 
 function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
@@ -132,7 +135,7 @@ async function listDirectoryEntries(params: {
   const runtime = params.runtime ?? defaultRuntime;
   const useLive = params.source === "live";
   if (params.kind === "user") {
-    const fn = useLive ? directory.listPeersLive ?? directory.listPeers : directory.listPeers;
+    const fn = useLive ? (directory.listPeersLive ?? directory.listPeers) : directory.listPeers;
     if (!fn) return [];
     return await fn({
       cfg: params.cfg,
@@ -142,7 +145,7 @@ async function listDirectoryEntries(params: {
       runtime,
     });
   }
-  const fn = useLive ? directory.listGroupsLive ?? directory.listGroups : directory.listGroups;
+  const fn = useLive ? (directory.listGroupsLive ?? directory.listGroups) : directory.listGroups;
   if (!fn) return [];
   return await fn({
     cfg: params.cfg,
@@ -254,9 +257,7 @@ export async function resolveMessagingTarget(params: {
   if (match.kind === "ambiguous") {
     return {
       ok: false,
-      error: new Error(
-        `Ambiguous target "${raw}". Provide a unique name or an explicit id.`,
-      ),
+      error: new Error(`Ambiguous target "${raw}". Provide a unique name or an explicit id.`),
       candidates: match.entries,
     };
   }

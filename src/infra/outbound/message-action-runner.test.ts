@@ -157,7 +157,10 @@ describe("runMessageAction context isolation", () => {
         to: "imessage:+15551230000",
         message: "hi",
       },
-      toolContext: { currentChannelId: "imessage:+15551234567", currentChannelProvider: "imessage" },
+      toolContext: {
+        currentChannelId: "imessage:+15551234567",
+        currentChannelProvider: "imessage",
+      },
       dryRun: true,
     });
 
