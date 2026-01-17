@@ -5,6 +5,13 @@ import {
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
+import {
+  buildCollectPrompt,
+  buildQueueSummaryLine,
+  buildQueueSummaryPrompt,
+  hasCrossChannelItems,
+  waitForQueueDebounce,
+} from "../utils/queue-helpers.js";
 
 export type AnnounceQueueItem = {
   prompt: string;
@@ -73,82 +80,6 @@ function getAnnounceQueue(
   return created;
 }
 
-function elideText(text: string, limit = 140): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-function buildQueueSummaryLine(item: AnnounceQueueItem): string {
-  const base = item.summaryLine?.trim() || item.prompt.trim();
-  const cleaned = base.replace(/\s+/g, " ").trim();
-  return elideText(cleaned, 160);
-}
-
-function waitForQueueDebounce(queue: { debounceMs: number; lastEnqueuedAt: number }) {
-  const debounceMs = Math.max(0, queue.debounceMs);
-  if (debounceMs <= 0) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const check = () => {
-      const since = Date.now() - queue.lastEnqueuedAt;
-      if (since >= debounceMs) {
-        resolve();
-        return;
-      }
-      setTimeout(check, debounceMs - since);
-    };
-    check();
-  });
-}
-
-function buildSummaryPrompt(queue: {
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-}): string | undefined {
-  if (queue.dropPolicy !== "summarize" || queue.droppedCount <= 0) {
-    return undefined;
-  }
-  const lines = [
-    `[Queue overflow] Dropped ${queue.droppedCount} announce${queue.droppedCount === 1 ? "" : "s"} due to cap.`,
-  ];
-  if (queue.summaryLines.length > 0) {
-    lines.push("Summary:");
-    for (const line of queue.summaryLines) {
-      lines.push(`- ${line}`);
-    }
-  }
-  queue.droppedCount = 0;
-  queue.summaryLines = [];
-  return lines.join("\n");
-}
-
-function buildCollectPrompt(items: AnnounceQueueItem[], summary?: string): string {
-  const blocks: string[] = ["[Queued announce messages while agent was busy]"];
-  if (summary) blocks.push(summary);
-  items.forEach((item, idx) => {
-    blocks.push(`---\nQueued #${idx + 1}\n${item.prompt}`.trim());
-  });
-  return blocks.join("\n\n");
-}
-
-function hasCrossChannelItems(items: AnnounceQueueItem[]): boolean {
-  const keys = new Set<string>();
-  let hasUnkeyed = false;
-  for (const item of items) {
-    if (!item.origin) {
-      hasUnkeyed = true;
-      continue;
-    }
-    if (!item.originKey) {
-      return true;
-    }
-    keys.add(item.originKey);
-  }
-  if (keys.size === 0) return false;
-  if (hasUnkeyed) return true;
-  return keys.size > 1;
-}
-
 function scheduleAnnounceDrain(key: string) {
   const queue = ANNOUNCE_QUEUES.get(key);
   if (!queue || queue.draining) return;
@@ -165,7 +96,11 @@ function scheduleAnnounceDrain(key: string) {
             await queue.send(next);
             continue;
           }
-          const isCrossChannel = hasCrossChannelItems(queue.items);
+          const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
+            if (!item.origin) return {};
+            if (!item.originKey) return { cross: true };
+            return { key: item.originKey };
+          });
           if (isCrossChannel) {
             forceIndividualCollect = true;
             const next = queue.items.shift();
@@ -174,15 +109,20 @@ function scheduleAnnounceDrain(key: string) {
             continue;
           }
           const items = queue.items.splice(0, queue.items.length);
-          const summary = buildSummaryPrompt(queue);
-          const prompt = buildCollectPrompt(items, summary);
+          const summary = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
+          const prompt = buildCollectPrompt({
+            title: "[Queued announce messages while agent was busy]",
+            items,
+            summary,
+            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
+          });
           const last = items.at(-1);
           if (!last) break;
           await queue.send({ ...last, prompt });
           continue;
         }
 
-        const summaryPrompt = buildSummaryPrompt(queue);
+        const summaryPrompt = buildQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
           const next = queue.items.shift();
           if (!next) break;
@@ -227,7 +167,8 @@ export function enqueueAnnounce(params: {
     if (queue.dropPolicy === "summarize") {
       for (const droppedItem of dropped) {
         queue.droppedCount += 1;
-        queue.summaryLines.push(buildQueueSummaryLine(droppedItem));
+        const base = droppedItem.summaryLine?.trim() || droppedItem.prompt.trim();
+        queue.summaryLines.push(buildQueueSummaryLine(base));
       }
       while (queue.summaryLines.length > cap) queue.summaryLines.shift();
     }

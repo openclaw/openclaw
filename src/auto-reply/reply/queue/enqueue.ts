@@ -1,16 +1,6 @@
+import { buildQueueSummaryLine } from "../../../utils/queue-helpers.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
-
-function elideText(text: string, limit = 140): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
-function buildQueueSummaryLine(run: FollowupRun): string {
-  const base = run.summaryLine?.trim() || run.prompt.trim();
-  const cleaned = base.replace(/\\s+/g, " ").trim();
-  return elideText(cleaned, 160);
-}
 
 function isRunAlreadyQueued(
   run: FollowupRun,
@@ -62,7 +52,8 @@ export function enqueueFollowupRun(
     if (queue.dropPolicy === "summarize") {
       for (const item of dropped) {
         queue.droppedCount += 1;
-        queue.summaryLines.push(buildQueueSummaryLine(item));
+        const base = item.summaryLine?.trim() || item.prompt.trim();
+        queue.summaryLines.push(buildQueueSummaryLine(base));
       }
       while (queue.summaryLines.length > cap) queue.summaryLines.shift();
     }
