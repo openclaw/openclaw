@@ -272,9 +272,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
-      channel: "discord",
-      to: `user:${author.id}`,
-      accountId: route.accountId,
+      deliveryContext: {
+        channel: "discord",
+        to: `user:${author.id}`,
+        accountId: route.accountId,
+      },
     });
   }
 

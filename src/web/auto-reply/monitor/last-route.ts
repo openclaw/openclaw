@@ -28,9 +28,11 @@ export function updateLastRouteInBackground(params: {
   const task = updateLastRoute({
     storePath,
     sessionKey: params.sessionKey,
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
+    deliveryContext: {
+      channel: params.channel,
+      to: params.to,
+      accountId: params.accountId,
+    },
   }).catch((err) => {
     params.warn(
       {

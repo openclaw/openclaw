@@ -489,9 +489,11 @@ export const buildTelegramMessageContext = async ({
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
-      channel: "telegram",
-      to: String(chatId),
-      accountId: route.accountId,
+      deliveryContext: {
+        channel: "telegram",
+        to: String(chatId),
+        accountId: route.accountId,
+      },
     });
   }
 

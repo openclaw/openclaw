@@ -4,7 +4,13 @@ import path from "node:path";
 
 import JSON5 from "json5";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -323,20 +329,29 @@ export async function updateSessionStoreEntry(params: {
 export async function updateLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  channel: SessionEntry["lastChannel"];
+  channel?: SessionEntry["lastChannel"];
   to?: string;
   accountId?: string;
+  deliveryContext?: DeliveryContext;
 }) {
   const { storePath, sessionKey, channel, to, accountId } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
     const now = Date.now();
+    const explicitContext = normalizeDeliveryContext(params.deliveryContext);
+    const inlineContext = normalizeDeliveryContext({
+      channel,
+      to,
+      accountId,
+    });
+    const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
+    const merged = mergeDeliveryContext(mergedInput, deliveryContextFromSession(existing));
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
-        channel: channel ?? existing?.lastChannel ?? existing?.deliveryContext?.channel,
-        to: to ?? existing?.lastTo ?? existing?.deliveryContext?.to,
-        accountId: accountId ?? existing?.lastAccountId ?? existing?.deliveryContext?.accountId,
+        channel: merged?.channel,
+        to: merged?.to,
+        accountId: merged?.accountId,
       },
     });
     const next = mergeSessionEntry(existing, {

@@ -143,9 +143,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await updateLastRoute({
         storePath,
         sessionKey: route.mainSessionKey,
-        channel: "signal",
-        to: entry.senderRecipient,
-        accountId: route.accountId,
+        deliveryContext: {
+          channel: "signal",
+          to: entry.senderRecipient,
+          accountId: route.accountId,
+        },
       });
     }
 
