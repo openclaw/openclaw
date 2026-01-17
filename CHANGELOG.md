@@ -33,6 +33,7 @@ Docs: https://docs.clawd.bot
 - Tools: add `process submit` helper to send CR for PTY sessions.
 - Tools: respond to PTY cursor position queries to unblock interactive TUIs.
 - Tools: include tool outputs in verbose mode and expand verbose tool feedback.
+- Skills: update coding-agent guidance to prefer PTY-enabled exec runs and simplify tmux usage.
 - TUI: refresh session token counts after runs complete or fail. (#1079) — thanks @d-ploutarchos.
 - Status: trim `/status` to current-provider usage only and drop the OAuth/token block.
 - Directory: unify `clawdbot directory` across channels and plugin channels.
