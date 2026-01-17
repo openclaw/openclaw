@@ -46,6 +46,11 @@ Send keys (tmux-style):
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Up","Up","Enter"]}
 ```
 
+Submit (send CR only):
+```json
+{"tool":"process","action":"submit","sessionId":"<id>"}
+```
+
 Paste (bracketed by default):
 ```json
 {"tool":"process","action":"paste","sessionId":"<id>","text":"line1\nline2\n"}

@@ -22,6 +22,7 @@
 - Tools: Firecrawl fallback now uses bot-circumvention + cache by default; remove basic HTML fallback when extraction fails.
 - Tools: default `exec` exit notifications and auto-migrate legacy `tools.bash` to `tools.exec`.
 - Tools: add tmux-style `process send-keys` and bracketed paste helpers for PTY sessions.
+- Tools: add `process submit` helper to send CR for PTY sessions.
 - Status: trim `/status` to current-provider usage only and drop the OAuth/token block.
 - Directory: unify `clawdbot directory` across channels and plugin channels.
 - UI: allow deleting sessions from the Control UI.

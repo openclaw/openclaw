@@ -44,3 +44,36 @@ test("process send-keys encodes Enter for pty sessions", async () => {
 
   throw new Error("PTY session did not exit after send-keys");
 });
+
+test("process submit sends CR for pty sessions", async () => {
+  const execTool = createExecTool();
+  const processTool = createProcessTool();
+  const result = await execTool.execute("toolcall", {
+    command:
+      "node -e \"process.stdin.on('data', d => { if (d.includes(13)) { process.stdout.write('submitted'); process.exit(0); } });\"",
+    pty: true,
+    background: true,
+  });
+
+  expect(result.details.status).toBe("running");
+  const sessionId = result.details.sessionId;
+  expect(sessionId).toBeTruthy();
+
+  await processTool.execute("toolcall", {
+    action: "submit",
+    sessionId,
+  });
+
+  for (let i = 0; i < 10; i += 1) {
+    await wait(50);
+    const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
+    const details = poll.details as { status?: string; aggregated?: string };
+    if (details.status !== "running") {
+      expect(details.status).toBe("completed");
+      expect(details.aggregated ?? "").toContain("submitted");
+      return;
+    }
+  }
+
+  throw new Error("PTY session did not exit after submit");
+});

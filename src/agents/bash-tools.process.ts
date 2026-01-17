@@ -58,11 +58,22 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description: "Manage running exec sessions: list, poll, log, write, send-keys, paste, kill.",
+    description:
+      "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
     parameters: processSchema,
     execute: async (_toolCallId, args) => {
       const params = args as {
-        action: "list" | "poll" | "log" | "write" | "send-keys" | "paste" | "kill" | "clear" | "remove";
+        action:
+          | "list"
+          | "poll"
+          | "log"
+          | "write"
+          | "send-keys"
+          | "submit"
+          | "paste"
+          | "kill"
+          | "clear"
+          | "remove";
         sessionId?: string;
         data?: string;
         keys?: string[];
@@ -419,6 +430,62 @@ export function createProcessTool(
                 text:
                   `Sent ${data.length} bytes to session ${params.sessionId}.` +
                   (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
+              },
+            ],
+            details: {
+              status: "running",
+              sessionId: params.sessionId,
+              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            },
+          };
+        }
+
+        case "submit": {
+          if (!scopedSession) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No active session found for ${params.sessionId}`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (!scopedSession.backgrounded) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
+          if (!stdin || stdin.destroyed) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} stdin is not writable.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          await new Promise<void>((resolve, reject) => {
+            stdin.write("\r", (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Submitted session ${params.sessionId} (sent CR).`,
               },
             ],
             details: {
