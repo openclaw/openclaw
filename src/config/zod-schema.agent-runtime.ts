@@ -194,6 +194,12 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    experimental: z
+      .object({
+        sessionMemory: z.boolean().optional(),
+      })
+      .optional(),
     provider: z.union([z.literal("openai"), z.literal("local")]).optional(),
     remote: z
       .object({

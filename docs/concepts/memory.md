@@ -144,6 +144,28 @@ Local mode:
 - Index storage: per-agent SQLite at `~/.clawdbot/state/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
 - Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval. Reindex triggers when embedding model/provider or chunk sizes change.
 
+### Session memory search (experimental)
+
+You can optionally index **session transcripts** and surface them via `memory_search`.
+This is gated behind an experimental flag.
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      experimental: { sessionMemory: true },
+      sources: ["memory", "sessions"]
+    }
+  }
+}
+```
+
+Notes:
+- Session indexing is **opt-in** (off by default).
+- Session updates are debounced and indexed lazily on the next `memory_search` (or manual `clawdbot memory index`).
+- Results still include snippets only; `memory_get` remains limited to memory files.
+- Session indexing is isolated per agent (only that agent’s session logs are indexed).
+
 ### SQLite vector acceleration (sqlite-vec)
 
 When the sqlite-vec extension is available, Clawdbot stores embeddings in a
