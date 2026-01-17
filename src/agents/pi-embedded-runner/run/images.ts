@@ -128,8 +128,12 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (seen.has(raw.toLowerCase())) continue;
     seen.add(raw.toLowerCase());
     // Use fileURLToPath for proper handling (e.g., file://localhost/path)
-    const resolved = fileURLToPath(raw);
-    refs.push({ raw, type: "path", resolved });
+    try {
+      const resolved = fileURLToPath(raw);
+      refs.push({ raw, type: "path", resolved });
+    } catch {
+      // Skip malformed file:// URLs
+    }
   }
 
   // Pattern for file paths (absolute, relative, or home)
