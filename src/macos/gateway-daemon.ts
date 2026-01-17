@@ -178,4 +178,10 @@ async function main() {
   }
 }
 
-void main();
+void main().catch((err) => {
+  console.error(
+    "[clawdbot] Gateway daemon failed:",
+    err instanceof Error ? (err.stack ?? err.message) : err,
+  );
+  process.exit(1);
+});
