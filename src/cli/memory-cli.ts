@@ -91,6 +91,10 @@ export function registerMemoryCli(program: Command) {
           );
           return;
         }
+        if (opts.index) {
+          const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+          defaultRuntime.log(line);
+        }
         const rich = isRich();
         const heading = (text: string) => colorize(rich, theme.heading, text);
         const muted = (text: string) => colorize(rich, theme.muted, text);
