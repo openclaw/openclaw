@@ -60,7 +60,9 @@ describe("signal createSignalEventHandler inbound contract", () => {
 
     expect(capturedCtx).toBeTruthy();
     expectInboundContextContract(capturedCtx!);
-    expect(String(capturedCtx?.Body ?? "")).toContain("[from:");
+    // Sender should appear as prefix in group messages (no redundant [from:] suffix)
     expect(String(capturedCtx?.Body ?? "")).toContain("Alice");
+    expect(String(capturedCtx?.Body ?? "")).toMatch(/Alice.*:/);
+    expect(String(capturedCtx?.Body ?? "")).not.toContain("[from:");
   });
 });

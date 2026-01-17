@@ -165,16 +165,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   async function handleMessageNow(message: IMessagePayload) {
     const senderRaw = message.sender ?? "";
     const sender = senderRaw.trim();
-    if (!sender) {
-      logVerbose(`imessage: skipping message (no sender), chat_id=${message.chat_id}`);
-      return;
-    }
+    if (!sender) return;
     const senderNormalized = normalizeIMessageHandle(sender);
-    if (!senderNormalized) {
-      logVerbose(
-        `imessage: sender normalized to empty, raw="${sender}", chat_id=${message.chat_id}`,
-      );
-    }
     if (message.is_from_me) return;
 
     const chatId = message.chat_id ?? undefined;
@@ -391,14 +383,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     const chatTarget = formatIMessageChatTarget(chatId);
+    // For groups: use chat name or just "Group" (channel "iMessage" is already shown)
+    // For DMs: show sender, only add id: suffix if raw differs from normalized
     const fromLabel = isGroup
-      ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
-      : `${senderNormalized} id:${sender}`;
-    if (isGroup && !senderNormalized) {
-      logVerbose(
-        `imessage: group message missing normalized sender, raw="${sender}", chat_id=${chatId}`,
-      );
-    }
+      ? `${message.chat_name || "Group"} id:${chatId ?? "unknown"}`
+      : senderNormalized === sender
+        ? senderNormalized
+        : `${senderNormalized} id:${sender}`;
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,

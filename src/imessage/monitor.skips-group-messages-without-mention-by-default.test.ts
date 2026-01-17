@@ -381,8 +381,9 @@ describe("monitorIMessageProvider", () => {
     expect(replyMock).toHaveBeenCalledOnce();
     const ctx = replyMock.mock.calls[0]?.[0] as { Body?: string; ChatType?: string };
     expect(ctx.ChatType).toBe("group");
-    expect(String(ctx.Body ?? "")).toContain("[from:");
-    expect(String(ctx.Body ?? "")).toContain("+15550002222");
+    // Sender should appear as prefix in group messages (no redundant [from:] suffix)
+    expect(String(ctx.Body ?? "")).toContain("+15550002222:");
+    expect(String(ctx.Body ?? "")).not.toContain("[from:");
 
     expect(sendMock).toHaveBeenCalledWith(
       "chat_id:42",

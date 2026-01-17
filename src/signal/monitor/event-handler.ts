@@ -65,9 +65,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
+    // For groups: use group name or just "Group" (channel "Signal" is already shown)
+    // For DMs: show sender, only add id: suffix if display differs from name
     const fromLabel = entry.isGroup
-      ? `${entry.groupName ?? "Signal Group"} id:${entry.groupId}`
-      : `${entry.senderName} id:${entry.senderDisplay}`;
+      ? `${entry.groupName || "Group"} id:${entry.groupId}`
+      : entry.senderName === entry.senderDisplay
+        ? entry.senderName
+        : `${entry.senderName} id:${entry.senderDisplay}`;
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
