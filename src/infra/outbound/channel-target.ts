@@ -6,10 +6,6 @@ export const CHANNEL_TARGET_DESCRIPTION =
 export const CHANNEL_TARGETS_DESCRIPTION =
   "Recipient/channel targets (same format as --target); accepts ids or names when the directory is available.";
 
-export function normalizeChannelTargetInput(raw: string): string {
-  return raw.trim();
-}
-
 export function applyTargetToParams(params: {
   action: string;
   args: Record<string, unknown>;

@@ -14,6 +14,7 @@
 - **BREAKING:** `clawdbot message` and message tool now require `target` (dropping `to`/`channelId` for destinations). (#1034) — thanks @tobalsan.
 - **BREAKING:** Drop legacy `chatType: "room"` support; use `chatType: "channel"`.
 - **BREAKING:** remove legacy provider-specific target resolution fallbacks; target resolution is centralized with plugin hints + directory lookups.
+- **BREAKING:** drop legacy target normalization helpers; use outbound target normalization and resolver flows.
 
 ### Changes
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
