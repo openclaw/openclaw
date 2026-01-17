@@ -111,7 +111,23 @@ Example wrapper:
 exec ssh -T mac-mini imsg "$@"
 ```
 
-Multi-account support: use `channels.imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don’t commit `~/.clawdbot/clawdbot.json` (it often contains tokens).
+**Remote attachments:** When `cliPath` points to a remote host via SSH, attachment paths in the Messages database reference files on the remote machine. Clawdbot can automatically fetch these over SCP by setting `channels.imessage.remoteHost`:
+
+```json5
+{
+  channels: {
+    imessage: {
+      cliPath: "~/imsg-ssh",                     // SSH wrapper to remote Mac
+      remoteHost: "clawdbot@192.168.64.3",       // for SCP file transfer
+      includeAttachments: true
+    }
+  }
+}
+```
+
+If `remoteHost` is not set, Clawdbot attempts to auto-detect it by parsing the SSH command in your wrapper script. Explicit configuration is recommended for reliability.
+
+Multi-account support: use `channels.imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don't commit `~/.clawdbot/clawdbot.json` (it often contains tokens).
 
 ## Access control (DMs + groups)
 DMs:
@@ -182,6 +198,7 @@ Provider options:
 - `channels.imessage.enabled`: enable/disable channel startup.
 - `channels.imessage.cliPath`: path to `imsg`.
 - `channels.imessage.dbPath`: Messages DB path.
+- `channels.imessage.remoteHost`: SSH host for SCP attachment transfer when `cliPath` points to a remote Mac (e.g., `clawdbot@192.168.64.3`). Auto-detected from SSH wrapper if not set.
 - `channels.imessage.service`: `imessage | sms | auto`.
 - `channels.imessage.region`: SMS region.
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
