@@ -213,4 +213,60 @@ describe("loadClawdbotPlugins", () => {
     const httpPlugin = registry.plugins.find((entry) => entry.id === "http-demo");
     expect(httpPlugin?.httpHandlers).toBe(1);
   });
+
+  it("respects explicit disable in config", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "config-disable",
+      body: `export default function () {}`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          entries: {
+            "config-disable": { enabled: false },
+          },
+        },
+      },
+    });
+
+    const disabled = registry.plugins.find((entry) => entry.id === "config-disable");
+    expect(disabled?.status).toBe("disabled");
+  });
+
+  it("prefers higher-precedence plugins with the same id", () => {
+    const bundledDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(bundledDir, "shadow.js"),
+      "export default function () {}",
+      "utf-8",
+    );
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const override = writePlugin({
+      id: "shadow",
+      body: `export default function () {}`,
+    });
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [override.file] },
+          entries: {
+            shadow: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const entries = registry.plugins.filter((entry) => entry.id === "shadow");
+    const loaded = entries.find((entry) => entry.status === "loaded");
+    const overridden = entries.find((entry) => entry.status === "disabled");
+    expect(loaded?.origin).toBe("config");
+    expect(overridden?.origin).toBe("bundled");
+  });
 });
