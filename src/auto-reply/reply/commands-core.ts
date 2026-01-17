@@ -56,18 +56,13 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction = resetMatch?.[1] ?? "new";
-    const hookEvent = createInternalHookEvent(
-      'command',
-      commandAction,
-      params.sessionKey ?? '',
-      {
-        sessionEntry: params.sessionEntry,
-        previousSessionEntry: params.previousSessionEntry,
-        commandSource: params.command.surface,
-        senderId: params.command.senderId,
-        cfg: params.cfg, // Pass config for LLM slug generation
-      }
-    );
+    const hookEvent = createInternalHookEvent("command", commandAction, params.sessionKey ?? "", {
+      sessionEntry: params.sessionEntry,
+      previousSessionEntry: params.previousSessionEntry,
+      commandSource: params.command.surface,
+      senderId: params.command.senderId,
+      cfg: params.cfg, // Pass config for LLM slug generation
+    });
     await triggerInternalHook(hookEvent);
 
     // Send hook messages immediately if present
@@ -78,7 +73,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
       if (channel && to) {
-        const hookReply = { text: hookEvent.messages.join('\n\n') };
+        const hookReply = { text: hookEvent.messages.join("\n\n") };
         await routeReply({
           payload: hookReply,
           channel: channel,

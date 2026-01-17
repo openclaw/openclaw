@@ -2,17 +2,8 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
-import {
-  hasBinary,
-  isConfigPathTruthy,
-  resolveConfigPath,
-  resolveHookConfig,
-} from "./config.js";
-import type {
-  HookEligibilityContext,
-  HookEntry,
-  HookInstallSpec,
-} from "./types.js";
+import { hasBinary, isConfigPathTruthy, resolveConfigPath, resolveHookConfig } from "./config.js";
+import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 export type HookStatusConfigCheck = {
@@ -155,9 +146,7 @@ function buildHookStatus(
     return { path: pathStr, value, satisfied };
   });
 
-  const missingConfig = configChecks
-    .filter((check) => !check.satisfied)
-    .map((check) => check.path);
+  const missingConfig = configChecks.filter((check) => !check.satisfied).map((check) => check.path);
 
   const missing = always
     ? { bins: [], anyBins: [], env: [], config: [], os: [] }

@@ -202,9 +202,7 @@ export function formatHookInfo(
     }
     if (hook.requirements.config.length > 0) {
       const configStatus = hook.configChecks.map((check) => {
-        return check.satisfied
-          ? chalk.green(`✓ ${check.path}`)
-          : chalk.red(`✗ ${check.path}`);
+        return check.satisfied ? chalk.green(`✓ ${check.path}`) : chalk.red(`✗ ${check.path}`);
       });
       lines.push(`  Config: ${configStatus.join(", ")}`);
     }
@@ -265,8 +263,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.anyBins.length > 0)
         reasons.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
       if (hook.missing.env.length > 0) reasons.push(`env: ${hook.missing.env.join(", ")}`);
-      if (hook.missing.config.length > 0)
-        reasons.push(`config: ${hook.missing.config.join(", ")}`);
+      if (hook.missing.config.length > 0) reasons.push(`config: ${hook.missing.config.join(", ")}`);
       if (hook.missing.os.length > 0) reasons.push(`os: ${hook.missing.os.join(", ")}`);
       lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
     }

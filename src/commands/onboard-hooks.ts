@@ -24,9 +24,7 @@ export async function setupInternalHooks(
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
   // Filter for eligible and recommended hooks (session-memory is recommended)
-  const recommendedHooks = report.hooks.filter(
-    (h) => h.eligible && h.name === "session-memory",
-  );
+  const recommendedHooks = report.hooks.filter((h) => h.eligible && h.name === "session-memory");
 
   if (recommendedHooks.length === 0) {
     await prompter.note(

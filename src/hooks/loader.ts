@@ -5,14 +5,14 @@
  * and from directory-based discovery (bundled, managed, workspace)
  */
 
-import { pathToFileURL } from 'node:url';
-import path from 'node:path';
-import { registerInternalHook } from './internal-hooks.js';
-import type { ClawdbotConfig } from '../config/config.js';
-import type { InternalHookHandler } from './internal-hooks.js';
-import { loadWorkspaceHookEntries } from './workspace.js';
-import { resolveHookConfig } from './config.js';
-import { shouldIncludeHook } from './config.js';
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { registerInternalHook } from "./internal-hooks.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
+import { loadWorkspaceHookEntries } from "./workspace.js";
+import { resolveHookConfig } from "./config.js";
+import { shouldIncludeHook } from "./config.js";
 
 /**
  * Load and register all internal hook handlers
@@ -49,9 +49,7 @@ export async function loadInternalHooks(
     const hookEntries = loadWorkspaceHookEntries(workspaceDir, { config: cfg });
 
     // Filter by eligibility
-    const eligible = hookEntries.filter((entry) =>
-      shouldIncludeHook({ entry, config: cfg }),
-    );
+    const eligible = hookEntries.filter((entry) => shouldIncludeHook({ entry, config: cfg }));
 
     for (const entry of eligible) {
       const hookConfig = resolveHookConfig(cfg, entry.hook.name);
@@ -68,10 +66,10 @@ export async function loadInternalHooks(
         const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
 
         // Get handler function (default or named export)
-        const exportName = entry.clawdbot?.export ?? 'default';
+        const exportName = entry.clawdbot?.export ?? "default";
         const handler = mod[exportName];
 
-        if (typeof handler !== 'function') {
+        if (typeof handler !== "function") {
           console.error(
             `Internal hook error: Handler '${exportName}' from ${entry.hook.name} is not a function`,
           );
@@ -92,7 +90,7 @@ export async function loadInternalHooks(
         }
 
         console.log(
-          `Registered internal hook: ${entry.hook.name} -> ${events.join(', ')}${exportName !== 'default' ? ` (export: ${exportName})` : ''}`,
+          `Registered internal hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
         );
         loadedCount++;
       } catch (err) {
@@ -104,7 +102,7 @@ export async function loadInternalHooks(
     }
   } catch (err) {
     console.error(
-      'Failed to load directory-based hooks:',
+      "Failed to load directory-based hooks:",
       err instanceof Error ? err.message : String(err),
     );
   }
@@ -124,10 +122,10 @@ export async function loadInternalHooks(
       const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
 
       // Get the handler function
-      const exportName = handlerConfig.export ?? 'default';
+      const exportName = handlerConfig.export ?? "default";
       const handler = mod[exportName];
 
-      if (typeof handler !== 'function') {
+      if (typeof handler !== "function") {
         console.error(
           `Internal hook error: Handler '${exportName}' from ${modulePath} is not a function`,
         );
@@ -137,7 +135,7 @@ export async function loadInternalHooks(
       // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
       console.log(
-        `Registered internal hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== 'default' ? `#${exportName}` : ''}`,
+        `Registered internal hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
     } catch (err) {

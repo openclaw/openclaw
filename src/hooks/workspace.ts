@@ -59,12 +59,7 @@ function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
       const description = frontmatter.description || "";
 
       // Locate handler file (handler.ts, handler.js, index.ts, index.js)
-      const handlerCandidates = [
-        "handler.ts",
-        "handler.js",
-        "index.ts",
-        "index.js",
-      ];
+      const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
 
       let handlerPath: string | undefined;
       for (const candidate of handlerCandidates) {
