@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
