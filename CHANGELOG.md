@@ -71,6 +71,7 @@
 - Security: bump `tar` to 7.5.3.
 - Models: align ZAI thinking toggles.
 - iMessage/Signal: include sender metadata for non-queued group messages. (#1059)
+- Discord: preserve whitespace when chunking long lines so message splits keep spacing intact.
 
 ## 2026.1.15
 
