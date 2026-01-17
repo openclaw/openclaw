@@ -6,6 +6,6 @@
     "oxc"
   ],
   "categories": {
-    "correctness": true
+    "correctness": "error"
   }
 }
