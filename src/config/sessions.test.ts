@@ -55,7 +55,7 @@ describe("sessions", () => {
     expect(
       buildGroupDisplayName({
         provider: "discord",
-        room: "#general",
+        groupChannel: "#general",
         space: "friends-of-clawd",
         id: "123",
         key: "discord:group:123",

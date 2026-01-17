@@ -131,7 +131,13 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
       : Date.now();
-  return { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const rec = normalized as unknown as Record<string, unknown>;
+  if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
+    rec.groupChannel = rec.room;
+  }
+  delete rec.room;
+  return normalized;
 }
 
 function emptyDirOrMissing(dir: string): boolean {

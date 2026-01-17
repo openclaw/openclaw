@@ -15,7 +15,7 @@ export type GatewaySessionRow = {
   displayName?: string;
   channel?: string;
   subject?: string;
-  room?: string;
+  groupChannel?: string;
   space?: string;
   chatType?: NormalizedChatType;
   updatedAt: number | null;

@@ -130,6 +130,14 @@ export function loadSessionStore(
       rec.lastChannel = rec.lastProvider;
       delete rec.lastProvider;
     }
+
+    // Best-effort migration: legacy `room` field → `groupChannel` (keep value, prune old key).
+    if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
+      rec.groupChannel = rec.room;
+      delete rec.room;
+    } else if ("room" in rec) {
+      delete rec.room;
+    }
   }
 
   // Cache the result if caching is enabled
