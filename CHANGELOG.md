@@ -9,7 +9,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Matrix: send voice/image-specific media payloads and keep legacy poll parsing. (#1088) — thanks @sibbl.
-
+- Telegram: allow media-only message tool sends to request voice notes via `asVoice`. (#1099) — thanks @mukhtharcm.
 ## 2026.1.16-2
 
 ### Changes
