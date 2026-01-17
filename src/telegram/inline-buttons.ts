@@ -61,8 +61,12 @@ export function isTelegramInlineButtonsEnabled(params: {
 }
 
 export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
-  const trimmed = target.trim();
+  let trimmed = target.trim();
   if (!trimmed) return "unknown";
+  // Strip telegram: prefix added by normalizeTelegramMessagingTarget
+  if (trimmed.toLowerCase().startsWith("telegram:")) {
+    trimmed = trimmed.slice("telegram:".length).trim();
+  }
   if (/^-?\d+$/.test(trimmed)) {
     return trimmed.startsWith("-") ? "group" : "direct";
   }
