@@ -27,6 +27,7 @@ type SessionListRow = {
   channel: string;
   label?: string;
   displayName?: string;
+  deliveryContext?: { channel?: string; to?: string; accountId?: string };
   updatedAt?: number | null;
   sessionId?: string;
   model?: string;
@@ -201,6 +202,14 @@ export function createSessionsListTool(opts?: {
           channel: derivedChannel,
           label: typeof entry.label === "string" ? entry.label : undefined,
           displayName: typeof entry.displayName === "string" ? entry.displayName : undefined,
+          deliveryContext:
+            deliveryChannel || deliveryTo || deliveryAccountId
+              ? {
+                  channel: deliveryChannel,
+                  to: deliveryTo,
+                  accountId: deliveryAccountId,
+                }
+              : undefined,
           updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
           sessionId,
           model: typeof entry.model === "string" ? entry.model : undefined,

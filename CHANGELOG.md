@@ -40,6 +40,7 @@
 ### Fixes
 - Sub-agents: normalize announce delivery origin + queue bucketing by accountId to keep multi-account routing stable. (#1061, #1058) — thanks @adam91holt.
 - Sessions: include deliveryContext in sessions.list and reuse normalized delivery routing for announce/restart fallbacks. (#1058)
+- Sessions: propagate deliveryContext into last-route updates to keep account/channel routing stable. (#1058)
 - Gateway: honor explicit delivery targets without implicit accountId fallback; preserve lastAccountId for implicit routing.
 - Gateway: avoid reusing last-to/accountId when the requested channel differs; sync deliveryContext with last route fields.
 - Repo: fix oxlint config filename and move ignore pattern into config. (#1064) — thanks @connorshea.
