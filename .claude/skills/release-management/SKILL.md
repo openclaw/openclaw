@@ -1,7 +1,7 @@
 ---
 name: release-management
 description: Manages release builds, hotfix application, and deployment workflows for Clawdbot. Use when building releases, checking release status, applying hotfixes, deploying versions, or discussing release processes.
-allowed-tools: Bash(git:*), Bash(./scripts/*:*), Read, Grep, Glob, AskUserQuestion
+allowed-tools: Bash(git:*), Bash(./scripts/*:*), Read, Grep, Glob
 ---
 
 # Release Management

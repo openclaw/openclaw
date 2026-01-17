@@ -1,7 +1,7 @@
 ---
 description: Build latest upstream release with hotfixes applied
 argument-hint: [version] [-y|--yes]
-allowed-tools: Bash(git:*), Bash(./scripts/*:*), Read, AskUserQuestion
+allowed-tools: Bash(git:*), Bash(./scripts/*:*), Read
 hooks:
   PreToolUse:
     - matcher: "Bash(./scripts/build-release.sh:*)"
