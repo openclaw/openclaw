@@ -164,13 +164,15 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMatrixMessagingTarget,
-    looksLikeTargetId: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return false;
-      if (/^(matrix:)?[!#@]/i.test(trimmed)) return true;
-      return trimmed.includes(":");
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        if (/^(matrix:)?[!#@]/i.test(trimmed)) return true;
+        return trimmed.includes(":");
+      },
+      hint: "<room|alias|user>",
     },
-    targetHint: "<room|alias|user>",
   },
   directory: {
     self: async () => null,
