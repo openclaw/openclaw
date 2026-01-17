@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-control-regex
 const DSR_PATTERN = /\x1b\[\??6n/g;
 
 export function stripDsrRequests(input: string): { cleaned: string; requests: number } {
