@@ -216,6 +216,7 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - General topic (thread id `1`) is special: message sends omit `message_thread_id` (Telegram rejects it), but typing indicators still include it.
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
 - Topic-specific configuration is available under `channels.telegram.groups.<chatId>.topics.<threadId>` (skills, allowlists, auto-reply, system prompts, disable).
+- Topic configs inherit group settings (requireMention, allowlists, skills, prompts, enabled) unless overridden per topic.
 
 Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
 

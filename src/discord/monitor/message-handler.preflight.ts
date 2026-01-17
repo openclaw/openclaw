@@ -252,8 +252,11 @@ export async function preflightDiscordMessage(
         scope: threadChannel ? "thread" : "channel",
       })
     : null;
+  const channelMatchMeta = `matchKey=${channelConfig?.matchKey ?? "none"} matchSource=${
+    channelConfig?.matchSource ?? "none"
+  }`;
   if (isGuildMessage && channelConfig?.enabled === false) {
-    logVerbose(`Blocked discord channel ${message.channelId} (channel disabled)`);
+    logVerbose(`Blocked discord channel ${message.channelId} (channel disabled, ${channelMatchMeta})`);
     return null;
   }
 
@@ -280,20 +283,27 @@ export async function preflightDiscordMessage(
     })
   ) {
     if (params.groupPolicy === "disabled") {
-      logVerbose("discord: drop guild message (groupPolicy: disabled)");
+      logVerbose(`discord: drop guild message (groupPolicy: disabled, ${channelMatchMeta})`);
     } else if (!channelAllowlistConfigured) {
-      logVerbose("discord: drop guild message (groupPolicy: allowlist, no channel allowlist)");
+      logVerbose(
+        `discord: drop guild message (groupPolicy: allowlist, no channel allowlist, ${channelMatchMeta})`,
+      );
     } else {
       logVerbose(
-        `Blocked discord channel ${message.channelId} not in guild channel allowlist (groupPolicy: allowlist)`,
+        `Blocked discord channel ${message.channelId} not in guild channel allowlist (groupPolicy: allowlist, ${channelMatchMeta})`,
       );
     }
     return null;
   }
 
   if (isGuildMessage && channelConfig?.allowed === false) {
-    logVerbose(`Blocked discord channel ${message.channelId} not in guild channel allowlist`);
+    logVerbose(
+      `Blocked discord channel ${message.channelId} not in guild channel allowlist (${channelMatchMeta})`,
+    );
     return null;
+  }
+  if (isGuildMessage) {
+    logVerbose(`discord: allow channel ${message.channelId} (${channelMatchMeta})`);
   }
 
   const textForHistory = resolveDiscordMessageText(message, {
