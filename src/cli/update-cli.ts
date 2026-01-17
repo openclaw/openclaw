@@ -247,9 +247,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
   if (opts.channel && !configSnapshot.valid) {
     const issues = configSnapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`);
-    defaultRuntime.error(
-      ["Config is invalid; cannot set update channel.", ...issues].join("\n"),
-    );
+    defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
     defaultRuntime.exit(1);
     return;
   }
