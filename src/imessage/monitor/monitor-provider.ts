@@ -27,7 +27,6 @@ import {
 } from "../../auto-reply/reply/history.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { formatInboundBodyWithSenderMeta } from "../../auto-reply/reply/inbound-sender-meta.js";
 import { loadConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -419,7 +418,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       OriginatingChannel: "imessage" as const,
       OriginatingTo: imessageTo,
     });
-    ctxPayload.Body = formatInboundBodyWithSenderMeta({ ctx: ctxPayload, body: ctxPayload.Body });
 
     if (!isGroup) {
       const sessionCfg = cfg.session;

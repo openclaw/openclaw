@@ -359,8 +359,8 @@ describe("gateway server sessions", () => {
       storePath,
       JSON.stringify(
         {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-          "discord:group:dev": {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
+          "agent:main:discord:group:dev": {
             sessionId: "sess-active",
             updatedAt: Date.now(),
           },

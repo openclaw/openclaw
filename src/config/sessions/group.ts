@@ -63,8 +63,8 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   if (!isGroup) return null;
 
   const providerHint = ctx.Provider?.trim().toLowerCase();
-  const hasLegacyGroupPrefix = from.startsWith("group:");
-  const raw = (hasLegacyGroupPrefix ? from.slice("group:".length) : from).trim();
+  const hasGroupPrefix = from.startsWith("group:");
+  const raw = (hasGroupPrefix ? from.slice("group:".length) : from).trim();
 
   let provider: string | undefined;
   let kind: "group" | "channel" | undefined;
@@ -97,7 +97,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     }
   };
 
-  if (hasLegacyGroupPrefix) {
+  if (hasGroupPrefix) {
     const legacyParts = raw.split(":").filter(Boolean);
     if (legacyParts.length > 1) {
       parseParts(legacyParts);
@@ -115,25 +115,19 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
 
   const resolvedProvider = provider ?? providerHint;
   if (!resolvedProvider) {
-    const legacy = hasLegacyGroupPrefix ? `group:${raw}` : `group:${from}`;
+    const legacy = hasGroupPrefix ? `group:${raw}` : `group:${from}`;
     return {
       key: legacy,
       id: raw || from,
-      legacyKey: legacy,
       chatType: "group",
     };
   }
 
   const resolvedKind = kind === "channel" ? "channel" : "group";
   const key = `${resolvedProvider}:${resolvedKind}:${id || raw || from}`;
-  let legacyKey: string | undefined;
-  if (hasLegacyGroupPrefix || from.includes("@g.us")) {
-    legacyKey = `group:${id || raw || from}`;
-  }
 
   return {
     key,
-    legacyKey,
     channel: resolvedProvider,
     id: id || raw || from,
     chatType: resolvedKind === "channel" ? "channel" : "group",

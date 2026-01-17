@@ -50,10 +50,7 @@ export function loadSessionEntry(sessionKey: string) {
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const parsed = parseAgentSessionKey(canonicalKey);
-  const legacyKey = parsed?.rest ?? parseAgentSessionKey(sessionKey)?.rest ?? undefined;
-  const entry =
-    store[canonicalKey] ?? store[sessionKey] ?? (legacyKey ? store[legacyKey] : undefined);
+  const entry = store[canonicalKey];
   return { cfg, storePath, store, entry, canonicalKey };
 }
 
@@ -248,10 +245,8 @@ export function resolveGatewaySessionStoreTarget(params: { cfg: ClawdbotConfig; 
     return { agentId, storePath, canonicalKey, storeKeys };
   }
 
-  const parsed = parseAgentSessionKey(canonicalKey);
   const storeKeys = new Set<string>();
   storeKeys.add(canonicalKey);
-  if (parsed?.rest) storeKeys.add(parsed.rest);
   if (key && key !== canonicalKey) storeKeys.add(key);
   return {
     agentId,

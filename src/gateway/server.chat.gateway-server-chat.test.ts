@@ -240,7 +240,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -353,7 +353,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             sessionFile: forkedPath,
             updatedAt: Date.now(),
@@ -401,7 +401,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -451,7 +451,7 @@ describe("gateway server chat", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },

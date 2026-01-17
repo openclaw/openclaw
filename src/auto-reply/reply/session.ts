@@ -170,13 +170,6 @@ export async function initSessionState(params: {
   }
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
-  if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
-    const legacyEntry = sessionStore[groupResolution.legacyKey];
-    if (legacyEntry && !sessionStore[sessionKey]) {
-      sessionStore[sessionKey] = legacyEntry;
-      delete sessionStore[groupResolution.legacyKey];
-    }
-  }
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const idleMs = idleMinutes * 60_000;
@@ -309,12 +302,6 @@ export async function initSessionState(params: {
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
   await updateSessionStore(storePath, (store) => {
-    if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
-      if (store[groupResolution.legacyKey] && !store[sessionKey]) {
-        store[sessionKey] = store[groupResolution.legacyKey];
-      }
-      delete store[groupResolution.legacyKey];
-    }
     // Preserve per-session overrides while resetting compaction state on /new.
     store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
   });

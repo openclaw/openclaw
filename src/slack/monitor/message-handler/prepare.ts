@@ -274,7 +274,7 @@ export async function prepareSlackMessage(params: {
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isRoom && shouldRequireMention && mentionGate.shouldSkip) {
-    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping room message");
+    ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     if (ctx.historyLimit > 0) {
       const pendingText = (message.text ?? "").trim();
       const fallbackFile = message.files?.[0]?.name

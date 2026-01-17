@@ -4,7 +4,6 @@ import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -23,11 +22,6 @@ function resolveSessionEntryForKey(
   if (!store || !sessionKey) return {};
   const direct = store[sessionKey];
   if (direct) return { entry: direct, key: sessionKey };
-  const parsed = parseAgentSessionKey(sessionKey);
-  const legacyKey = parsed?.rest;
-  if (legacyKey && store[legacyKey]) {
-    return { entry: store[legacyKey], key: legacyKey };
-  }
   return {};
 }
 
