@@ -26,6 +26,7 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import type { ChannelPlugin } from "./types.js";
+import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("signal");
 
@@ -201,8 +202,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error(
-            "Delivering to Signal requires target <E.164|group:ID|signal:group:ID|signal:+E.164>",
+          error: missingTargetError(
+            "Signal",
+            "<E.164|group:ID|signal:group:ID|signal:+E.164>",
           ),
         };
       }

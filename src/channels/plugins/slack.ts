@@ -28,6 +28,7 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
+import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("slack");
 
@@ -497,7 +498,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Slack requires target <channelId|user:ID|channel:ID>"),
+          error: missingTargetError("Slack", "<channelId|user:ID|channel:ID>"),
         };
       }
       return { ok: true, to: trimmed };

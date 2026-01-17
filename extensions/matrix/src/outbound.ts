@@ -1,6 +1,7 @@
 import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
+import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -11,7 +12,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error("Delivering to Matrix requires target <room|alias|user>"),
+        error: missingTargetError("Matrix", "<room|alias|user>"),
       };
     }
     return { ok: true, to: trimmed };

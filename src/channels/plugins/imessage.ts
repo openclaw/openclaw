@@ -25,6 +25,7 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import type { ChannelPlugin } from "./types.js";
+import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("imessage");
 
@@ -177,7 +178,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to iMessage requires target <handle|chat_id:ID>"),
+          error: missingTargetError("iMessage", "<handle|chat_id:ID>"),
         };
       }
       return { ok: true, to: trimmed };

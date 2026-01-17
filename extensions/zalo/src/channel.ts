@@ -21,6 +21,7 @@ import {
 import { collectZaloStatusIssues } from "./status-issues.js";
 import type { CoreConfig } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./shared/account-ids.js";
+import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 const meta = {
   id: "zalo",
@@ -185,7 +186,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         return "ZALO_BOT_TOKEN can only be used for the default account.";
       }
       if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Zalo requires targetken or --token-file (or --use-env).";
+        return "Zalo requires token or --token-file (or --use-env).";
       }
       return null;
     },
@@ -284,7 +285,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Zalo requires target <chatId>"),
+          error: missingTargetError("Zalo", "<chatId>"),
         };
       }
       return { ok: true, to: trimmed };
