@@ -43,6 +43,12 @@ const KIMI_CODE_CONTEXT_WINDOW = 262144;
 const KIMI_CODE_MAX_TOKENS = 32768;
 const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
 const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
+const KIMI_CODE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
@@ -200,7 +206,7 @@ function buildKimiCodeProvider(): ProviderConfig {
         name: "Kimi For Coding",
         reasoning: true,
         input: ["text"],
-        cost: MOONSHOT_DEFAULT_COST,
+        cost: KIMI_CODE_DEFAULT_COST,
         contextWindow: KIMI_CODE_CONTEXT_WINDOW,
         maxTokens: KIMI_CODE_MAX_TOKENS,
         headers: KIMI_CODE_HEADERS,

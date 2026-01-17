@@ -155,6 +155,34 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 }
 ```
 
+### Kimi Code
+
+Kimi Code uses a dedicated endpoint and key (separate from Moonshot):
+
+- Provider: `kimi-code`
+- Auth: `KIMICODE_API_KEY`
+- Example model: `kimi-code/kimi-for-coding`
+
+```json5
+{
+  env: { KIMICODE_API_KEY: "sk-..." },
+  agents: {
+    defaults: { model: { primary: "kimi-code/kimi-for-coding" } }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "kimi-code": {
+        baseUrl: "https://api.kimi.com/coding/v1",
+        apiKey: "${KIMICODE_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "kimi-for-coding", name: "Kimi For Coding" }]
+      }
+    }
+  }
+}
+```
+
 ### Synthetic
 
 Synthetic provides Anthropic-compatible models behind the `synthetic` provider:

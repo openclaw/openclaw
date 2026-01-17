@@ -95,7 +95,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
    - More detail: [Synthetic](/providers/synthetic)
    - **Moonshot (Kimi K2)**: config is auto-written.
-   - More detail: [Moonshot AI](/providers/moonshot)
+   - **Kimi Code**: config is auto-written.
+   - More detail: [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
    - **Skip**: no auth configured yet.
    - Pick a default model from detected options (or enter provider/model manually).
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
