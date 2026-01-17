@@ -1091,7 +1091,9 @@ export class MemoryIndexManager {
     options: { source: MemorySource; content?: string },
   ) {
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-    const chunks = chunkMarkdown(content, this.settings.chunking);
+    const chunks = chunkMarkdown(content, this.settings.chunking).filter(
+      (chunk) => chunk.text.trim().length > 0,
+    );
     const embeddings = await this.embedChunksInBatches(chunks);
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;

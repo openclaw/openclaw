@@ -191,4 +191,33 @@ describe("memory embedding batches", () => {
 
     expect(calls).toBe(3);
   }, 10000);
+
+  it("skips empty chunks so embeddings input stays valid", async () => {
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "\n\n\n");
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
+    expect(inputs).not.toContain("");
+  });
 });
