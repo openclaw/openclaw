@@ -32,6 +32,16 @@ export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   return `channel:${trimmed}`.toLowerCase();
 }
 
+export function looksLikeSlackTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (/^<@([A-Z0-9]+)>$/i.test(trimmed)) return true;
+  if (/^(user|channel|group):/i.test(trimmed)) return true;
+  if (/^slack:/i.test(trimmed)) return true;
+  if (/^[@#]/.test(trimmed)) return true;
+  return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
+}
+
 export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
@@ -60,6 +70,15 @@ export function normalizeDiscordMessagingTarget(raw: string): string | undefined
   return `channel:${trimmed}`.toLowerCase();
 }
 
+export function looksLikeDiscordTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (/^<@!?\d+>$/.test(trimmed)) return true;
+  if (/^(user|channel|group|discord):/i.test(trimmed)) return true;
+  if (/^\d{6,}$/.test(trimmed)) return true;
+  return false;
+}
+
 export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
@@ -78,6 +97,14 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
   if (tmeMatch?.[1]) normalized = `@${tmeMatch[1]}`;
   if (!normalized) return undefined;
   return `telegram:${normalized}`.toLowerCase();
+}
+
+export function looksLikeTelegramTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (/^(telegram|tg|group):/i.test(trimmed)) return true;
+  if (trimmed.startsWith("@")) return true;
+  return /^-?\d{6,}$/.test(trimmed);
 }
 
 export function normalizeSignalMessagingTarget(raw: string): string | undefined {
@@ -104,8 +131,23 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
   return normalized.toLowerCase();
 }
 
+export function looksLikeSignalTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (/^(signal:)?(group:|username:|u:)/i.test(trimmed)) return true;
+  return /^\+?\d{3,}$/.test(trimmed);
+}
+
 export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
   return normalizeWhatsAppTarget(trimmed) ?? undefined;
+}
+
+export function looksLikeWhatsAppTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (/^whatsapp:/i.test(trimmed)) return true;
+  if (trimmed.includes("@")) return true;
+  return /^\+?\d{3,}$/.test(trimmed);
 }

@@ -6,7 +6,7 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { getChannelMessageAdapter } from "./channel-adapters.js";
-import { lookupDirectoryDisplay } from "./target-resolver.js";
+import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
 export type CrossContextDecoration = {
   prefix: string;
@@ -125,7 +125,12 @@ export async function buildCrossContextDecoration(params: {
       targetId: params.toolContext.currentChannelId,
       accountId: params.accountId ?? undefined,
     })) ?? params.toolContext.currentChannelId;
-  const originLabel = currentName.startsWith("#") ? currentName : `#${currentName}`;
+  const originLabel = formatTargetDisplay({
+    channel: params.channel,
+    target: params.toolContext.currentChannelId,
+    display: currentName,
+    kind: "group",
+  });
   const prefixTemplate = markerConfig?.prefix ?? "[from {channel}] ";
   const suffixTemplate = markerConfig?.suffix ?? "";
   const prefix = prefixTemplate.replaceAll("{channel}", originLabel);

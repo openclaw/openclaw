@@ -13,6 +13,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { missingTargetError } from "./target-errors.js";
 
 export type OutboundChannel = DeliverableMessageChannel | "none";
 
@@ -145,9 +146,10 @@ export function resolveOutboundTarget(params: {
   if (trimmed) {
     return { ok: true, to: trimmed };
   }
+  const hint = plugin.messaging?.targetHint;
   return {
     ok: false,
-    error: new Error(`Delivering to ${plugin.meta.label} requires a destination`),
+    error: missingTargetError(plugin.meta.label ?? params.channel, hint),
   };
 }
 

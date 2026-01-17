@@ -3,23 +3,12 @@ import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types
 
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
-import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkMarkdownText,
   textChunkLimit: 4000,
   pollMaxOptions: 12,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: missingTargetError("MS Teams", "<conversationId|user:ID|conversation:ID>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ cfg, to, text, deps }) => {
     const send = deps?.sendMSTeams ?? ((to, text) => sendMessageMSTeams({ cfg, to, text }));
     const result = await send(to, text);

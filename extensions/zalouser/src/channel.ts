@@ -16,7 +16,6 @@ import {
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { sendMessageZalouser } from "./send.js";
 import { checkZcaInstalled, parseJsonOutput, runZca, runZcaInteractive } from "./zca.js";
-import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 import {
   DEFAULT_ACCOUNT_ID,
   type CoreConfig,
@@ -219,6 +218,12 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       if (!trimmed) return undefined;
       return trimmed.replace(/^(zalouser|zlu):/i, "");
     },
+    looksLikeTargetId: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return false;
+      return /^\d{3,}$/.test(trimmed);
+    },
+    targetHint: "<threadId>",
   },
   directory: {
     self: async ({ cfg, accountId, runtime }) => {
@@ -374,16 +379,6 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       return chunks;
     },
     textChunkLimit: 2000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: missingTargetError("Zalouser", "<threadId>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ to, text, accountId, cfg }) => {
       const account = resolveZalouserAccountSync({ cfg: cfg as CoreConfig, accountId });
       const result = await sendMessageZalouser(to, text, { profile: account.profile });

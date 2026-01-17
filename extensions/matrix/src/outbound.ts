@@ -1,22 +1,11 @@
 import { chunkMarkdownText } from "../../../src/auto-reply/chunk.js";
 import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
-import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkMarkdownText,
   textChunkLimit: 4000,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: missingTargetError("Matrix", "<room|alias|user>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ to, text, deps, replyToId, threadId }) => {
     const send = deps?.sendMatrix ?? sendMessageMatrix;
     const resolvedThreadId =

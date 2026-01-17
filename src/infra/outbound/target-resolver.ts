@@ -62,6 +62,52 @@ function stripTargetPrefixes(value: string): string {
     .trim();
 }
 
+export function formatTargetDisplay(params: {
+  channel: ChannelId;
+  target: string;
+  display?: string;
+  kind?: ChannelDirectoryEntryKind;
+}): string {
+  const plugin = getChannelPlugin(params.channel);
+  if (plugin?.messaging?.formatTargetDisplay) {
+    return plugin.messaging.formatTargetDisplay({
+      target: params.target,
+      display: params.display,
+      kind: params.kind,
+    });
+  }
+
+  const trimmedTarget = params.target.trim();
+  const lowered = trimmedTarget.toLowerCase();
+  const display = params.display?.trim();
+  const kind =
+    params.kind ??
+    (lowered.startsWith("user:")
+      ? "user"
+      : lowered.startsWith("channel:") || lowered.startsWith("group:")
+        ? "group"
+        : undefined);
+
+  if (display) {
+    if (display.startsWith("#") || display.startsWith("@")) return display;
+    if (kind === "user") return `@${display}`;
+    if (kind === "group" || kind === "channel") return `#${display}`;
+    return display;
+  }
+
+  if (!trimmedTarget) return trimmedTarget;
+  if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) return trimmedTarget;
+
+  const withoutPrefix = trimmedTarget.replace(/^telegram:/i, "");
+  if (/^(channel|group):/i.test(withoutPrefix)) {
+    return `#${withoutPrefix.replace(/^(channel|group):/i, "")}`;
+  }
+  if (/^user:/i.test(withoutPrefix)) {
+    return `@${withoutPrefix.replace(/^user:/i, "")}`;
+  }
+  return withoutPrefix;
+}
+
 function preserveTargetCase(channel: ChannelId, raw: string, normalized: string): string {
   if (channel !== "slack") return normalized;
   const trimmed = raw.trim();
@@ -114,35 +160,22 @@ function resolveMatch(params: {
   return { kind: "ambiguous" as const, entries: matches };
 }
 
-function looksLikeId(channel: ChannelId, normalized: string): boolean {
-  if (!normalized) return false;
-  const raw = normalized.trim();
-  switch (channel) {
-    case "discord": {
-      const candidate = stripTargetPrefixes(raw);
-      return /^\d{6,}$/.test(candidate);
-    }
-    case "slack": {
-      const candidate = stripTargetPrefixes(raw);
-      return /^[A-Z0-9]{8,}$/i.test(candidate);
-    }
-    case "msteams": {
-      return /^conversation:/i.test(raw) || /^user:/i.test(raw) || raw.includes("@thread");
-    }
-    case "telegram": {
-      return /^telegram:/i.test(raw) || raw.startsWith("@");
-    }
-    case "whatsapp": {
-      const candidate = stripTargetPrefixes(raw);
-      return (
-        /@/i.test(candidate) ||
-        /^\+?\d{3,}$/.test(candidate) ||
-        candidate.toLowerCase().endsWith("@g.us")
-      );
-    }
-    default:
-      return Boolean(raw);
-  }
+function looksLikeTargetId(params: {
+  channel: ChannelId;
+  raw: string;
+  normalized: string;
+}): boolean {
+  const raw = params.raw.trim();
+  if (!raw) return false;
+  const plugin = getChannelPlugin(params.channel);
+  const lookup = plugin?.messaging?.looksLikeTargetId;
+  if (lookup) return lookup(raw, params.normalized);
+  if (/^(channel|group|user):/i.test(raw)) return true;
+  if (/^[@#]/.test(raw)) return true;
+  if (/^\+?\d{6,}$/.test(raw)) return true;
+  if (raw.includes("@thread")) return true;
+  if (/^(conversation|user):/i.test(raw)) return true;
+  return false;
 }
 
 async function listDirectoryEntries(params: {
@@ -245,7 +278,7 @@ export async function resolveMessagingTarget(params: {
   }
   const kind = detectTargetKind(raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
-  if (looksLikeId(params.channel, normalized)) {
+  if (looksLikeTargetId({ channel: params.channel, raw, normalized })) {
     const directTarget = preserveTargetCase(params.channel, raw, normalized);
     return {
       ok: true,

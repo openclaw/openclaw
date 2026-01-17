@@ -25,7 +25,6 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import type { ChannelPlugin } from "./types.js";
-import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("imessage");
 
@@ -107,6 +106,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,
   },
+  messaging: {
+    looksLikeTargetId: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return false;
+      if (/^(imessage:|chat_id:)/i.test(trimmed)) return true;
+      if (trimmed.includes("@")) return true;
+      return /^\+?\d{3,}$/.test(trimmed);
+    },
+    targetHint: "<handle|chat_id:ID>",
+  },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
@@ -173,16 +182,6 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     deliveryMode: "direct",
     chunker: chunkText,
     textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: missingTargetError("iMessage", "<handle|chat_id:ID>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendIMessage ?? sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({

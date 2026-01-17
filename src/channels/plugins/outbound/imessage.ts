@@ -2,22 +2,11 @@ import { chunkText } from "../../../auto-reply/chunk.js";
 import { sendMessageIMessage } from "../../../imessage/send.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
-import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const imessageOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkText,
   textChunkLimit: 4000,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: missingTargetError("iMessage", "<handle|chat_id:ID>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ cfg, to, text, accountId, deps }) => {
     const send = deps?.sendIMessage ?? sendMessageIMessage;
     const maxBytes = resolveChannelMediaMaxBytes({

@@ -26,7 +26,10 @@ import { buildChannelConfigSchema } from "./config-schema.js";
 import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppMessagingTarget,
+} from "./normalize-target.js";
 import { whatsappOnboardingAdapter } from "./onboarding/whatsapp.js";
 import {
   applyAccountNameToChannelSection,
@@ -219,6 +222,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
+    looksLikeTargetId: looksLikeWhatsAppTargetId,
+    targetHint: "<E.164|group JID>",
   },
   directory: {
     self: async ({ cfg, accountId }) => {

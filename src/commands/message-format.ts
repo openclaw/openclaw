@@ -2,6 +2,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
+import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -242,7 +243,10 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
-      Target: shortenText(entry.to, 36),
+      Target: shortenText(
+        formatTargetDisplay({ channel: entry.channel, target: entry.to }),
+        36,
+      ),
       Status: entry.ok ? "ok" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));

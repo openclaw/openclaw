@@ -88,7 +88,7 @@ describe("messageCommand", () => {
     const deps = makeDeps();
     await messageCommand(
       {
-        target: "123",
+        target: "123456",
         message: "hi",
       },
       deps,

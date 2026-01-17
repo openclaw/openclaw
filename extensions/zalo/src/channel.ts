@@ -21,7 +21,6 @@ import {
 import { collectZaloStatusIssues } from "./status-issues.js";
 import type { CoreConfig } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./shared/account-ids.js";
-import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 const meta = {
   id: "zalo",
@@ -151,6 +150,12 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   actions: zaloMessageActions,
   messaging: {
     normalizeTarget: normalizeZaloMessagingTarget,
+    looksLikeTargetId: (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return false;
+      return /^\d{3,}$/.test(trimmed);
+    },
+    targetHint: "<chatId>",
   },
   directory: {
     self: async () => null,
@@ -280,16 +285,6 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
       return chunks;
     },
     textChunkLimit: 2000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: missingTargetError("Zalo", "<chatId>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {
         accountId: accountId ?? undefined,

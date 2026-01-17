@@ -26,7 +26,10 @@ import {
 } from "./config-helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { normalizeTelegramMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeTelegramTargetId,
+  normalizeTelegramMessagingTarget,
+} from "./normalize-target.js";
 import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -35,7 +38,6 @@ import {
 } from "./setup-helpers.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ChannelPlugin } from "./types.js";
-import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("telegram");
 
@@ -158,6 +160,8 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
+    looksLikeTargetId: looksLikeTelegramTargetId,
+    targetHint: "<chatId>",
   },
   directory: {
     self: async () => null,
@@ -281,16 +285,6 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     deliveryMode: "direct",
     chunker: chunkMarkdownText,
     textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: missingTargetError("Telegram", "<chatId>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
       const send = deps?.sendTelegram ?? sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);

@@ -1,21 +1,10 @@
 import { sendMessageSlack } from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
-import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: missingTargetError("Slack", "<channelId|user:ID|channel:ID>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ to, text, accountId, deps, replyToId }) => {
     const send = deps?.sendSlack ?? sendMessageSlack;
     const result = await send(to, text, {
