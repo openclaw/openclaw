@@ -33,6 +33,7 @@ export type HandleCommandsParams = {
     failures: Array<{ gate: string; key: string }>;
   };
   sessionEntry?: SessionEntry;
+  previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;

@@ -2,6 +2,7 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
@@ -12,8 +13,8 @@ import {
   setAbortMemory,
   stopSubagentsForRequester,
 } from "./abort.js";
-import { clearSessionQueues } from "./queue.js";
 import type { CommandHandler } from "./commands-types.js";
+import { clearSessionQueues } from "./queue.js";
 
 function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
@@ -213,14 +214,27 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
+
+  // Trigger internal hook for stop command
+  const hookEvent = createInternalHookEvent(
+    'command',
+    'stop',
+    abortTarget.key ?? params.sessionKey ?? '',
+    {
+      sessionEntry: abortTarget.entry ?? params.sessionEntry,
+      sessionId: abortTarget.sessionId,
+      commandSource: params.command.surface,
+      senderId: params.command.senderId,
+    }
+  );
+  await triggerInternalHook(hookEvent);
+
   const { stopped } = stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
-  return {
-    shouldContinue: false,
-    reply: { text: formatAbortReplyText(stopped) },
-  };
+
+  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
@@ -235,12 +249,6 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
   if (abortTarget.sessionId) {
     abortEmbeddedPiRun(abortTarget.sessionId);
   }
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop-trigger: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
   if (abortTarget.entry && params.sessionStore && abortTarget.key) {
     abortTarget.entry.abortedLastRun = true;
     abortTarget.entry.updatedAt = Date.now();
@@ -253,12 +261,5 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
-  const { stopped } = stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: abortTarget.key ?? params.sessionKey,
-  });
-  return {
-    shouldContinue: false,
-    reply: { text: formatAbortReplyText(stopped) },
-  };
+  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
 };

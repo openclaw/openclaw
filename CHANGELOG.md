@@ -7,6 +7,7 @@
 - Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh.
 - Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins.
 - Sessions: add `session.identityLinks` for cross-platform DM session linking. (#1033) — thanks @thewilloftheshadow.
+- Hooks: add internal hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake.
 
 ### Breaking
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.

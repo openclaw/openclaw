@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import * as internalHooks from "../../hooks/internal-hooks.js";
 import type { MsgContext } from "../templating.js";
 import { resetBashChatCommandForTests } from "./bash-command.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
@@ -140,6 +141,24 @@ describe("handleCommands identity", () => {
     expect(result.reply?.text).toContain("User id: 12345");
     expect(result.reply?.text).toContain("Username: @TestUser");
     expect(result.reply?.text).toContain("AllowFrom: 12345");
+  });
+});
+
+describe("handleCommands internal hooks", () => {
+  it("triggers hooks for /new with arguments", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as ClawdbotConfig;
+    const params = buildParams("/new take notes", cfg);
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "command", action: "new" }),
+    );
+    spy.mockRestore();
   });
 });
 

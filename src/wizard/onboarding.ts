@@ -19,6 +19,7 @@ import {
 } from "../commands/onboard-helpers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
+import { setupInternalHooks } from "../commands/onboard-hooks.js";
 import type {
   GatewayAuthChoice,
   OnboardMode,
@@ -403,6 +404,10 @@ export async function runOnboardingWizard(
   } else {
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
   }
+
+  // Setup internal hooks (session memory on /new)
+  nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 

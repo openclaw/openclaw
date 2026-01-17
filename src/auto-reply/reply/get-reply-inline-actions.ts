@@ -29,6 +29,7 @@ export async function handleInlineActions(params: {
   cfg: ClawdbotConfig;
   agentId: string;
   sessionEntry?: SessionEntry;
+  previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;
@@ -66,8 +67,9 @@ export async function handleInlineActions(params: {
     sessionCtx,
     cfg,
     agentId,
-    sessionEntry,
-    sessionStore,
+  sessionEntry,
+  previousSessionEntry,
+  sessionStore,
     sessionKey,
     storePath,
     sessionScope,
@@ -203,6 +205,7 @@ export async function handleInlineActions(params: {
         failures: elevatedFailures,
       },
       sessionEntry,
+      previousSessionEntry,
       sessionStore,
       sessionKey,
       storePath,
@@ -265,6 +268,7 @@ export async function handleInlineActions(params: {
       failures: elevatedFailures,
     },
     sessionEntry,
+    previousSessionEntry,
     sessionStore,
     sessionKey,
     storePath,

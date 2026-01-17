@@ -41,6 +41,32 @@ export const HookMappingSchema = z
   })
   .optional();
 
+export const InternalHookHandlerSchema = z.object({
+  event: z.string(),
+  module: z.string(),
+  export: z.string().optional(),
+});
+
+const HookConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .passthrough();
+
+export const InternalHooksSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    handlers: z.array(InternalHookHandlerSchema).optional(),
+    entries: z.record(z.string(), HookConfigSchema).optional(),
+    load: z
+      .object({
+        extraDirs: z.array(z.string()).optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
 export const HooksGmailSchema = z
   .object({
     account: z.string().optional(),

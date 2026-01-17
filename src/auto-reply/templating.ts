@@ -75,6 +75,11 @@ export type MsgContext = {
    * The chat/channel/user ID where the reply should be sent.
    */
   OriginatingTo?: string;
+  /**
+   * Messages from internal hooks to be included in the response.
+   * Used for hook confirmation messages like "Session context saved to memory".
+   */
+  HookMessages?: string[];
 };
 
 export type TemplateContext = MsgContext & {

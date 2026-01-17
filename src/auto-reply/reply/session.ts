@@ -30,6 +30,7 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
+  previousSessionEntry?: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   sessionId: string;
@@ -115,6 +116,7 @@ export async function initSessionState(params: {
   let bodyStripped: string | undefined;
   let systemSent = false;
   let abortedLastRun = false;
+  let resetTriggered = false;
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
@@ -149,12 +151,14 @@ export async function initSessionState(params: {
     if (trimmedBody === trigger || strippedForReset === trigger) {
       isNewSession = true;
       bodyStripped = "";
+      resetTriggered = true;
       break;
     }
     const triggerPrefix = `${trigger} `;
     if (trimmedBody.startsWith(triggerPrefix) || strippedForReset.startsWith(triggerPrefix)) {
       isNewSession = true;
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
+      resetTriggered = true;
       break;
     }
   }
@@ -168,6 +172,7 @@ export async function initSessionState(params: {
     }
   }
   const entry = sessionStore[sessionKey];
+  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const idleMs = idleMinutes * 60_000;
   const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
 
@@ -308,6 +313,7 @@ export async function initSessionState(params: {
   return {
     sessionCtx,
     sessionEntry,
+    previousSessionEntry,
     sessionStore,
     sessionKey,
     sessionId: sessionId ?? crypto.randomUUID(),

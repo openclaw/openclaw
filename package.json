@@ -65,7 +65,7 @@
     "docs:bin": "bun build scripts/docs-list.ts --compile --outfile bin/docs-list",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
-    "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",
+    "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts && tsx scripts/copy-hook-metadata.ts",
     "plugins:sync": "tsx scripts/sync-plugin-versions.ts",
     "release:check": "tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
