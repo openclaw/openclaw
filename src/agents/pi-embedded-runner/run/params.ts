@@ -38,6 +38,7 @@ export type RunEmbeddedPiAgentParams = {
   runId: string;
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
+  shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: {

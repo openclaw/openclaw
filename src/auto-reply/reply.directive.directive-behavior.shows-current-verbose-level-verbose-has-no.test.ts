@@ -81,7 +81,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current verbose level: on");
-      expect(text).toContain("Options: on, off.");
+      expect(text).toContain("Options: on, full, off.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

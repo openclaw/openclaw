@@ -39,6 +39,6 @@ clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 - `--deliver`: send the reply to the chosen channel (requires `--to`)
 - `--channel`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
 - `--thinking <off|minimal|low|medium|high|xhigh>`: persist thinking level (GPT-5.2 + Codex models only)
-- `--verbose <on|off>`: persist verbose level
+- `--verbose <on|full|off>`: persist verbose level
 - `--timeout <seconds>`: override agent timeout
 - `--json`: output structured JSON

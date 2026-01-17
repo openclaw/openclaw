@@ -131,4 +131,52 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload.text).toContain("snapshot");
     expect(payload.text).toContain("https://example.com");
   });
+
+  it("emits exec output in full verbose mode and includes PTY indicator", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-exec-full",
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-1",
+      args: { command: "claude", pty: true },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const summary = onToolResult.mock.calls[0][0];
+    expect(summary.text).toContain("exec");
+    expect(summary.text).toContain("pty");
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-exec-1",
+      isError: false,
+      result: { content: [{ type: "text", text: "hello\nworld" }] },
+    });
+
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    const output = onToolResult.mock.calls[1][0];
+    expect(output.text).toContain("hello");
+    expect(output.text).toContain("```txt");
+  });
 });

@@ -24,6 +24,7 @@ import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
+  createShouldEmitToolOutput,
   createShouldEmitToolResult,
   finalizeWithFollowup,
   isAudioPayload,
@@ -112,6 +113,11 @@ export async function runReplyAgent(params: {
   });
 
   const shouldEmitToolResult = createShouldEmitToolResult({
+    sessionKey,
+    storePath,
+    resolvedVerboseLevel,
+  });
+  const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
     resolvedVerboseLevel,
@@ -296,6 +302,7 @@ export async function runReplyAgent(params: {
       resolvedBlockStreamingBreak,
       applyReplyToMode,
       shouldEmitToolResult,
+      shouldEmitToolOutput,
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
@@ -473,6 +480,7 @@ export async function runReplyAgent(params: {
 
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = replyPayloads;
+    const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -480,12 +488,12 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
-      if (resolvedVerboseLevel === "on") {
+      if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
       }
     }
-    if (resolvedVerboseLevel === "on" && activeIsNewSession) {
+    if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
     }
     if (responseUsageLine) {

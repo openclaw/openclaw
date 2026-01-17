@@ -18,17 +18,38 @@ export const createShouldEmitToolResult = (params: {
 }): (() => boolean) => {
   return () => {
     if (!params.sessionKey || !params.storePath) {
-      return params.resolvedVerboseLevel === "on";
+      return params.resolvedVerboseLevel !== "off";
     }
     try {
       const store = loadSessionStore(params.storePath);
       const entry = store[params.sessionKey];
       const current = normalizeVerboseLevel(entry?.verboseLevel);
-      if (current) return current === "on";
+      if (current) return current !== "off";
     } catch {
       // ignore store read failures
     }
-    return params.resolvedVerboseLevel === "on";
+    return params.resolvedVerboseLevel !== "off";
+  };
+};
+
+export const createShouldEmitToolOutput = (params: {
+  sessionKey?: string;
+  storePath?: string;
+  resolvedVerboseLevel: VerboseLevel;
+}): (() => boolean) => {
+  return () => {
+    if (!params.sessionKey || !params.storePath) {
+      return params.resolvedVerboseLevel === "full";
+    }
+    try {
+      const store = loadSessionStore(params.storePath);
+      const entry = store[params.sessionKey];
+      const current = normalizeVerboseLevel(entry?.verboseLevel);
+      if (current) return current === "full";
+    } catch {
+      // ignore store read failures
+    }
+    return params.resolvedVerboseLevel === "full";
   };
 };
 

@@ -99,7 +99,7 @@ export const AgentDefaultsSchema = z
         z.literal("xhigh"),
       ])
       .optional(),
-    verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+    verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
     blockStreamingDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
     blockStreamingBreak: z.union([z.literal("text_end"), z.literal("message_end")]).optional(),

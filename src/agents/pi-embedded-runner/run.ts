@@ -213,6 +213,7 @@ export async function runEmbeddedPiAgent(
             runId: params.runId,
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
+            shouldEmitToolOutput: params.shouldEmitToolOutput,
             onPartialReply: params.onPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
             onBlockReply: params.onBlockReply,
