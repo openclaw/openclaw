@@ -467,10 +467,10 @@ export async function prepareSlackMessage(params: {
     MediaPath: media?.path,
     MediaType: media?.contentType,
     MediaUrl: media?.path,
-	    CommandAuthorized: commandAuthorized,
-	    OriginatingChannel: "slack" as const,
-	    OriginatingTo: slackTo,
-	  }) satisfies FinalizedMsgContext;
+    CommandAuthorized: commandAuthorized,
+    OriginatingChannel: "slack" as const,
+    OriginatingTo: slackTo,
+  }) satisfies FinalizedMsgContext;
 
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) return null;

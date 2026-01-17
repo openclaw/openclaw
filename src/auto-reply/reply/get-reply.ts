@@ -73,7 +73,7 @@ export async function getReplyFromConfig(
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
-	  opts?.onTypingController?.(typing);
+  opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
 
