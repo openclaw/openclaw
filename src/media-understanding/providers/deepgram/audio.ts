@@ -44,12 +44,13 @@ export async function transcribeDeepgramAudio(
     headers.set("content-type", params.mime ?? "application/octet-stream");
   }
 
+  const body = new Uint8Array(params.buffer);
   const res = await fetchWithTimeout(
     url.toString(),
     {
       method: "POST",
       headers,
-      body: params.buffer,
+      body,
     },
     params.timeoutMs,
     fetchFn,
