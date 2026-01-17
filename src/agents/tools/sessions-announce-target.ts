@@ -33,9 +33,19 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const channel = typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
-    const to = typeof match?.lastTo === "string" ? match.lastTo : undefined;
-    const accountId = typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined;
+    const deliveryContext =
+      match?.deliveryContext && typeof match.deliveryContext === "object"
+        ? (match.deliveryContext as Record<string, unknown>)
+        : undefined;
+    const channel =
+      (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
+      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined);
+    const to =
+      (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
+      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
+    const accountId =
+      (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
+      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined);
     if (channel && to) return { channel, to, accountId };
   } catch {
     // ignore

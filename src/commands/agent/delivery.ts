@@ -1,6 +1,4 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -12,33 +10,15 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
+import { resolveAgentDeliveryPlan } from "../../infra/outbound/agent-delivery.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  isInternalMessageChannel,
-  resolveGatewayMessageChannel,
-} from "../../utils/message-channel.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
-
-function resolveDeliveryAccountId(params: {
-  opts: AgentCommandOpts;
-  sessionEntry?: SessionEntry;
-  targetMode: ChannelOutboundTargetMode;
-  deliveryChannel?: string;
-}) {
-  const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
-  const explicit = normalizeAccountId(params.opts.accountId);
-  if (explicit || params.targetMode !== "implicit") return explicit;
-  if (!params.deliveryChannel || isInternalMessageChannel(params.deliveryChannel)) return undefined;
-  if (sessionOrigin?.channel !== params.deliveryChannel) return undefined;
-  return normalizeAccountId(sessionOrigin?.accountId);
-}
 
 export async function deliverAgentCommandResult(params: {
   cfg: ClawdbotConfig;
@@ -52,7 +32,14 @@ export async function deliverAgentCommandResult(params: {
   const { cfg, deps, runtime, opts, sessionEntry, payloads, result } = params;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryChannel = resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
+  const deliveryPlan = resolveAgentDeliveryPlan({
+    sessionEntry,
+    requestedChannel: opts.channel,
+    explicitTo: opts.to,
+    accountId: opts.accountId,
+    wantsDelivery: deliver,
+  });
+  const deliveryChannel = deliveryPlan.resolvedChannel;
   // Channel docking: delivery channels are resolved via plugin registry.
   const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
     ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
@@ -61,19 +48,14 @@ export async function deliverAgentCommandResult(params: {
   const isDeliveryChannelKnown =
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
 
-  const targetMode: ChannelOutboundTargetMode =
-    opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedAccountId = resolveDeliveryAccountId({
-    opts,
-    sessionEntry,
-    targetMode,
-    deliveryChannel,
-  });
+  const targetMode =
+    opts.deliveryTargetMode ?? deliveryPlan.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
+  const resolvedAccountId = deliveryPlan.resolvedAccountId;
   const resolvedTarget =
     deliver && isDeliveryChannelKnown && deliveryChannel
       ? resolveOutboundTarget({
           channel: deliveryChannel,
-          to: opts.to,
+          to: deliveryPlan.resolvedTo,
           cfg,
           accountId: resolvedAccountId,
           mode: targetMode,

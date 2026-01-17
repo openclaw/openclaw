@@ -128,6 +128,7 @@ describe("gateway server sessions", () => {
         thinkingLevel?: string;
         verboseLevel?: string;
         lastAccountId?: string;
+        deliveryContext?: { channel?: string; to?: string; accountId?: string };
       }>;
     }>(ws, "sessions.list", { includeGlobal: false, includeUnknown: false });
 
@@ -140,6 +141,11 @@ describe("gateway server sessions", () => {
     expect(main?.thinkingLevel).toBe("low");
     expect(main?.verboseLevel).toBe("on");
     expect(main?.lastAccountId).toBe("work");
+    expect(main?.deliveryContext).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "work",
+    });
 
     const active = await rpcReq<{
       sessions: Array<{ key: string }>;

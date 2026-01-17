@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -9,10 +8,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "../../infra/outbound/targets.js";
+import { resolveAgentDeliveryPlan } from "../../infra/outbound/agent-delivery.js";
+import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -202,53 +201,21 @@ export const agentHandlers: GatewayRequestHandlers = {
     const runId = idem;
 
     const wantsDelivery = request.deliver === true;
-    const requestedChannel = normalizeMessageChannel(request.channel) ?? "last";
     const explicitTo =
       typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
-
-    const baseDelivery = resolveSessionDeliveryTarget({
-      entry: sessionEntry,
-      requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
+    const deliveryPlan = resolveAgentDeliveryPlan({
+      sessionEntry,
+      requestedChannel: request.channel,
       explicitTo,
+      accountId: request.accountId,
+      wantsDelivery,
     });
 
-    const resolvedChannel = (() => {
-      if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
-      if (requestedChannel === "last") {
-        // WebChat is not a deliverable surface. Treat it as "unset" for routing,
-        // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
-          return baseDelivery.channel;
-        }
-        return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
-      }
+    const resolvedChannel = deliveryPlan.resolvedChannel;
+    const deliveryTargetMode = deliveryPlan.deliveryTargetMode;
+    const resolvedAccountId = deliveryPlan.resolvedAccountId;
+    let resolvedTo = deliveryPlan.resolvedTo;
 
-      if (isGatewayMessageChannel(requestedChannel)) return requestedChannel;
-
-      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
-        return baseDelivery.channel;
-      }
-      return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
-    })();
-
-    const deliveryTargetMode = explicitTo
-      ? "explicit"
-      : isDeliverableMessageChannel(resolvedChannel)
-        ? "implicit"
-        : undefined;
-    const resolvedAccountId =
-      normalizeAccountId(request.accountId) ??
-      (deliveryTargetMode === "implicit" && resolvedChannel === baseDelivery.lastChannel
-        ? baseDelivery.lastAccountId
-        : undefined);
-    let resolvedTo = explicitTo;
-    if (
-      !resolvedTo &&
-      isDeliverableMessageChannel(resolvedChannel) &&
-      resolvedChannel === baseDelivery.lastChannel
-    ) {
-      resolvedTo = baseDelivery.lastTo;
-    }
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfg = cfgForAgent ?? loadConfig();
       const fallback = resolveOutboundTarget({

@@ -201,9 +201,10 @@ export async function initSessionState(params: {
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const lastChannelRaw =
-    (ctx.OriginatingChannel as string | undefined)?.trim() || baseEntry?.lastChannel;
-  const lastToRaw = ctx.OriginatingTo?.trim() || ctx.To?.trim() || baseEntry?.lastTo;
-  const lastAccountIdRaw = ctx.AccountId?.trim() || baseEntry?.lastAccountId;
+    (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
+  const lastToRaw = (ctx.OriginatingTo as string | undefined) || ctx.To || baseEntry?.lastTo;
+  const lastAccountIdRaw =
+    (ctx.AccountId as string | undefined) || baseEntry?.lastAccountId;
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
