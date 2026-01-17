@@ -2,6 +2,7 @@ import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -51,6 +52,8 @@ export function createGatewayReloadHandlers(params: {
       state.heartbeatRunner.stop();
       nextState.heartbeatRunner = startHeartbeatRunner({ cfg: nextConfig });
     }
+
+    resetDirectoryCache();
 
     if (plan.restartCron) {
       state.cronState.cron.stop();

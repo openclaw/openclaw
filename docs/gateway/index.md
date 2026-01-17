@@ -281,7 +281,7 @@ Windows installs should use **WSL2** and follow the Linux systemd section above.
 
 ## CLI helpers
 - `clawdbot gateway health|status` — request health/status over the Gateway WS.
-- `clawdbot message send --to <num> --message "hi" [--media ...]` — send via Gateway (idempotent for WhatsApp).
+- `clawdbot message send --target <num> --message "hi" [--media ...]` — send via Gateway (idempotent for WhatsApp).
 - `clawdbot agent --message "hi" --to <num>` — run an agent turn (waits for final by default).
 - `clawdbot gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
 - `clawdbot daemon stop|restart` — stop/restart the supervised gateway service (launchd/systemd).

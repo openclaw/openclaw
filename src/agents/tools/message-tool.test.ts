@@ -47,7 +47,7 @@ describe("message tool mirroring", () => {
 
     await tool.execute("1", {
       action: "send",
-      to: "telegram:123",
+      target: "telegram:123",
       message: "",
       media: "https://example.com/files/report.pdf?sig=1",
     });
@@ -75,7 +75,7 @@ describe("message tool mirroring", () => {
 
     await tool.execute("1", {
       action: "send",
-      to: "telegram:123",
+      target: "telegram:123",
       message: "hi",
     });
 

@@ -1495,7 +1495,7 @@ Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (o
 CLI sending:
 
 ```bash
-clawdbot message send --to +15555550123 --message "Here you go" --media /path/to/file.png
+clawdbot message send --target +15555550123 --message "Here you go" --media /path/to/file.png
 ```
 
 Also check:

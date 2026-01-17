@@ -88,7 +88,7 @@ describe("messageCommand", () => {
     const deps = makeDeps();
     await messageCommand(
       {
-        to: "123",
+        target: "123",
         message: "hi",
       },
       deps,
@@ -104,7 +104,7 @@ describe("messageCommand", () => {
     await expect(
       messageCommand(
         {
-          to: "123",
+          target: "123",
           message: "hi",
         },
         deps,
@@ -120,7 +120,7 @@ describe("messageCommand", () => {
       {
         action: "send",
         channel: "whatsapp",
-        to: "+15551234567",
+        target: "+15551234567",
         message: "hi",
       },
       deps,
@@ -135,7 +135,7 @@ describe("messageCommand", () => {
       {
         action: "poll",
         channel: "discord",
-        to: "channel:123456789",
+        target: "channel:123456789",
         pollQuestion: "Snack?",
         pollOption: ["Pizza", "Sushi"],
       },

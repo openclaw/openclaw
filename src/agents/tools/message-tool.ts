@@ -26,7 +26,9 @@ const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
-    to: Type.Optional(channelTargetSchema()),
+    target: Type.Optional(
+      channelTargetSchema({ description: "Target channel/user id or name." }),
+    ),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
     dryRun: Type.Optional(Type.Boolean()),
@@ -89,8 +91,12 @@ function buildPollSchema() {
 
 function buildChannelTargetSchema() {
   return {
-    channelId: Type.Optional(channelTargetSchema()),
-    channelIds: Type.Optional(channelTargetsSchema()),
+    channelId: Type.Optional(
+      Type.String({ description: "Channel id filter (search/thread list/event create)." }),
+    ),
+    channelIds: Type.Optional(
+      Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
+    ),
     guildId: Type.Optional(Type.String()),
     userId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
@@ -181,6 +187,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean }) {
     ...buildChannelManagementSchema(),
   };
 }
+
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],

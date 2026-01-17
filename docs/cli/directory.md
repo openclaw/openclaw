@@ -15,7 +15,7 @@ Directory lookups for channels that support it (contacts/peers, groups, and “m
 - `--json`: output JSON
 
 ## Notes
-- `directory` is meant to help you find IDs you can paste into other commands (especially `clawdbot message send --to ...`).
+- `directory` is meant to help you find IDs you can paste into other commands (especially `clawdbot message send --target ...`).
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
 - Default output is `id` (and sometimes `name`) separated by a tab; use `--json` for scripting.
 
@@ -23,7 +23,7 @@ Directory lookups for channels that support it (contacts/peers, groups, and “m
 
 ```bash
 clawdbot directory peers list --channel slack --query "U0"
-clawdbot message send --channel slack --to user:U012ABCDEF --message "hello"
+clawdbot message send --channel slack --target user:U012ABCDEF --message "hello"
 ```
 
 ## ID formats (by channel)
