@@ -1,6 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
+import type { MediaUnderstandingOutput } from "../media-understanding/types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
@@ -41,6 +42,9 @@ export type MsgContext = {
   /** Remote host for SCP when media lives on a different machine (e.g., clawdbot@192.168.64.3). */
   MediaRemoteHost?: string;
   Transcript?: string;
+  MediaUnderstanding?: MediaUnderstandingOutput[];
+  Prompt?: string;
+  MaxChars?: number;
   ChatType?: string;
   GroupSubject?: string;
   GroupRoom?: string;

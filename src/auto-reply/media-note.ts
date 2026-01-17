@@ -18,6 +18,12 @@ function formatMediaAttachedLine(params: {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+  // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
+  const suppressed = new Set(
+    Array.isArray(ctx.MediaUnderstanding)
+      ? ctx.MediaUnderstanding.map((output) => output.attachmentIndex)
+      : [],
+  );
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
@@ -36,24 +42,33 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       ? ctx.MediaTypes
       : undefined;
 
-  if (paths.length === 1) {
+  const entries = paths
+    .map((entry, index) => ({
+      path: entry ?? "",
+      type: types?.[index] ?? ctx.MediaType,
+      url: urls?.[index] ?? ctx.MediaUrl,
+      index,
+    }))
+    .filter((entry) => !suppressed.has(entry.index));
+  if (entries.length === 0) return undefined;
+  if (entries.length === 1) {
     return formatMediaAttachedLine({
-      path: paths[0] ?? "",
-      type: types?.[0] ?? ctx.MediaType,
-      url: urls?.[0] ?? ctx.MediaUrl,
+      path: entries[0]?.path ?? "",
+      type: entries[0]?.type,
+      url: entries[0]?.url,
     });
   }
 
-  const count = paths.length;
+  const count = entries.length;
   const lines: string[] = [`[media attached: ${count} files]`];
-  for (const [idx, mediaPath] of paths.entries()) {
+  for (const [idx, entry] of entries.entries()) {
     lines.push(
       formatMediaAttachedLine({
-        path: mediaPath,
+        path: entry.path,
         index: idx + 1,
         total: count,
-        type: types?.[idx],
-        url: urls?.[idx],
+        type: entry.type,
+        url: entry.url,
       }),
     );
   }

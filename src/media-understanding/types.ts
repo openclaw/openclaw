@@ -1,0 +1,62 @@
+export type MediaUnderstandingKind =
+  | "audio.transcription"
+  | "video.description"
+  | "image.description";
+
+export type MediaAttachment = {
+  path?: string;
+  url?: string;
+  mime?: string;
+  index: number;
+};
+
+export type MediaUnderstandingOutput = {
+  kind: MediaUnderstandingKind;
+  attachmentIndex: number;
+  text: string;
+  provider: string;
+  model?: string;
+};
+
+export type AudioTranscriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  model?: string;
+  language?: string;
+  prompt?: string;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+};
+
+export type AudioTranscriptionResult = {
+  text: string;
+  model?: string;
+};
+
+export type VideoDescriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  apiKey: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  model?: string;
+  prompt?: string;
+  timeoutMs: number;
+  fetchFn?: typeof fetch;
+};
+
+export type VideoDescriptionResult = {
+  text: string;
+  model?: string;
+};
+
+export type MediaUnderstandingProvider = {
+  id: string;
+  transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
+  describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
+};

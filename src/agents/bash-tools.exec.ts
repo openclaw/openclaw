@@ -254,12 +254,27 @@ export function createExecTool(
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let timeoutTimer: NodeJS.Timeout | null = null;
+      let timeoutFinalizeTimer: NodeJS.Timeout | null = null;
       let timedOut = false;
+      const timeoutFinalizeMs = 1000;
+      let rejectFn: ((err: Error) => void) | null = null;
 
       const settle = (fn: () => void) => {
         if (settled) return;
         settled = true;
         fn();
+      };
+
+      const effectiveTimeout =
+        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      const finalizeTimeout = () => {
+        if (session.exited) return;
+        markExited(session, null, "SIGKILL", "failed");
+        if (settled || !rejectFn) return;
+        const aggregated = session.aggregated.trim();
+        const reason = `Command timed out after ${effectiveTimeout} seconds`;
+        const message = aggregated ? `${aggregated}\n\n${reason}` : reason;
+        settle(() => rejectFn?.(new Error(message)));
       };
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
@@ -272,15 +287,17 @@ export function createExecTool(
       const onTimeout = () => {
         timedOut = true;
         killSession(session);
+        if (!timeoutFinalizeTimer) {
+          timeoutFinalizeTimer = setTimeout(() => {
+            finalizeTimeout();
+          }, timeoutFinalizeMs);
+        }
       };
 
       if (signal?.aborted) onAbortSignal();
       else if (signal) {
         signal.addEventListener("abort", onAbortSignal, { once: true });
       }
-
-      const effectiveTimeout =
-        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
       if (effectiveTimeout > 0) {
         timeoutTimer = setTimeout(() => {
           onTimeout();
@@ -321,6 +338,7 @@ export function createExecTool(
       });
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+        rejectFn = reject;
         const resolveRunning = () => {
           settle(() =>
             resolve({
@@ -369,6 +387,7 @@ export function createExecTool(
         const handleExit = (code: number | null, exitSignal: NodeJS.Signals | number | null) => {
           if (yieldTimer) clearTimeout(yieldTimer);
           if (timeoutTimer) clearTimeout(timeoutTimer);
+          if (timeoutFinalizeTimer) clearTimeout(timeoutFinalizeTimer);
           const durationMs = Date.now() - startedAt;
           const wasSignal = exitSignal != null;
           const isSuccess = code === 0 && !wasSignal && !signal?.aborted && !timedOut;
@@ -421,6 +440,7 @@ export function createExecTool(
         child.once("error", (err) => {
           if (yieldTimer) clearTimeout(yieldTimer);
           if (timeoutTimer) clearTimeout(timeoutTimer);
+          if (timeoutFinalizeTimer) clearTimeout(timeoutFinalizeTimer);
           markExited(session, null, null, "failed");
           settle(() => reject(err));
         });

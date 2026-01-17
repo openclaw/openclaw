@@ -25,4 +25,20 @@ describe("buildInboundMediaNote", () => {
       ].join("\n"),
     );
   });
+
+  it("skips media notes for attachments with understanding output", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
+      MediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "hello",
+          provider: "groq",
+        },
+      ],
+    });
+    expect(note).toBe("[media attached: /tmp/b.png | https://example.com/b.png]");
+  });
 });

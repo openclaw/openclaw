@@ -1769,6 +1769,58 @@ Legacy: `tools.bash` is still accepted as an alias.
 - `tools.web.fetch.firecrawl.maxAgeMs` (optional)
 - `tools.web.fetch.firecrawl.timeoutSeconds` (optional)
 
+`tools.media` configures inbound media understanding (image/audio/video):
+- `tools.media.image` / `tools.media.audio` / `tools.media.video`:
+  - `enabled`: opt-out switch (default true).
+  - `prompt`: optional prompt override (image/video append a `maxChars` hint automatically).
+  - `maxChars`: max output characters (default 500 for image/video; unset for audio).
+  - `maxBytes`: max media size to send (defaults: image 10MB, audio 20MB, video 50MB).
+  - `timeoutSeconds`: request timeout (defaults: image 60s, audio 60s, video 120s).
+  - `language`: optional audio hint.
+  - `scope`: optional gating (first match wins) with `match.channel`, `match.chatType`, or `match.keyPrefix`.
+  - `models`: ordered list of model entries; failures or oversize media fall back to the next entry.
+- Each `models[]` entry:
+  - Provider entry (`type: "provider"` or omitted):
+    - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc).
+    - `model`: model id override (required for image; defaults to `whisper-1`/`whisper-large-v3-turbo` for audio providers, and `gemini-3-flash-preview` for video).
+    - `profile` / `preferredProfile`: auth profile selection.
+  - CLI entry (`type: "cli"`):
+    - `command`: executable to run.
+    - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc).
+  - `capabilities`: optional list (`image`, `audio`, `video`) to gate a shared entry.
+  - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language` can be overridden per entry.
+
+If no models are configured (or `enabled: false`), understanding is skipped; the model still receives the original attachments.
+
+Provider auth follows the standard model auth order (auth profiles, env vars like `OPENAI_API_KEY`/`GROQ_API_KEY`/`GEMINI_API_KEY`, or `models.providers.*.apiKey`).
+
+Example:
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        maxBytes: 20971520,
+        scope: {
+          default: "deny",
+          rules: [{ action: "allow", match: { chatType: "direct" } }]
+        },
+        models: [
+          { provider: "openai", model: "whisper-1" },
+          { type: "cli", command: "whisper", args: ["--model", "base", "{{MediaPath}}"] }
+        ]
+      },
+      video: {
+        enabled: true,
+        maxBytes: 52428800,
+        models: [{ provider: "google", model: "gemini-3-flash-preview" }]
+      }
+    }
+  }
+}
+```
+
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
 - `maxConcurrent`: max concurrent sub-agent runs (default 1)
@@ -2848,7 +2900,7 @@ clawdbot dns setup --apply
 
 ## Template variables
 
-Template placeholders are expanded in `tools.audio.transcription.args` (and any future templated argument fields).
+Template placeholders are expanded in `tools.media.*.models[].args` (and any future templated argument fields).
 
 | Variable | Description |
 |----------|-------------|
@@ -2864,6 +2916,8 @@ Template placeholders are expanded in `tools.audio.transcription.args` (and any 
 | `{{MediaPath}}` | Local media path (if downloaded) |
 | `{{MediaType}}` | Media type (image/audio/document/…) |
 | `{{Transcript}}` | Audio transcript (when enabled) |
+| `{{Prompt}}` | Resolved media prompt for CLI entries |
+| `{{MaxChars}}` | Resolved max output chars for CLI entries |
 | `{{ChatType}}` | `"direct"` or `"group"` |
 | `{{GroupSubject}}` | Group subject (best effort) |
 | `{{GroupMembers}}` | Group members preview (best effort) |
