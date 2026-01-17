@@ -96,12 +96,21 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   session.tail = tail(session.aggregated, 2000);
 }
 
+const MAX_DRAIN_CHARS = 30_000;
+
 export function drainSession(session: ProcessSession) {
-  const stdout = session.pendingStdout.join("");
-  const stderr = session.pendingStderr.join("");
+  const stdoutRaw = session.pendingStdout.join("");
+  const stderrRaw = session.pendingStderr.join("");
   session.pendingStdout = [];
   session.pendingStderr = [];
-  return { stdout, stderr };
+
+  const cap = (text: string) => {
+    if (text.length <= MAX_DRAIN_CHARS) return text;
+    session.truncated = true;
+    return text.slice(text.length - MAX_DRAIN_CHARS);
+  };
+
+  return { stdout: cap(stdoutRaw), stderr: cap(stderrRaw) };
 }
 
 export function markExited(

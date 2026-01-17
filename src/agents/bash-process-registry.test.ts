@@ -4,6 +4,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
+  drainSession,
   listFinishedSessions,
   markBackgrounded,
   markExited,
@@ -70,5 +71,33 @@ describe("bash process registry", () => {
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(1);
+  });
+
+  it("caps drained output to avoid runaway transcripts", () => {
+    const session: ProcessSession = {
+      id: "sess",
+      command: "echo test",
+      child: { pid: 123 } as ChildProcessWithoutNullStreams,
+      startedAt: Date.now(),
+      cwd: "/tmp",
+      maxOutputChars: 100,
+      totalOutputChars: 0,
+      pendingStdout: [],
+      pendingStderr: [],
+      aggregated: "",
+      tail: "",
+      exited: false,
+      exitCode: undefined,
+      exitSignal: undefined,
+      truncated: false,
+      backgrounded: true,
+    };
+
+    addSession(session);
+    appendOutput(session, "stdout", "x".repeat(100_000));
+
+    const drained = drainSession(session);
+    expect(drained.stdout.length).toBeLessThanOrEqual(30_000);
+    expect(session.truncated).toBe(true);
   });
 });
