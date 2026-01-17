@@ -210,9 +210,12 @@ export async function handleDiscordMessagingAction(
       });
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
+      const embeds =
+        Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
       const result = await sendMessageDiscord(to, content, {
         mediaUrl,
         replyTo,
+        embeds,
       });
       return jsonResult({ ok: true, result });
     }

@@ -18,6 +18,7 @@ import { registerMessageReactionsCommands } from "./message/register.reactions.j
 import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
+import { registerMessageBroadcastCommand } from "./message/register.broadcast.js";
 
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
@@ -41,6 +42,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.clawd.bot/cli/mes
 
   const helpers = createMessageCliHelpers(message, ctx.messageChannelOptions);
   registerMessageSendCommand(message, helpers);
+  registerMessageBroadcastCommand(message, helpers);
   registerMessagePollCommand(message, helpers);
   registerMessageReactionsCommands(message, helpers);
   registerMessageReadEditDeleteCommands(message, helpers);

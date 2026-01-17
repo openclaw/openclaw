@@ -110,6 +110,13 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
+  "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
+  "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
+  "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
+  "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
+  "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
+  "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
+  "tools.message.broadcast.enabled": "Enable Message Broadcast",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.apiKey": "Brave Search API Key",
@@ -256,6 +263,20 @@ const FIELD_HELP: Record<string, string> = {
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+  "tools.message.allowCrossContextSend":
+    "Legacy override: allow cross-context sends across all providers.",
+  "tools.message.crossContext.allowWithinProvider":
+    "Allow sends to other channels within the same provider (default: true).",
+  "tools.message.crossContext.allowAcrossProviders":
+    "Allow sends across different providers (default: false).",
+  "tools.message.crossContext.marker.enabled":
+    "Add a visible origin marker when sending cross-context (default: true).",
+  "tools.message.crossContext.marker.prefix":
+    'Text prefix for cross-context markers (supports "{channel}").',
+  "tools.message.crossContext.marker.suffix":
+    'Text suffix for cross-context markers (supports "{channel}").',
+  "tools.message.broadcast.enabled":
+    "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires Brave API key).",
   "tools.web.search.provider": 'Search provider (only "brave" supported today).',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",

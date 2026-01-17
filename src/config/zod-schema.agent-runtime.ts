@@ -288,6 +288,29 @@ export const ToolsSchema = z
         transcription: ToolsAudioTranscriptionSchema,
       })
       .optional(),
+    message: z
+      .object({
+        allowCrossContextSend: z.boolean().optional(),
+        crossContext: z
+          .object({
+            allowWithinProvider: z.boolean().optional(),
+            allowAcrossProviders: z.boolean().optional(),
+            marker: z
+              .object({
+                enabled: z.boolean().optional(),
+                prefix: z.string().optional(),
+                suffix: z.string().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+        broadcast: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     agentToAgent: z
       .object({
         enabled: z.boolean().optional(),

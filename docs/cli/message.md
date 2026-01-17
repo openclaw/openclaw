@@ -24,16 +24,21 @@ Channel selection:
 Target formats (`--to`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
-- Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are rejected)
+- Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle, `chat_id:<id>`, `chat_guid:<guid>`, or `chat_identifier:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
+Name lookup:
+- For supported providers (Discord/Slack/etc), channel names like `Help` or `#help` are resolved via the directory cache.
+- On cache miss, Clawdbot will attempt a live directory lookup when the provider supports it.
+
 ## Common flags
 
 - `--channel <name>`
 - `--account <id>`
+- `--targets <name>` (repeat; broadcast only)
 - `--json`
 - `--dry-run`
 - `--verbose`
@@ -165,6 +170,13 @@ Target formats (`--to`):
 - `kick`: `--guild-id`, `--user-id` (+ `--reason`)
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` also supports `--reason`
+
+### Broadcast
+
+- `broadcast`
+  - Channels: any configured channel; use `--channel all` to target all providers
+  - Required: `--targets` (repeat)
+  - Optional: `--message`, `--media`, `--dry-run`
 
 ## Examples
 
