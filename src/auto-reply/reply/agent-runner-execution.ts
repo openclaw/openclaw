@@ -20,6 +20,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  isMarkdownCapableMessageChannel,
+  resolveMessageChannel,
+} from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -222,6 +226,14 @@ export async function runAgentTurnWithFallback(params: {
             thinkLevel: params.followupRun.run.thinkLevel,
             verboseLevel: params.followupRun.run.verboseLevel,
             reasoningLevel: params.followupRun.run.reasoningLevel,
+            toolResultFormat: (() => {
+              const channel = resolveMessageChannel(
+                params.sessionCtx.Surface,
+                params.sessionCtx.Provider,
+              );
+              if (!channel) return "markdown";
+              return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+            })(),
             bashElevated: params.followupRun.run.bashElevated,
             timeoutMs: params.followupRun.run.timeoutMs,
             runId,
