@@ -3,13 +3,17 @@ import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo } from "../logger.js";
 import {
+  type ProcessSession,
   type SessionStdin,
   addSession,
   appendOutput,
   markBackgrounded,
   markExited,
+  tail,
 } from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
@@ -34,6 +38,7 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
 );
 const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 
 type PtyExitEvent = { exitCode: number; signal?: number };
 type PtyListener<T> = (event: T) => void;
@@ -62,6 +67,8 @@ export type ExecToolDefaults = {
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
+  sessionKey?: string;
+  notifyOnExit?: boolean;
   cwd?: string;
 };
 
@@ -117,6 +124,28 @@ export type ExecToolDetails =
       cwd?: string;
     };
 
+function normalizeNotifyOutput(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) return;
+  const sessionKey = session.sessionKey?.trim();
+  if (!sessionKey) return;
+  session.exitNotified = true;
+  const exitLabel = session.exitSignal
+    ? `signal ${session.exitSignal}`
+    : `code ${session.exitCode ?? 0}`;
+  const output = normalizeNotifyOutput(
+    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
+  );
+  const summary = output
+    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
+    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  enqueueSystemEvent(summary, { sessionKey });
+  requestHeartbeatNow({ reason: `exec:${session.id}:exit` });
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
@@ -132,6 +161,8 @@ export function createExecTool(
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
       : 1800;
+  const notifyOnExit = defaults?.notifyOnExit !== false;
+  const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
 
   return {
     name: "exec",
@@ -308,6 +339,9 @@ export function createExecTool(
         id: sessionId,
         command: params.command,
         scopeKey: defaults?.scopeKey,
+        sessionKey: notifySessionKey,
+        notifyOnExit,
+        exitNotified: false,
         child: child ?? undefined,
         stdin,
         pid: child?.pid ?? pty?.pid,
@@ -347,6 +381,7 @@ export function createExecTool(
       const finalizeTimeout = () => {
         if (session.exited) return;
         markExited(session, null, "SIGKILL", "failed");
+        maybeNotifyOnExit(session, "failed");
         if (settled || !rejectFn) return;
         const aggregated = session.aggregated.trim();
         const reason = `Command timed out after ${effectiveTimeout} seconds`;
@@ -477,6 +512,7 @@ export function createExecTool(
           const isSuccess = code === 0 && !wasSignal && !signal?.aborted && !timedOut;
           const status: "completed" | "failed" = isSuccess ? "completed" : "failed";
           markExited(session, code, exitSignal, status);
+          maybeNotifyOnExit(session, status);
           if (!session.child && session.stdin) {
             session.stdin.destroyed = true;
           }
@@ -536,6 +572,7 @@ export function createExecTool(
             if (timeoutTimer) clearTimeout(timeoutTimer);
             if (timeoutFinalizeTimer) clearTimeout(timeoutFinalizeTimer);
             markExited(session, null, null, "failed");
+            maybeNotifyOnExit(session, "failed");
             settle(() => reject(err));
           });
         }

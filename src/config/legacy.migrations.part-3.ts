@@ -25,6 +25,22 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "tools.bash->tools.exec",
+    describe: "Move tools.bash to tools.exec",
+    apply: (raw, changes) => {
+      const tools = ensureRecord(raw, "tools");
+      const bash = getRecord(tools.bash);
+      if (!bash) return;
+      if (tools.exec === undefined) {
+        tools.exec = bash;
+        changes.push("Moved tools.bash → tools.exec.");
+      } else {
+        changes.push("Removed tools.bash (tools.exec already set).");
+      }
+      delete tools.bash;
+    },
+  },
+  {
     id: "agent.defaults-v2",
     describe: "Move agent config to agents.defaults and tools",
     apply: (raw, changes) => {
@@ -59,13 +75,11 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
 
       const bash = getRecord(agent.bash);
       if (bash) {
-        if (tools.exec === undefined && tools.bash === undefined) {
+        if (tools.exec === undefined) {
           tools.exec = bash;
           changes.push("Moved agent.bash → tools.exec.");
-        } else if (tools.exec !== undefined) {
-          changes.push("Removed agent.bash (tools.exec already set).");
         } else {
-          changes.push("Removed agent.bash (tools.bash already set).");
+          changes.push("Removed agent.bash (tools.exec already set).");
         }
       }
 

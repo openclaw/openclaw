@@ -1745,10 +1745,10 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
+- `notifyOnExit`: enqueue a system event + request heartbeat when backgrounded exec exits (default true)
 - `applyPatch.enabled`: enable experimental `apply_patch` (OpenAI/OpenAI Codex only; default false)
 - `applyPatch.allowModels`: optional allowlist of model ids (e.g. `gpt-5.2` or `openai/gpt-5.2`)
-Note: `applyPatch` is only under `tools.exec` (no `tools.bash` alias).
-Legacy: `tools.bash` is still accepted as an alias.
+Note: `applyPatch` is only under `tools.exec`.
 
 `tools.web` configures web search + fetch tools:
 - `tools.web.search.enabled` (default: true when key is present)

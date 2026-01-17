@@ -263,6 +263,8 @@ export type ToolsConfig = {
     timeoutSec?: number;
     /** How long to keep finished sessions in memory (ms). */
     cleanupMs?: number;
+    /** Emit a system event and heartbeat when a backgrounded exec exits. */
+    notifyOnExit?: boolean;
     /** apply_patch subtool configuration (experimental). */
     applyPatch?: {
       /** Enable apply_patch for OpenAI models (default: false). */
@@ -273,15 +275,6 @@ export type ToolsConfig = {
        */
       allowModels?: string[];
     };
-  };
-  /** @deprecated Use tools.exec. */
-  bash?: {
-    /** Default time (ms) before a bash command auto-backgrounds. */
-    backgroundMs?: number;
-    /** Default timeout (seconds) before auto-killing bash commands. */
-    timeoutSec?: number;
-    /** How long to keep finished sessions in memory (ms). */
-    cleanupMs?: number;
   };
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {

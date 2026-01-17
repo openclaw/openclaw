@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool, execTool, processTool } from "./bash-tools.js";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
@@ -42,6 +43,7 @@ async function waitForCompletion(sessionId: string) {
 
 beforeEach(() => {
   resetProcessRegistryForTests();
+  resetSystemEventsForTest();
 });
 
 describe("exec tool backgrounding", () => {
@@ -238,6 +240,36 @@ describe("exec tool backgrounding", () => {
       sessionId: sessionA,
     });
     expect(pollB.details.status).toBe("failed");
+  });
+});
+
+describe("exec notifyOnExit", () => {
+  it("enqueues a system event when a backgrounded exec exits", async () => {
+    const tool = createExecTool({
+      allowBackground: true,
+      backgroundMs: 0,
+      notifyOnExit: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call1", {
+      command: echoAfterDelay("notify"),
+      background: true,
+    });
+
+    expect(result.details.status).toBe("running");
+    const sessionId = (result.details as { sessionId: string }).sessionId;
+
+    let finished = getFinishedSession(sessionId);
+    const deadline = Date.now() + (isWin ? 8000 : 2000);
+    while (!finished && Date.now() < deadline) {
+      await sleep(20);
+      finished = getFinishedSession(sessionId);
+    }
+
+    expect(finished).toBeTruthy();
+    const events = peekSystemEvents("agent:main:main");
+    expect(events.some((event) => event.includes(sessionId.slice(0, 8)))).toBe(true);
   });
 });
 

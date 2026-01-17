@@ -22,6 +22,10 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - Need a fully interactive session? Use `pty: true` and the `process` tool for stdin/output.
 Note: `elevated` is ignored when sandboxing is off (exec already runs on the host).
 
+## Config
+
+- `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
+
 ## Examples
 
 Foreground:
@@ -53,4 +57,4 @@ Enable it explicitly:
 Notes:
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
-- Config lives under `tools.exec.applyPatch` (no `tools.bash` alias).
+- Config lives under `tools.exec.applyPatch`.
