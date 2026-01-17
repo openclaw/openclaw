@@ -27,6 +27,7 @@ import {
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTypingThreadParams,
+  normalizeForwardedContext,
   describeReplyTarget,
   extractTelegramLocation,
   hasBotMention,
@@ -384,10 +385,16 @@ export const buildTelegramMessageContext = async ({
       : null;
 
   const replyTarget = describeReplyTarget(msg);
+  const forwardOrigin = normalizeForwardedContext(msg);
   const replySuffix = replyTarget
     ? `\n\n[Replying to ${replyTarget.sender}${
         replyTarget.id ? ` id:${replyTarget.id}` : ""
       }]\n${replyTarget.body}\n[/Replying]`
+    : "";
+  const forwardPrefix = forwardOrigin
+    ? `[Forwarded from ${forwardOrigin.from}${
+        forwardOrigin.date ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}` : ""
+      }]\n`
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
@@ -398,7 +405,7 @@ export const buildTelegramMessageContext = async ({
     channel: "Telegram",
     from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
-    body: `${bodyText}${replySuffix}`,
+    body: `${forwardPrefix}${bodyText}${replySuffix}`,
     chatType: isGroup ? "group" : "direct",
     sender: {
       name: senderName,
@@ -454,6 +461,13 @@ export const buildTelegramMessageContext = async ({
     ReplyToId: replyTarget?.id,
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
+    ForwardedFrom: forwardOrigin?.from,
+    ForwardedFromType: forwardOrigin?.fromType,
+    ForwardedFromId: forwardOrigin?.fromId,
+    ForwardedFromUsername: forwardOrigin?.fromUsername,
+    ForwardedFromTitle: forwardOrigin?.fromTitle,
+    ForwardedFromSignature: forwardOrigin?.fromSignature,
+    ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     MediaPath: allMedia[0]?.path,
@@ -478,6 +492,12 @@ export const buildTelegramMessageContext = async ({
     const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
     logVerbose(
       `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${preview}"`,
+    );
+  }
+
+  if (forwardOrigin && shouldLogVerbose()) {
+    logVerbose(
+      `telegram forward-context: forwardedFrom="${forwardOrigin.from}" type=${forwardOrigin.fromType}`,
     );
   }
 
