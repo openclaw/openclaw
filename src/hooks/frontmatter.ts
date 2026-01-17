@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import type {
   ClawdbotHookMetadata,
   HookEntry,
@@ -16,6 +17,48 @@ function stripQuotes(value: string): string {
   return value;
 }
 
+/**
+ * Extract a multi-line block value from frontmatter lines.
+ * Handles indented continuation lines (YAML-style multi-line values).
+ *
+ * @param lines - All lines in the frontmatter block
+ * @param startIndex - Index of the line containing the key
+ * @returns The combined multi-line value and the number of lines consumed
+ */
+function extractMultiLineValue(
+  lines: string[],
+  startIndex: number,
+): { value: string; linesConsumed: number } {
+  const startLine = lines[startIndex];
+  const match = startLine.match(/^([\w-]+):\s*(.*)$/);
+  if (!match) return { value: "", linesConsumed: 1 };
+
+  const inlineValue = match[2].trim();
+
+  // If there's a value on the same line, return it (single-line case)
+  if (inlineValue) {
+    return { value: inlineValue, linesConsumed: 1 };
+  }
+
+  // Multi-line case: collect indented continuation lines
+  const valueLines: string[] = [];
+  let i = startIndex + 1;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    // Stop if we hit a non-indented line (new key or empty line without indent)
+    if (line.length > 0 && !line.startsWith(" ") && !line.startsWith("\t")) {
+      break;
+    }
+    valueLines.push(line);
+    i++;
+  }
+
+  // Join and trim the multi-line value
+  const combined = valueLines.join("\n").trim();
+  return { value: combined, linesConsumed: i - startIndex };
+}
+
 export function parseFrontmatter(content: string): ParsedHookFrontmatter {
   const frontmatter: ParsedHookFrontmatter = {};
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -23,14 +66,47 @@ export function parseFrontmatter(content: string): ParsedHookFrontmatter {
   const endIndex = normalized.indexOf("\n---", 3);
   if (endIndex === -1) return frontmatter;
   const block = normalized.slice(4, endIndex);
-  for (const line of block.split("\n")) {
+  const lines = block.split("\n");
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
     const match = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!match) continue;
+    if (!match) {
+      i++;
+      continue;
+    }
+
     const key = match[1];
-    const value = stripQuotes(match[2].trim());
-    if (!key || !value) continue;
-    frontmatter[key] = value;
+    const inlineValue = match[2].trim();
+
+    if (!key) {
+      i++;
+      continue;
+    }
+
+    // Check if this is a multi-line value (no inline value and next line is indented)
+    if (!inlineValue && i + 1 < lines.length) {
+      const nextLine = lines[i + 1];
+      if (nextLine.startsWith(" ") || nextLine.startsWith("\t")) {
+        // Multi-line value
+        const { value, linesConsumed } = extractMultiLineValue(lines, i);
+        if (value) {
+          frontmatter[key] = value;
+        }
+        i += linesConsumed;
+        continue;
+      }
+    }
+
+    // Single-line value
+    const value = stripQuotes(inlineValue);
+    if (value) {
+      frontmatter[key] = value;
+    }
+    i++;
   }
+
   return frontmatter;
 }
 
@@ -96,7 +172,8 @@ export function resolveClawdbotMetadata(
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
   try {
-    const parsed = JSON.parse(raw) as { clawdbot?: unknown };
+    // Use JSON5 to handle trailing commas and other relaxed JSON syntax
+    const parsed = JSON5.parse(raw) as { clawdbot?: unknown };
     if (!parsed || typeof parsed !== "object") return undefined;
     const clawdbot = (parsed as { clawdbot?: unknown }).clawdbot;
     if (!clawdbot || typeof clawdbot !== "object") return undefined;
