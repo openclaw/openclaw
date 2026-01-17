@@ -1,3 +1,6 @@
 - [2026-01-16 13:23:28] 🔄 Starting morning email rollup
 - [2026-01-16 13:23:29] 📅 Calendar events listed (2 events)
 - [2026-01-16 13:23:29] ✅ No important emails found
+- [2026-01-17 08:00:41] 🔄 Starting morning email rollup
+- [2026-01-17 08:00:41] 📅 Calendar events listed (4 events)
+- [2026-01-17 08:00:49] ✅ Rollup complete: 2 emails
