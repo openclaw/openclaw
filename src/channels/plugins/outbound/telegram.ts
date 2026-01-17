@@ -1,6 +1,7 @@
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 function parseReplyToMessageId(replyToId?: string | null) {
   if (!replyToId) return undefined;
@@ -27,7 +28,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error("Delivering to Telegram requires target <chatId>"),
+        error: missingTargetError("Telegram", "<chatId>"),
       };
     }
     return { ok: true, to: trimmed };

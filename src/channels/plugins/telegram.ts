@@ -35,6 +35,7 @@ import {
 } from "./setup-helpers.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ChannelPlugin } from "./types.js";
+import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("telegram");
 
@@ -215,7 +216,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
       }
       if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Telegram requires targetken or --token-file (or --use-env).";
+        return "Telegram requires token or --token-file (or --use-env).";
       }
       return null;
     },
@@ -285,7 +286,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Telegram requires target <chatId>"),
+          error: missingTargetError("Telegram", "<chatId>"),
         };
       }
       return { ok: true, to: trimmed };

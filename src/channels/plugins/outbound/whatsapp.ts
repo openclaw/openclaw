@@ -3,6 +3,7 @@ import { shouldLogVerbose } from "../../../globals.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../../web/outbound.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
@@ -26,8 +27,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         }
         return {
           ok: false,
-          error: new Error(
-            "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
+          error: missingTargetError(
+            "WhatsApp",
+            "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
           ),
         };
       }
@@ -51,8 +53,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     }
     return {
       ok: false,
-      error: new Error(
-        "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
+      error: missingTargetError(
+        "WhatsApp",
+        "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
       ),
     };
   },

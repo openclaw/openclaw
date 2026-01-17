@@ -2,6 +2,7 @@ import { chunkText } from "../../../auto-reply/chunk.js";
 import { sendMessageSignal } from "../../../signal/send.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const signalOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -12,9 +13,7 @@ export const signalOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error(
-          "Delivering to Signal requires target <E.164|group:ID|signal:group:ID|signal:+E.164>",
-        ),
+        error: missingTargetError("Signal", "<E.164|group:ID|signal:group:ID|signal:+E.164>"),
       };
     }
     return { ok: true, to: trimmed };

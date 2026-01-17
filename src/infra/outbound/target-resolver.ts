@@ -227,6 +227,7 @@ async function getDirectoryEntries(params: {
     source: "live",
   });
   directoryCache.set(liveKey, liveEntries, params.cfg);
+  directoryCache.set(cacheKey, liveEntries, params.cfg);
   return liveEntries;
 }
 

@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types
 
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
+import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -14,9 +15,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error(
-          "Delivering to MS Teams requires target <conversationId|user:ID|conversation:ID>",
-        ),
+        error: missingTargetError("MS Teams", "<conversationId|user:ID|conversation:ID>"),
       };
     }
     return { ok: true, to: trimmed };

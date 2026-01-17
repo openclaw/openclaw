@@ -150,6 +150,36 @@ function applyCrossContextMessageDecoration({
   return applied.message;
 }
 
+async function maybeApplyCrossContextMarker(params: {
+  cfg: ClawdbotConfig;
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  target: string;
+  toolContext?: ChannelThreadingToolContext;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  message: string;
+  preferEmbeds: boolean;
+}): Promise<string> {
+  if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
+    return params.message;
+  }
+  const decoration = await buildCrossContextDecoration({
+    cfg: params.cfg,
+    channel: params.channel,
+    target: params.target,
+    toolContext: params.toolContext,
+    accountId: params.accountId ?? undefined,
+  });
+  if (!decoration) return params.message;
+  return applyCrossContextMessageDecoration({
+    params: params.args,
+    message: params.message,
+    decoration,
+    preferEmbeds: params.preferEmbeds,
+  });
+}
+
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
   if (typeof raw === "boolean") return raw;
@@ -339,24 +369,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     params.media = parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
   }
 
-  const decoration =
-    shouldApplyCrossContextMarker(action) && input.toolContext
-      ? await buildCrossContextDecoration({
-          cfg,
-          channel,
-          target: to,
-          toolContext: input.toolContext,
-          accountId: accountId ?? undefined,
-        })
-      : null;
-  if (decoration) {
-    message = applyCrossContextMessageDecoration({
-      params,
-      message,
-      decoration,
-      preferEmbeds: true,
-    });
-  }
+  message = await maybeApplyCrossContextMarker({
+    cfg,
+    channel,
+    action,
+    target: to,
+    toolContext: input.toolContext,
+    accountId,
+    args: params,
+    message,
+    preferEmbeds: true,
+  });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
@@ -415,25 +438,18 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     integer: true,
   });
   const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
-  const decoration =
-    shouldApplyCrossContextMarker(action) && input.toolContext
-      ? await buildCrossContextDecoration({
-          cfg,
-          channel,
-          target: to,
-          toolContext: input.toolContext,
-          accountId: accountId ?? undefined,
-        })
-      : null;
-  if (decoration) {
-    const base = typeof params.message === "string" ? params.message : "";
-    applyCrossContextMessageDecoration({
-      params,
-      message: base,
-      decoration,
-      preferEmbeds: true,
-    });
-  }
+  const base = typeof params.message === "string" ? params.message : "";
+  await maybeApplyCrossContextMarker({
+    cfg,
+    channel,
+    action,
+    target: to,
+    toolContext: input.toolContext,
+    accountId,
+    args: params,
+    message: base,
+    preferEmbeds: true,
+  });
 
   const poll = await executePollAction({
     ctx: {

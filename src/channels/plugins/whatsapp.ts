@@ -35,6 +35,7 @@ import {
 import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
 import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
+import { missingTargetError } from "../../infra/outbound/target-errors.js";
 
 const meta = getChatChannelMeta("whatsapp");
 
@@ -315,8 +316,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           }
           return {
             ok: false,
-            error: new Error(
-              "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
+            error: missingTargetError(
+              "WhatsApp",
+              "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
             ),
           };
         }
@@ -340,9 +342,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       return {
         ok: false,
-        error: new Error(
-          "Delivering to WhatsApp requires target <E.164|group JID> or channels.whatsapp.allowFrom[0]",
-        ),
+        error: missingTargetError("WhatsApp", "<E.164|group JID> or channels.whatsapp.allowFrom[0]"),
       };
     },
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {

@@ -1,5 +1,6 @@
 import { sendMessageSlack } from "../../../slack/send.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -10,7 +11,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error("Delivering to Slack requires target <channelId|user:ID|channel:ID>"),
+        error: missingTargetError("Slack", "<channelId|user:ID|channel:ID>"),
       };
     }
     return { ok: true, to: trimmed };
