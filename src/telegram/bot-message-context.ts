@@ -7,6 +7,7 @@ import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntry,
 } from "../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
@@ -358,12 +359,10 @@ export const buildTelegramMessageContext = async ({
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
-    BodyForAgent: combinedBody,
     RawBody: rawBody,
     CommandBody: commandBody,
-    BodyForCommands: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
     To: `telegram:${chatId}`,
     SessionKey: route.sessionKey,
@@ -399,7 +398,7 @@ export const buildTelegramMessageContext = async ({
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
-  };
+  });
 
   if (replyTarget && shouldLogVerbose()) {
     const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);

@@ -81,6 +81,8 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ntranscribed text");
     expect(ctx.CommandBody).toBe("transcribed text");
     expect(ctx.RawBody).toBe("transcribed text");
+    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    expect(ctx.BodyForCommands).toBe("transcribed text");
   });
 
   it("handles URL-only attachments for audio transcription", async () => {
@@ -254,6 +256,8 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
     expect(ctx.CommandBody).toBe("show Dom");
     expect(ctx.RawBody).toBe("show Dom");
+    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    expect(ctx.BodyForCommands).toBe("show Dom");
   });
 
   it("uses shared media models list when capability config is missing", async () => {

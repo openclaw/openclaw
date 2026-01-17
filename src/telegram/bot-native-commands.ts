@@ -13,6 +13,7 @@ import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -251,11 +252,11 @@ export const registerTelegramNativeCommands = ({
           const conversationLabel = isGroup
             ? (msg.chat.title ? `${msg.chat.title} id:${chatId}` : `group:${chatId}`)
             : (buildSenderName(msg) ?? String(senderId || chatId));
-          const ctxPayload = {
+          const ctxPayload = finalizeInboundContext({
             Body: prompt,
-            BodyForAgent: prompt,
+            RawBody: prompt,
+            CommandBody: prompt,
             CommandArgs: commandArgs,
-            BodyForCommands: prompt,
             From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",
@@ -275,7 +276,7 @@ export const registerTelegramNativeCommands = ({
             CommandTargetSessionKey: route.sessionKey,
             MessageThreadId: resolvedThreadId,
             IsForum: isForum,
-          };
+          });
 
           const disableBlockStreaming =
             typeof telegramCfg.blockStreaming === "boolean"

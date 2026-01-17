@@ -18,6 +18,8 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
 } from "../../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { formatInboundBodyWithSenderMeta } from "../../auto-reply/reply/inbound-sender-meta.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -102,12 +104,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const signalTo = entry.isGroup ? `group:${entry.groupId}` : `signal:${entry.senderRecipient}`;
-    const ctxPayload = {
+    const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: combinedBody,
       RawBody: entry.bodyText,
       CommandBody: entry.bodyText,
-      BodyForCommands: entry.bodyText,
       From: entry.isGroup
         ? `group:${entry.groupId ?? "unknown"}`
         : `signal:${entry.senderRecipient}`,
@@ -129,7 +129,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       CommandAuthorized: entry.commandAuthorized,
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
-    };
+    });
+    ctxPayload.Body = formatInboundBodyWithSenderMeta({ ctx: ctxPayload, body: ctxPayload.Body });
 
     if (!entry.isGroup) {
       const sessionCfg = deps.cfg.session;

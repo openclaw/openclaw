@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 
 import type { RuntimeEnv } from "../../../src/runtime.js";
+import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import { loadCoreChannelDeps, type CoreChannelDeps } from "./core-bridge.js";
 import { sendMessageZalouser } from "./send.js";
 import type { CoreConfig, ResolvedZalouserAccount, ZcaMessage } from "./types.js";
@@ -181,12 +182,10 @@ async function processMessage(
     body: rawBody,
   });
 
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: body,
-    BodyForAgent: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    BodyForCommands: rawBody,
     From: isGroup ? `group:${chatId}` : `zalouser:${senderId}`,
     To: `zalouser:${chatId}`,
     SessionKey: route.sessionKey,
@@ -200,7 +199,7 @@ async function processMessage(
     MessageSid: message.msgId ?? `${timestamp}`,
     OriginatingChannel: "zalouser",
     OriginatingTo: `zalouser:${chatId}`,
-  };
+  });
 
   await deps.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,

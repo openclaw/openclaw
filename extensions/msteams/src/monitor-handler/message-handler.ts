@@ -5,6 +5,7 @@ import {
   resolveInboundDebounceMs,
 } from "../../../../src/auto-reply/inbound-debounce.js";
 import { dispatchReplyFromConfig } from "../../../../src/auto-reply/reply/dispatch-from-config.js";
+import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -381,16 +382,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       });
     }
 
-    const ctxPayload = {
-      Body: combinedBody,
-      BodyForAgent: combinedBody,
-      RawBody: rawBody,
-      CommandBody: rawBody,
-      BodyForCommands: rawBody,
-      From: teamsFrom,
-      To: teamsTo,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
+	    const ctxPayload = finalizeInboundContext({
+	      Body: combinedBody,
+	      RawBody: rawBody,
+	      CommandBody: rawBody,
+	      From: teamsFrom,
+	      To: teamsTo,
+	      SessionKey: route.sessionKey,
+	      AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
@@ -400,12 +399,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
-      CommandAuthorized: true,
-      OriginatingChannel: "msteams" as const,
-      OriginatingTo: teamsTo,
-      ...mediaPayload,
-    };
+	      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+	      CommandAuthorized: true,
+	      OriginatingChannel: "msteams" as const,
+	      OriginatingTo: teamsTo,
+	      ...mediaPayload,
+	    });
 
     if (shouldLogVerbose()) {
       logVerbose(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
