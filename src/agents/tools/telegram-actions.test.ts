@@ -382,6 +382,42 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/inline buttons are limited to DMs/i);
   });
 
+  it("allows inline buttons in DMs with tg: prefixed targets", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
+      },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "tg:5232990709",
+        content: "Choose",
+        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("allows inline buttons in groups with topic targets", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", capabilities: { inlineButtons: "group" } },
+      },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "telegram:group:-1001234567890:topic:456",
+        content: "Choose",
+        buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
   it("sends messages with inline keyboard buttons when enabled", async () => {
     const cfg = {
       channels: {
