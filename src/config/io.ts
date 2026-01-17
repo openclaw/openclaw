@@ -52,6 +52,8 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "CLAWDBOT_GATEWAY_PASSWORD",
 ];
 
+const CONFIG_BACKUP_COUNT = 5;
+
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
 function hashConfigRaw(raw: string | null): string {
@@ -71,6 +73,53 @@ export function resolveConfigSnapshotHash(snapshot: {
   }
   if (typeof snapshot.raw !== "string") return null;
   return hashConfigRaw(snapshot.raw);
+}
+
+function coerceConfig(value: unknown): ClawdbotConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as ClawdbotConfig;
+}
+
+function rotateConfigBackupsSync(configPath: string, ioFs: typeof fs): void {
+  if (CONFIG_BACKUP_COUNT <= 1) return;
+  const backupBase = `${configPath}.bak`;
+  const maxIndex = CONFIG_BACKUP_COUNT - 1;
+  try {
+    ioFs.unlinkSync(`${backupBase}.${maxIndex}`);
+  } catch {
+    // best-effort
+  }
+  for (let index = maxIndex - 1; index >= 1; index -= 1) {
+    try {
+      ioFs.renameSync(`${backupBase}.${index}`, `${backupBase}.${index + 1}`);
+    } catch {
+      // best-effort
+    }
+  }
+  try {
+    ioFs.renameSync(backupBase, `${backupBase}.1`);
+  } catch {
+    // best-effort
+  }
+}
+
+async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
+  if (CONFIG_BACKUP_COUNT <= 1) return;
+  const backupBase = `${configPath}.bak`;
+  const maxIndex = CONFIG_BACKUP_COUNT - 1;
+  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
+    // best-effort
+  });
+  for (let index = maxIndex - 1; index >= 1; index -= 1) {
+    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
+      // best-effort
+    });
+  }
+  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
+    // best-effort
+  });
 }
 
 export type ConfigIoDeps = {
@@ -165,10 +214,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     deps.fs.writeFileSync(tmp, json, { encoding: "utf-8", mode: 0o600 });
 
-    try {
-      deps.fs.copyFileSync(configPath, `${configPath}.bak`);
-    } catch {
-      // best-effort
+    if (deps.fs.existsSync(configPath)) {
+      rotateConfigBackupsSync(configPath, deps.fs);
+      try {
+        deps.fs.copyFileSync(configPath, `${configPath}.bak`);
+      } catch {
+        // best-effort
+      }
     }
 
     try {
@@ -344,7 +396,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: {},
+          config: coerceConfig(parsedRes.parsed),
           hash,
           issues: [{ path: "", message }],
           legacyIssues: [],
@@ -366,7 +418,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: {},
+          config: coerceConfig(resolved),
           hash,
           issues: [{ path: "", message }],
           legacyIssues: [],
@@ -379,17 +431,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       const validated = validateConfigObject(resolvedConfigRaw);
       if (!validated.ok) {
-        const resolvedConfig =
-          typeof resolvedConfigRaw === "object" && resolvedConfigRaw !== null
-            ? (resolvedConfigRaw as ClawdbotConfig)
-            : {};
         return {
           path: configPath,
           exists: true,
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: resolvedConfig,
+          config: coerceConfig(resolvedConfigRaw),
           hash,
           issues: validated.issues,
           legacyIssues,
@@ -450,9 +498,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       mode: 0o600,
     });
 
-    await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-      // best-effort
-    });
+    if (deps.fs.existsSync(configPath)) {
+      await rotateConfigBackups(configPath, deps.fs.promises);
+      await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
+        // best-effort
+      });
+    }
 
     try {
       await deps.fs.promises.rename(tmp, configPath);
