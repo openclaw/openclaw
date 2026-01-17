@@ -1,4 +1,5 @@
 import { normalizeAccountId } from "./account-id.js";
+import { normalizeMessageChannel } from "./message-channel.js";
 
 export type DeliveryContext = {
   channel?: string;
@@ -6,16 +7,20 @@ export type DeliveryContext = {
   accountId?: string;
 };
 
-type DeliveryContextSessionSource = {
+export type DeliveryContextSessionSource = {
   channel?: string;
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  deliveryContext?: DeliveryContext;
 };
 
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) return undefined;
-  const channel = typeof context.channel === "string" ? context.channel.trim() : undefined;
+  const channel =
+    typeof context.channel === "string"
+      ? normalizeMessageChannel(context.channel) ?? context.channel.trim()
+      : undefined;
   const to = typeof context.to === "string" ? context.to.trim() : undefined;
   const accountId = normalizeAccountId(context.accountId);
   if (!channel && !to && !accountId) return undefined;
@@ -26,15 +31,54 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   };
 }
 
+export function normalizeSessionDeliveryFields(
+  source?: DeliveryContextSessionSource,
+): {
+  deliveryContext?: DeliveryContext;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+} {
+  if (!source) {
+    return {
+      deliveryContext: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+    };
+  }
+
+  const merged = mergeDeliveryContext(
+    normalizeDeliveryContext({
+      channel: source.lastChannel ?? source.channel,
+      to: source.lastTo,
+      accountId: source.lastAccountId,
+    }),
+    normalizeDeliveryContext(source.deliveryContext),
+  );
+
+  if (!merged) {
+    return {
+      deliveryContext: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+    };
+  }
+
+  return {
+    deliveryContext: merged,
+    lastChannel: merged.channel,
+    lastTo: merged.to,
+    lastAccountId: merged.accountId,
+  };
+}
+
 export function deliveryContextFromSession(
   entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
   if (!entry) return undefined;
-  return normalizeDeliveryContext({
-    channel: entry.lastChannel ?? entry.channel,
-    to: entry.lastTo,
-    accountId: entry.lastAccountId,
-  });
+  return normalizeSessionDeliveryFields(entry).deliveryContext;
 }
 
 export function mergeDeliveryContext(

@@ -4,8 +4,7 @@ import path from "node:path";
 
 import JSON5 from "json5";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -44,21 +43,23 @@ function invalidateSessionStoreCache(storePath: string): void {
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
-  const normalizedLastChannel = normalizeMessageChannel(entry.lastChannel) ?? undefined;
-  const normalizedLastTo = typeof entry.lastTo === "string" ? entry.lastTo.trim() : undefined;
-  const normalizedLastAccountId = normalizeAccountId(entry.lastAccountId);
-  if (
-    normalizedLastChannel === entry.lastChannel &&
-    normalizedLastTo === entry.lastTo &&
-    normalizedLastAccountId === entry.lastAccountId
-  ) {
-    return entry;
-  }
+  const normalized = normalizeSessionDeliveryFields(entry);
+  const nextDelivery = normalized.deliveryContext;
+  const sameDelivery =
+    (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
+    (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
+    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId;
+  const sameLast =
+    entry.lastChannel === normalized.lastChannel &&
+    entry.lastTo === normalized.lastTo &&
+    entry.lastAccountId === normalized.lastAccountId;
+  if (sameDelivery && sameLast) return entry;
   return {
     ...entry,
-    lastChannel: normalizedLastChannel,
-    lastTo: normalizedLastTo || undefined,
-    lastAccountId: normalizedLastAccountId,
+    deliveryContext: nextDelivery,
+    lastChannel: normalized.lastChannel,
+    lastTo: normalized.lastTo,
+    lastAccountId: normalized.lastAccountId,
   };
 }
 
@@ -331,11 +332,24 @@ export async function updateLastRoute(params: {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
     const now = Date.now();
+    const trimmedAccountId = accountId?.trim();
+    const resolvedAccountId =
+      trimmedAccountId && trimmedAccountId.length > 0
+        ? trimmedAccountId
+        : existing?.lastAccountId ?? existing?.deliveryContext?.accountId;
+    const normalized = normalizeSessionDeliveryFields({
+      deliveryContext: {
+        channel: channel ?? existing?.lastChannel,
+        to,
+        accountId: resolvedAccountId,
+      },
+    });
     const next = mergeSessionEntry(existing, {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-      lastChannel: channel,
-      lastTo: to?.trim() ? to.trim() : undefined,
-      lastAccountId: accountId?.trim() ? accountId.trim() : existing?.lastAccountId,
+      deliveryContext: normalized.deliveryContext,
+      lastChannel: normalized.lastChannel ?? channel,
+      lastTo: normalized.lastTo ?? (to?.trim() ? to.trim() : undefined),
+      lastAccountId: normalized.lastAccountId ?? resolvedAccountId,
     });
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);

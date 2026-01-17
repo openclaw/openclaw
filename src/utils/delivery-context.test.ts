@@ -5,6 +5,7 @@ import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {
@@ -69,5 +70,22 @@ describe("delivery context helpers", () => {
       to: "123",
       accountId: undefined,
     });
+  });
+
+  it("normalizes delivery fields and mirrors them on session entries", () => {
+    const normalized = normalizeSessionDeliveryFields({
+      deliveryContext: { channel: " Slack ", to: " channel:1 ", accountId: " acct-2 " },
+      lastChannel: " whatsapp ",
+      lastTo: " +1555 ",
+    });
+
+    expect(normalized.deliveryContext).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-2",
+    });
+    expect(normalized.lastChannel).toBe("whatsapp");
+    expect(normalized.lastTo).toBe("+1555");
+    expect(normalized.lastAccountId).toBe("acct-2");
   });
 });

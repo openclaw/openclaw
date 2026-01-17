@@ -29,6 +29,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -199,10 +200,20 @@ export async function initSessionState(params: {
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
-  const lastChannel =
+  const lastChannelRaw =
     (ctx.OriginatingChannel as string | undefined)?.trim() || baseEntry?.lastChannel;
-  const lastTo = ctx.OriginatingTo?.trim() || ctx.To?.trim() || baseEntry?.lastTo;
-  const lastAccountId = ctx.AccountId?.trim() || baseEntry?.lastAccountId;
+  const lastToRaw = ctx.OriginatingTo?.trim() || ctx.To?.trim() || baseEntry?.lastTo;
+  const lastAccountIdRaw = ctx.AccountId?.trim() || baseEntry?.lastAccountId;
+  const deliveryFields = normalizeSessionDeliveryFields({
+    deliveryContext: {
+      channel: lastChannelRaw,
+      to: lastToRaw,
+      accountId: lastAccountIdRaw,
+    },
+  });
+  const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
+  const lastTo = deliveryFields.lastTo ?? lastToRaw;
+  const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -227,6 +238,7 @@ export async function initSessionState(params: {
     subject: baseEntry?.subject,
     room: baseEntry?.room,
     space: baseEntry?.space,
+    deliveryContext: deliveryFields.deliveryContext,
     // Track originating channel for subagent announce routing.
     lastChannel,
     lastTo,

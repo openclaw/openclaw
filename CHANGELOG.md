@@ -36,6 +36,7 @@
 ### Fixes
 - Sub-agents: normalize announce delivery origin + queue bucketing by accountId to keep multi-account routing stable. (#1061, #1058) — thanks @adam91holt.
 - Gateway: honor explicit delivery targets without implicit accountId fallback; preserve lastAccountId for implicit routing.
+- Gateway: avoid reusing last-to/accountId when the requested channel differs; sync deliveryContext with last route fields.
 - Repo: fix oxlint config filename and move ignore pattern into config. (#1064) — thanks @connorshea.
 - Messages: `/stop` now hard-aborts queued followups and sub-agent runs; suppress zero-count stop notes.
 - Messages: include sender labels for live group messages across channels, matching queued/history formatting. (#1059)

@@ -130,6 +130,10 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
     expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
+    expect(store[mainSessionKey]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "12345",
+    });
     expect(store[mainSessionKey]?.responseUsage).toBe("on");
     expect(store[mainSessionKey]?.queueDebounceMs).toBe(1234);
     expect(store[mainSessionKey]?.reasoningLevel).toBe("on");
@@ -176,6 +180,11 @@ describe("sessions", () => {
     expect(store["agent:main:main"]?.lastChannel).toBe("whatsapp");
     expect(store["agent:main:main"]?.lastTo).toBe("+1555");
     expect(store["agent:main:main"]?.lastAccountId).toBe("acct-1");
+    expect(store["agent:main:main"]?.deliveryContext).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-1",
+    });
   });
 
   it("updateSessionStore keeps deletions when concurrent writes happen", async () => {

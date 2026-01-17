@@ -76,6 +76,7 @@ describe("deliverAgentCommandResult", () => {
     } as unknown as RuntimeEnv;
     const sessionEntry = {
       lastAccountId: "legacy",
+      lastChannel: "whatsapp",
     } as SessionEntry;
     const result = {
       payloads: [{ text: "hi" }],
@@ -139,6 +140,42 @@ describe("deliverAgentCommandResult", () => {
     );
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: undefined }),
+    );
+  });
+
+  it("skips session accountId when channel differs", async () => {
+    const cfg = {} as ClawdbotConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const sessionEntry = {
+      lastAccountId: "legacy",
+      lastChannel: "telegram",
+    } as SessionEntry;
+    const result = {
+      payloads: [{ text: "hi" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+      },
+      sessionEntry,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: undefined, channel: "whatsapp" }),
     );
   });
 });

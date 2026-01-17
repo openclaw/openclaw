@@ -9,10 +9,11 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "../../infra/outbound/targets.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -144,6 +145,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
       const spawnedByValue = request.spawnedBy?.trim() || entry?.spawnedBy;
+      const deliveryFields = normalizeSessionDeliveryFields(entry);
       const nextEntry: SessionEntry = {
         sessionId,
         updatedAt: now,
@@ -153,9 +155,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
-        lastChannel: entry?.lastChannel,
-        lastTo: entry?.lastTo,
-        lastAccountId: entry?.lastAccountId,
+        deliveryContext: deliveryFields.deliveryContext,
+        lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+        lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+        lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
@@ -198,32 +201,32 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
 
+    const wantsDelivery = request.deliver === true;
     const requestedChannel = normalizeMessageChannel(request.channel) ?? "last";
-
-    const lastChannel = sessionEntry?.lastChannel;
-    const lastTo = typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
     const explicitTo =
       typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
-    const resolvedAccountId =
-      normalizeAccountId(request.accountId) ??
-      (explicitTo ? undefined : normalizeAccountId(sessionEntry?.lastAccountId));
 
-    const wantsDelivery = request.deliver === true;
+    const baseDelivery = resolveSessionDeliveryTarget({
+      entry: sessionEntry,
+      requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
+      explicitTo,
+    });
 
     const resolvedChannel = (() => {
+      if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) return INTERNAL_MESSAGE_CHANNEL;
       if (requestedChannel === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        if (lastChannel && lastChannel !== INTERNAL_MESSAGE_CHANNEL) {
-          return lastChannel;
+        if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
+          return baseDelivery.channel;
         }
         return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
       }
 
       if (isGatewayMessageChannel(requestedChannel)) return requestedChannel;
 
-      if (lastChannel && lastChannel !== INTERNAL_MESSAGE_CHANNEL) {
-        return lastChannel;
+      if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
+        return baseDelivery.channel;
       }
       return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
     })();
@@ -233,9 +236,19 @@ export const agentHandlers: GatewayRequestHandlers = {
       : isDeliverableMessageChannel(resolvedChannel)
         ? "implicit"
         : undefined;
-    let resolvedTo =
-      explicitTo ||
-      (isDeliverableMessageChannel(resolvedChannel) ? lastTo || undefined : undefined);
+    const resolvedAccountId =
+      normalizeAccountId(request.accountId) ??
+      (deliveryTargetMode === "implicit" && resolvedChannel === baseDelivery.lastChannel
+        ? baseDelivery.lastAccountId
+        : undefined);
+    let resolvedTo = explicitTo;
+    if (
+      !resolvedTo &&
+      isDeliverableMessageChannel(resolvedChannel) &&
+      resolvedChannel === baseDelivery.lastChannel
+    ) {
+      resolvedTo = baseDelivery.lastTo;
+    }
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfg = cfgForAgent ?? loadConfig();
       const fallback = resolveOutboundTarget({

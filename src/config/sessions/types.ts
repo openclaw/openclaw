@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import type { DeliveryContext } from "../../utils/delivery-context.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -69,6 +70,7 @@ export type SessionEntry = {
   subject?: string;
   room?: string;
   space?: string;
+  deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;

@@ -30,12 +30,14 @@ function resolveDeliveryAccountId(params: {
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
   targetMode: ChannelOutboundTargetMode;
+  deliveryChannel?: string;
 }) {
   const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
-  return (
-    normalizeAccountId(params.opts.accountId) ??
-    (params.targetMode === "implicit" ? normalizeAccountId(sessionOrigin?.accountId) : undefined)
-  );
+  const explicit = normalizeAccountId(params.opts.accountId);
+  if (explicit || params.targetMode !== "implicit") return explicit;
+  if (!params.deliveryChannel || isInternalMessageChannel(params.deliveryChannel)) return undefined;
+  if (sessionOrigin?.channel !== params.deliveryChannel) return undefined;
+  return normalizeAccountId(sessionOrigin?.accountId);
 }
 
 export async function deliverAgentCommandResult(params: {
@@ -61,7 +63,12 @@ export async function deliverAgentCommandResult(params: {
 
   const targetMode: ChannelOutboundTargetMode =
     opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedAccountId = resolveDeliveryAccountId({ opts, sessionEntry, targetMode });
+  const resolvedAccountId = resolveDeliveryAccountId({
+    opts,
+    sessionEntry,
+    targetMode,
+    deliveryChannel,
+  });
   const resolvedTarget =
     deliver && isDeliveryChannelKnown && deliveryChannel
       ? resolveOutboundTarget({
