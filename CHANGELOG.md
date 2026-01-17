@@ -79,6 +79,7 @@ Docs: https://docs.clawd.bot
 - Tools: include provider/session context in elevated exec denial errors.
 - Tools: normalize exec tool alias naming in tool error logs.
 - Logging: reuse shared ANSI stripping to keep console capture lint-clean.
+- Logging: prefix nested agent output with session/run/channel context.
 - Telegram: accept tg/group/telegram prefixes + topic targets for inline button validation. (#1072) — thanks @danielz1z.
 - Telegram: split long captions into follow-up messages.
 - Config: block startup on invalid config, preserve best-effort doctor config, and keep rolling config backups. (#1083) — thanks @mukhtharcm.
