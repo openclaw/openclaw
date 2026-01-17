@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
 - CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
+- Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
 
 ## 2026.1.16-2
 

@@ -14,7 +14,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
-  formatUsageSummaryLine,
+  formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
@@ -148,11 +148,15 @@ export async function buildStatusReply(params: {
         providers: [currentUsageProvider],
         agentDir: statusAgentDir,
       });
-      const summaryLine = formatUsageSummaryLine(usageSummary, {
-        now: Date.now(),
-        maxProviders: 1,
-      });
-      if (summaryLine) usageLine = summaryLine;
+      const usageEntry = usageSummary.providers[0];
+      if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
+        const summaryLine = formatUsageWindowSummary(usageEntry, {
+          now: Date.now(),
+          maxWindows: 2,
+          includeResets: true,
+        });
+        if (summaryLine) usageLine = `📊 Usage: ${summaryLine}`;
+      }
     } catch {
       usageLine = null;
     }
