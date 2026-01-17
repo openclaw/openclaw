@@ -13,6 +13,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "openrouter-api-key": "openrouter",
   "ai-gateway-api-key": "vercel-ai-gateway",
   "moonshot-api-key": "moonshot",
+  "kimi-code-api-key": "kimi-code",
   "gemini-api-key": "google",
   "zai-api-key": "zai",
   "synthetic-api-key": "synthetic",

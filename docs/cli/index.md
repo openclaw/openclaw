@@ -292,7 +292,7 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced>`
-- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|codex-cli|gemini-api-key|zai-api-key|apiKey|minimax-api|opencode-zen|skip>`
+- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|openrouter-api-key|ai-gateway-api-key|moonshot-api-key|kimi-code-api-key|codex-cli|gemini-api-key|zai-api-key|apiKey|minimax-api|opencode-zen|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
@@ -302,6 +302,7 @@ Options:
 - `--openrouter-api-key <key>`
 - `--ai-gateway-api-key <key>`
 - `--moonshot-api-key <key>`
+- `--kimi-code-api-key <key>`
 - `--gemini-api-key <key>`
 - `--zai-api-key <key>`
 - `--minimax-api-key <key>`
