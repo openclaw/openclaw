@@ -253,6 +253,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const isGroupSession =
     entry?.chatType === "group" ||
+    entry?.chatType === "channel" ||
     entry?.chatType === "room" ||
     Boolean(args.sessionKey?.includes(":group:")) ||
     Boolean(args.sessionKey?.includes(":channel:")) ||

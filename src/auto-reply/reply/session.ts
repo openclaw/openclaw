@@ -25,8 +25,10 @@ import {
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
+import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -126,10 +128,11 @@ export async function initSessionState(params: {
   let persistedProviderOverride: string | undefined;
 
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
-  const isGroup = ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
+  const normalizedChatType = normalizeChatType(ctx.ChatType);
+  const isGroup = normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim().toLowerCase();
 
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
@@ -308,7 +311,15 @@ export async function initSessionState(params: {
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: formatInboundBodyWithSenderMeta({
       ctx,
-      body: bodyStripped ?? ctx.Body ?? ctx.CommandBody ?? ctx.RawBody ?? "",
+      body: normalizeInboundTextNewlines(
+        bodyStripped ??
+          ctx.BodyForAgent ??
+          ctx.Body ??
+          ctx.CommandBody ??
+          ctx.RawBody ??
+          ctx.BodyForCommands ??
+          "",
+      ),
     }),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",

@@ -15,6 +15,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { monitorWebChannel, SILENT_REPLY_TOKEN } from "./auto-reply.js";
 import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
@@ -184,6 +185,7 @@ describe("web auto-reply", () => {
     expect(payload.Body).not.toContain("Alice (+111): first");
     expect(payload.Body).not.toContain("[message_id: g-always-1]");
     expect(payload.Body).toContain("second");
+    expectInboundContextContract(payload);
     expect(payload.SenderName).toBe("Bob");
     expect(payload.SenderE164).toBe("+222");
     expect(reply).toHaveBeenCalledTimes(1);

@@ -248,12 +248,18 @@ export const registerTelegramNativeCommands = ({
           ].filter((entry): entry is string => Boolean(entry));
           const groupSystemPrompt =
             systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+          const conversationLabel = isGroup
+            ? (msg.chat.title ? `${msg.chat.title} id:${chatId}` : `group:${chatId}`)
+            : (buildSenderName(msg) ?? String(senderId || chatId));
           const ctxPayload = {
             Body: prompt,
+            BodyForAgent: prompt,
             CommandArgs: commandArgs,
+            BodyForCommands: prompt,
             From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",
+            ConversationLabel: conversationLabel,
             GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
             GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
             SenderName: buildSenderName(msg),

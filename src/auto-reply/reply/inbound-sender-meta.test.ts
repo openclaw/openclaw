@@ -28,10 +28,10 @@ describe("formatInboundBodyWithSenderMeta", () => {
     );
   });
 
-  it("preserves escaped newline style when body uses literal \\\\n", () => {
+  it("appends with a real newline even if the body contains literal \\\\n", () => {
     const ctx: MsgContext = { ChatType: "group", SenderName: "Bob", SenderId: "+222" };
     expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] one\\n[X] two" })).toBe(
-      "[X] one\\n[X] two\\n[from: Bob (+222)]",
+      "[X] one\\n[X] two\n[from: Bob (+222)]",
     );
   });
 

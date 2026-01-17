@@ -15,7 +15,7 @@ export type GatewaySessionRow = {
   subject?: string;
   room?: string;
   space?: string;
-  chatType?: "direct" | "group" | "room";
+  chatType?: "direct" | "group" | "channel" | "room";
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;

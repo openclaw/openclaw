@@ -59,7 +59,9 @@ export function loadSessionEntry(sessionKey: string) {
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
   if (key === "global") return "global";
   if (key === "unknown") return "unknown";
-  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (entry?.chatType === "group" || entry?.chatType === "channel" || entry?.chatType === "room") {
+    return "group";
+  }
   if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }

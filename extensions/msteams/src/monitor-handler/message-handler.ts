@@ -383,13 +383,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const ctxPayload = {
       Body: combinedBody,
+      BodyForAgent: combinedBody,
       RawBody: rawBody,
       CommandBody: rawBody,
+      BodyForCommands: rawBody,
       From: teamsFrom,
       To: teamsTo,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
-      ChatType: isDirectMessage ? "direct" : isChannel ? "room" : "group",
+      ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+      ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
       SenderName: senderName,
       SenderId: senderId,

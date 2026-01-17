@@ -324,9 +324,12 @@ export const buildTelegramMessageContext = async ({
       }]\n${replyTarget.body}\n[/Replying]`
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const conversationLabel = isGroup
+    ? (groupLabel ?? `group:${chatId}`)
+    : buildSenderLabel(msg, senderId || chatId);
   const body = formatAgentEnvelope({
     channel: "Telegram",
-    from: isGroup ? (groupLabel ?? `group:${chatId}`) : buildSenderLabel(msg, senderId || chatId),
+    from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
     body: `${bodyText}${replySuffix}`,
   });
@@ -357,13 +360,16 @@ export const buildTelegramMessageContext = async ({
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const ctxPayload = {
     Body: combinedBody,
+    BodyForAgent: combinedBody,
     RawBody: rawBody,
     CommandBody: commandBody,
+    BodyForCommands: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
     To: `telegram:${chatId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
+    ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
     GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
     SenderName: buildSenderName(msg),
