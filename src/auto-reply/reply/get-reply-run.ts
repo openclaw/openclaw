@@ -299,8 +299,7 @@ export async function runPreparedReply(
   });
   const isGroupSession =
     sessionEntry?.chatType === "group" ||
-    sessionEntry?.chatType === "channel" ||
-    sessionEntry?.chatType === "room";
+    sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   prefixedBodyBase = await prependSystemEvents({
     cfg,

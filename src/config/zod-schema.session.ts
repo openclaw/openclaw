@@ -43,8 +43,6 @@ export const SessionSchema = z
                       z.literal("direct"),
                       z.literal("group"),
                       z.literal("channel"),
-                      // Legacy alias for "channel".
-                      z.literal("room"),
                     ])
                     .optional(),
                   keyPrefix: z.string().optional(),

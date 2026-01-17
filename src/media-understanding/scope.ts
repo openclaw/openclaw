@@ -1,4 +1,5 @@
 import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 
 export type MediaUnderstandingScopeDecision = "allow" | "deny";
 
@@ -15,12 +16,7 @@ function normalizeMatch(value?: string | null): string | undefined {
 }
 
 export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
-  const value = raw?.trim().toLowerCase();
-  if (!value) return undefined;
-  if (value === "dm" || value === "direct_message" || value === "private") return "direct";
-  if (value === "groups") return "group";
-  if (value === "room") return "channel";
-  return value;
+  return normalizeChatType(raw ?? undefined);
 }
 
 export function resolveMediaUnderstandingScope(params: {
@@ -33,7 +29,7 @@ export function resolveMediaUnderstandingScope(params: {
   if (!scope) return "allow";
 
   const channel = normalizeMatch(params.channel);
-  const chatType = normalizeMediaUnderstandingChatType(params.chatType) ?? normalizeMatch(params.chatType);
+  const chatType = normalizeMediaUnderstandingChatType(params.chatType);
   const sessionKey = normalizeMatch(params.sessionKey) ?? "";
 
   for (const rule of scope.rules ?? []) {
@@ -41,8 +37,7 @@ export function resolveMediaUnderstandingScope(params: {
     const action = normalizeDecision(rule.action) ?? "allow";
     const match = rule.match ?? {};
     const matchChannel = normalizeMatch(match.channel);
-    const matchChatType =
-      normalizeMediaUnderstandingChatType(match.chatType) ?? normalizeMatch(match.chatType);
+    const matchChatType = normalizeMediaUnderstandingChatType(match.chatType);
     const matchPrefix = normalizeMatch(match.keyPrefix);
 
     if (matchChannel && matchChannel !== channel) continue;

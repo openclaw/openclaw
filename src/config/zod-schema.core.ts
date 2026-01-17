@@ -255,7 +255,6 @@ export const MediaUnderstandingScopeSchema = z
                   z.literal("direct"),
                   z.literal("group"),
                   z.literal("channel"),
-                  z.literal("room"),
                 ])
                 .optional(),
               keyPrefix: z.string().optional(),

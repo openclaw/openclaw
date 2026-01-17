@@ -8,7 +8,7 @@ describe("finalizeInboundContext", () => {
     const ctx: MsgContext = {
       Body: "a\\nb\r\nc",
       RawBody: "raw\\nline",
-      ChatType: "room",
+      ChatType: "channel",
       From: "group:123@g.us",
       GroupSubject: "Test",
     };
@@ -35,4 +35,3 @@ describe("finalizeInboundContext", () => {
     expect(ctx.BodyForCommands).toBe("say hi");
   });
 });
-
