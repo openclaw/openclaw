@@ -89,6 +89,18 @@ describe("msteams policy", () => {
       });
     });
 
+    it("inherits team mention settings when channel config is missing", () => {
+      const policy = resolveMSTeamsReplyPolicy({
+        isDirectMessage: false,
+        globalConfig: { requireMention: true },
+        teamConfig: { requireMention: false },
+      });
+      expect(policy).toEqual({
+        requireMention: false,
+        replyStyle: "top-level",
+      });
+    });
+
     it("uses explicit replyStyle even when requireMention defaults would differ", () => {
       const policy = resolveMSTeamsReplyPolicy({
         isDirectMessage: false,

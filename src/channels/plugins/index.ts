@@ -84,4 +84,9 @@ export {
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
 } from "./directory-config.js";
+export {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatch,
+  type ChannelEntryMatch,
+} from "./channel-config.js";
 export type { ChannelId, ChannelPlugin } from "./types.js";

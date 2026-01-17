@@ -249,6 +249,34 @@ describe("discord mention gating", () => {
       }),
     ).toBe(false);
   });
+
+  it("inherits parent channel mention rules for threads", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        "parent-1": { allow: true, requireMention: false },
+      },
+    };
+    const channelConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-1",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-1",
+      parentName: "Parent",
+      parentSlug: "parent",
+      scope: "thread",
+    });
+    expect(channelConfig?.matchSource).toBe("parent");
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        channelConfig,
+        guildInfo,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("discord groupPolicy gating", () => {
