@@ -293,9 +293,9 @@ async function runProviderEntry(params: {
     const providerConfig = cfg.models?.providers?.[providerId];
     const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
     const mergedHeaders = {
-      ...(providerConfig?.headers ?? {}),
-      ...(params.config?.headers ?? {}),
-      ...(entry.headers ?? {}),
+      ...providerConfig?.headers,
+      ...params.config?.headers,
+      ...entry.headers,
     };
     const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
     const providerQuery = resolveProviderQuery({

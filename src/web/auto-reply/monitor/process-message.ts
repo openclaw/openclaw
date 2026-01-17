@@ -16,7 +16,10 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import { hasInlineCommandTokens, isControlCommandMessage } from "../../../auto-reply/command-detection.js";
+import {
+  hasInlineCommandTokens,
+  isControlCommandMessage,
+} from "../../../auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";

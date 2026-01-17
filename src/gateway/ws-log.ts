@@ -67,7 +67,9 @@ export function formatForLog(value: unknown): string {
         : JSON.stringify(value);
     if (!str) return "";
     const redacted = redactSensitiveText(str, WS_LOG_REDACT_OPTIONS);
-    return redacted.length > LOG_VALUE_LIMIT ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...` : redacted;
+    return redacted.length > LOG_VALUE_LIMIT
+      ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...`
+      : redacted;
   } catch {
     return String(value);
   }

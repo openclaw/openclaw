@@ -31,21 +31,17 @@ async function fetchSampleBuffer(url: string, timeoutMs: number): Promise<Buffer
 }
 
 describeLive("deepgram live", () => {
-  it(
-    "transcribes sample audio",
-    async () => {
-      const buffer = await fetchSampleBuffer(SAMPLE_URL, 15000);
-      const result = await transcribeDeepgramAudio({
-        buffer,
-        fileName: "sample.wav",
-        mime: "audio/wav",
-        apiKey: DEEPGRAM_KEY,
-        model: DEEPGRAM_MODEL,
-        baseUrl: DEEPGRAM_BASE_URL,
-        timeoutMs: 20000,
-      });
-      expect(result.text.trim().length).toBeGreaterThan(0);
-    },
-    30000,
-  );
+  it("transcribes sample audio", async () => {
+    const buffer = await fetchSampleBuffer(SAMPLE_URL, 15000);
+    const result = await transcribeDeepgramAudio({
+      buffer,
+      fileName: "sample.wav",
+      mime: "audio/wav",
+      apiKey: DEEPGRAM_KEY,
+      model: DEEPGRAM_MODEL,
+      baseUrl: DEEPGRAM_BASE_URL,
+      timeoutMs: 20000,
+    });
+    expect(result.text.trim().length).toBeGreaterThan(0);
+  }, 30000);
 });

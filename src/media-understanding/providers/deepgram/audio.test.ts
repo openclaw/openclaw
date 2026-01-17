@@ -84,6 +84,6 @@ describe("transcribeDeepgramAudio", () => {
     expect(headers.get("authorization")).toBe("Token test-key");
     expect(headers.get("x-custom")).toBe("1");
     expect(headers.get("content-type")).toBe("audio/wav");
-    expect(Buffer.isBuffer(seenInit?.body)).toBe(true);
+    expect(seenInit?.body).toBeInstanceOf(Uint8Array);
   });
 });

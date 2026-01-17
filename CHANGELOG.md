@@ -81,6 +81,7 @@ Docs: https://docs.clawd.bot
 - WhatsApp: scope self-chat response prefix; inject pending-only group history and clear after any processed message.
 - WhatsApp: include `linked` field in `describeAccount`.
 - Agents: drop unsigned Gemini tool calls and avoid JSON Schema `format` keyword collisions.
+- Agents: hide the image tool when the primary model already supports images.
 - Agents: avoid duplicate sends by replying with `NO_REPLY` after `message` tool sends.
 - Auth: inherit/merge sub-agent auth profiles from the main agent.
 - Gateway: resolve local auth for security probe and validate gateway token/password file modes. (#1011, #1022) — thanks @ivanrvpereira, @kkarimi.

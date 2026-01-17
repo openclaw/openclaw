@@ -102,6 +102,27 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("disables image tool when primary model already supports images", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-image-"));
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "acme/vision-1" },
+          imageModel: { primary: "openai/gpt-5-mini" },
+        },
+      },
+      models: {
+        providers: {
+          acme: {
+            models: [{ id: "vision-1", input: ["text", "image"] }],
+          },
+        },
+      },
+    };
+    expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
+    expect(createImageTool({ config: cfg, agentDir })).toBeNull();
+  });
+
   it("sandboxes image paths like the read tool", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-image-sandbox-"));
     const agentDir = path.join(stateDir, "agent");

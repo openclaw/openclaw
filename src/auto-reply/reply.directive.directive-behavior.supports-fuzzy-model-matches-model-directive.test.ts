@@ -107,7 +107,12 @@ describe("directive behavior", () => {
       const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
-        { Body: "/model kimi-k2-0905-preview", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {
+          Body: "/model kimi-k2-0905-preview",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
         {},
         {
           agents: {
