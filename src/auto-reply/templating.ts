@@ -63,7 +63,8 @@ export type MsgContext = {
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
-  GroupRoom?: string;
+  /** Human label for channel-like group conversations (e.g. #general, #support). */
+  GroupChannel?: string;
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;

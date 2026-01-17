@@ -27,7 +27,7 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   }
 
   const base =
-    ctx.GroupRoom?.trim() ||
+    ctx.GroupChannel?.trim() ||
     ctx.GroupSubject?.trim() ||
     ctx.GroupSpace?.trim() ||
     ctx.From?.trim() ||

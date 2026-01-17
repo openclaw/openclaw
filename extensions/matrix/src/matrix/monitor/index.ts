@@ -379,7 +379,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         SenderId: senderId,
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
-        GroupRoom: isRoom ? (room.getCanonicalAlias?.() ?? roomId) : undefined,
+        GroupChannel: isRoom ? (room.getCanonicalAlias?.() ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         Provider: "matrix" as const,
         Surface: "matrix" as const,

@@ -33,7 +33,7 @@ import {
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
-import { isSlackRoomAllowedByPolicy } from "./policy.js";
+import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { deliverSlackSlashReplies } from "./replies.js";
 
 type SlackBlock = { type: string; [key: string]: unknown };
@@ -247,7 +247,7 @@ export function registerSlackMonitorSlashCommands(params: {
             Boolean(ctx.channelsConfig) && Object.keys(ctx.channelsConfig ?? {}).length > 0;
           const channelAllowed = channelConfig?.allowed !== false;
           if (
-            !isSlackRoomAllowedByPolicy({
+            !isSlackChannelAllowedByPolicy({
               groupPolicy: ctx.groupPolicy,
               channelAllowlistConfigured,
               channelAllowed,

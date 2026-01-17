@@ -133,7 +133,8 @@ export type ChannelLogSink = {
 export type ChannelGroupContext = {
   cfg: ClawdbotConfig;
   groupId?: string | null;
-  groupRoom?: string | null;
+  /** Human label for channel-like group conversations (e.g. #general). */
+  groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
 };

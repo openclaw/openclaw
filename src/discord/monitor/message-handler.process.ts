@@ -124,8 +124,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
       : (senderDisplay ?? senderTag ?? author.id);
-  const groupRoom = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
-  const groupSubject = isDirectMessage ? undefined : groupRoom;
+  const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
+  const groupSubject = isDirectMessage ? undefined : groupChannel;
   const channelDescription = channelInfo?.topic?.trim();
   const systemPromptParts = [
     channelDescription ? `Channel topic: ${channelDescription}` : null,
@@ -245,7 +245,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     SenderUsername: author.username,
     SenderTag: formatDiscordUserTag(author),
     GroupSubject: groupSubject,
-    GroupRoom: groupRoom,
+    GroupChannel: groupChannel,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     Provider: "discord" as const,
