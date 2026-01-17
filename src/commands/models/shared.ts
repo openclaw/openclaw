@@ -84,3 +84,13 @@ export function normalizeAlias(alias: string): string {
 
 export { modelKey };
 export { DEFAULT_MODEL, DEFAULT_PROVIDER };
+
+/**
+ * Model key format: "provider/model"
+ *
+ * The model key is displayed in `/model status` and used to reference models.
+ * When using `/model <key>`, use the exact format shown (e.g., "openrouter/moonshotai/kimi-k2").
+ *
+ * For providers with hierarchical model IDs (e.g., OpenRouter), the model ID may include
+ * sub-providers (e.g., "moonshotai/kimi-k2"), resulting in a key like "openrouter/moonshotai/kimi-k2".
+ */
