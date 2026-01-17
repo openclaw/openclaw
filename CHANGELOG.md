@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
+- Models: add Kimi Code provider onboarding and docs. (#1085) — thanks @dan-dr.
 
 ## 2026.1.16-2
 
