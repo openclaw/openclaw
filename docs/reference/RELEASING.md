@@ -10,6 +10,12 @@ read_when:
 
 Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
 
+## Operator trigger
+When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
+- Read this doc and `docs/platforms/mac/release.md`.
+- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set.
+- Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
+
 1) **Version & metadata**
 - [ ] Bump `package.json` version (e.g., `1.1.0`).
 - [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
