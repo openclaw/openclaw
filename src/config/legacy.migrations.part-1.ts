@@ -35,6 +35,34 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_1: LegacyConfigMigration[] = [
     },
   },
   {
+    id: "bindings.match.accountID->bindings.match.accountId",
+    describe: "Move bindings[].match.accountID to bindings[].match.accountId",
+    apply: (raw, changes) => {
+      const bindings = Array.isArray(raw.bindings) ? raw.bindings : null;
+      if (!bindings) return;
+
+      let touched = false;
+      for (const entry of bindings) {
+        if (!isRecord(entry)) continue;
+        const match = getRecord(entry.match);
+        if (!match) continue;
+        if (match.accountId !== undefined) continue;
+        const accountID =
+          typeof match.accountID === "string" ? match.accountID.trim() : match.accountID;
+        if (!accountID) continue;
+        match.accountId = accountID;
+        delete match.accountID;
+        entry.match = match;
+        touched = true;
+      }
+
+      if (touched) {
+        raw.bindings = bindings;
+        changes.push("Moved bindings[].match.accountID → bindings[].match.accountId.");
+      }
+    },
+  },
+  {
     id: "session.sendPolicy.rules.match.provider->match.channel",
     describe: "Move session.sendPolicy.rules[].match.provider to match.channel",
     apply: (raw, changes) => {

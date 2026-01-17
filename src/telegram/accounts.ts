@@ -1,7 +1,14 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
+import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveTelegramToken } from "./token.js";
+
+const debugAccounts = (...args: unknown[]) => {
+  if (process.env.CLAWDBOT_DEBUG_TELEGRAM_ACCOUNTS === "1") {
+    console.warn("[telegram:accounts]", ...args);
+  }
+};
 
 export type ResolvedTelegramAccount = {
   accountId: string;
@@ -15,16 +22,26 @@ export type ResolvedTelegramAccount = {
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
   const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") return [];
-  return Object.keys(accounts).filter(Boolean);
+  const ids = new Set<string>();
+  for (const key of Object.keys(accounts)) {
+    if (!key) continue;
+    ids.add(normalizeAccountId(key));
+  }
+  return [...ids];
 }
 
 export function listTelegramAccountIds(cfg: ClawdbotConfig): string[] {
-  const ids = listConfiguredAccountIds(cfg);
+  const ids = Array.from(
+    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "telegram")]),
+  );
+  debugAccounts("listTelegramAccountIds", ids);
   if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
   return ids.sort((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultTelegramAccountId(cfg: ClawdbotConfig): string {
+  const boundDefault = resolveDefaultAgentBoundAccountId(cfg, "telegram");
+  if (boundDefault) return boundDefault;
   const ids = listTelegramAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
@@ -36,7 +53,13 @@ function resolveAccountConfig(
 ): TelegramAccountConfig | undefined {
   const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") return undefined;
-  return accounts[accountId] as TelegramAccountConfig | undefined;
+  const direct = accounts[accountId] as TelegramAccountConfig | undefined;
+  if (direct) return direct;
+  const normalized = normalizeAccountId(accountId);
+  const matchKey = Object.keys(accounts).find(
+    (key) => normalizeAccountId(key) === normalized,
+  );
+  return matchKey ? (accounts[matchKey] as TelegramAccountConfig | undefined) : undefined;
 }
 
 function mergeTelegramAccountConfig(cfg: ClawdbotConfig, accountId: string): TelegramAccountConfig {
@@ -58,6 +81,11 @@ export function resolveTelegramAccount(params: {
     const accountEnabled = merged.enabled !== false;
     const enabled = baseEnabled && accountEnabled;
     const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
+    debugAccounts("resolve", {
+      accountId,
+      enabled,
+      tokenSource: tokenResolution.source,
+    });
     return {
       accountId,
       enabled,

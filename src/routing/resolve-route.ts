@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
@@ -83,11 +84,6 @@ export function buildAgentSessionKey(params: {
     dmScope: params.dmScope,
     identityLinks: params.identityLinks,
   });
-}
-
-function listBindings(cfg: ClawdbotConfig) {
-  const bindings = cfg.bindings;
-  return Array.isArray(bindings) ? bindings : [];
 }
 
 function listAgents(cfg: ClawdbotConfig) {
