@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+
 import {
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
@@ -53,6 +55,32 @@ import { deliverReplies } from "./deliver.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
+/**
+ * Try to detect remote host from an SSH wrapper script like:
+ *   exec ssh -T clawdbot@192.168.64.3 /opt/homebrew/bin/imsg "$@"
+ *   exec ssh -T mac-mini imsg "$@"
+ * Returns the user@host or host portion if found, undefined otherwise.
+ */
+async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
+  try {
+    // Expand ~ to home directory
+    const expanded = cliPath.startsWith("~")
+      ? cliPath.replace(/^~/, process.env.HOME ?? "")
+      : cliPath;
+    const content = await fs.readFile(expanded, "utf8");
+
+    // Match user@host pattern first (e.g., clawdbot@192.168.64.3)
+    const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
+    if (userHostMatch) return userHostMatch[1];
+
+    // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
+    const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
+    return hostOnlyMatch?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -81,6 +109,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
+
+  // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
+  let remoteHost = imessageCfg.remoteHost;
+  if (!remoteHost && cliPath && cliPath !== "imsg") {
+    remoteHost = await detectRemoteHostFromCliPath(cliPath);
+    if (remoteHost) {
+      logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
+    }
+  }
 
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "imessage" });
   const inboundDebouncer = createInboundDebouncer<{ message: IMessagePayload }>({
@@ -369,6 +406,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       MediaPath: mediaPath,
       MediaType: mediaType,
       MediaUrl: mediaPath,
+      MediaRemoteHost: remoteHost,
       WasMentioned: effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
       // Originating channel for reply routing.
