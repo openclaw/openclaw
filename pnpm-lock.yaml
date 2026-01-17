@@ -28,6 +28,9 @@ importers:
       '@homebridge/ciao':
         specifier: ^1.3.4
         version: 1.3.4
+      '@lydell/node-pty':
+        specifier: 1.2.0-beta.3
+        version: 1.2.0-beta.3
       '@mariozechner/pi-agent-core':
         specifier: 0.46.0
         version: 0.46.0(ws@8.19.0)(zod@4.3.5)
@@ -934,6 +937,39 @@ packages:
 
   '@lit/reactive-element@2.1.2':
     resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
+
+  '@lydell/node-pty-darwin-arm64@1.2.0-beta.3':
+    resolution: {integrity: sha512-owcv+e1/OSu3bf9ZBdUQqJsQF888KyuSIiPYFNn0fLhgkhm9F3Pvha76Kj5mCPnodf7hh3suDe7upw7GPRXftQ==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@lydell/node-pty-darwin-x64@1.2.0-beta.3':
+    resolution: {integrity: sha512-k38O+UviWrWdxtqZBBc/D8NJU11Rey8Y2YMwSWNxLv3eXZZdF5IVpbBkI/2RmLsV5nCcciqLPbukxeZnEfPlwA==}
+    cpu: [x64]
+    os: [darwin]
+
+  '@lydell/node-pty-linux-arm64@1.2.0-beta.3':
+    resolution: {integrity: sha512-HUwRpGu3O+4sv9DAQFKnyW5LYhyYu2SDUa/bdFO/t4dIFCM4uDJEq47wfRM7+aYtJTi1b3lakN8SlWeuFQqJQQ==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@lydell/node-pty-linux-x64@1.2.0-beta.3':
+    resolution: {integrity: sha512-+RRY0PoCUeQaCvPR7/UnkGbxulwbFtoTWJfe+o4T1RcNtngrgaI55I9nl8CD8uqhGrB3smKuyvPM5UtwGhASUw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@lydell/node-pty-win32-arm64@1.2.0-beta.3':
+    resolution: {integrity: sha512-UEDd9ASp2M3iIYpIzfmfBlpyn4+K1G4CAjYcHWStptCkefoSVXWTiUBIa1KjBjZi3/xmsHIDpBEYTkGWuvLt2Q==}
+    cpu: [arm64]
+    os: [win32]
+
+  '@lydell/node-pty-win32-x64@1.2.0-beta.3':
+    resolution: {integrity: sha512-TpdqSFYx7/Rj+68tuP6F/lkRYrHCYAIJgaS1bx3SctTkb5QAQCFwOKHd4xlsivmEOMT2LdhkJggPxwX9PAO5pQ==}
+    cpu: [x64]
+    os: [win32]
+
+  '@lydell/node-pty@1.2.0-beta.3':
+    resolution: {integrity: sha512-ngGAItlRhmJXrhspxt8kX13n1dVFqzETOq0m/+gqSkO8NJBvNMwP7FZckMwps2UFySdr4yxCXNGu/bumg5at6A==}
 
   '@mariozechner/clipboard-darwin-arm64@0.3.0':
     resolution: {integrity: sha512-7i4bitLzRSij0fj6q6tPmmf+JrwHqfBsBmf8mOcLVv0LVexD+4gEsyMait4i92exKYmCfna6uHKVS84G4nqehg==}
@@ -5141,6 +5177,33 @@ snapshots:
   '@lit/reactive-element@2.1.2':
     dependencies:
       '@lit-labs/ssr-dom-shim': 1.5.1
+
+  '@lydell/node-pty-darwin-arm64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty-darwin-x64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty-linux-arm64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty-linux-x64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty-win32-arm64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty-win32-x64@1.2.0-beta.3':
+    optional: true
+
+  '@lydell/node-pty@1.2.0-beta.3':
+    optionalDependencies:
+      '@lydell/node-pty-darwin-arm64': 1.2.0-beta.3
+      '@lydell/node-pty-darwin-x64': 1.2.0-beta.3
+      '@lydell/node-pty-linux-arm64': 1.2.0-beta.3
+      '@lydell/node-pty-linux-x64': 1.2.0-beta.3
+      '@lydell/node-pty-win32-arm64': 1.2.0-beta.3
+      '@lydell/node-pty-win32-x64': 1.2.0-beta.3
 
   '@mariozechner/clipboard-darwin-arm64@0.3.0':
     optional: true

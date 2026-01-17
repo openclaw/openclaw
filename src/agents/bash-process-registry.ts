@@ -13,11 +13,18 @@ let jobTtlMs = clampTtl(Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10
 
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
+export type SessionStdin = {
+  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  end: () => void;
+  destroyed?: boolean;
+};
+
 export interface ProcessSession {
   id: string;
   command: string;
   scopeKey?: string;
   child?: ChildProcessWithoutNullStreams;
+  stdin?: SessionStdin;
   pid?: number;
   startedAt: number;
   cwd?: string;

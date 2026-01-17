@@ -302,7 +302,8 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          if (!scopedSession.child?.stdin || scopedSession.child.stdin.destroyed) {
+          const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
+          if (!stdin || stdin.destroyed) {
             return {
               content: [
                 {
@@ -314,13 +315,13 @@ export function createProcessTool(
             };
           }
           await new Promise<void>((resolve, reject) => {
-            scopedSession.child?.stdin.write(params.data ?? "", (err) => {
+            stdin.write(params.data ?? "", (err) => {
               if (err) reject(err);
               else resolve();
             });
           });
           if (params.eof) {
-            scopedSession.child.stdin.end();
+            stdin.end();
           }
           return {
             content: [

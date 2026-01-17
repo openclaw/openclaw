@@ -17,8 +17,9 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `yieldMs` (default 10000): auto-background after delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
+- `pty` (bool): run in a pseudo-terminal when available (TTY-only CLIs, coding agents, terminal UIs)
 - `elevated` (bool): run on host if elevated mode is enabled/allowed (only changes behavior when the agent is sandboxed)
-- Need a real TTY? Use the tmux skill.
+- Need a fully interactive session? Use `pty: true` and the `process` tool for stdin/output.
 Note: `elevated` is ignored when sandboxing is off (exec already runs on the host).
 
 ## Examples

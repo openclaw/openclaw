@@ -166,7 +166,7 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    exec: "Run shell commands",
+    exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
