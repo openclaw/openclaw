@@ -29,7 +29,7 @@ import {
   normalizeThinkLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";

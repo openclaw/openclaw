@@ -1,8 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
-import type { CliDeps } from "../../cli/deps.js";
-import { createOutboundSendDeps } from "../../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";

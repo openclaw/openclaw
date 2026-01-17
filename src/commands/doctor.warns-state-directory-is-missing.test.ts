@@ -316,6 +316,10 @@ vi.mock("./doctor-state-migrations.js", () => ({
   }),
 }));
 
+vi.mock("./doctor-update.js", () => ({
+  maybeOfferUpdateBeforeDoctor: vi.fn().mockResolvedValue({ handled: false }),
+}));
+
 describe("doctor command", () => {
   it("warns when the state directory is missing", async () => {
     readConfigFileSnapshot.mockResolvedValue({
