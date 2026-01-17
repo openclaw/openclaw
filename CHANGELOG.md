@@ -2,7 +2,7 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.16 (unreleased)
+## 2026.1.16
 
 ### Highlights
 - Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake. https://docs.clawd.bot/hooks

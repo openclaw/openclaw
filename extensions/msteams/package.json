@@ -1,10 +1,12 @@
 {
   "name": "@clawdbot/msteams",
-  "version": "2026.1.15",
+  "version": "2026.1.16",
   "type": "module",
   "description": "Clawdbot Microsoft Teams channel plugin",
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "dependencies": {
     "@microsoft/agents-hosting": "^1.1.1",
