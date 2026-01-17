@@ -137,6 +137,34 @@ export function resolveDiscordGuildEntry(params: {
   return null;
 }
 
+type DiscordChannelEntry = NonNullable<DiscordGuildEntryResolved["channels"]>[string];
+
+function resolveDiscordChannelEntry(
+  channels: NonNullable<DiscordGuildEntryResolved["channels"]>,
+  channelId: string,
+  channelName?: string,
+  channelSlug?: string,
+): DiscordChannelEntry | null {
+  if (channelId && channels[channelId]) return channels[channelId];
+  if (channelSlug && channels[channelSlug]) return channels[channelSlug];
+  if (channelName && channels[channelName]) return channels[channelName];
+  return null;
+}
+
+function resolveDiscordChannelConfigEntry(
+  entry: DiscordChannelEntry,
+): DiscordChannelConfigResolved {
+  return {
+    allowed: entry.allow !== false,
+    requireMention: entry.requireMention,
+    skills: entry.skills,
+    enabled: entry.enabled,
+    users: entry.users,
+    systemPrompt: entry.systemPrompt,
+    autoThread: entry.autoThread,
+  };
+}
+
 export function resolveDiscordChannelConfig(params: {
   guildInfo?: DiscordGuildEntryResolved | null;
   channelId: string;
@@ -146,40 +174,35 @@ export function resolveDiscordChannelConfig(params: {
   const { guildInfo, channelId, channelName, channelSlug } = params;
   const channels = guildInfo?.channels;
   if (!channels) return null;
-  const byId = channels[channelId];
-  if (byId)
-    return {
-      allowed: byId.allow !== false,
-      requireMention: byId.requireMention,
-      skills: byId.skills,
-      enabled: byId.enabled,
-      users: byId.users,
-      systemPrompt: byId.systemPrompt,
-      autoThread: byId.autoThread,
-    };
-  if (channelSlug && channels[channelSlug]) {
-    const entry = channels[channelSlug];
-    return {
-      allowed: entry.allow !== false,
-      requireMention: entry.requireMention,
-      skills: entry.skills,
-      enabled: entry.enabled,
-      users: entry.users,
-      systemPrompt: entry.systemPrompt,
-      autoThread: entry.autoThread,
-    };
-  }
-  if (channelName && channels[channelName]) {
-    const entry = channels[channelName];
-    return {
-      allowed: entry.allow !== false,
-      requireMention: entry.requireMention,
-      skills: entry.skills,
-      enabled: entry.enabled,
-      users: entry.users,
-      systemPrompt: entry.systemPrompt,
-      autoThread: entry.autoThread,
-    };
+  const entry = resolveDiscordChannelEntry(channels, channelId, channelName, channelSlug);
+  if (!entry) return { allowed: false };
+  return resolveDiscordChannelConfigEntry(entry);
+}
+
+export function resolveDiscordChannelConfigWithFallback(params: {
+  guildInfo?: DiscordGuildEntryResolved | null;
+  channelId: string;
+  channelName?: string;
+  channelSlug: string;
+  parentId?: string;
+  parentName?: string;
+  parentSlug?: string;
+}): DiscordChannelConfigResolved | null {
+  const { guildInfo, channelId, channelName, channelSlug, parentId, parentName, parentSlug } =
+    params;
+  const channels = guildInfo?.channels;
+  if (!channels) return null;
+  const entry = resolveDiscordChannelEntry(channels, channelId, channelName, channelSlug);
+  if (entry) return resolveDiscordChannelConfigEntry(entry);
+  if (parentId || parentName || parentSlug) {
+    const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
+    const parentEntry = resolveDiscordChannelEntry(
+      channels,
+      parentId ?? "",
+      parentName,
+      resolvedParentSlug,
+    );
+    if (parentEntry) return resolveDiscordChannelConfigEntry(parentEntry);
   }
   return { allowed: false };
 }

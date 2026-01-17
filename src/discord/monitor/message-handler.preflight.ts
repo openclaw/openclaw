@@ -22,7 +22,7 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,
   resolveDiscordUserAllowed,
@@ -236,13 +236,19 @@ export async function preflightDiscordMessage(
     guildInfo?.slug ||
     (params.data.guild?.name ? normalizeDiscordSlug(params.data.guild.name) : "");
 
+  const threadChannelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+
   const baseSessionKey = route.sessionKey;
   const channelConfig = isGuildMessage
-    ? resolveDiscordChannelConfig({
+    ? resolveDiscordChannelConfigWithFallback({
         guildInfo,
-        channelId: threadParentId ?? message.channelId,
-        channelName: configChannelName,
-        channelSlug: configChannelSlug,
+        channelId: message.channelId,
+        channelName,
+        channelSlug: threadChannelSlug,
+        parentId: threadParentId ?? undefined,
+        parentName: threadParentName ?? undefined,
+        parentSlug: threadParentSlug,
       })
     : null;
   if (isGuildMessage && channelConfig?.enabled === false) {

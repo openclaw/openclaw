@@ -20,6 +20,7 @@ Docs: https://docs.clawd.bot
 - Memory: split overly long lines to keep embeddings under token limits.
 - Memory: skip empty chunks to avoid invalid embedding inputs.
 - Sessions: fall back to session labels when listing display names. (#1124) — thanks @abdaraxus.
+- Discord: inherit parent channel allowlists for thread slash commands and reactions. (#1123) — thanks @thewilloftheshadow.
 
 ## 2026.1.17-1
 

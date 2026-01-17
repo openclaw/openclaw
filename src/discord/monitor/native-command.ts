@@ -47,11 +47,13 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordUserAllowed,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
+import { resolveDiscordChannelInfo } from "./message-utils.js";
+import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<ClawdbotConfig["channels"]>["discord"];
 
@@ -499,8 +501,13 @@ async function dispatchDiscordCommandInteraction(params: {
   const channelType = channel?.type;
   const isDirectMessage = channelType === ChannelType.DM;
   const isGroupDm = channelType === ChannelType.GroupDM;
+  const isThreadChannel =
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread;
   const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const rawChannelId = channel?.id ?? "";
   const ownerAllowList = normalizeDiscordAllowList(discordConfig?.dm?.allowFrom ?? [], [
     "discord:",
     "user:",
@@ -517,12 +524,35 @@ async function dispatchDiscordCommandInteraction(params: {
     guild: interaction.guild ?? undefined,
     guildEntries: discordConfig?.guilds,
   });
+  let threadParentId: string | undefined;
+  let threadParentName: string | undefined;
+  let threadParentSlug = "";
+  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
+    // Threads inherit parent channel config unless explicitly overridden.
+    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
+    const parentInfo = await resolveDiscordThreadParentInfo({
+      client: interaction.client,
+      threadChannel: {
+        id: rawChannelId,
+        name: channelName,
+        parentId: "parentId" in channel ? channel.parentId ?? undefined : undefined,
+        parent: undefined,
+      },
+      channelInfo,
+    });
+    threadParentId = parentInfo.id;
+    threadParentName = parentInfo.name;
+    threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
+  }
   const channelConfig = interaction.guild
-    ? resolveDiscordChannelConfig({
+    ? resolveDiscordChannelConfigWithFallback({
         guildInfo,
-        channelId: channel?.id ?? "",
+        channelId: rawChannelId,
         channelName,
         channelSlug,
+        parentId: threadParentId,
+        parentName: threadParentName,
+        parentSlug: threadParentSlug,
       })
     : null;
   if (channelConfig?.enabled === false) {
@@ -664,7 +694,7 @@ async function dispatchDiscordCommandInteraction(params: {
   }
 
   const isGuild = Boolean(interaction.guild);
-  const channelId = channel?.id ?? "unknown";
+  const channelId = rawChannelId || "unknown";
   const interactionId = interaction.rawData.id;
   const route = resolveAgentRoute({
     cfg,
