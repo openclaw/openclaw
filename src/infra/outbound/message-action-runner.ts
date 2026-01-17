@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { normalizeTargetForProvider } from "../../agents/pi-embedded-messaging.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -18,7 +17,13 @@ import { listConfiguredMessageChannels, resolveMessageChannelSelection } from ".
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
-import { lookupDirectoryDisplay, resolveMessagingTarget } from "./target-resolver.js";
+import {
+  applyCrossContextDecoration,
+  buildCrossContextDecoration,
+  enforceCrossContextPolicy,
+  shouldApplyCrossContextMarker,
+} from "./outbound-policy.js";
+import { resolveMessagingTarget } from "./target-resolver.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -139,72 +144,6 @@ function parseButtonsParam(params: Record<string, unknown>): void {
   }
 }
 
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "thread-create",
-  "thread-reply",
-  "sticker",
-]);
-
-function resolveContextGuardTarget(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) return undefined;
-
-  if (action === "thread-reply" || action === "thread-create") {
-    return readStringParam(params, "channelId") ?? readStringParam(params, "to");
-  }
-
-  return readStringParam(params, "to") ?? readStringParam(params, "channelId");
-}
-
-function enforceContextIsolation(params: {
-  channel: ChannelId;
-  action: ChannelMessageActionName;
-  params: Record<string, unknown>;
-  toolContext?: ChannelThreadingToolContext;
-  cfg: ClawdbotConfig;
-}): void {
-  const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) return;
-  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) return;
-
-  if (params.cfg.tools?.message?.allowCrossContextSend) return;
-
-  const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider = params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders =
-    params.cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
-
-  if (currentProvider && currentProvider !== params.channel) {
-    if (!allowAcrossProviders) {
-      throw new Error(
-        `Cross-context messaging denied: action=${params.action} target provider "${params.channel}" while bound to "${currentProvider}".`,
-      );
-    }
-    return;
-  }
-
-  if (allowWithinProvider) return;
-
-  const target = resolveContextGuardTarget(params.action, params.params);
-  if (!target) return;
-
-  const normalizedTarget =
-    normalizeTargetForProvider(params.channel, target) ?? target.toLowerCase();
-  const normalizedCurrent =
-    normalizeTargetForProvider(params.channel, currentTarget) ?? currentTarget.toLowerCase();
-
-  if (!normalizedTarget || !normalizedCurrent) return;
-  if (normalizedTarget === normalizedCurrent) return;
-
-  throw new Error(
-    `Cross-context messaging denied: action=${params.action} target="${target}" while bound to "${currentTarget}" (channel=${params.channel}).`,
-  );
-}
-
 async function resolveChannel(cfg: ClawdbotConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
@@ -212,57 +151,6 @@ async function resolveChannel(cfg: ClawdbotConfig, params: Record<string, unknow
     channel: channelHint,
   });
   return selection.channel;
-}
-
-function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
-  return action === "send" || action === "poll" || action === "thread-reply" || action === "sticker";
-}
-
-async function buildCrossContextMarker(params: {
-  cfg: ClawdbotConfig;
-  channel: ChannelId;
-  target: string;
-  toolContext?: ChannelThreadingToolContext;
-  accountId?: string | null;
-}) {
-  const currentTarget = params.toolContext?.currentChannelId?.trim();
-  if (!currentTarget) return null;
-  const normalizedTarget =
-    normalizeTargetForProvider(params.channel, params.target) ?? params.target.toLowerCase();
-  const normalizedCurrent =
-    normalizeTargetForProvider(params.channel, currentTarget) ?? currentTarget.toLowerCase();
-  if (!normalizedTarget || !normalizedCurrent) return null;
-  if (normalizedTarget === normalizedCurrent) return null;
-
-  const markerEnabled = params.cfg.tools?.message?.crossContext?.marker?.enabled !== false;
-  if (!markerEnabled) return null;
-
-  const currentName =
-    (await lookupDirectoryDisplay({
-      cfg: params.cfg,
-      channel: params.channel,
-      targetId: currentTarget,
-      accountId: params.accountId ?? undefined,
-    })) ?? currentTarget;
-  const originLabel = currentName.startsWith("#") ? currentName : `#${currentName}`;
-  const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
-  const prefixTemplate = markerConfig?.prefix ?? "[from {channel}] ";
-  const suffixTemplate = markerConfig?.suffix ?? "";
-  const prefix = prefixTemplate.replaceAll("{channel}", originLabel);
-  const suffix = suffixTemplate.replaceAll("{channel}", originLabel);
-  const discordEmbeds =
-    params.channel === "discord"
-      ? [
-          {
-            description: `From ${originLabel}`,
-          },
-        ]
-      : undefined;
-  return {
-    prefix,
-    suffix,
-    discordEmbeds,
-  };
 }
 
 async function resolveActionTarget(params: {
@@ -396,10 +284,10 @@ export async function runMessageAction(
     accountId,
   });
 
-  enforceContextIsolation({
+  enforceCrossContextPolicy({
     channel,
     action,
-    params,
+    args: params,
     toolContext: input.toolContext,
     cfg,
   });
@@ -433,9 +321,9 @@ export async function runMessageAction(
       params.media = parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
     }
 
-    const marker =
+    const decoration =
       shouldApplyCrossContextMarker(action) && input.toolContext
-        ? await buildCrossContextMarker({
+        ? await buildCrossContextDecoration({
             cfg,
             channel,
             target: to,
@@ -443,20 +331,22 @@ export async function runMessageAction(
             accountId: accountId ?? undefined,
           })
         : null;
-    const useTextMarker = !(channel === "discord" && marker?.discordEmbeds?.length);
-    if (useTextMarker && (marker?.prefix || marker?.suffix)) {
-      const merged = `${marker?.prefix ?? ""}${message}${marker?.suffix ?? ""}`;
-      params.message = merged;
-      message = merged;
+    if (decoration) {
+      const applied = applyCrossContextDecoration({
+        message,
+        decoration,
+        preferEmbeds: true,
+      });
+      message = applied.message;
+      params.message = applied.message;
+      if (applied.embeds?.length) {
+        params.embeds = applied.embeds;
+      }
     }
 
     const mediaUrl = readStringParam(params, "media", { trim: false });
     const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
     const bestEffort = readBooleanParam(params, "bestEffort");
-    if (marker?.discordEmbeds && channel === "discord") {
-      params.embeds = marker.discordEmbeds;
-    }
-
     if (!dryRun) {
       const handled = await dispatchChannelMessageAction({
         channel,
@@ -529,9 +419,9 @@ export async function runMessageAction(
       integer: true,
     });
     const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
-    const marker =
+    const decoration =
       shouldApplyCrossContextMarker(action) && input.toolContext
-        ? await buildCrossContextMarker({
+        ? await buildCrossContextDecoration({
             cfg,
             channel,
             target: to,
@@ -539,12 +429,17 @@ export async function runMessageAction(
             accountId: accountId ?? undefined,
           })
         : null;
-    if (marker?.prefix || marker?.suffix) {
+    if (decoration) {
       const base = typeof params.message === "string" ? params.message : "";
-      params.message = `${marker?.prefix ?? ""}${base}${marker?.suffix ?? ""}`;
-    }
-    if (marker?.discordEmbeds && channel === "discord") {
-      params.embeds = marker.discordEmbeds;
+      const applied = applyCrossContextDecoration({
+        message: base,
+        decoration,
+        preferEmbeds: true,
+      });
+      params.message = applied.message;
+      if (applied.embeds?.length) {
+        params.embeds = applied.embeds;
+      }
     }
 
     if (!dryRun) {
