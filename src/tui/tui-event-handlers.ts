@@ -8,10 +8,11 @@ type EventHandlerContext = {
   tui: TUI;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  refreshSessionInfo?: () => Promise<void>;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
-  const { chatLog, tui, state, setActivityStatus } = context;
+  const { chatLog, tui, state, setActivityStatus, refreshSessionInfo } = context;
   const finalizedRuns = new Map<string, number>();
 
   const noteFinalizedRun = (runId: string) => {
@@ -64,6 +65,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       noteFinalizedRun(evt.runId);
       state.activeChatRunId = null;
       setActivityStatus(stopReason === "error" ? "error" : "idle");
+      // Refresh session info to update token counts in footer
+      void refreshSessionInfo?.();
     }
     if (evt.state === "aborted") {
       chatLog.addSystem("run aborted");
