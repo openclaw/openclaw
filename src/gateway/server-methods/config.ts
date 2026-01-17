@@ -305,7 +305,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
 
     // Safely merge with existing config to prevent wipeouts on partial applies
-    const merged = applyMergePatch(snapshot.config, parsedRes.parsed as any);
+    const merged = applyMergePatch(snapshot.config, parsedRes.parsed);
     const migrated = applyLegacyMigrations(merged);
     const resolved = migrated.next ?? merged;
 
