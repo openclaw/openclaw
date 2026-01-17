@@ -161,8 +161,9 @@ function normalizeForwardedUserLabel(user: TelegramForwardUser) {
   const username = user.username?.trim() || undefined;
   const id = user.id != null ? String(user.id) : undefined;
   const display =
-    (name && username ? `${name} (@${username})` : name || (username ? `@${username}` : undefined)) ||
-    (id ? `user:${id}` : undefined);
+    (name && username
+      ? `${name} (@${username})`
+      : name || (username ? `@${username}` : undefined)) || (id ? `user:${id}` : undefined);
   return { display, name: name || undefined, username, id };
 }
 
@@ -213,7 +214,8 @@ function buildForwardedContextFromChat(params: {
   type: string;
   signature?: string;
 }): TelegramForwardedContext | null {
-  const fallbackKind = params.type === "channel" || params.type === "legacy_channel" ? "channel" : "chat";
+  const fallbackKind =
+    params.type === "channel" || params.type === "legacy_channel" ? "channel" : "chat";
   const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
   if (!display) return null;
   const signature = params.signature?.trim() || undefined;

@@ -177,8 +177,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
   "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
-  "agents.defaults.memorySearch.store.vector.extensionPath":
-    "Memory Search Vector Extension Path",
+  "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
   "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
