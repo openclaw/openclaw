@@ -90,6 +90,23 @@ function createMessageQueue(ws: WebSocket) {
   return { next };
 }
 
+async function waitForListMatch<T>(
+  fetchList: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  timeoutMs = 2000,
+  intervalMs = 50,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const value = await fetchList();
+    if (predicate(value)) return value;
+    if (Date.now() >= deadline) {
+      throw new Error("timeout waiting for list update");
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 describe("chrome extension relay server", () => {
   let cdpUrl = "";
 
@@ -174,12 +191,21 @@ describe("chrome extension relay server", () => {
       }),
     );
 
-    const list2 = (await fetch(`${cdpUrl}/json/list`).then((r) => r.json())) as Array<{
-      id?: string;
-      url?: string;
-      title?: string;
-    }>;
-    expect(list2.some((t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD")).toBe(true);
+    const list2 = await waitForListMatch(
+      async () =>
+        (await fetch(`${cdpUrl}/json/list`).then((r) => r.json())) as Array<{
+          id?: string;
+          url?: string;
+          title?: string;
+        }>,
+      (list) =>
+        list.some(
+          (t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD",
+        ),
+    );
+    expect(
+      list2.some((t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD"),
+    ).toBe(true);
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`);
     await waitForOpen(cdp);

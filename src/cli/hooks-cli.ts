@@ -677,15 +677,15 @@ export function registerHooksCli(program: Command): void {
       for (const hookId of targets) {
         const record = installs[hookId];
         if (!record) {
-          defaultRuntime.log(chalk.yellow(`No install record for \"${hookId}\".`));
+          defaultRuntime.log(chalk.yellow(`No install record for "${hookId}".`));
           continue;
         }
         if (record.source !== "npm") {
-          defaultRuntime.log(chalk.yellow(`Skipping \"${hookId}\" (source: ${record.source}).`));
+          defaultRuntime.log(chalk.yellow(`Skipping "${hookId}" (source: ${record.source}).`));
           continue;
         }
         if (!record.spec) {
-          defaultRuntime.log(chalk.yellow(`Skipping \"${hookId}\" (missing npm spec).`));
+          defaultRuntime.log(chalk.yellow(`Skipping "${hookId}" (missing npm spec).`));
           continue;
         }
 
