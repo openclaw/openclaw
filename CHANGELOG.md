@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
+- Hooks: parse multi-line/YAML frontmatter metadata blocks (JSON5-friendly). (#1114) — thanks @sebslight.
 - CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
 - Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
 - Memory: probe sqlite-vec availability in `clawdbot memory status`.
