@@ -27,6 +27,7 @@ import {
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
   buildTypingThreadParams,
+  expandTextLinks,
   normalizeForwardedContext,
   describeReplyTarget,
   extractTelegramLocation,
@@ -271,7 +272,8 @@ export const buildTelegramMessageContext = async ({
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawText = (msg.text ?? msg.caption ?? "").trim();
+  const rawTextSource = msg.text ?? msg.caption ?? "";
+  const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) rawBody = placeholder;
   if (!rawBody && allMedia.length === 0) return null;

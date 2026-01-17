@@ -114,6 +114,37 @@ export function hasBotMention(msg: TelegramMessage, botUsername: string) {
   return false;
 }
 
+type TelegramTextLinkEntity = {
+  type: string;
+  offset: number;
+  length: number;
+  url?: string;
+};
+
+export function expandTextLinks(
+  text: string,
+  entities?: TelegramTextLinkEntity[] | null,
+): string {
+  if (!text || !entities?.length) return text;
+
+  const textLinks = entities
+    .filter(
+      (entity): entity is TelegramTextLinkEntity & { url: string } =>
+        entity.type === "text_link" && Boolean(entity.url),
+    )
+    .sort((a, b) => b.offset - a.offset);
+
+  if (textLinks.length === 0) return text;
+
+  let result = text;
+  for (const entity of textLinks) {
+    const linkText = text.slice(entity.offset, entity.offset + entity.length);
+    const markdown = `[${linkText}](${entity.url})`;
+    result = result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
+  }
+  return result;
+}
+
 export function resolveTelegramReplyId(raw?: string): number | undefined {
   if (!raw) return undefined;
   const parsed = Number(raw);
