@@ -31,6 +31,11 @@ vi.mock("../../../../src/web/media.js", () => ({
   }),
 }));
 
+vi.mock("../../../../src/media/image-ops.js", () => ({
+  getImageMetadata: vi.fn().mockResolvedValue(null),
+  resizeToJpeg: vi.fn(),
+}));
+
 let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
 
 const makeClient = () => {
@@ -65,13 +70,13 @@ describe("sendMessageMatrix media", () => {
     const uploadArg = uploadContent.mock.calls[0]?.[0];
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
 
-    const content = sendMessage.mock.calls[0]?.[2] as {
+    const content = sendMessage.mock.calls[0]?.[1] as {
       url?: string;
       msgtype?: string;
       format?: string;
       formatted_body?: string;
     };
-    expect(content.msgtype).toBe("m.file");
+    expect(content.msgtype).toBe("m.image");
     expect(content.format).toBe("org.matrix.custom.html");
     expect(content.formatted_body).toContain("caption");
     expect(content.url).toBe("mxc://example/file");
