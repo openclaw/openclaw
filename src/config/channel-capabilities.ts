@@ -4,6 +4,9 @@ import type { ClawdbotConfig } from "./config.js";
 
 function normalizeCapabilities(capabilities: string[] | undefined): string[] | undefined {
   if (!capabilities) return undefined;
+  // Handle object-format capabilities (e.g., { inlineButtons: "dm" }) gracefully.
+  // Channel-specific handlers (like resolveTelegramInlineButtonsScope) process these separately.
+  if (!Array.isArray(capabilities)) return undefined;
   const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
 }
