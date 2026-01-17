@@ -165,8 +165,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   async function handleMessageNow(message: IMessagePayload) {
     const senderRaw = message.sender ?? "";
     const sender = senderRaw.trim();
-    if (!sender) return;
+    if (!sender) {
+      logVerbose(`imessage: skipping message (no sender), chat_id=${message.chat_id}`);
+      return;
+    }
     const senderNormalized = normalizeIMessageHandle(sender);
+    if (!senderNormalized) {
+      logVerbose(
+        `imessage: sender normalized to empty, raw="${sender}", chat_id=${message.chat_id}`,
+      );
+    }
     if (message.is_from_me) return;
 
     const chatId = message.chat_id ?? undefined;
@@ -386,6 +394,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const fromLabel = isGroup
       ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
       : `${senderNormalized} id:${sender}`;
+    if (isGroup && !senderNormalized) {
+      logVerbose(
+        `imessage: group message missing normalized sender, raw="${sender}", chat_id=${chatId}`,
+      );
+    }
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,
