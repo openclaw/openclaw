@@ -32,6 +32,12 @@ const mocks = vi.hoisted(() => ({
     configSnapshot: null,
   }),
   callGateway: vi.fn().mockResolvedValue({}),
+  listAgentsForGateway: vi.fn().mockReturnValue({
+    defaultId: "main",
+    mainKey: "agent:main:main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Main" }],
+  }),
   runSecurityAudit: vi.fn().mockResolvedValue({
     ts: 0,
     summary: { critical: 1, warn: 1, info: 2 },
@@ -154,12 +160,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: mocks.callGateway };
 });
 vi.mock("../gateway/session-utils.js", () => ({
-  listAgentsForGateway: () => ({
-    defaultId: "main",
-    mainKey: "agent:main:main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Main" }],
-  }),
+  listAgentsForGateway: mocks.listAgentsForGateway,
 }));
 vi.mock("../infra/clawdbot-root.js", () => ({
   resolveClawdbotPackageRoot: vi.fn().mockResolvedValue("/tmp/clawdbot"),
@@ -234,7 +235,7 @@ describe("statusCommand", () => {
     const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
     expect(payload.linkChannel.linked).toBe(true);
     expect(payload.sessions.count).toBe(1);
-    expect(payload.sessions.path).toBe("/tmp/sessions.json");
+    expect(payload.sessions.paths).toContain("/tmp/sessions.json");
     expect(payload.sessions.defaults.model).toBeTruthy();
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
@@ -334,5 +335,63 @@ describe("statusCommand", () => {
     expect(logs.join("\n")).toMatch(/iMessage/i);
     expect(logs.join("\n")).toMatch(/gateway:/i);
     expect(logs.join("\n")).toMatch(/WARN/);
+  });
+
+  it("includes sessions across agents in JSON output", async () => {
+    const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
+    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+
+    mocks.listAgentsForGateway.mockReturnValue({
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "ops", name: "Ops" },
+      ],
+    });
+    mocks.resolveStorePath.mockImplementation((_store, opts) =>
+      opts?.agentId === "ops" ? "/tmp/ops.json" : "/tmp/main.json",
+    );
+    mocks.loadSessionStore.mockImplementation((storePath) => {
+      if (storePath === "/tmp/ops.json") {
+        return {
+          "agent:ops:main": {
+            updatedAt: Date.now() - 120_000,
+            inputTokens: 1_000,
+            outputTokens: 1_000,
+            contextTokens: 10_000,
+            model: "pi:opus",
+          },
+        };
+      }
+      return {
+        "+1000": {
+          updatedAt: Date.now() - 60_000,
+          verboseLevel: "on",
+          thinkingLevel: "low",
+          inputTokens: 2_000,
+          outputTokens: 3_000,
+          contextTokens: 10_000,
+          model: "pi:opus",
+          sessionId: "abc123",
+          systemSent: true,
+        },
+      };
+    });
+
+    await statusCommand({ json: true }, runtime as never);
+    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
+    expect(payload.sessions.count).toBe(2);
+    expect(payload.sessions.paths.length).toBe(2);
+    expect(payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"))
+      .toBe(true);
+
+    if (originalAgents) mocks.listAgentsForGateway.mockImplementation(originalAgents);
+    if (originalResolveStorePath)
+      mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
+    if (originalLoadSessionStore)
+      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
   });
 });

@@ -338,6 +338,43 @@ describe("legacy config detection", () => {
       }
     });
   });
+  it("auto-migrates bindings[].match.accountID on load and writes back", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdbot", "clawdbot.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            bindings: [{ agentId: "main", match: { channel: "telegram", accountID: "work" } }],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vi.resetModules();
+      try {
+        const { loadConfig } = await import("./config.js");
+        const cfg = loadConfig();
+        expect(cfg.bindings?.[0]?.match?.accountId).toBe("work");
+
+        const raw = await fs.readFile(configPath, "utf-8");
+        const parsed = JSON.parse(raw) as {
+          bindings?: Array<{ match?: { accountId?: string; accountID?: string } }>;
+        };
+        expect(parsed.bindings?.[0]?.match?.accountId).toBe("work");
+        expect(parsed.bindings?.[0]?.match?.accountID).toBeUndefined();
+        expect(
+          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
   it("auto-migrates session.sendPolicy.rules[].match.provider on load and writes back", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
