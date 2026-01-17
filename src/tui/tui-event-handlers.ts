@@ -8,10 +8,11 @@ type EventHandlerContext = {
   tui: TUI;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
+  refreshSessionInfo: () => Promise<void>;
 };
 
 export function createEventHandlers(context: EventHandlerContext) {
-  const { chatLog, tui, state, setActivityStatus } = context;
+  const { chatLog, tui, state, setActivityStatus, refreshSessionInfo } = context;
   const finalizedRuns = new Map<string, number>();
 
   const noteFinalizedRun = (runId: string) => {
