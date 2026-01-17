@@ -6,7 +6,8 @@ import Testing
     @Test func semverParsesCommonForms() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("v2.0.0") == Semver(major: 2, minor: 0, patch: 0))
-        #expect(Semver.parse("3.4.5-beta.1") == Semver(major: 3, minor: 4, patch: 0)) // patch drops trailing text
+        #expect(Semver.parse("3.4.5-beta.1") == Semver(major: 3, minor: 4, patch: 5)) // prerelease suffix stripped
+        #expect(Semver.parse("2026.1.11-4") == Semver(major: 2026, minor: 1, patch: 11)) // build suffix stripped
         #expect(Semver.parse(nil) == nil)
         #expect(Semver.parse("invalid") == nil)
     }

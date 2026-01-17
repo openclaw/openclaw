@@ -25,8 +25,10 @@ struct Semver: Comparable, CustomStringConvertible, Sendable {
               let major = Int(parts[0]),
               let minor = Int(parts[1])
         else { return nil }
-        let patch = Int(parts[2]) ?? 0
-        return Semver(major: major, minor: minor, patch: patch)
+        // Strip prerelease suffix (e.g., "11-4" → "11", "5-beta.1" → "5")
+        let patchRaw = String(parts[2])
+        let patchNumeric = patchRaw.split { $0 == "-" || $0 == "+" }.first.flatMap { Int($0) } ?? 0
+        return Semver(major: major, minor: minor, patch: patchNumeric)
     }
 
     func compatible(with required: Semver) -> Bool {
