@@ -1,5 +1,6 @@
 import type { Guild, User } from "@buape/carbon";
 
+import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "../../channels/channel-config.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -138,17 +139,25 @@ export function resolveDiscordGuildEntry(params: {
 }
 
 type DiscordChannelEntry = NonNullable<DiscordGuildEntryResolved["channels"]>[string];
+type DiscordChannelLookup = {
+  id: string;
+  name?: string;
+  slug?: string;
+};
+type DiscordChannelScope = "channel" | "thread";
 
 function resolveDiscordChannelEntry(
   channels: NonNullable<DiscordGuildEntryResolved["channels"]>,
-  channelId: string,
-  channelName?: string,
-  channelSlug?: string,
+  params: DiscordChannelLookup & { allowNameMatch?: boolean },
 ): DiscordChannelEntry | null {
-  if (channelId && channels[channelId]) return channels[channelId];
-  if (channelSlug && channels[channelSlug]) return channels[channelSlug];
-  if (channelName && channels[channelName]) return channels[channelName];
-  return null;
+  const allowNameMatch = params.allowNameMatch !== false;
+  const keys = buildChannelKeyCandidates(
+    params.id,
+    allowNameMatch ? params.slug : undefined,
+    allowNameMatch ? params.name : undefined,
+  );
+  const { entry } = resolveChannelEntryMatch({ entries: channels, keys });
+  return entry ?? null;
 }
 
 function resolveDiscordChannelConfigEntry(
@@ -174,7 +183,11 @@ export function resolveDiscordChannelConfig(params: {
   const { guildInfo, channelId, channelName, channelSlug } = params;
   const channels = guildInfo?.channels;
   if (!channels) return null;
-  const entry = resolveDiscordChannelEntry(channels, channelId, channelName, channelSlug);
+  const entry = resolveDiscordChannelEntry(channels, {
+    id: channelId,
+    name: channelName,
+    slug: channelSlug,
+  });
   if (!entry) return { allowed: false };
   return resolveDiscordChannelConfigEntry(entry);
 }
@@ -187,21 +200,34 @@ export function resolveDiscordChannelConfigWithFallback(params: {
   parentId?: string;
   parentName?: string;
   parentSlug?: string;
+  scope?: DiscordChannelScope;
 }): DiscordChannelConfigResolved | null {
-  const { guildInfo, channelId, channelName, channelSlug, parentId, parentName, parentSlug } =
-    params;
+  const {
+    guildInfo,
+    channelId,
+    channelName,
+    channelSlug,
+    parentId,
+    parentName,
+    parentSlug,
+    scope,
+  } = params;
   const channels = guildInfo?.channels;
   if (!channels) return null;
-  const entry = resolveDiscordChannelEntry(channels, channelId, channelName, channelSlug);
+  const entry = resolveDiscordChannelEntry(channels, {
+    id: channelId,
+    name: channelName,
+    slug: channelSlug,
+    allowNameMatch: scope !== "thread",
+  });
   if (entry) return resolveDiscordChannelConfigEntry(entry);
   if (parentId || parentName || parentSlug) {
     const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
-    const parentEntry = resolveDiscordChannelEntry(
-      channels,
-      parentId ?? "",
-      parentName,
-      resolvedParentSlug,
-    );
+    const parentEntry = resolveDiscordChannelEntry(channels, {
+      id: parentId ?? "",
+      name: parentName,
+      slug: resolvedParentSlug,
+    });
     if (parentEntry) return resolveDiscordChannelConfigEntry(parentEntry);
   }
   return { allowed: false };
