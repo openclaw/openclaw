@@ -306,6 +306,9 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
+      channel: item.originatingChannel,
+      accountId: item.originatingAccountId,
+      to: item.originatingTo,
       deliver: true,
       idempotencyKey: crypto.randomUUID(),
     },
@@ -348,6 +351,7 @@ async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   triggerMessage: string;
   summaryLine?: string;
+  requesterAccountId?: string;
 }): Promise<"steered" | "queued" | "none"> {
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
@@ -382,7 +386,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sessionKey: canonicalKey,
         originatingChannel: entry?.lastChannel,
         originatingTo: entry?.lastTo,
-        originatingAccountId: entry?.lastAccountId,
+        originatingAccountId: entry?.lastAccountId ?? params.requesterAccountId,
       },
       queueSettings,
     );
@@ -505,6 +509,7 @@ export async function runSubagentAnnounceFlow(params: {
   childRunId: string;
   requesterSessionKey: string;
   requesterChannel?: string;
+  requesterAccountId?: string;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -600,6 +605,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterSessionKey: params.requesterSessionKey,
       triggerMessage,
       summaryLine: taskLabel,
+      requesterAccountId: params.requesterAccountId,
     });
     if (queued === "steered") {
       didAnnounce = true;
@@ -617,6 +623,8 @@ export async function runSubagentAnnounceFlow(params: {
         sessionKey: params.requesterSessionKey,
         message: triggerMessage,
         deliver: true,
+        channel: params.requesterChannel,
+        accountId: params.requesterAccountId,
         idempotencyKey: crypto.randomUUID(),
       },
       expectFinal: true,

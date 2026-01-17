@@ -60,6 +60,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       channel?: string;
+      accountId?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -199,6 +200,10 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lastChannel = sessionEntry?.lastChannel;
     const lastTo = typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
+    const resolvedAccountId =
+      typeof request.accountId === "string" && request.accountId.trim()
+        ? request.accountId.trim()
+        : sessionEntry?.lastAccountId;
 
     const wantsDelivery = request.deliver === true;
 
@@ -235,7 +240,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const fallback = resolveOutboundTarget({
         channel: resolvedChannel,
         cfg,
-        accountId: sessionEntry?.lastAccountId ?? undefined,
+        accountId: resolvedAccountId,
         mode: "implicit",
       });
       if (fallback.ok) {
@@ -269,6 +274,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         deliver,
         deliveryTargetMode,
         channel: resolvedChannel,
+        accountId: resolvedAccountId,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
         messageChannel: resolvedChannel,
