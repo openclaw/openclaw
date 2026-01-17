@@ -357,7 +357,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
-        sessionkey: String? = nil,
+        sessionkey: String?,
         idempotencykey: String
     ) {
         self.to = to
@@ -431,6 +431,7 @@ public struct AgentParams: Codable, Sendable {
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let channel: String?
+    public let accountid: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -447,6 +448,7 @@ public struct AgentParams: Codable, Sendable {
         deliver: Bool?,
         attachments: [AnyCodable]?,
         channel: String?,
+        accountid: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -462,6 +464,7 @@ public struct AgentParams: Codable, Sendable {
         self.deliver = deliver
         self.attachments = attachments
         self.channel = channel
+        self.accountid = accountid
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -478,6 +481,7 @@ public struct AgentParams: Codable, Sendable {
         case deliver
         case attachments
         case channel
+        case accountid = "accountId"
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"

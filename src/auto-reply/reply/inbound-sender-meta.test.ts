@@ -11,7 +11,9 @@ describe("formatInboundBodyWithSenderMeta", () => {
 
   it("appends a sender meta line for non-direct messages", () => {
     const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe("[X] hi\n[from: Alice (A1)]");
+    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
+      "[X] hi\n[from: Alice (A1)]",
+    );
   });
 
   it("prefers SenderE164 in the label when present", () => {
@@ -21,7 +23,9 @@ describe("formatInboundBodyWithSenderMeta", () => {
       SenderId: "bob@s.whatsapp.net",
       SenderE164: "+222",
     };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe("[X] hi\n[from: Bob (+222)]");
+    expect(formatInboundBodyWithSenderMeta({ ctx, body: "[X] hi" })).toBe(
+      "[X] hi\n[from: Bob (+222)]",
+    );
   });
 
   it("preserves escaped newline style when body uses literal \\\\n", () => {
@@ -38,4 +42,3 @@ describe("formatInboundBodyWithSenderMeta", () => {
     );
   });
 });
-

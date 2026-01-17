@@ -202,8 +202,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     const lastChannel = sessionEntry?.lastChannel;
     const lastTo = typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
     const resolvedAccountId =
-      normalizeAccountId(request.accountId) ??
-      normalizeAccountId(sessionEntry?.lastAccountId);
+      normalizeAccountId(request.accountId) ?? normalizeAccountId(sessionEntry?.lastAccountId);
 
     const wantsDelivery = request.deliver === true;
 

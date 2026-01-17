@@ -275,8 +275,7 @@ const FIELD_HELP: Record<string, string> = {
     'Text prefix for cross-context markers (supports "{channel}").',
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
-  "tools.message.broadcast.enabled":
-    "Enable broadcast action (default: true).",
+  "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires Brave API key).",
   "tools.web.search.provider": 'Search provider (only "brave" supported today).',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",

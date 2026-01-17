@@ -37,5 +37,7 @@ export function channelTargetSchema(options?: { description?: string }) {
 }
 
 export function channelTargetsSchema(options?: { description?: string }) {
-  return Type.Array(channelTargetSchema({ description: options?.description ?? CHANNEL_TARGETS_DESCRIPTION }));
+  return Type.Array(
+    channelTargetSchema({ description: options?.description ?? CHANNEL_TARGETS_DESCRIPTION }),
+  );
 }

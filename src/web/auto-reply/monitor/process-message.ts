@@ -9,7 +9,10 @@ import {
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
-import { buildHistoryContextFromEntries, type HistoryEntry } from "../../../auto-reply/reply/history.js";
+import {
+  buildHistoryContextFromEntries,
+  type HistoryEntry,
+} from "../../../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
@@ -88,7 +91,9 @@ export async function processMessage(params: {
         currentMessage: combinedBody,
         excludeLast: false,
         formatEntry: (entry) => {
-          const bodyWithId = entry.messageId ? `${entry.body}\n[message_id: ${entry.messageId}]` : entry.body;
+          const bodyWithId = entry.messageId
+            ? `${entry.body}\n[message_id: ${entry.messageId}]`
+            : entry.body;
           return formatAgentEnvelope({
             channel: "WhatsApp",
             from: conversationId,

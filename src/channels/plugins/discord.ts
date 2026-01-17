@@ -234,8 +234,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         }
       }
       const filtered = q ? rows.filter((row) => row.name?.toLowerCase().includes(q)) : rows;
-      const limited =
-        typeof limit === "number" && limit > 0 ? filtered.slice(0, limit) : filtered;
+      const limited = typeof limit === "number" && limit > 0 ? filtered.slice(0, limit) : filtered;
       return limited;
     },
   },

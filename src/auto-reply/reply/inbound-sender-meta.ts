@@ -1,9 +1,6 @@
 import type { MsgContext } from "../templating.js";
 
-export function formatInboundBodyWithSenderMeta(params: {
-  body: string;
-  ctx: MsgContext;
-}): string {
+export function formatInboundBodyWithSenderMeta(params: { body: string; ctx: MsgContext }): string {
   const body = params.body;
   if (!body.trim()) return body;
   const chatType = params.ctx.ChatType?.trim().toLowerCase();

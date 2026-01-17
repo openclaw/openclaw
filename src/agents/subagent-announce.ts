@@ -16,10 +16,7 @@ import {
 } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  type DeliveryContext,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.js";
+import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 

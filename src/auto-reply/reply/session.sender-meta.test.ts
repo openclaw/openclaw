@@ -49,4 +49,3 @@ describe("initSessionState sender meta", () => {
     expect(result.sessionCtx.BodyStripped).toBe("[WhatsApp +1] ping");
   });
 });
-

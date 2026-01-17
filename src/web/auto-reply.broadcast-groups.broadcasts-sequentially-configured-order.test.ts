@@ -216,7 +216,12 @@ describe("broadcast groups", () => {
 
     expect(resolver).toHaveBeenCalledTimes(2);
     for (const call of resolver.mock.calls.slice(0, 2)) {
-      const payload = call[0] as { Body: string; SenderName?: string; SenderE164?: string; SenderId?: string };
+      const payload = call[0] as {
+        Body: string;
+        SenderName?: string;
+        SenderE164?: string;
+        SenderId?: string;
+      };
       expect(payload.Body).toContain("Chat messages since your last reply");
       expect(payload.Body).toContain("Alice (+111): hello group");
       expect(payload.Body).toContain("[message_id: g1]");
