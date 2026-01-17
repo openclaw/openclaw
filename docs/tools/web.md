@@ -104,6 +104,7 @@ Fetch a URL and extract readable content.
 ### Requirements
 
 - `tools.web.fetch.enabled` must not be `false` (default: enabled)
+- Optional Firecrawl fallback: set `tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`.
 
 ### Config
 
@@ -116,8 +117,16 @@ Fetch a URL and extract readable content.
         maxChars: 50000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
-        userAgent: "clawdbot/2026.1.15",
-        readability: true
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        readability: true,
+        firecrawl: {
+          enabled: true,
+          apiKey: "FIRECRAWL_API_KEY_HERE", // optional if FIRECRAWL_API_KEY is set
+          baseUrl: "https://api.firecrawl.dev",
+          onlyMainContent: true,
+          maxAgeMs: 86400000, // ms (1 day)
+          timeoutSeconds: 60
+        }
       }
     }
   }
@@ -131,8 +140,11 @@ Fetch a URL and extract readable content.
 - `maxChars` (truncate long pages)
 
 Notes:
-- `web_fetch` uses Readability (main-content extraction) by default and falls back to basic HTML cleanup if it fails.
+- `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
+- Firecrawl requests use bot-circumvention mode and cache results by default.
+- `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
+- See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.
 - If you use tool profiles/allowlists, add `web_search`/`web_fetch` or `group:web`.
 - If the Brave key is missing, `web_search` returns a short setup hint with a docs link.

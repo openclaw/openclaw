@@ -1715,6 +1715,12 @@ Legacy: `tools.bash` is still accepted as an alias.
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.userAgent` (optional override)
 - `tools.web.fetch.readability` (default true; disable to use basic HTML cleanup only)
+- `tools.web.fetch.firecrawl.enabled` (default true when an API key is set)
+- `tools.web.fetch.firecrawl.apiKey` (optional; defaults to `FIRECRAWL_API_KEY`)
+- `tools.web.fetch.firecrawl.baseUrl` (default https://api.firecrawl.dev)
+- `tools.web.fetch.firecrawl.onlyMainContent` (default true)
+- `tools.web.fetch.firecrawl.maxAgeMs` (optional)
+- `tools.web.fetch.firecrawl.timeoutSeconds` (optional)
 
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
