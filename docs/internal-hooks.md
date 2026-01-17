@@ -8,17 +8,20 @@ read_when:
 
 Internal hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in Clawdbot.
 
-## Beginner-Friendly Intro
+## Getting Oriented
 
-Internal hooks are small scripts that run inside the Gateway when specific events happen (like `/new`, `/reset`, `/stop`, or other lifecycle events). Think of them as: **“When X happens, run this code.”** They let you extend Clawdbot without changing core code.
+Hooks are small scripts that run when something happens. There are two kinds:
 
-What you can do with hooks:
-- Automatically save a memory snapshot when you reset a session
+- **Internal hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
+- **Web-based hooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook).
+
+Common uses:
+- Save a memory snapshot when you reset a session
 - Keep an audit trail of commands for troubleshooting or compliance
-- Trigger follow-up automation when an agent starts or ends a session
+- Trigger follow-up automation when a session starts or ends
 - Write files into the agent workspace or call external APIs when events fire
 
-If you can write a small TypeScript function, you can write a hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
+If you can write a small TypeScript function, you can write an internal hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
 
 ## Overview
 
