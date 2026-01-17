@@ -27,7 +27,10 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
-import { createDiscordNativeCommand } from "./native-command.js";
+import {
+  createDiscordCommandArgFallbackButton,
+  createDiscordNativeCommand,
+} from "./native-command.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -149,6 +152,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     {
       commands,
       listeners: [],
+      components: [
+        createDiscordCommandArgFallbackButton({
+          cfg,
+          discordConfig: discordCfg,
+          accountId: account.accountId,
+          sessionPrefix,
+        }),
+      ],
     },
     [
       new GatewayPlugin({

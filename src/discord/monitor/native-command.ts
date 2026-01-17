@@ -163,6 +163,35 @@ function decodeDiscordCommandArgValue(value: string): string {
   }
 }
 
+function isDiscordUnknownInteraction(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as {
+    discordCode?: number;
+    status?: number;
+    message?: string;
+    rawBody?: { code?: number; message?: string };
+  };
+  if (err.discordCode === 10062 || err.rawBody?.code === 10062) return true;
+  if (err.status === 404 && /Unknown interaction/i.test(err.message ?? "")) return true;
+  if (/Unknown interaction/i.test(err.rawBody?.message ?? "")) return true;
+  return false;
+}
+
+async function safeDiscordInteractionCall<T>(
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (isDiscordUnknownInteraction(error)) {
+      console.warn(`discord: ${label} skipped (interaction expired)`);
+      return null;
+    }
+    throw error;
+  }
+}
+
 function buildDiscordCommandArgCustomId(params: {
   command: string;
   arg: string;
@@ -196,6 +225,73 @@ function parseDiscordCommandArgData(
   };
 }
 
+type DiscordCommandArgContext = {
+  cfg: ReturnType<typeof loadConfig>;
+  discordConfig: DiscordConfig;
+  accountId: string;
+  sessionPrefix: string;
+};
+
+async function handleDiscordCommandArgInteraction(
+  interaction: ButtonInteraction,
+  data: ComponentData,
+  ctx: DiscordCommandArgContext,
+) {
+  const parsed = parseDiscordCommandArgData(data);
+  if (!parsed) {
+    await safeDiscordInteractionCall("command arg update", () =>
+      interaction.update({
+        content: "Sorry, that selection is no longer available.",
+        components: [],
+      }),
+    );
+    return;
+  }
+  if (interaction.user?.id && interaction.user.id !== parsed.userId) {
+    await safeDiscordInteractionCall("command arg ack", () => interaction.acknowledge());
+    return;
+  }
+  const commandDefinition =
+    findCommandByNativeName(parsed.command) ??
+    listChatCommands().find((entry) => entry.key === parsed.command);
+  if (!commandDefinition) {
+    await safeDiscordInteractionCall("command arg update", () =>
+      interaction.update({
+        content: "Sorry, that command is no longer available.",
+        components: [],
+      }),
+    );
+    return;
+  }
+  const updated = await safeDiscordInteractionCall("command arg update", () =>
+    interaction.update({
+      content: `✅ Selected ${parsed.value}.`,
+      components: [],
+    }),
+  );
+  if (!updated) return;
+  const commandArgs = createCommandArgsWithValue({
+    argName: parsed.arg,
+    value: parsed.value,
+  });
+  const commandArgsWithRaw: CommandArgs = {
+    ...commandArgs,
+    raw: serializeCommandArgs(commandDefinition, commandArgs),
+  };
+  const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
+  await dispatchDiscordCommandInteraction({
+    interaction,
+    prompt,
+    command: commandDefinition,
+    commandArgs: commandArgsWithRaw,
+    cfg: ctx.cfg,
+    discordConfig: ctx.discordConfig,
+    accountId: ctx.accountId,
+    sessionPrefix: ctx.sessionPrefix,
+    preferFollowUp: true,
+  });
+}
+
 class DiscordCommandArgButton extends Button {
   label: string;
   customId: string;
@@ -223,53 +319,32 @@ class DiscordCommandArgButton extends Button {
   }
 
   async run(interaction: ButtonInteraction, data: ComponentData) {
-    const parsed = parseDiscordCommandArgData(data);
-    if (!parsed) {
-      await interaction.update({
-        content: "Sorry, that selection is no longer available.",
-        components: [],
-      });
-      return;
-    }
-    if (interaction.user?.id && interaction.user.id !== parsed.userId) {
-      await interaction.acknowledge();
-      return;
-    }
-    const commandDefinition =
-      findCommandByNativeName(parsed.command) ??
-      listChatCommands().find((entry) => entry.key === parsed.command);
-    if (!commandDefinition) {
-      await interaction.update({
-        content: "Sorry, that command is no longer available.",
-        components: [],
-      });
-      return;
-    }
-    await interaction.update({
-      content: `✅ Selected ${parsed.value}.`,
-      components: [],
-    });
-    const commandArgs = createCommandArgsWithValue({
-      argName: parsed.arg,
-      value: parsed.value,
-    });
-    const commandArgsWithRaw: CommandArgs = {
-      ...commandArgs,
-      raw: serializeCommandArgs(commandDefinition, commandArgs),
-    };
-    const prompt = buildCommandTextFromArgs(commandDefinition, commandArgsWithRaw);
-    await dispatchDiscordCommandInteraction({
-      interaction,
-      prompt,
-      command: commandDefinition,
-      commandArgs: commandArgsWithRaw,
+    await handleDiscordCommandArgInteraction(interaction, data, {
       cfg: this.cfg,
       discordConfig: this.discordConfig,
       accountId: this.accountId,
       sessionPrefix: this.sessionPrefix,
-      preferFollowUp: true,
     });
   }
+}
+
+class DiscordCommandArgFallbackButton extends Button {
+  label = "cmdarg";
+  customId = "cmdarg:seed=1";
+  private ctx: DiscordCommandArgContext;
+
+  constructor(ctx: DiscordCommandArgContext) {
+    super();
+    this.ctx = ctx;
+  }
+
+  async run(interaction: ButtonInteraction, data: ComponentData) {
+    await handleDiscordCommandArgInteraction(interaction, data, this.ctx);
+  }
+}
+
+export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {
+  return new DiscordCommandArgFallbackButton(params);
 }
 
 function buildDiscordCommandArgMenu(params: {
@@ -408,11 +483,13 @@ async function dispatchDiscordCommandInteraction(params: {
       content,
       ...(options?.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
     };
-    if (preferFollowUp) {
-      await interaction.followUp(payload);
-      return;
-    }
-    await interaction.reply(payload);
+    await safeDiscordInteractionCall("interaction reply", async () => {
+      if (preferFollowUp) {
+        await interaction.followUp(payload);
+        return;
+      }
+      await interaction.reply(payload);
+    });
   };
 
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -567,18 +644,22 @@ async function dispatchDiscordCommandInteraction(params: {
       sessionPrefix,
     });
     if (preferFollowUp) {
-      await interaction.followUp({
+      await safeDiscordInteractionCall("interaction follow-up", () =>
+        interaction.followUp({
+          content: menuPayload.content,
+          components: menuPayload.components,
+          ephemeral: true,
+        }),
+      );
+      return;
+    }
+    await safeDiscordInteractionCall("interaction reply", () =>
+      interaction.reply({
         content: menuPayload.content,
         components: menuPayload.components,
         ephemeral: true,
-      });
-      return;
-    }
-    await interaction.reply({
-      content: menuPayload.content,
-      components: menuPayload.components,
-      ephemeral: true,
-    });
+      }),
+    );
     return;
   }
 
@@ -646,15 +727,23 @@ async function dispatchDiscordCommandInteraction(params: {
       responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
-        await deliverDiscordInteractionReply({
-          interaction,
-          payload,
-          textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-            fallbackLimit: 2000,
-          }),
-          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-          preferFollowUp: preferFollowUp || didReply,
-        });
+        try {
+          await deliverDiscordInteractionReply({
+            interaction,
+            payload,
+            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+              fallbackLimit: 2000,
+            }),
+            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+            preferFollowUp: preferFollowUp || didReply,
+          });
+        } catch (error) {
+          if (isDiscordUnknownInteraction(error)) {
+            console.warn("discord: interaction reply skipped (interaction expired)");
+            return;
+          }
+          throw error;
+        }
         didReply = true;
       },
       onError: (err, info) => {
@@ -697,13 +786,15 @@ async function deliverDiscordInteractionReply(params: {
             }),
           }
         : { content };
-    if (!preferFollowUp && !hasReplied) {
-      await interaction.reply(payload);
+    await safeDiscordInteractionCall("interaction send", async () => {
+      if (!preferFollowUp && !hasReplied) {
+        await interaction.reply(payload);
+        hasReplied = true;
+        return;
+      }
+      await interaction.followUp(payload);
       hasReplied = true;
-      return;
-    }
-    await interaction.followUp(payload);
-    hasReplied = true;
+    });
   };
 
   if (mediaList.length > 0) {
