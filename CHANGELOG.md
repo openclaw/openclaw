@@ -26,6 +26,7 @@ Docs: https://docs.clawd.bot
 - Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
 - Memory: probe sqlite-vec availability in `clawdbot memory status`.
 - Memory: split embedding batches to avoid OpenAI token limits during indexing.
+- Telegram: preserve hidden text_link URLs by expanding entities in inbound text. (#1118) — thanks @sleontenko.
 
 ## 2026.1.16-2
 
