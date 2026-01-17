@@ -98,6 +98,23 @@ function buildModelDecision(params: {
   };
 }
 
+function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
+  const total = decision.attachments.length;
+  const success = decision.attachments.filter((entry) => entry.chosen?.outcome === "success").length;
+  const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
+  const provider = chosen?.provider?.trim();
+  const model = chosen?.model?.trim();
+  const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
+  const reason = decision.attachments
+    .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+    .find(Boolean);
+  const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+  const countLabel = total > 0 ? ` (${success}/${total})` : "";
+  const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
+  const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
+  return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
 async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
@@ -495,12 +512,16 @@ export async function runCapability(params: {
       chosen: attempts.find((attempt) => attempt.outcome === "success"),
     });
   }
+  const decision: MediaUnderstandingDecision = {
+    capability,
+    outcome: outputs.length > 0 ? "success" : "skipped",
+    attachments: attachmentDecisions,
+  };
+  if (shouldLogVerbose()) {
+    logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
+  }
   return {
     outputs,
-    decision: {
-      capability,
-      outcome: outputs.length > 0 ? "success" : "skipped",
-      attachments: attachmentDecisions,
-    },
+    decision,
   };
 }

@@ -19,11 +19,22 @@ function formatMediaAttachedLine(params: {
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
-  const suppressed = new Set(
-    Array.isArray(ctx.MediaUnderstanding)
-      ? ctx.MediaUnderstanding.map((output) => output.attachmentIndex)
-      : [],
-  );
+  const suppressed = new Set<number>();
+  if (Array.isArray(ctx.MediaUnderstanding)) {
+    for (const output of ctx.MediaUnderstanding) {
+      suppressed.add(output.attachmentIndex);
+    }
+  }
+  if (Array.isArray(ctx.MediaUnderstandingDecisions)) {
+    for (const decision of ctx.MediaUnderstandingDecisions) {
+      if (decision.outcome !== "success") continue;
+      for (const attachment of decision.attachments) {
+        if (attachment.chosen?.outcome === "success") {
+          suppressed.add(attachment.attachmentIndex);
+        }
+      }
+    }
+  }
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
     pathsFromArray && pathsFromArray.length > 0
