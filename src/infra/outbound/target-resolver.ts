@@ -86,11 +86,7 @@ export function formatTargetDisplay(params: {
   const display = params.display?.trim();
   const kind =
     params.kind ??
-    (lowered.startsWith("user:")
-      ? "user"
-      : lowered.startsWith("channel:")
-        ? "group"
-        : undefined);
+    (lowered.startsWith("user:") ? "user" : lowered.startsWith("channel:") ? "group" : undefined);
 
   if (display) {
     if (display.startsWith("#") || display.startsWith("@")) return display;

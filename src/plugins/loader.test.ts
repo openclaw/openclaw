@@ -239,11 +239,7 @@ describe("loadClawdbotPlugins", () => {
 
   it("prefers higher-precedence plugins with the same id", () => {
     const bundledDir = makeTempDir();
-    fs.writeFileSync(
-      path.join(bundledDir, "shadow.js"),
-      "export default function () {}",
-      "utf-8",
-    );
+    fs.writeFileSync(path.join(bundledDir, "shadow.js"), "export default function () {}", "utf-8");
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
 
     const override = writePlugin({

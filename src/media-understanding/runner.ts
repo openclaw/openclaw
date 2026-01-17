@@ -98,14 +98,6 @@ function buildDeepgramCompatQuery(options?: {
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
-function mergeProviderQuery(
-  base: ProviderQuery | undefined,
-  incoming: ProviderQuery | undefined,
-): ProviderQuery | undefined {
-  if (!base && !incoming) return undefined;
-  return { ...(base ?? {}), ...(incoming ?? {}) };
-}
-
 function normalizeDeepgramQueryKeys(query: ProviderQuery): ProviderQuery {
   const normalized = { ...query };
   if ("detectLanguage" in normalized) {
@@ -126,8 +118,8 @@ function resolveProviderQuery(params: {
 }): ProviderQuery | undefined {
   const { providerId, config, entry } = params;
   const mergedOptions = normalizeProviderQuery({
-    ...(config?.providerOptions?.[providerId] ?? {}),
-    ...(entry.providerOptions?.[providerId] ?? {}),
+    ...config?.providerOptions?.[providerId],
+    ...entry.providerOptions?.[providerId],
   });
   if (providerId !== "deepgram") {
     return mergedOptions;
