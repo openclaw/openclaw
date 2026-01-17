@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 
+### Fixes
+- Matrix: send voice/image-specific media payloads and keep legacy poll parsing. (#1088) — thanks @sibbl.
+
 ## 2026.1.16-2
 
 ### Changes

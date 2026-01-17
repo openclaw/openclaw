@@ -42,7 +42,18 @@ export type PollAnswer = {
   id: string;
 } & TextContent;
 
-export type PollStartContent = TimelineEvents[typeof M_POLL_START];
+export type PollStartSubtype = {
+  question: TextContent;
+  kind?: PollKind;
+  max_selections?: number;
+  answers: PollAnswer[];
+};
+
+export type LegacyPollStartContent = {
+  "m.poll"?: PollStartSubtype;
+};
+
+export type PollStartContent = TimelineEvents[typeof M_POLL_START] | LegacyPollStartContent;
 
 export type PollSummary = {
   eventId: string;
@@ -65,7 +76,9 @@ export function getTextContent(text?: TextContent): string {
 }
 
 export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const poll = content[M_POLL_START] ?? content[ORG_POLL_START];
+  const poll = (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START]
+    ?? (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START]
+    ?? (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
   if (!poll) return null;
 
   const question = getTextContent(poll.question);
