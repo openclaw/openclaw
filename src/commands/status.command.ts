@@ -226,7 +226,7 @@ export async function statusCommand(
   const storeLabel =
     summary.sessions.paths.length > 1
       ? `${summary.sessions.paths.length} stores`
-      : summary.sessions.paths[0] ?? "unknown";
+      : (summary.sessions.paths[0] ?? "unknown");
 
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },

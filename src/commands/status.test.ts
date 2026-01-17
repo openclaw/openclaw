@@ -385,8 +385,9 @@ describe("statusCommand", () => {
     const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
     expect(payload.sessions.count).toBe(2);
     expect(payload.sessions.paths.length).toBe(2);
-    expect(payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"))
-      .toBe(true);
+    expect(
+      payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
+    ).toBe(true);
 
     if (originalAgents) mocks.listAgentsForGateway.mockImplementation(originalAgents);
     if (originalResolveStorePath)

@@ -463,10 +463,7 @@ function isObjectSchema(schema: JsonSchemaObject): boolean {
 }
 
 function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject): JsonSchemaObject {
-  const mergedRequired = new Set<string>([
-    ...(base.required ?? []),
-    ...(extension.required ?? []),
-  ]);
+  const mergedRequired = new Set<string>([...(base.required ?? []), ...(extension.required ?? [])]);
   const merged: JsonSchemaObject = {
     ...base,
     ...extension,
@@ -598,12 +595,17 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
 
   for (const plugin of plugins) {
     if (!plugin.configSchema) continue;
-    const entrySchema = entryBase ? cloneSchema(entryBase) : ({ type: "object" } as JsonSchemaObject);
+    const entrySchema = entryBase
+      ? cloneSchema(entryBase)
+      : ({ type: "object" } as JsonSchemaObject);
     const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
     const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
     const pluginSchema = asSchemaObject(plugin.configSchema);
     const nextConfigSchema =
-      baseConfigSchema && pluginSchema && isObjectSchema(baseConfigSchema) && isObjectSchema(pluginSchema)
+      baseConfigSchema &&
+      pluginSchema &&
+      isObjectSchema(baseConfigSchema) &&
+      isObjectSchema(pluginSchema)
         ? mergeObjectSchema(baseConfigSchema, pluginSchema)
         : cloneSchema(plugin.configSchema);
 
@@ -683,10 +685,7 @@ export function buildConfigSchema(params?: {
   const mergedHints = applySensitiveHints(
     applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
   );
-  const mergedSchema = applyChannelSchemas(
-    applyPluginSchemas(base.schema, plugins),
-    channels,
-  );
+  const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
   return {
     ...base,
     schema: mergedSchema,

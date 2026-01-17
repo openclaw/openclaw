@@ -13,10 +13,7 @@ import {
   resolveHeartbeatSummaryForAgent,
 } from "../infra/heartbeat-runner.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  buildChannelAccountBindings,
-  resolvePreferredAccountId,
-} from "../routing/bindings.js";
+import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 
@@ -158,10 +155,7 @@ const isAccountEnabled = (account: unknown): boolean => {
 const asRecord = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 
-const formatProbeLine = (
-  probe: unknown,
-  opts: { botUsernames?: string[] } = {},
-): string | null => {
+const formatProbeLine = (probe: unknown, opts: { botUsernames?: string[] } = {}): string | null => {
   const record = asRecord(probe);
   if (!record) return null;
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
@@ -203,7 +197,8 @@ const formatAccountProbeTiming = (summary: ChannelAccountHealthSummary): string 
 
   const accountId = summary.accountId || "default";
   const botRecord = asRecord(probe.bot);
-  const botUsername = botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
+  const botUsername =
+    botRecord && typeof botRecord.username === "string" ? botRecord.username : null;
   const handle = botUsername ? `@${botUsername}` : accountId;
   const timing = elapsedMs != null ? `${elapsedMs}ms` : "ok";
 
@@ -268,11 +263,9 @@ export const formatHealthChannelLines = (
     const listSummaries =
       accountMode === "all"
         ? Object.values(accountSummaries)
-        : filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []);
+        : (filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []));
     const baseSummary =
-      filteredSummaries && filteredSummaries.length > 0
-        ? filteredSummaries[0]
-        : channelSummary;
+      filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
     const botUsernames = listSummaries
       ? listSummaries
           .map((account) => {
@@ -285,8 +278,7 @@ export const formatHealthChannelLines = (
     const linked = typeof baseSummary.linked === "boolean" ? baseSummary.linked : null;
     if (linked !== null) {
       if (linked) {
-        const authAgeMs =
-          typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
+        const authAgeMs = typeof baseSummary.authAgeMs === "number" ? baseSummary.authAgeMs : null;
         const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
         lines.push(`${label}: linked${authLabel}`);
       } else {
@@ -431,7 +423,8 @@ export async function getHealthSnapshot(params?: {
         }
       }
 
-      const probeRecord = probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
+      const probeRecord =
+        probe && typeof probe === "object" ? (probe as Record<string, unknown>) : null;
       const bot =
         probeRecord && typeof probeRecord.bot === "object"
           ? (probeRecord.bot as { username?: string | null })
@@ -637,14 +630,15 @@ export async function healthCommand(
       }
       return byChannel;
     })();
-    const channelLines = Object.keys(accountIdsByChannel).length > 0
-      ? formatHealthChannelLines(summary, {
-          accountMode: opts.verbose ? "all" : "default",
-          accountIdsByChannel,
-        })
-      : formatHealthChannelLines(summary, {
-          accountMode: opts.verbose ? "all" : "default",
-        });
+    const channelLines =
+      Object.keys(accountIdsByChannel).length > 0
+        ? formatHealthChannelLines(summary, {
+            accountMode: opts.verbose ? "all" : "default",
+            accountIdsByChannel,
+          })
+        : formatHealthChannelLines(summary, {
+            accountMode: opts.verbose ? "all" : "default",
+          });
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line));
     }
@@ -690,7 +684,9 @@ export async function healthCommand(
       runtime.log(info(`Heartbeat interval: ${heartbeatParts.join(", ")}`));
     }
     if (displayAgents.length === 0) {
-      runtime.log(info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`));
+      runtime.log(
+        info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`),
+      );
       if (summary.sessions.recent.length > 0) {
         for (const r of summary.sessions.recent) {
           runtime.log(

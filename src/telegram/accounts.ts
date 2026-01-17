@@ -56,9 +56,7 @@ function resolveAccountConfig(
   const direct = accounts[accountId] as TelegramAccountConfig | undefined;
   if (direct) return direct;
   const normalized = normalizeAccountId(accountId);
-  const matchKey = Object.keys(accounts).find(
-    (key) => normalizeAccountId(key) === normalized,
-  );
+  const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
   return matchKey ? (accounts[matchKey] as TelegramAccountConfig | undefined) : undefined;
 }
 
