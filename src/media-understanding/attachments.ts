@@ -102,7 +102,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
 
 export function resolveAttachmentKind(
   attachment: MediaAttachment,
-): "image" | "audio" | "video" | "unknown" {
+): "image" | "audio" | "video" | "document" | "unknown" {
   const kind = kindFromMime(attachment.mime);
   if (kind !== "unknown") return kind;
 

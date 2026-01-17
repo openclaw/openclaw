@@ -12,7 +12,11 @@ import {
   type HookStatusReport,
 } from "../hooks/hooks-status.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
-import { installHooksFromNpmSpec, installHooksFromPath, resolveHookInstallDir } from "../hooks/install.js";
+import {
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+  resolveHookInstallDir,
+} from "../hooks/install.js";
 import { recordHookInstall } from "../hooks/installs.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -732,8 +736,7 @@ export function registerHooksCli(program: Command): void {
           continue;
         }
 
-        const nextVersion =
-          result.version ?? (await readInstalledPackageVersion(result.targetDir));
+        const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
         nextCfg = recordHookInstall(nextCfg, {
           hookId,
           source: "npm",
