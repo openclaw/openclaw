@@ -141,6 +141,18 @@ describe("legacy config detection", () => {
     });
     expect((res.config as { agent?: unknown }).agent).toBeUndefined();
   });
+  it("migrates tools.bash to tools.exec", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      tools: {
+        bash: { timeoutSec: 12 },
+      },
+    });
+    expect(res.changes).toContain("Moved tools.bash → tools.exec.");
+    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
+    expect((res.config?.tools as { bash?: unknown } | undefined)?.bash).toBeUndefined();
+  });
   it("accepts per-agent tools.elevated overrides", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
