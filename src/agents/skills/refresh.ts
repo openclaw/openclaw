@@ -26,11 +26,12 @@ const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
 let globalVersion = 0;
 
-export const DEFAULT_SKILLS_WATCH_IGNORED = [
+export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
-] as RegExp[];
+];
+];
 
 function bumpVersion(current: number): number {
   const now = Date.now();
