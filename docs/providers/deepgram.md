@@ -41,6 +41,9 @@ DEEPGRAM_API_KEY=dg_...
 
 - `model`: Deepgram model id (default: `nova-3`)
 - `language`: language hint (optional)
+- `tools.media.audio.deepgram.detectLanguage`: enable language detection (optional)
+- `tools.media.audio.deepgram.punctuate`: enable punctuation (optional)
+- `tools.media.audio.deepgram.smartFormat`: enable smart formatting (optional)
 
 Example with language:
 ```json5
@@ -58,7 +61,27 @@ Example with language:
 }
 ```
 
+Example with Deepgram options:
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        deepgram: {
+          detectLanguage: true,
+          punctuate: true,
+          smartFormat: true
+        },
+        models: [{ provider: "deepgram", model: "nova-3" }]
+      }
+    }
+  }
+}
+```
+
 ## Notes
 
 - Authentication follows the standard provider auth order; `DEEPGRAM_API_KEY` is the simplest path.
+- Override endpoints or headers with `tools.media.audio.baseUrl` and `tools.media.audio.headers` when using a proxy.
 - Output follows the same audio rules as other providers (size caps, timeouts, transcript injection).

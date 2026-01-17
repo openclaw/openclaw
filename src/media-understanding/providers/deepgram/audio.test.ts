@@ -65,12 +65,18 @@ describe("transcribeDeepgramAudio", () => {
       language: " en ",
       mime: "audio/wav",
       headers: { "X-Custom": "1" },
+      query: {
+        punctuate: false,
+        smart_format: true,
+      },
       fetchFn,
     });
 
     expect(result.model).toBe("nova-3");
     expect(result.text).toBe("hello");
-    expect(seenUrl).toBe("https://api.example.com/v1/listen?model=nova-3&language=en");
+    expect(seenUrl).toBe(
+      "https://api.example.com/v1/listen?model=nova-3&language=en&punctuate=false&smart_format=true",
+    );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
 

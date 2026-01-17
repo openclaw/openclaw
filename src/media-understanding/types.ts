@@ -57,6 +57,7 @@ export type AudioTranscriptionRequest = {
   model?: string;
   language?: string;
   prompt?: string;
+  query?: Record<string, string | number | boolean>;
   timeoutMs: number;
   fetchFn?: typeof fetch;
 };

@@ -32,6 +32,8 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
 - `tools.media.models`: shared model list (use `capabilities` to gate).
 - `tools.media.image` / `tools.media.audio` / `tools.media.video`:
   - defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
+  - provider overrides (`baseUrl`, `headers`)
+  - Deepgram audio options (`deepgram` in `tools.media.audio`)
   - optional **per‑capability `models` list** (preferred before shared models)
   - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
   - `scope` (optional gating by channel/chatType/session key)

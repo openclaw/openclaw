@@ -51,6 +51,16 @@ export type MediaUnderstandingModelConfig = {
   timeoutSeconds?: number;
   /** Optional language hint for audio transcription. */
   language?: string;
+  /** Optional Deepgram transcription options (audio only). */
+  deepgram?: {
+    detectLanguage?: boolean;
+    punctuate?: boolean;
+    smartFormat?: boolean;
+  };
+  /** Optional base URL override for provider requests. */
+  baseUrl?: string;
+  /** Optional headers merged into provider requests. */
+  headers?: Record<string, string>;
   /** Auth profile id to use for this provider. */
   profile?: string;
   /** Preferred profile id if multiple are available. */
@@ -72,6 +82,16 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Optional Deepgram transcription options (audio only). */
+  deepgram?: {
+    detectLanguage?: boolean;
+    punctuate?: boolean;
+    smartFormat?: boolean;
+  };
+  /** Optional base URL override for provider requests. */
+  baseUrl?: string;
+  /** Optional headers merged into provider requests. */
+  headers?: Record<string, string>;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
