@@ -12,7 +12,7 @@ export function extractMediaUserText(body?: string): string | undefined {
 }
 
 function formatSection(
-  title: "Audio" | "Video" | "Image",
+  title: string,
   kind: "Transcript" | "Description",
   text: string,
   userText?: string,
@@ -40,11 +40,21 @@ export function formatMediaUnderstandingBody(params: {
     sections.push(`User text:\n${userText}`);
   }
 
+  const counts = new Map<MediaUnderstandingOutput["kind"], number>();
   for (const output of outputs) {
+    counts.set(output.kind, (counts.get(output.kind) ?? 0) + 1);
+  }
+  const seen = new Map<MediaUnderstandingOutput["kind"], number>();
+
+  for (const output of outputs) {
+    const count = counts.get(output.kind) ?? 1;
+    const next = (seen.get(output.kind) ?? 0) + 1;
+    seen.set(output.kind, next);
+    const suffix = count > 1 ? ` ${next}/${count}` : "";
     if (output.kind === "audio.transcription") {
       sections.push(
         formatSection(
-          "Audio",
+          `Audio${suffix}`,
           "Transcript",
           output.text,
           outputs.length === 1 ? userText : undefined,
@@ -55,7 +65,7 @@ export function formatMediaUnderstandingBody(params: {
     if (output.kind === "image.description") {
       sections.push(
         formatSection(
-          "Image",
+          `Image${suffix}`,
           "Description",
           output.text,
           outputs.length === 1 ? userText : undefined,
@@ -65,7 +75,7 @@ export function formatMediaUnderstandingBody(params: {
     }
     sections.push(
       formatSection(
-        "Video",
+        `Video${suffix}`,
         "Description",
         output.text,
         outputs.length === 1 ? userText : undefined,
@@ -74,4 +84,11 @@ export function formatMediaUnderstandingBody(params: {
   }
 
   return sections.join("\n\n").trim();
+}
+
+export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
+  if (outputs.length === 1) return outputs[0].text;
+  return outputs
+    .map((output, index) => `Audio ${index + 1}:\n${output.text}`)
+    .join("\n\n");
 }

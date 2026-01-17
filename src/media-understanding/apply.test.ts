@@ -255,4 +255,90 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.CommandBody).toBe("show Dom");
     expect(ctx.RawBody).toBe("show Dom");
   });
+
+  it("uses shared media models list when capability config is missing", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const imagePath = path.join(dir, "shared.jpg");
+    await fs.writeFile(imagePath, "image-bytes");
+
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: imagePath,
+      MediaType: "image/jpeg",
+    };
+    const cfg: ClawdbotConfig = {
+      tools: {
+        media: {
+          models: [
+            {
+              type: "cli",
+              command: "gemini",
+              args: ["--allowed-tools", "read_file", "{{MediaPath}}"],
+              capabilities: ["image"],
+            },
+          ],
+        },
+      },
+    };
+
+    const execModule = await import("../process/exec.js");
+    vi.mocked(execModule.runExec).mockResolvedValue({
+      stdout: "shared description\n",
+      stderr: "",
+    });
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
+  });
+
+  it("handles multiple audio attachments when attachment mode is all", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const audioPathA = path.join(dir, "note-a.ogg");
+    const audioPathB = path.join(dir, "note-b.ogg");
+    await fs.writeFile(audioPathA, "hello");
+    await fs.writeFile(audioPathB, "world");
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPaths: [audioPathA, audioPathB],
+      MediaTypes: ["audio/ogg", "audio/ogg"],
+    };
+    const cfg: ClawdbotConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            attachments: { mode: "all", maxAttachments: 2 },
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio: async (req) => ({ text: req.fileName }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("Audio 1:\nnote-a.ogg\n\nAudio 2:\nnote-b.ogg");
+    expect(ctx.Body).toBe(
+      ["[Audio 1/2]\nTranscript:\nnote-a.ogg", "[Audio 2/2]\nTranscript:\nnote-b.ogg"].join(
+        "\n\n",
+      ),
+    );
+  });
 });

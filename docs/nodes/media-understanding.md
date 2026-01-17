@@ -16,7 +16,7 @@ Clawdbot can optionally **summarize inbound media** (image/audio/video) before t
 
 ## High‑level behavior
 1) Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
-2) For each enabled capability (image/audio/video), pick the **first matching attachment**.
+2) For each enabled capability (image/audio/video), select attachments per policy (default: **first**).
 3) Choose the first eligible model entry (size + capability + auth).  
 4) If a model fails or the media is too large, **fall back to the next entry**.
 5) On success:
@@ -27,18 +27,23 @@ Clawdbot can optionally **summarize inbound media** (image/audio/video) before t
 If understanding fails or is disabled, **the reply flow continues** with the original body + attachments.
 
 ## Config overview
-Use **per‑capability configs** under `tools.media`. Each capability can define:
-- defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
-- **ordered `models` list** (fallback order)
-- `scope` (optional gating by channel/chatType/session key)
+`tools.media` supports **shared models** plus per‑capability overrides:
+- `tools.media.models`: shared model list (use `capabilities` to gate).
+- `tools.media.image` / `tools.media.audio` / `tools.media.video`:
+  - defaults (`prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language`)
+  - optional **per‑capability `models` list** (preferred before shared models)
+  - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
+  - `scope` (optional gating by channel/chatType/session key)
+- `tools.media.concurrency`: max concurrent capability runs (default **2**).
 
 ```json5
 {
   tools: {
     media: {
-      image: { /* config */ },
-      audio: { /* config */ },
-      video: { /* config */ }
+      models: [ /* shared list */ ],
+      image: { /* optional overrides */ },
+      audio: { /* optional overrides */ },
+      video: { /* optional overrides */ }
     }
   }
 }
@@ -95,12 +100,13 @@ Rules:
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
 
 ## Capabilities (optional)
-If you set `capabilities`, the entry only runs for those media types. Suggested
-defaults when you opt in:
-- `openai`, `anthropic`: **image**
+If you set `capabilities`, the entry only runs for those media types. For shared
+lists, Clawdbot can infer defaults:
+- `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
-- CLI entries: declare the exact capabilities you support.
+- `groq`: **audio**
 
+For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (Clawdbot integrations)
@@ -123,9 +129,49 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 - `google/gemini-3-flash-preview` (fast), `google/gemini-3-pro-preview` (richer).
 - CLI fallback: `gemini` CLI (supports `read_file` on video/audio).
 
+## Attachment policy
+Per‑capability `attachments` controls which attachments are processed:
+- `mode`: `first` (default) or `all`
+- `maxAttachments`: cap the number processed (default **1**)
+- `prefer`: `first`, `last`, `path`, `url`
+
+When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
+
 ## Config examples
 
-### 1) Audio + Video only (image off)
+### 1) Shared models list + overrides
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        { provider: "openai", model: "gpt-5.2", capabilities: ["image"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["image", "audio", "video"] },
+        {
+          type: "cli",
+          command: "gemini",
+          args: [
+            "-m",
+            "gemini-3-flash",
+            "--allowed-tools",
+            "read_file",
+            "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters."
+          ],
+          capabilities: ["image", "video"]
+        }
+      ],
+      audio: {
+        attachments: { mode: "all", maxAttachments: 2 }
+      },
+      video: {
+        maxChars: 500
+      }
+    }
+  }
+}
+```
+
+### 2) Audio + Video only (image off)
 ```json5
 {
   tools: {
@@ -164,7 +210,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 }
 ```
 
-### 2) Optional image understanding
+### 3) Optional image understanding
 ```json5
 {
   tools: {
@@ -194,7 +240,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 }
 ```
 
-### 3) Multi‑modal single entry (explicit capabilities)
+### 4) Multi‑modal single entry (explicit capabilities)
 ```json5
 {
   tools: {

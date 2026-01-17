@@ -1770,13 +1770,16 @@ Legacy: `tools.bash` is still accepted as an alias.
 - `tools.web.fetch.firecrawl.timeoutSeconds` (optional)
 
 `tools.media` configures inbound media understanding (image/audio/video):
+- `tools.media.models`: shared model list (capability-tagged; used after per-cap lists).
+- `tools.media.concurrency`: max concurrent capability runs (default 2).
 - `tools.media.image` / `tools.media.audio` / `tools.media.video`:
-  - `enabled`: opt-out switch (default true).
+  - `enabled`: opt-out switch (default true when models are configured).
   - `prompt`: optional prompt override (image/video append a `maxChars` hint automatically).
   - `maxChars`: max output characters (default 500 for image/video; unset for audio).
   - `maxBytes`: max media size to send (defaults: image 10MB, audio 20MB, video 50MB).
   - `timeoutSeconds`: request timeout (defaults: image 60s, audio 60s, video 120s).
   - `language`: optional audio hint.
+  - `attachments`: attachment policy (`mode`, `maxAttachments`, `prefer`).
   - `scope`: optional gating (first match wins) with `match.channel`, `match.chatType`, or `match.keyPrefix`.
   - `models`: ordered list of model entries; failures or oversize media fall back to the next entry.
 - Each `models[]` entry:
@@ -1787,7 +1790,7 @@ Legacy: `tools.bash` is still accepted as an alias.
   - CLI entry (`type: "cli"`):
     - `command`: executable to run.
     - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc).
-  - `capabilities`: optional list (`image`, `audio`, `video`) to gate a shared entry.
+  - `capabilities`: optional list (`image`, `audio`, `video`) to gate a shared entry. Defaults when omitted: `openai`/`anthropic`/`minimax` → image, `google` → image+audio+video, `groq` → audio.
   - `prompt`, `maxChars`, `maxBytes`, `timeoutSeconds`, `language` can be overridden per entry.
 
 If no models are configured (or `enabled: false`), understanding is skipped; the model still receives the original attachments.
@@ -2900,7 +2903,7 @@ clawdbot dns setup --apply
 
 ## Template variables
 
-Template placeholders are expanded in `tools.media.*.models[].args` (and any future templated argument fields).
+Template placeholders are expanded in `tools.media.*.models[].args` and `tools.media.models[].args` (and any future templated argument fields).
 
 | Variable | Description |
 |----------|-------------|

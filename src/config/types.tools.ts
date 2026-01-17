@@ -18,6 +18,15 @@ export type MediaUnderstandingScopeConfig = {
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
+export type MediaUnderstandingAttachmentsConfig = {
+  /** Select the first matching attachment or process multiple. */
+  mode?: "first" | "all";
+  /** Max number of attachments to process (default: 1). */
+  maxAttachments?: number;
+  /** Attachment ordering preference. */
+  prefer?: "first" | "last" | "path" | "url";
+};
+
 export type MediaUnderstandingModelConfig = {
   /** provider API id (e.g. openai, google). */
   provider?: string;
@@ -62,11 +71,17 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Attachment selection policy. */
+  attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
   models?: MediaUnderstandingModelConfig[];
 };
 
 export type MediaToolsConfig = {
+  /** Shared model list applied across image/audio/video. */
+  models?: MediaUnderstandingModelConfig[];
+  /** Max concurrent media understanding runs. */
+  concurrency?: number;
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;

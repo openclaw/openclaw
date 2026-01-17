@@ -38,10 +38,10 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.
-- Media understanding (if configured via `tools.media.*`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
+- Media understanding (if configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
-- Only the first matching image/audio/video attachment is processed; remaining attachments are left untouched.
+- By default only the first matching image/audio/video attachment is processed; set `tools.media.<cap>.attachments` to process multiple attachments.
 
 ## Limits & Errors
 **Outbound send caps (WhatsApp web send)**

@@ -271,6 +271,14 @@ export const MediaUnderstandingCapabilitiesSchema = z
   .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
+export const MediaUnderstandingAttachmentsSchema = z
+  .object({
+    mode: z.union([z.literal("first"), z.literal("all")]).optional(),
+    maxAttachments: z.number().int().positive().optional(),
+    prefer: z.union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")]).optional(),
+  })
+  .optional();
+
 export const MediaUnderstandingModelSchema = z
   .object({
     provider: z.string().optional(),
@@ -298,12 +306,15 @@ export const ToolsMediaUnderstandingSchema = z
     prompt: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     language: z.string().optional(),
+    attachments: MediaUnderstandingAttachmentsSchema,
     models: z.array(MediaUnderstandingModelSchema).optional(),
   })
   .optional();
 
 export const ToolsMediaSchema = z
   .object({
+    models: z.array(MediaUnderstandingModelSchema).optional(),
+    concurrency: z.number().int().positive().optional(),
     image: ToolsMediaUnderstandingSchema.optional(),
     audio: ToolsMediaUnderstandingSchema.optional(),
     video: ToolsMediaUnderstandingSchema.optional(),
