@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 
 ### Fixes
+- Memory: split overly long lines to keep embeddings under token limits.
 
 ## 2026.1.17-1
 
