@@ -256,4 +256,20 @@ metadata:
     expect(clawdbot?.requires?.config).toEqual(["workspace.dir"]);
     expect(clawdbot?.install?.[0].kind).toBe("bundled");
   });
+
+  it("parses YAML metadata map", () => {
+    const content = `---
+name: yaml-metadata
+metadata:
+  clawdbot:
+    emoji: disk
+    events:
+      - command:new
+---
+`;
+    const frontmatter = parseFrontmatter(content);
+    const clawdbot = resolveClawdbotMetadata(frontmatter);
+    expect(clawdbot?.emoji).toBe("disk");
+    expect(clawdbot?.events).toEqual(["command:new"]);
+  });
 });

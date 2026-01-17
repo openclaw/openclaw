@@ -37,6 +37,38 @@ metadata:
     expect(parsed.clawdbot?.emoji).toBe("disk");
   });
 
+  it("preserves inline JSON values", () => {
+    const content = `---
+name: inline-json
+metadata: {"clawdbot": {"events": ["test"]}}
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.metadata).toBe('{"clawdbot": {"events": ["test"]}}');
+  });
+
+  it("stringifies YAML objects and arrays", () => {
+    const content = `---
+name: yaml-objects
+enabled: true
+retries: 3
+tags:
+  - alpha
+  - beta
+metadata:
+  clawdbot:
+    events:
+      - command:new
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.enabled).toBe("true");
+    expect(result.retries).toBe("3");
+    expect(JSON.parse(result.tags ?? "[]")).toEqual(["alpha", "beta"]);
+    const parsed = JSON5.parse(result.metadata ?? "") as { clawdbot?: { events?: string[] } };
+    expect(parsed.clawdbot?.events).toEqual(["command:new"]);
+  });
+
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
