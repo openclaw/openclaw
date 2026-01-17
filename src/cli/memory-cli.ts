@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { withProgress, withProgressTotals } from "./progress.js";
-import { getMemorySearchManager } from "../memory/index.js";
+import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -15,10 +15,40 @@ type MemoryCommandOptions = {
   index?: boolean;
 };
 
+type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
+
 function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) return trimmed;
   return resolveDefaultAgentId(cfg);
+}
+
+function formatErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function closeManager(manager: MemoryManager): Promise<void> {
+  try {
+    await manager.close();
+  } catch (err) {
+    defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`);
+  }
+}
+
+async function withMemoryManager(
+  params: { cfg: ReturnType<typeof loadConfig>; agentId: string },
+  run: (manager: MemoryManager) => Promise<void>,
+): Promise<void> {
+  const { manager, error } = await getMemorySearchManager(params);
+  if (!manager) {
+    defaultRuntime.log(error ?? "Memory search disabled.");
+    return;
+  }
+  try {
+    await run(manager);
+  } finally {
+    await closeManager(manager);
+  }
 }
 
 export function registerMemoryCli(program: Command) {
@@ -41,12 +71,7 @@ export function registerMemoryCli(program: Command) {
     .action(async (opts: MemoryCommandOptions) => {
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
-      const { manager, error } = await getMemorySearchManager({ cfg, agentId });
-      if (!manager) {
-        defaultRuntime.log(error ?? "Memory search disabled.");
-        return;
-      }
-      try {
+      await withMemoryManager({ cfg, agentId }, async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe: Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>> | undefined;
         let indexError: string | undefined;
@@ -76,7 +101,7 @@ export function registerMemoryCli(program: Command) {
                     },
                   });
                 } catch (err) {
-                  indexError = err instanceof Error ? err.message : String(err);
+                  indexError = formatErrorMessage(err);
                   defaultRuntime.error(`Memory index failed: ${indexError}`);
                   process.exitCode = 1;
                 }
@@ -175,9 +200,7 @@ export function registerMemoryCli(program: Command) {
           lines.push(`${label("Index error")} ${warn(indexError)}`);
         }
         defaultRuntime.log(lines.join("\n"));
-      } finally {
-        await manager.close();
-      }
+      });
     });
 
   memory
@@ -188,21 +211,16 @@ export function registerMemoryCli(program: Command) {
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
-      const { manager, error } = await getMemorySearchManager({ cfg, agentId });
-      if (!manager) {
-        defaultRuntime.log(error ?? "Memory search disabled.");
-        return;
-      }
-      try {
-        await manager.sync({ reason: "cli", force: opts.force });
-        defaultRuntime.log("Memory index updated.");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        defaultRuntime.error(`Memory index failed: ${message}`);
-        process.exitCode = 1;
-      } finally {
-        await manager.close();
-      }
+      await withMemoryManager({ cfg, agentId }, async (manager) => {
+        try {
+          await manager.sync({ reason: "cli", force: opts.force });
+          defaultRuntime.log("Memory index updated.");
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          defaultRuntime.error(`Memory index failed: ${message}`);
+          process.exitCode = 1;
+        }
+      });
     });
 
   memory
@@ -223,50 +241,42 @@ export function registerMemoryCli(program: Command) {
       ) => {
         const cfg = loadConfig();
         const agentId = resolveAgent(cfg, opts.agent);
-        const { manager, error } = await getMemorySearchManager({
-          cfg,
-          agentId,
+        await withMemoryManager({ cfg, agentId }, async (manager) => {
+          let results: Awaited<ReturnType<typeof manager.search>>;
+          try {
+            results = await manager.search(query, {
+              maxResults: opts.maxResults,
+              minScore: opts.minScore,
+            });
+          } catch (err) {
+            const message = formatErrorMessage(err);
+            defaultRuntime.error(`Memory search failed: ${message}`);
+            process.exitCode = 1;
+            return;
+          }
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify({ results }, null, 2));
+            return;
+          }
+          if (results.length === 0) {
+            defaultRuntime.log("No matches.");
+            return;
+          }
+          const rich = isRich();
+          const lines: string[] = [];
+          for (const result of results) {
+            lines.push(
+              `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
+                rich,
+                theme.accent,
+                `${result.path}:${result.startLine}-${result.endLine}`,
+              )}`,
+            );
+            lines.push(colorize(rich, theme.muted, result.snippet));
+            lines.push("");
+          }
+          defaultRuntime.log(lines.join("\n").trim());
         });
-        if (!manager) {
-          defaultRuntime.log(error ?? "Memory search disabled.");
-          return;
-        }
-        let results: Awaited<ReturnType<typeof manager.search>>;
-        try {
-          results = await manager.search(query, {
-            maxResults: opts.maxResults,
-            minScore: opts.minScore,
-          });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          defaultRuntime.error(`Memory search failed: ${message}`);
-          process.exitCode = 1;
-          return;
-        } finally {
-          await manager.close();
-        }
-        if (opts.json) {
-          defaultRuntime.log(JSON.stringify({ results }, null, 2));
-          return;
-        }
-        if (results.length === 0) {
-          defaultRuntime.log("No matches.");
-          return;
-        }
-        const rich = isRich();
-        const lines: string[] = [];
-        for (const result of results) {
-          lines.push(
-            `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
-              rich,
-              theme.accent,
-              `${result.path}:${result.startLine}-${result.endLine}`,
-            )}`,
-          );
-          lines.push(colorize(rich, theme.muted, result.snippet));
-          lines.push("");
-        }
-        defaultRuntime.log(lines.join("\n").trim());
       },
     );
 }

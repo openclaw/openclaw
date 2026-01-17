@@ -197,6 +197,34 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith("Memory index updated.");
   });
 
+  it("logs close failures without failing the command", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {
+      throw new Error("close boom");
+    });
+    const sync = vi.fn(async () => {});
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        sync,
+        close,
+      },
+    });
+
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "index"], { from: "user" });
+
+    expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
+    expect(close).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("Memory manager close failed: close boom"),
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it("closes manager after search error", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");
