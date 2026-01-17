@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
+- Providers: update MiniMax coding plan usage endpoint for API keys.
 
 ## 2026.1.16-2
 
