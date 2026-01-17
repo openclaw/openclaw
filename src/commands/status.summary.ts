@@ -8,11 +8,13 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { listAgentsForGateway } from "../gateway/session-utils.js";
 import { buildChannelSummary } from "../infra/channel-summary.js";
+import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
-import { resolveHeartbeatSeconds } from "../web/reconnect.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
-import type { SessionStatus, StatusSummary } from "./status.types.js";
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
   if (key === "global") return "global";
@@ -24,7 +26,8 @@ const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] =
   return "direct";
 };
 
-const buildFlags = (entry: SessionEntry): string[] => {
+const buildFlags = (entry?: SessionEntry): string[] => {
+  if (!entry) return [];
   const flags: string[] = [];
   const think = entry?.thinkingLevel;
   if (typeof think === "string" && think.length > 0) flags.push(`think:${think}`);
@@ -44,7 +47,16 @@ const buildFlags = (entry: SessionEntry): string[] => {
 export async function getStatusSummary(): Promise<StatusSummary> {
   const cfg = loadConfig();
   const linkContext = await resolveLinkChannelContext(cfg);
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
+  const agentList = listAgentsForGateway(cfg);
+  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
+    const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+    return {
+      agentId: agent.id,
+      enabled: summary.enabled,
+      every: summary.every,
+      everyMs: summary.everyMs,
+    } satisfies HeartbeatStatus;
+  });
   const channelSummary = await buildChannelSummary(cfg, {
     colorize: true,
     includeAllowFrom: true,
@@ -63,50 +75,82 @@ export async function getStatusSummary(): Promise<StatusSummary> {
     lookupContextTokens(configModel) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  const storePath = resolveStorePath(cfg.session?.store);
-  const store = loadSessionStore(storePath);
   const now = Date.now();
-  const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      const age = updatedAt ? now - updatedAt : null;
-      const model = entry?.model ?? configModel ?? null;
-      const contextTokens =
-        entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
-      const input = entry?.inputTokens ?? 0;
-      const output = entry?.outputTokens ?? 0;
-      const total = entry?.totalTokens ?? input + output;
-      const remaining = contextTokens != null ? Math.max(0, contextTokens - total) : null;
-      const pct =
-        contextTokens && contextTokens > 0
-          ? Math.min(999, Math.round((total / contextTokens) * 100))
-          : null;
+  const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
+  const loadStore = (storePath: string) => {
+    const cached = storeCache.get(storePath);
+    if (cached) return cached;
+    const store = loadSessionStore(storePath);
+    storeCache.set(storePath, store);
+    return store;
+  };
+  const buildSessionRows = (
+    store: Record<string, SessionEntry | undefined>,
+    opts: { agentIdOverride?: string } = {},
+  ) =>
+    Object.entries(store)
+      .filter(([key]) => key !== "global" && key !== "unknown")
+      .map(([key, entry]) => {
+        const updatedAt = entry?.updatedAt ?? null;
+        const age = updatedAt ? now - updatedAt : null;
+        const model = entry?.model ?? configModel ?? null;
+        const contextTokens =
+          entry?.contextTokens ?? lookupContextTokens(model) ?? configContextTokens ?? null;
+        const input = entry?.inputTokens ?? 0;
+        const output = entry?.outputTokens ?? 0;
+        const total = entry?.totalTokens ?? input + output;
+        const remaining = contextTokens != null ? Math.max(0, contextTokens - total) : null;
+        const pct =
+          contextTokens && contextTokens > 0
+            ? Math.min(999, Math.round((total / contextTokens) * 100))
+            : null;
+        const parsedAgentId = parseAgentSessionKey(key)?.agentId;
+        const agentId = opts.agentIdOverride ?? parsedAgentId;
 
-      return {
-        key,
-        kind: classifyKey(key, entry),
-        sessionId: entry?.sessionId,
-        updatedAt,
-        age,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: total ?? null,
-        remainingTokens: remaining,
-        percentUsed: pct,
-        model,
-        contextTokens,
-        flags: buildFlags(entry),
-      } satisfies SessionStatus;
-    })
+        return {
+          agentId,
+          key,
+          kind: classifyKey(key, entry),
+          sessionId: entry?.sessionId,
+          updatedAt,
+          age,
+          thinkingLevel: entry?.thinkingLevel,
+          verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
+          elevatedLevel: entry?.elevatedLevel,
+          systemSent: entry?.systemSent,
+          abortedLastRun: entry?.abortedLastRun,
+          inputTokens: entry?.inputTokens,
+          outputTokens: entry?.outputTokens,
+          totalTokens: total ?? null,
+          remainingTokens: remaining,
+          percentUsed: pct,
+          model,
+          contextTokens,
+          flags: buildFlags(entry),
+        } satisfies SessionStatus;
+      })
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  const paths = new Set<string>();
+  const byAgent = agentList.agents.map((agent) => {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+    paths.add(storePath);
+    const store = loadStore(storePath);
+    const sessions = buildSessionRows(store, { agentIdOverride: agent.id });
+    return {
+      agentId: agent.id,
+      path: storePath,
+      count: sessions.length,
+      recent: sessions.slice(0, 10),
+    };
+  });
+
+  const allSessions = Array.from(paths)
+    .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const recent = sessions.slice(0, 5);
+  const recent = allSessions.slice(0, 10);
+  const totalSessions = allSessions.length;
 
   return {
     linkChannel: linkContext
@@ -117,17 +161,21 @@ export async function getStatusSummary(): Promise<StatusSummary> {
           authAgeMs: linkContext.authAgeMs,
         }
       : undefined,
-    heartbeatSeconds,
+    heartbeat: {
+      defaultAgentId: agentList.defaultId,
+      agents: heartbeatAgents,
+    },
     channelSummary,
     queuedSystemEvents,
     sessions: {
-      path: storePath,
-      count: sessions.length,
+      paths: Array.from(paths),
+      count: totalSessions,
       defaults: {
         model: configModel ?? null,
         contextTokens: configContextTokens ?? null,
       },
       recent,
+      byAgent,
     },
   };
 }

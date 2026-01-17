@@ -58,6 +58,35 @@ type HeartbeatAgent = {
   heartbeat?: HeartbeatConfig;
 };
 
+export type HeartbeatSummary = {
+  enabled: boolean;
+  every: string;
+  everyMs: number | null;
+  prompt: string;
+  target: string;
+  model?: string;
+  ackMaxChars: number;
+};
+
+const DEFAULT_HEARTBEAT_TARGET = "last";
+
+function hasExplicitHeartbeatAgents(cfg: ClawdbotConfig) {
+  const list = cfg.agents?.list ?? [];
+  return list.some((entry) => Boolean(entry?.heartbeat));
+}
+
+export function isHeartbeatEnabledForAgent(cfg: ClawdbotConfig, agentId?: string): boolean {
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const list = cfg.agents?.list ?? [];
+  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
+  if (hasExplicit) {
+    return list.some(
+      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+    );
+  }
+  return resolvedAgentId === resolveDefaultAgentId(cfg);
+}
+
 function resolveHeartbeatConfig(
   cfg: ClawdbotConfig,
   agentId?: string,
@@ -69,11 +98,59 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+export function resolveHeartbeatSummaryForAgent(
+  cfg: ClawdbotConfig,
+  agentId?: string,
+): HeartbeatSummary {
+  const defaults = cfg.agents?.defaults?.heartbeat;
+  const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
+  const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      every: "disabled",
+      everyMs: null,
+      prompt: resolveHeartbeatPromptText(defaults?.prompt),
+      target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
+      model: defaults?.model,
+      ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
+    };
+  }
+
+  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
+  const every = merged?.every ?? defaults?.every ?? overrides?.every ?? DEFAULT_HEARTBEAT_EVERY;
+  const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
+  const prompt = resolveHeartbeatPromptText(
+    merged?.prompt ?? defaults?.prompt ?? overrides?.prompt,
+  );
+  const target =
+    merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
+  const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const ackMaxChars = Math.max(
+    0,
+    merged?.ackMaxChars ??
+      defaults?.ackMaxChars ??
+      overrides?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
+
+  return {
+    enabled: true,
+    every,
+    everyMs,
+    prompt,
+    target,
+    model,
+    ackMaxChars,
+  };
+}
+
 function resolveHeartbeatAgents(cfg: ClawdbotConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
-  const explicit = list.filter((entry) => entry?.heartbeat);
-  if (explicit.length > 0) {
-    return explicit
+  if (hasExplicitHeartbeatAgents(cfg)) {
+    return list
+      .filter((entry) => entry?.heartbeat)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
@@ -242,6 +319,9 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
   if (!heartbeatsEnabled) {
+    return { status: "skipped", reason: "disabled" };
+  }
+  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
     return { status: "skipped", reason: "disabled" };
   }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {

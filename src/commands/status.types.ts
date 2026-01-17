@@ -1,6 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 
 export type SessionStatus = {
+  agentId?: string;
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
   sessionId?: string;
@@ -22,6 +23,13 @@ export type SessionStatus = {
   flags: string[];
 };
 
+export type HeartbeatStatus = {
+  agentId: string;
+  enabled: boolean;
+  every: string;
+  everyMs: number | null;
+};
+
 export type StatusSummary = {
   linkChannel?: {
     id: ChannelId;
@@ -29,13 +37,22 @@ export type StatusSummary = {
     linked: boolean;
     authAgeMs: number | null;
   };
-  heartbeatSeconds: number;
+  heartbeat: {
+    defaultAgentId: string;
+    agents: HeartbeatStatus[];
+  };
   channelSummary: string[];
   queuedSystemEvents: string[];
   sessions: {
-    path: string;
+    paths: string[];
     count: number;
     defaults: { model: string | null; contextTokens: number | null };
     recent: SessionStatus[];
+    byAgent: Array<{
+      agentId: string;
+      path: string;
+      count: number;
+      recent: SessionStatus[];
+    }>;
   };
 };

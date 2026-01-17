@@ -7,14 +7,14 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   const lines: string[] = [];
   lines.push("Gateway status");
 
-  if (!summary.linkProvider) {
-    lines.push("Link provider: unknown");
+  if (!summary.linkChannel) {
+    lines.push("Link channel: unknown");
   } else {
-    const linkLabel = summary.linkProvider.label ?? "Link provider";
-    const linked = summary.linkProvider.linked === true;
+    const linkLabel = summary.linkChannel.label ?? "Link channel";
+    const linked = summary.linkChannel.linked === true;
     const authAge =
-      linked && typeof summary.linkProvider.authAgeMs === "number"
-        ? ` (last refreshed ${formatAge(summary.linkProvider.authAgeMs)})`
+      linked && typeof summary.linkChannel.authAgeMs === "number"
+        ? ` (last refreshed ${formatAge(summary.linkChannel.authAgeMs)})`
         : "";
     lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
   }
@@ -28,13 +28,23 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     }
   }
 
-  if (typeof summary.heartbeatSeconds === "number") {
+  const heartbeatAgents = summary.heartbeat?.agents ?? [];
+  if (heartbeatAgents.length > 0) {
+    const heartbeatParts = heartbeatAgents.map((agent) => {
+      const agentId = agent.agentId ?? "unknown";
+      if (!agent.enabled || !agent.everyMs) return `disabled (${agentId})`;
+      return `${agent.every ?? "unknown"} (${agentId})`;
+    });
     lines.push("");
-    lines.push(`Heartbeat: ${summary.heartbeatSeconds}s`);
+    lines.push(`Heartbeat: ${heartbeatParts.join(", ")}`);
   }
 
-  const sessionPath = summary.sessions?.path;
-  if (sessionPath) lines.push(`Session store: ${sessionPath}`);
+  const sessionPaths = summary.sessions?.paths ?? [];
+  if (sessionPaths.length === 1) {
+    lines.push(`Session store: ${sessionPaths[0]}`);
+  } else if (sessionPaths.length > 1) {
+    lines.push(`Session stores: ${sessionPaths.length}`);
+  }
 
   const defaults = summary.sessions?.defaults;
   const defaultModel = defaults?.model ?? "unknown";
