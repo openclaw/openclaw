@@ -16,6 +16,7 @@ import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
+  type OpenAiEmbeddingClient,
 } from "./embeddings.js";
 import {
   buildFileEntry,
@@ -73,6 +74,35 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
+type OpenAiBatchRequest = {
+  custom_id: string;
+  method: "POST";
+  url: "/v1/embeddings";
+  body: {
+    model: string;
+    input: string;
+  };
+};
+
+type OpenAiBatchStatus = {
+  id?: string;
+  status?: string;
+  output_file_id?: string | null;
+  error_file_id?: string | null;
+};
+
+type OpenAiBatchOutputLine = {
+  custom_id?: string;
+  response?: {
+    status_code?: number;
+    body?: {
+      data?: Array<{ embedding?: number[]; index?: number }>;
+      error?: { message?: string };
+    };
+  };
+  error?: { message?: string };
+};
+
 const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
@@ -83,6 +113,9 @@ const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+const OPENAI_BATCH_ENDPOINT = "/v1/embeddings";
+const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
+const OPENAI_BATCH_MAX_REQUESTS = 50000;
 
 const log = createSubsystemLogger("memory");
 
@@ -100,6 +133,13 @@ export class MemoryIndexManager {
   private readonly provider: EmbeddingProvider;
   private readonly requestedProvider: "openai" | "local";
   private readonly fallbackReason?: string;
+  private readonly openAi?: OpenAiEmbeddingClient;
+  private readonly batch: {
+    enabled: boolean;
+    wait: boolean;
+    pollIntervalMs: number;
+    timeoutMs: number;
+  };
   private readonly db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
   private readonly vector: {
@@ -170,6 +210,7 @@ export class MemoryIndexManager {
     this.provider = params.providerResult.provider;
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackReason = params.providerResult.fallbackReason;
+    this.openAi = params.providerResult.openAi;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.ensureSchema();
@@ -189,6 +230,13 @@ export class MemoryIndexManager {
     if (this.sources.has("sessions")) {
       this.sessionsDirty = true;
     }
+    const batch = params.settings.remote?.batch;
+    this.batch = {
+      enabled: Boolean(batch?.enabled && this.openAi && this.provider.id === "openai"),
+      wait: batch?.wait ?? true,
+      pollIntervalMs: batch?.pollIntervalMs ?? 5000,
+      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
+    };
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -712,7 +760,7 @@ export class MemoryIndexManager {
         });
       }
     });
-    await this.runWithConcurrency(tasks, EMBEDDING_INDEX_CONCURRENCY);
+    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
@@ -784,7 +832,7 @@ export class MemoryIndexManager {
         });
       }
     });
-    await this.runWithConcurrency(tasks, EMBEDDING_INDEX_CONCURRENCY);
+    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
 
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
@@ -1035,6 +1083,271 @@ export class MemoryIndexManager {
     return embeddings;
   }
 
+  private getOpenAiBaseUrl(): string {
+    return this.openAi?.baseUrl?.replace(/\/$/, "") ?? "";
+  }
+
+  private getOpenAiHeaders(params: { json: boolean }): Record<string, string> {
+    const headers = this.openAi?.headers ? { ...this.openAi.headers } : {};
+    if (params.json) {
+      if (!headers["Content-Type"] && !headers["content-type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+    } else {
+      delete headers["Content-Type"];
+      delete headers["content-type"];
+    }
+    return headers;
+  }
+
+  private buildOpenAiBatchRequests(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): { requests: OpenAiBatchRequest[]; mapping: Map<string, number> } {
+    const requests: OpenAiBatchRequest[] = [];
+    const mapping = new Map<string, number>();
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      const customId = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${i}`,
+      );
+      mapping.set(customId, i);
+      requests.push({
+        custom_id: customId,
+        method: "POST",
+        url: OPENAI_BATCH_ENDPOINT,
+        body: {
+          model: this.openAi?.model ?? this.provider.model,
+          input: chunk.text,
+        },
+      });
+    }
+    return { requests, mapping };
+  }
+
+  private splitOpenAiBatchRequests(requests: OpenAiBatchRequest[]): OpenAiBatchRequest[][] {
+    if (requests.length <= OPENAI_BATCH_MAX_REQUESTS) return [requests];
+    const groups: OpenAiBatchRequest[][] = [];
+    for (let i = 0; i < requests.length; i += OPENAI_BATCH_MAX_REQUESTS) {
+      groups.push(requests.slice(i, i + OPENAI_BATCH_MAX_REQUESTS));
+    }
+    return groups;
+  }
+
+  private async submitOpenAiBatch(requests: OpenAiBatchRequest[]): Promise<OpenAiBatchStatus> {
+    if (!this.openAi) {
+      throw new Error("OpenAI batch requested without an OpenAI embedding client.");
+    }
+    const baseUrl = this.getOpenAiBaseUrl();
+    const jsonl = requests.map((request) => JSON.stringify(request)).join("\n");
+    const form = new FormData();
+    form.append("purpose", "batch");
+    form.append(
+      "file",
+      new Blob([jsonl], { type: "application/jsonl" }),
+      "memory-embeddings.jsonl",
+    );
+
+    const fileRes = await fetch(`${baseUrl}/files`, {
+      method: "POST",
+      headers: this.getOpenAiHeaders({ json: false }),
+      body: form,
+    });
+    if (!fileRes.ok) {
+      const text = await fileRes.text();
+      throw new Error(`openai batch file upload failed: ${fileRes.status} ${text}`);
+    }
+    const filePayload = (await fileRes.json()) as { id?: string };
+    if (!filePayload.id) {
+      throw new Error("openai batch file upload failed: missing file id");
+    }
+
+    const batchRes = await fetch(`${baseUrl}/batches`, {
+      method: "POST",
+      headers: this.getOpenAiHeaders({ json: true }),
+      body: JSON.stringify({
+        input_file_id: filePayload.id,
+        endpoint: OPENAI_BATCH_ENDPOINT,
+        completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
+        metadata: {
+          source: "clawdbot-memory",
+          agent: this.agentId,
+        },
+      }),
+    });
+    if (!batchRes.ok) {
+      const text = await batchRes.text();
+      throw new Error(`openai batch create failed: ${batchRes.status} ${text}`);
+    }
+    return (await batchRes.json()) as OpenAiBatchStatus;
+  }
+
+  private async fetchOpenAiBatchStatus(batchId: string): Promise<OpenAiBatchStatus> {
+    const baseUrl = this.getOpenAiBaseUrl();
+    const res = await fetch(`${baseUrl}/batches/${batchId}`, {
+      headers: this.getOpenAiHeaders({ json: true }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`openai batch status failed: ${res.status} ${text}`);
+    }
+    return (await res.json()) as OpenAiBatchStatus;
+  }
+
+  private async fetchOpenAiFileContent(fileId: string): Promise<string> {
+    const baseUrl = this.getOpenAiBaseUrl();
+    const res = await fetch(`${baseUrl}/files/${fileId}/content`, {
+      headers: this.getOpenAiHeaders({ json: true }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`openai batch file content failed: ${res.status} ${text}`);
+    }
+    return await res.text();
+  }
+
+  private parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
+    if (!text.trim()) return [];
+    return text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as OpenAiBatchOutputLine);
+  }
+
+  private async readOpenAiBatchError(errorFileId: string): Promise<string | undefined> {
+    try {
+      const content = await this.fetchOpenAiFileContent(errorFileId);
+      const lines = this.parseOpenAiBatchOutput(content);
+      const first = lines.find((line) => line.error?.message || line.response?.body?.error);
+      const message =
+        first?.error?.message ??
+        (typeof first?.response?.body?.error?.message === "string"
+          ? first?.response?.body?.error?.message
+          : undefined);
+      return message;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return message ? `error file unavailable: ${message}` : undefined;
+    }
+  }
+
+  private async waitForOpenAiBatch(
+    batchId: string,
+    initial?: OpenAiBatchStatus,
+  ): Promise<{ outputFileId: string; errorFileId?: string }> {
+    const start = Date.now();
+    let current: OpenAiBatchStatus | undefined = initial;
+    while (true) {
+      const status = current ?? (await this.fetchOpenAiBatchStatus(batchId));
+      const state = status.status ?? "unknown";
+      if (state === "completed") {
+        if (!status.output_file_id) {
+          throw new Error(`openai batch ${batchId} completed without output file`);
+        }
+        return {
+          outputFileId: status.output_file_id,
+          errorFileId: status.error_file_id ?? undefined,
+        };
+      }
+      if (["failed", "expired", "cancelled", "canceled"].includes(state)) {
+        const detail = status.error_file_id
+          ? await this.readOpenAiBatchError(status.error_file_id)
+          : undefined;
+        const suffix = detail ? `: ${detail}` : "";
+        throw new Error(`openai batch ${batchId} ${state}${suffix}`);
+      }
+      if (!this.batch.wait) {
+        throw new Error(`openai batch ${batchId} still ${state}; wait disabled`);
+      }
+      if (Date.now() - start > this.batch.timeoutMs) {
+        throw new Error(`openai batch ${batchId} timed out after ${this.batch.timeoutMs}ms`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.batch.pollIntervalMs));
+      current = undefined;
+    }
+  }
+
+  private async embedChunksWithBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    if (!this.openAi) {
+      return this.embedChunksInBatches(chunks);
+    }
+    if (chunks.length === 0) return [];
+
+    const { requests, mapping } = this.buildOpenAiBatchRequests(chunks, entry, source);
+    const groups = this.splitOpenAiBatchRequests(requests);
+    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
+
+    for (const group of groups) {
+      const batchInfo = await this.submitOpenAiBatch(group);
+      if (!batchInfo.id) {
+        throw new Error("openai batch create failed: missing batch id");
+      }
+      if (!this.batch.wait && batchInfo.status !== "completed") {
+        throw new Error(
+          `openai batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
+        );
+      }
+      const completed =
+        batchInfo.status === "completed"
+          ? {
+              outputFileId: batchInfo.output_file_id ?? "",
+              errorFileId: batchInfo.error_file_id ?? undefined,
+            }
+          : await this.waitForOpenAiBatch(batchInfo.id, batchInfo);
+      if (!completed.outputFileId) {
+        throw new Error(`openai batch ${batchInfo.id} completed without output file`);
+      }
+      const content = await this.fetchOpenAiFileContent(completed.outputFileId);
+      const outputLines = this.parseOpenAiBatchOutput(content);
+      const errors: string[] = [];
+      const remaining = new Set(group.map((request) => request.custom_id));
+      for (const line of outputLines) {
+        const customId = line.custom_id;
+        if (!customId) continue;
+        const index = mapping.get(customId);
+        if (index === undefined) continue;
+        remaining.delete(customId);
+        if (line.error?.message) {
+          errors.push(`${customId}: ${line.error.message}`);
+          continue;
+        }
+        const response = line.response;
+        const statusCode = response?.status_code ?? 0;
+        if (statusCode >= 400) {
+          const message =
+            response?.body?.error?.message ??
+            (typeof response?.body === "string" ? response.body : undefined) ??
+            "unknown error";
+          errors.push(`${customId}: ${message}`);
+          continue;
+        }
+        const data = response?.body?.data ?? [];
+        const embedding = data[0]?.embedding ?? [];
+        if (embedding.length === 0) {
+          errors.push(`${customId}: empty embedding`);
+          continue;
+        }
+        embeddings[index] = embedding;
+      }
+      if (errors.length > 0) {
+        throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+      }
+      if (remaining.size > 0) {
+        throw new Error(
+          `openai batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
+        );
+      }
+    }
+
+    return embeddings;
+  }
+
   private async embedBatchWithRetry(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     let attempt = 0;
@@ -1068,7 +1381,7 @@ export class MemoryIndexManager {
     const resolvedLimit = Math.max(1, Math.min(limit, tasks.length));
     const results: T[] = Array.from({ length: tasks.length });
     let next = 0;
-    let firstError: unknown | null = null;
+    let firstError: unknown = null;
 
     const workers = Array.from({ length: resolvedLimit }, async () => {
       while (true) {
@@ -1090,6 +1403,10 @@ export class MemoryIndexManager {
     return results;
   }
 
+  private getIndexConcurrency(): number {
+    return this.batch.enabled ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+  }
+
   private async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
@@ -1098,7 +1415,9 @@ export class MemoryIndexManager {
     const chunks = chunkMarkdown(content, this.settings.chunking).filter(
       (chunk) => chunk.text.trim().length > 0,
     );
-    const embeddings = await this.embedChunksInBatches(chunks);
+    const embeddings = this.batch.enabled
+      ? await this.embedChunksWithBatch(chunks, entry, options.source)
+      : await this.embedChunksInBatches(chunks);
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();

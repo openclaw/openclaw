@@ -206,6 +206,14 @@ export const MemorySearchSchema = z
         baseUrl: z.string().optional(),
         apiKey: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        batch: z
+          .object({
+            enabled: z.boolean().optional(),
+            wait: z.boolean().optional(),
+            pollIntervalMs: z.number().int().nonnegative().optional(),
+            timeoutMinutes: z.number().int().positive().optional(),
+          })
+          .optional(),
       })
       .optional(),
     fallback: z.union([z.literal("openai"), z.literal("none")]).optional(),

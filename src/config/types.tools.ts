@@ -158,6 +158,16 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
+    batch?: {
+      /** Enable OpenAI Batch API for embedding indexing (default: false). */
+      enabled?: boolean;
+      /** Wait for batch completion (default: true). */
+      wait?: boolean;
+      /** Poll interval in ms (default: 5000). */
+      pollIntervalMs?: number;
+      /** Timeout in minutes (default: 60). */
+      timeoutMinutes?: number;
+    };
   };
   /** Fallback behavior when local embeddings fail. */
   fallback?: "openai" | "none";

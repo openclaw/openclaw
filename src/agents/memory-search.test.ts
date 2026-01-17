@@ -97,6 +97,12 @@ describe("memory search config", () => {
       baseUrl: "https://agent.example/v1",
       apiKey: "default-key",
       headers: { "X-Default": "on" },
+      batch: {
+        enabled: false,
+        wait: true,
+        pollIntervalMs: 5000,
+        timeoutMinutes: 60,
+      },
     });
   });
 

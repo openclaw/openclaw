@@ -366,6 +366,14 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
+  "agents.defaults.memorySearch.remote.batch.enabled":
+    "Enable OpenAI Batch API for memory embeddings (default: false).",
+  "agents.defaults.memorySearch.remote.batch.wait":
+    "Wait for OpenAI batch completion when indexing (default: true).",
+  "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
+    "Polling interval in ms for OpenAI batch status (default: 5000).",
+  "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
+    "Timeout in minutes for OpenAI batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":
     "Local GGUF model path or hf: URI (node-llama-cpp).",
   "agents.defaults.memorySearch.fallback":
