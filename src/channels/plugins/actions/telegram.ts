@@ -50,6 +50,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
       const buttons = params.buttons;
+      const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
       return await handleTelegramAction(
         {
           action: "sendMessage",
@@ -60,6 +61,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageThreadId: threadId ?? undefined,
           accountId: accountId ?? undefined,
           buttons,
+          asVoice,
         },
         cfg,
       );
