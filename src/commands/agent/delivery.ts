@@ -20,6 +20,7 @@ import {
   resolveGatewayMessageChannel,
 } from "../../utils/message-channel.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
@@ -31,10 +32,11 @@ function resolveDeliveryAccountId(params: {
   sessionEntry?: SessionEntry;
   targetMode: ChannelOutboundTargetMode;
 }) {
+  const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
   return (
     normalizeAccountId(params.opts.accountId) ??
     (params.targetMode === "implicit"
-      ? normalizeAccountId(params.sessionEntry?.lastAccountId)
+      ? normalizeAccountId(sessionOrigin?.accountId)
       : undefined)
   );
 }

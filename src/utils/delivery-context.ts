@@ -6,6 +6,13 @@ export type DeliveryContext = {
   accountId?: string;
 };
 
+type DeliveryContextSessionSource = {
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+};
+
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) return undefined;
   const channel = typeof context.channel === "string" ? context.channel.trim() : undefined;
@@ -17,6 +24,17 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     to: to || undefined,
     accountId,
   };
+}
+
+export function deliveryContextFromSession(
+  entry?: DeliveryContextSessionSource,
+): DeliveryContext | undefined {
+  if (!entry) return undefined;
+  return normalizeDeliveryContext({
+    channel: entry.lastChannel ?? entry.channel,
+    to: entry.lastTo,
+    accountId: entry.lastAccountId,
+  });
 }
 
 export function mergeDeliveryContext(

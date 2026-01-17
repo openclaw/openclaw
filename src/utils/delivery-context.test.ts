@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deliveryContextKey,
+  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "./delivery-context.js";
@@ -41,5 +42,20 @@ describe("delivery context helpers", () => {
       "whatsapp|+1555|",
     );
     expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
+  });
+
+  it("derives delivery context from a session entry", () => {
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        lastChannel: " whatsapp ",
+        lastTo: " +1777 ",
+        lastAccountId: " acct-9 ",
+      }),
+    ).toEqual({
+      channel: "whatsapp",
+      to: "+1777",
+      accountId: "acct-9",
+    });
   });
 });
