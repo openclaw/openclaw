@@ -80,8 +80,13 @@ enum GatewayEnvironment {
     }
 
     static func expectedGatewayVersion() -> Semver? {
+        Semver.parse(self.expectedGatewayVersionString())
+    }
+
+    static func expectedGatewayVersionString() -> String? {
         let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        return Semver.parse(bundleVersion)
+        let trimmed = bundleVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false) ? trimmed : nil
     }
 
     // Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
@@ -220,8 +225,14 @@ enum GatewayEnvironment {
     }
 
     static func installGlobal(version: Semver?, statusHandler: @escaping @Sendable (String) -> Void) async {
+        await self.installGlobal(versionString: version?.description, statusHandler: statusHandler)
+    }
+
+    static func installGlobal(versionString: String?, statusHandler: @escaping @Sendable (String) -> Void) async {
         let preferred = CommandResolver.preferredPaths().joined(separator: ":")
-        let target = version?.description ?? "latest"
+        let target = versionString?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "latest"
         let npm = CommandResolver.findExecutable(named: "npm")
         let pnpm = CommandResolver.findExecutable(named: "pnpm")
         let bun = CommandResolver.findExecutable(named: "bun")
