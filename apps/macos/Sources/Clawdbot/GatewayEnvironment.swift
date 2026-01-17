@@ -279,6 +279,8 @@ enum GatewayEnvironment {
         process.standardError = pipe
         do {
             try process.run()
+            // Read pipe before waitUntilExit to avoid potential deadlock
+            let data = pipe.fileHandleForReading.readToEndSafely()
             process.waitUntilExit()
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
@@ -294,7 +296,6 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let data = pipe.fileHandleForReading.readToEndSafely()
             let raw = String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return Semver.parse(raw)
