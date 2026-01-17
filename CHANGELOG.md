@@ -9,8 +9,7 @@
 - Sessions: add `session.identityLinks` for cross-platform DM session linking. (#1033) — thanks @thewilloftheshadow.
 
 ### Breaking
-- **BREAKING:** Discord/Telegram channel tokens now prefer config over env (env is fallback only).
-- **BREAKING:** Matrix channel credentials now prefer config over env (env is fallback only).
+- **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
 
 ### Changes
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
