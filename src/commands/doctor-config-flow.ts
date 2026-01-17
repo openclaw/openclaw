@@ -46,9 +46,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const snapshot = await readConfigFileSnapshot();
-  let cfg: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
+  let cfg: ClawdbotConfig = snapshot.config ?? {};
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
-    note("Config invalid; doctor will run with defaults.", "Config");
+    note("Config invalid; doctor will run with best-effort config.", "Config");
   }
 
   if (snapshot.legacyIssues.length > 0) {
