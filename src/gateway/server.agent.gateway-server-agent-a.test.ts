@@ -107,6 +107,51 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
+  test("agent forwards accountId to agentCommand", async () => {
+    testState.allowFrom = ["+1555"];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-account",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+            lastAccountId: "default",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      deliver: true,
+      accountId: "kev",
+      idempotencyKey: "idem-agent-account",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectChannels(call, "whatsapp");
+    expect(call.to).toBe("+1555");
+    expect(call.accountId).toBe("kev");
+
+    ws.close();
+    await server.close();
+    testState.allowFrom = undefined;
+  });
+
   test("agent forwards image attachments as images[]", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

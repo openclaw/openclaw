@@ -16,6 +16,10 @@ import {
 } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  type DeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
@@ -89,9 +93,7 @@ type AnnounceQueueItem = {
   summaryLine?: string;
   enqueuedAt: number;
   sessionKey: string;
-  originatingChannel?: string;
-  originatingTo?: string;
-  originatingAccountId?: string;
+  origin?: DeliveryContext;
 };
 
 type AnnounceQueueState = {
@@ -225,9 +227,10 @@ function hasCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   const keys = new Set<string>();
   let hasUnkeyed = false;
   for (const item of items) {
-    const channel = item.originatingChannel;
-    const to = item.originatingTo;
-    const accountId = item.originatingAccountId;
+    const origin = item.origin;
+    const channel = origin?.channel;
+    const to = origin?.to;
+    const accountId = origin?.accountId;
     if (!channel && !to && !accountId) {
       hasUnkeyed = true;
       continue;
@@ -301,14 +304,15 @@ function scheduleAnnounceDrain(key: string) {
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
+  const origin = item.origin;
   await callGateway({
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
       message: item.prompt,
-      channel: item.originatingChannel,
-      accountId: item.originatingAccountId,
-      to: item.originatingTo,
+      channel: origin?.channel,
+      accountId: origin?.accountId,
+      to: origin?.to,
       deliver: true,
       idempotencyKey: crypto.randomUUID(),
     },
@@ -377,6 +381,11 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
+    const origin = normalizeDeliveryContext({
+      channel: entry?.lastChannel,
+      to: entry?.lastTo,
+      accountId: entry?.lastAccountId ?? params.requesterAccountId,
+    });
     enqueueAnnounce(
       canonicalKey,
       {
@@ -384,9 +393,7 @@ async function maybeQueueSubagentAnnounce(params: {
         summaryLine: params.summaryLine,
         enqueuedAt: Date.now(),
         sessionKey: canonicalKey,
-        originatingChannel: entry?.lastChannel,
-        originatingTo: entry?.lastTo,
-        originatingAccountId: entry?.lastAccountId ?? params.requesterAccountId,
+        origin,
       },
       queueSettings,
     );
@@ -617,14 +624,18 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     // Send to main agent - it will respond in its own voice
+    const directOrigin = normalizeDeliveryContext({
+      channel: params.requesterChannel,
+      accountId: params.requesterAccountId,
+    });
     await callGateway({
       method: "agent",
       params: {
         sessionKey: params.requesterSessionKey,
         message: triggerMessage,
         deliver: true,
-        channel: params.requesterChannel,
-        accountId: params.requesterAccountId,
+        channel: directOrigin?.channel,
+        accountId: directOrigin?.accountId,
         idempotencyKey: crypto.randomUUID(),
       },
       expectFinal: true,

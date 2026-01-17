@@ -12,6 +12,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -201,9 +202,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const lastChannel = sessionEntry?.lastChannel;
     const lastTo = typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
     const resolvedAccountId =
-      typeof request.accountId === "string" && request.accountId.trim()
-        ? request.accountId.trim()
-        : sessionEntry?.lastAccountId;
+      normalizeAccountId(request.accountId) ??
+      normalizeAccountId(sessionEntry?.lastAccountId);
 
     const wantsDelivery = request.deliver === true;
 

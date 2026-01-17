@@ -52,6 +52,7 @@ describe("subagent registry persistence", () => {
       runId: "run-1",
       childSessionKey: "agent:main:subagent:test",
       requesterSessionKey: "agent:main:main",
+      requesterAccountId: "acct-main",
       requesterDisplayKey: "main",
       task: "do the thing",
       cleanup: "keep",
@@ -61,6 +62,8 @@ describe("subagent registry persistence", () => {
     const raw = await fs.readFile(registryPath, "utf8");
     const parsed = JSON.parse(raw) as { runs?: Record<string, unknown> };
     expect(parsed.runs && Object.keys(parsed.runs)).toContain("run-1");
+    const run = parsed.runs?.["run-1"] as { requesterAccountId?: string } | undefined;
+    expect(run?.requesterAccountId).toBe("acct-main");
 
     // Simulate a process restart: module re-import should load persisted runs
     // and trigger the announce flow once the run resolves.
@@ -77,12 +80,14 @@ describe("subagent registry persistence", () => {
       childSessionKey: string;
       childRunId: string;
       requesterSessionKey: string;
+      requesterAccountId?: string;
       task: string;
       cleanup: string;
       label?: string;
     };
     const first = announceSpy.mock.calls[0]?.[0] as unknown as AnnounceParams;
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
+    expect(first.requesterAccountId).toBe("acct-main");
   });
 
   it("skips cleanup when cleanupHandled/announceHandled was persisted", async () => {

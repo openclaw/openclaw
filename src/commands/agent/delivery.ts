@@ -19,6 +19,7 @@ import {
   isInternalMessageChannel,
   resolveGatewayMessageChannel,
 } from "../../utils/message-channel.js";
+import { normalizeAccountId } from "../../utils/account-id.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
@@ -49,11 +50,8 @@ export async function deliverAgentCommandResult(params: {
   const targetMode: ChannelOutboundTargetMode =
     opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
   const resolvedAccountId =
-    typeof opts.accountId === "string" && opts.accountId.trim()
-      ? opts.accountId.trim()
-      : targetMode === "implicit"
-        ? sessionEntry?.lastAccountId
-        : undefined;
+    normalizeAccountId(opts.accountId) ??
+    (targetMode === "implicit" ? normalizeAccountId(sessionEntry?.lastAccountId) : undefined);
   const resolvedTarget =
     deliver && isDeliveryChannelKnown && deliveryChannel
       ? resolveOutboundTarget({
