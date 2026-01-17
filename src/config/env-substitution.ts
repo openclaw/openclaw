@@ -22,10 +22,7 @@
 
 // Pattern for valid uppercase env var names: starts with letter or underscore,
 // followed by letters, numbers, or underscores (all uppercase)
-const ENV_VAR_PATTERN = /\$\{([A-Z_][A-Z0-9_]*)\}/g;
-
-// Pattern for escaped env vars: $${...} -> ${...}
-const ESCAPED_PATTERN = /\$\$\{([A-Z_][A-Z0-9_]*)\}/g;
+const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export class MissingEnvVarError extends Error {
   constructor(
@@ -46,26 +43,65 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
+function readEnvVarName(
+  value: string,
+  start: number,
+): { name: string | null; end: number } {
+  const end = value.indexOf("}", start);
+  if (end === -1) {
+    return { name: null, end: -1 };
+  }
+
+  const name = value.slice(start, end);
+  if (!ENV_VAR_NAME_PATTERN.test(name)) {
+    return { name: null, end: -1 };
+  }
+
+  return { name, end };
+}
+
 function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
-  // First pass: substitute real env vars
-  const substituted = value.replace(ENV_VAR_PATTERN, (match, varName: string) => {
-    // Check if this is actually an escaped var (preceded by $)
-    // We handle this in the second pass, so check the original string
-    const idx = value.indexOf(match);
-    if (idx > 0 && value[idx - 1] === "$") {
-      // This will be handled by ESCAPED_PATTERN, return as-is for now
-      return match;
+  let result = "";
+
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char !== "$") {
+      result += char;
+      continue;
     }
 
-    const envValue = env[varName];
-    if (envValue === undefined || envValue === "") {
-      throw new MissingEnvVarError(varName, configPath);
-    }
-    return envValue;
-  });
+    const next = value[i + 1];
+    const afterNext = value[i + 2];
 
-  // Second pass: convert escaped $${VAR} to literal ${VAR}
-  return substituted.replace(ESCAPED_PATTERN, (_, varName: string) => `\${${varName}}`);
+    // Escaped: $${VAR} -> ${VAR}
+    if (next === "$" && afterNext === "{") {
+      const { name, end } = readEnvVarName(value, i + 3);
+      if (name !== null) {
+        result += `\${${name}}`;
+        i = end;
+        continue;
+      }
+    }
+
+    // Substitution: ${VAR} -> value
+    if (next === "{") {
+      const { name, end } = readEnvVarName(value, i + 2);
+      if (name !== null) {
+        const envValue = env[name];
+        if (envValue === undefined || envValue === "") {
+          throw new MissingEnvVarError(name, configPath);
+        }
+        result += envValue;
+        i = end;
+        continue;
+      }
+    }
+
+    // Leave untouched if not a recognized pattern
+    result += char;
+  }
+
+  return result;
 }
 
 function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {

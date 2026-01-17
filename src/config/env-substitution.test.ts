@@ -129,9 +129,24 @@ describe("resolveConfigEnvVars", () => {
       expect(result).toEqual({ key: "resolved/${LITERAL}" });
     });
 
+    it("handles escaped and unescaped of the same var (escaped first)", () => {
+      const result = resolveConfigEnvVars({ key: "$${FOO} ${FOO}" }, { FOO: "bar" });
+      expect(result).toEqual({ key: "${FOO} bar" });
+    });
+
+    it("handles escaped and unescaped of the same var (unescaped first)", () => {
+      const result = resolveConfigEnvVars({ key: "${FOO} $${FOO}" }, { FOO: "bar" });
+      expect(result).toEqual({ key: "bar ${FOO}" });
+    });
+
     it("handles multiple escaped vars", () => {
       const result = resolveConfigEnvVars({ key: "$${A}:$${B}" }, {});
       expect(result).toEqual({ key: "${A}:${B}" });
+    });
+
+    it("does not unescape $${VAR} sequences from env values", () => {
+      const result = resolveConfigEnvVars({ key: "${FOO}" }, { FOO: "$${BAR}" });
+      expect(result).toEqual({ key: "$${BAR}" });
     });
   });
 
