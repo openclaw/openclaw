@@ -17,7 +17,7 @@ import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { stringEnum } from "../schema/typebox.js";
+import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -25,8 +25,8 @@ const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 
 const MessageToolCommonSchema = {
   channel: Type.Optional(Type.String()),
-  to: Type.Optional(Type.String()),
-  targets: Type.Optional(Type.Array(Type.String())),
+  to: Type.Optional(channelTargetSchema()),
+  targets: Type.Optional(channelTargetsSchema()),
   message: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
   buttons: Type.Optional(
@@ -59,8 +59,8 @@ const MessageToolCommonSchema = {
   pollOption: Type.Optional(Type.Array(Type.String())),
   pollDurationHours: Type.Optional(Type.Number()),
   pollMulti: Type.Optional(Type.Boolean()),
-  channelId: Type.Optional(Type.String()),
-  channelIds: Type.Optional(Type.Array(Type.String())),
+  channelId: Type.Optional(channelTargetSchema()),
+  channelIds: Type.Optional(channelTargetsSchema()),
   guildId: Type.Optional(Type.String()),
   userId: Type.Optional(Type.String()),
   authorId: Type.Optional(Type.String()),

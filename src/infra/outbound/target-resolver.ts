@@ -7,6 +7,8 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeChannelTargetInput } from "./channel-target.js";
+import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 
 export type TargetResolveKind = ChannelDirectoryEntryKind | "channel";
 
@@ -21,30 +23,8 @@ export type ResolveMessagingTargetResult =
   | { ok: true; target: ResolvedMessagingTarget }
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
-type DirectoryCacheEntry = {
-  entries: ChannelDirectoryEntry[];
-  fetchedAt: number;
-};
-
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const directoryCache = new Map<string, DirectoryCacheEntry>();
-let lastConfigRef: ClawdbotConfig | null = null;
-
-function resetCacheIfConfigChanged(cfg: ClawdbotConfig): void {
-  if (lastConfigRef && lastConfigRef !== cfg) {
-    directoryCache.clear();
-  }
-  lastConfigRef = cfg;
-}
-
-function buildCacheKey(params: {
-  channel: ChannelId;
-  accountId?: string | null;
-  kind: ChannelDirectoryEntryKind;
-  source: "cache" | "live";
-}) {
-  return `${params.channel}:${params.accountId ?? "default"}:${params.kind}:${params.source}`;
-}
+const directoryCache = new DirectoryCache<ChannelDirectoryEntry[]>(CACHE_TTL_MS);
 
 function normalizeQuery(value: string): string {
   return value.trim().toLowerCase();
@@ -182,17 +162,14 @@ async function getDirectoryEntries(params: {
   runtime?: RuntimeEnv;
   preferLiveOnMiss?: boolean;
 }): Promise<ChannelDirectoryEntry[]> {
-  resetCacheIfConfigChanged(params.cfg);
-  const cacheKey = buildCacheKey({
+  const cacheKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
     source: "cache",
   });
-  const cached = directoryCache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.entries;
-  }
+  const cached = directoryCache.get(cacheKey, params.cfg);
+  if (cached) return cached;
   const entries = await listDirectoryEntries({
     cfg: params.cfg,
     channel: params.channel,
@@ -203,10 +180,10 @@ async function getDirectoryEntries(params: {
     source: "cache",
   });
   if (entries.length > 0 || !params.preferLiveOnMiss) {
-    directoryCache.set(cacheKey, { entries, fetchedAt: Date.now() });
+    directoryCache.set(cacheKey, entries, params.cfg);
     return entries;
   }
-  const liveKey = buildCacheKey({
+  const liveKey = buildDirectoryCacheKey({
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
@@ -221,7 +198,7 @@ async function getDirectoryEntries(params: {
     runtime: params.runtime,
     source: "live",
   });
-  directoryCache.set(liveKey, { entries: liveEntries, fetchedAt: Date.now() });
+  directoryCache.set(liveKey, liveEntries, params.cfg);
   return liveEntries;
 }
 
@@ -233,7 +210,7 @@ export async function resolveMessagingTarget(params: {
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
 }): Promise<ResolveMessagingTargetResult> {
-  const raw = params.input.trim();
+  const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
     return { ok: false, error: new Error("Target is required") };
   }

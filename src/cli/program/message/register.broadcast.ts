@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { CHANNEL_TARGETS_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
 export function registerMessageBroadcastCommand(message: Command, helpers: MessageCliHelpers) {
@@ -8,7 +9,7 @@ export function registerMessageBroadcastCommand(message: Command, helpers: Messa
     )
     .requiredOption(
       "--targets <target...>",
-      "Targets to broadcast to (repeatable, accepts names or ids)",
+      CHANNEL_TARGETS_DESCRIPTION,
     )
     .option("--message <text>", "Message to send")
     .option("--media <url>", "Media URL")
