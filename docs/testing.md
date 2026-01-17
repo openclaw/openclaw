@@ -290,6 +290,11 @@ Live tests discover credentials the same way the CLI does. Practical implication
 
 If you want to rely on env keys (e.g. exported in your `~/.profile`), run local tests after `source ~/.profile`, or use the Docker runners below (they can mount `~/.profile` into the container).
 
+## Deepgram live (audio transcription)
+
+- Test: `src/media-understanding/providers/deepgram/audio.live.test.ts`
+- Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+
 ## Docker runners (optional “works in Linux” checks)
 
 These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):

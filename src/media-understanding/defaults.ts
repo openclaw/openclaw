@@ -30,6 +30,7 @@ export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;
 export const DEFAULT_AUDIO_MODELS: Record<string, string> = {
   groq: "whisper-large-v3-turbo",
   openai: "whisper-1",
+  deepgram: "nova-3",
 };
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;

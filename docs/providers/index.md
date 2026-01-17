@@ -34,5 +34,9 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Chann
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 
+## Transcription providers
+
+- [Deepgram (audio transcription)](/providers/deepgram)
+
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).
