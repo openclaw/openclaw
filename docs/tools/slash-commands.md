@@ -58,7 +58,7 @@ They run immediately, are stripped before the model sees the message, and the re
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes provider usage/quota when available, plus OAuth/token status block when OAuth profiles exist)
+- `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
 - `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)
@@ -105,7 +105,7 @@ Notes:
 
 ## Usage vs cost (what shows where)
 
-- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` when provider usage tracking is enabled.
+- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled.
 - **Per-response tokens/cost** is controlled by `/cost on|off` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
