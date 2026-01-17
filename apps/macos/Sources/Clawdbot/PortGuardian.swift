@@ -204,14 +204,15 @@ actor PortGuardian {
         proc.standardError = Pipe()
         do {
             try proc.run()
+            // Read pipe before waitUntilExit to avoid potential deadlock
+            let data = pipe.fileHandleForReading.readToEndSafely()
             proc.waitUntilExit()
+            guard !data.isEmpty else { return nil }
+            return String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             return nil
         }
-        let data = pipe.fileHandleForReading.readToEndSafely()
-        guard !data.isEmpty else { return nil }
-        return String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func parseListeners(from text: String) -> [Listener] {
