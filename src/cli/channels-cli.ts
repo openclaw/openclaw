@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import {
   channelsAddCommand,
+  channelsCapabilitiesCommand,
   channelsListCommand,
   channelsLogsCommand,
   channelsRemoveCommand,
@@ -81,6 +82,23 @@ export function registerChannelsCli(program: Command) {
     .action(async (opts) => {
       try {
         await channelsStatusCommand(opts, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  channels
+    .command("capabilities")
+    .description("Show provider capabilities (intents/scopes + supported features)")
+    .option("--channel <name>", `Channel (${channelNames}|all)`)
+    .option("--account <id>", "Account id (only with --channel)")
+    .option("--target <dest>", "Channel target for permission audit (Discord channel:<id>)")
+    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      try {
+        await channelsCapabilitiesCommand(opts, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
