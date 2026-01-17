@@ -8,6 +8,9 @@ Docs: https://docs.clawd.bot
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 - macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
 
+### Fixes
+- Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
+
 ## 2026.1.16-2
 
 ### Changes
