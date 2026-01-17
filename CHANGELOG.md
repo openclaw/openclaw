@@ -5,13 +5,16 @@ Docs: https://docs.clawd.bot
 ## 2026.1.17 (Unreleased)
 
 ### Changes
+- Telegram: enrich forwarded message context with normalized origin details + legacy fallback. (#1090) — thanks @sleontenko.
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 - macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
-- CLI: add `channels capabilities` with provider probes (Discord intents, Slack bot/user scopes, Teams Graph hints).
+- CLI: surface update availability in `clawdbot status`.
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
-- Providers: update MiniMax coding plan usage endpoint for API keys.
+- CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
+- Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
+- Memory: probe sqlite-vec availability in `clawdbot memory status`.
 
 ## 2026.1.16-2
 
@@ -55,6 +58,7 @@ Docs: https://docs.clawd.bot
 - Directory: unify `clawdbot directory` across channels and plugin channels.
 - UI: allow deleting sessions from the Control UI.
 - Memory: add sqlite-vec vector acceleration with CLI status details.
+- Memory: add experimental session transcript indexing for memory_search (opt-in via memorySearch.experimental.sessionMemory + sources).
 - Skills: add user-invocable skill commands and expanded skill command registration.
 - Telegram: default reaction level to minimal and enable reaction notifications by default.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
@@ -74,6 +78,9 @@ Docs: https://docs.clawd.bot
 - macOS: drain subprocess pipes before waiting to avoid deadlocks. (#1081) — thanks @thesash.
 - Verbose: wrap tool summaries/output in markdown only for markdown-capable channels.
 - Tools: include provider/session context in elevated exec denial errors.
+- Tools: normalize exec tool alias naming in tool error logs.
+- Logging: reuse shared ANSI stripping to keep console capture lint-clean.
+- Logging: prefix nested agent output with session/run/channel context.
 - Telegram: accept tg/group/telegram prefixes + topic targets for inline button validation. (#1072) — thanks @danielz1z.
 - Telegram: split long captions into follow-up messages.
 - Config: block startup on invalid config, preserve best-effort doctor config, and keep rolling config backups. (#1083) — thanks @mukhtharcm.

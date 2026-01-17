@@ -369,6 +369,11 @@ export class MemoryIndexManager {
     };
   }
 
+  async probeVectorAvailability(): Promise<boolean> {
+    if (!this.vector.enabled) return false;
+    return this.ensureVectorReady();
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;

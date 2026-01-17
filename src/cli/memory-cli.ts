@@ -42,6 +42,7 @@ export function registerMemoryCli(program: Command) {
         return;
       }
       try {
+        await manager.probeVectorAvailability();
         const status = manager.status();
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
