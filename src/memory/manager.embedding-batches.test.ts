@@ -192,6 +192,47 @@ describe("memory embedding batches", () => {
     expect(calls).toBe(3);
   }, 10000);
 
+  it("retries embeddings on transient 5xx errors", async () => {
+    const line = "e".repeat(120);
+    const content = Array.from({ length: 12 }, () => line).join("\n");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
+
+    let calls = 0;
+    embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls < 3) {
+        throw new Error("openai embeddings failed: 502 Bad Gateway (cloudflare)");
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            chunking: { tokens: 200, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+
+    await manager.sync({ force: true });
+
+    expect(calls).toBe(3);
+  }, 10000);
+
   it("skips empty chunks so embeddings input stays valid", async () => {
     await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-07.md"), "\n\n\n");
 

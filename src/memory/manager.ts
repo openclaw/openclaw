@@ -733,7 +733,7 @@ export class MemoryIndexManager {
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
-        label: "Indexing memory files…",
+        label: this.batch.enabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
       });
     }
 
@@ -784,7 +784,7 @@ export class MemoryIndexManager {
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
-        label: "Indexing session files…",
+        label: this.batch.enabled ? "Indexing session files (batch)..." : "Indexing session files…",
       });
     }
 
@@ -1357,7 +1357,7 @@ export class MemoryIndexManager {
         return await this.provider.embedBatch(texts);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRateLimitError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
         const waitMs = Math.min(
@@ -1372,8 +1372,10 @@ export class MemoryIndexManager {
     }
   }
 
-  private isRateLimitError(message: string): boolean {
-    return /(rate[_ ]limit|too many requests|429|resource has been exhausted)/i.test(message);
+  private isRetryableEmbeddingError(message: string): boolean {
+    return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare)/i.test(
+      message,
+    );
   }
 
   private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {

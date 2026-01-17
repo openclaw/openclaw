@@ -138,11 +138,18 @@ describe("memory indexing with OpenAI batches", () => {
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
     manager = result.manager;
-    await manager.sync({ force: true });
+    const labels: string[] = [];
+    await manager.sync({
+      force: true,
+      progress: (update) => {
+        if (update.label) labels.push(update.label);
+      },
+    });
 
     const status = manager.status();
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatch).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalled();
+    expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
   });
 });

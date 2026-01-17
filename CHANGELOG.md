@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Memory: add OpenAI Batch API indexing for embeddings when configured.
 
+### Fixes
+- Memory: retry transient 5xx errors (Cloudflare) during embedding indexing.
+
 ## 2026.1.17-2
 
 ### Changes
