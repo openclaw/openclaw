@@ -19,6 +19,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -30,6 +31,7 @@ import { ClawdbotSchema } from "./zod-schema.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
+export { MissingEnvVarError } from "./env-substitution.js";
 
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
@@ -219,8 +221,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parseJson: (raw) => deps.json5.parse(raw),
       });
 
-      const migrated = applyLegacyMigrations(resolved);
-      const resolvedConfig = migrated.next ?? resolved;
+      // Substitute ${VAR} env var references
+      const substituted = resolveConfigEnvVars(resolved, deps.env);
+
+      const migrated = applyLegacyMigrations(substituted);
+      const resolvedConfig = migrated.next ?? substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) return {};
       const validated = ClawdbotSchema.safeParse(resolvedConfig);
@@ -346,8 +351,30 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const migrated = applyLegacyMigrations(resolved);
-      const resolvedConfigRaw = migrated.next ?? resolved;
+      // Substitute ${VAR} env var references
+      let substituted: unknown;
+      try {
+        substituted = resolveConfigEnvVars(resolved, deps.env);
+      } catch (err) {
+        const message =
+          err instanceof MissingEnvVarError
+            ? err.message
+            : `Env var substitution failed: ${String(err)}`;
+        return {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed: parsedRes.parsed,
+          valid: false,
+          config: {},
+          hash,
+          issues: [{ path: "", message }],
+          legacyIssues: [],
+        };
+      }
+
+      const migrated = applyLegacyMigrations(substituted);
+      const resolvedConfigRaw = migrated.next ?? substituted;
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
       const validated = validateConfigObject(resolvedConfigRaw);

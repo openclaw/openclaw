@@ -283,6 +283,48 @@ Env var equivalent:
 - `CLAWDBOT_LOAD_SHELL_ENV=1`
 - `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
 
+### Env var substitution in config
+
+You can reference environment variables directly in any config string value using
+`${VAR_NAME}` syntax. Variables are substituted at config load time, before validation.
+
+```json5
+{
+  models: {
+    providers: {
+      "vercel-gateway": {
+        apiKey: "${VERCEL_GATEWAY_API_KEY}"
+      }
+    }
+  },
+  gateway: {
+    auth: {
+      token: "${CLAWDBOT_GATEWAY_TOKEN}"
+    }
+  }
+}
+```
+
+**Rules:**
+- Only uppercase env var names are matched: `[A-Z_][A-Z0-9_]*`
+- Missing or empty env vars throw an error at config load
+- Escape with `$${VAR}` to output a literal `${VAR}`
+- Works with `$include` (included files also get substitution)
+
+**Inline substitution:**
+
+```json5
+{
+  models: {
+    providers: {
+      custom: {
+        baseUrl: "${CUSTOM_API_BASE}/v1"  // → "https://api.example.com/v1"
+      }
+    }
+  }
+}
+```
+
 ### Auth storage (OAuth + API keys)
 
 Clawdbot stores **per-agent** auth profiles (OAuth + API keys) in:

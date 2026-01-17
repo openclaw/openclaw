@@ -53,6 +53,24 @@ Env var equivalents:
 - `CLAWDBOT_LOAD_SHELL_ENV=1`
 - `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
 
+## Env var substitution in config
+
+You can reference env vars directly in config string values using `${VAR_NAME}` syntax:
+
+```json5
+{
+  models: {
+    providers: {
+      "vercel-gateway": {
+        apiKey: "${VERCEL_GATEWAY_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
+
 ## Related
 
 - [Gateway configuration](/gateway/configuration)
