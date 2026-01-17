@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Tools: show exec elevated flag before the command and keep it outside markdown in tool summaries.
+- Memory: parallelize embedding indexing with rate-limit retries.
 - Memory: split overly long lines to keep embeddings under token limits.
 
 ## 2026.1.17-1
