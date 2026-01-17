@@ -198,11 +198,15 @@ export const buildTelegramMessageContext = async ({
       return null;
     }
   }
-  const commandAuthorized = isSenderAllowed({
-    allow: isGroup ? effectiveGroupAllow : effectiveDmAllow,
+  const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
+  const senderAllowedForCommands = isSenderAllowed({
+    allow: allowForCommands,
     senderId,
     senderUsername,
   });
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const commandAuthorized =
+    useAccessGroups && !allowForCommands.hasEntries ? false : senderAllowedForCommands;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = "";
@@ -229,6 +233,14 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
+  if (
+    isGroup &&
+    hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername }) &&
+    !commandAuthorized
+  ) {
+    logVerbose(`telegram: drop control command from unauthorized sender ${senderId ?? "unknown"}`);
+    return null;
+  }
   const activationOverride = resolveGroupActivation({
     chatId,
     messageThreadId: resolvedThreadId,

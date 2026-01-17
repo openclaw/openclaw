@@ -172,17 +172,18 @@ export const registerTelegramNativeCommands = ({
             : [];
           const senderId = msg.from?.id ? String(msg.from.id) : "";
           const senderUsername = msg.from?.username ?? "";
-          const commandAuthorized =
-            allowFromList.length === 0 ||
-            allowFromList.includes("*") ||
-            (senderId && allowFromList.includes(senderId)) ||
-            (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
-            (senderUsername &&
-              allowFromList.some(
-                (entry) =>
-                  entry.toLowerCase() === senderUsername.toLowerCase() ||
-                  entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
-              ));
+          const allowFromConfigured = allowFromList.length > 0;
+          const commandAuthorized = allowFromConfigured
+            ? allowFromList.includes("*") ||
+              (senderId && allowFromList.includes(senderId)) ||
+              (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
+              (senderUsername &&
+                allowFromList.some(
+                  (entry) =>
+                    entry.toLowerCase() === senderUsername.toLowerCase() ||
+                    entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
+                ))
+            : !useAccessGroups;
           if (!commandAuthorized) {
             await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
             return;

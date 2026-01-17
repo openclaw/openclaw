@@ -14,6 +14,7 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
 } from "../../discord/send.js";
+import { resolveNativeCommandsEnabled } from "../../config/commands.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getChatChannelMeta } from "../registry.js";
@@ -117,19 +118,53 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };
     },
-    collectWarnings: ({ account }) => {
+    collectWarnings: ({ cfg, account }) => {
+      const warnings: string[] = [];
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
-      const channelAllowlistConfigured =
-        Boolean(account.config.guilds) && Object.keys(account.config.guilds ?? {}).length > 0;
-      if (channelAllowlistConfigured) {
-        return [
-          `- Discord guilds: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
-        ];
+      const guildEntries = account.config.guilds ?? {};
+      const guildsConfigured = Object.keys(guildEntries).length > 0;
+      const channelAllowlistConfigured = guildsConfigured;
+
+      if (groupPolicy === "open") {
+        if (channelAllowlistConfigured) {
+          warnings.push(
+            `- Discord guilds: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
+          );
+        } else {
+          warnings.push(
+            `- Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
+          );
+        }
       }
-      return [
-        `- Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels.`,
-      ];
+
+      const nativeCommandsEnabled = resolveNativeCommandsEnabled({
+        providerId: "discord",
+        providerSetting: account.config.commands?.native,
+        globalSetting: cfg.commands?.native,
+      });
+      if (nativeCommandsEnabled && guildsConfigured) {
+        const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
+          if (!guild || typeof guild !== "object") return false;
+          if (Array.isArray(guild.users) && guild.users.length > 0) return true;
+          const channels = guild.channels;
+          if (!channels || typeof channels !== "object") return false;
+          return Object.values(channels).some(
+            (channel) =>
+              Boolean(channel) &&
+              typeof channel === "object" &&
+              Array.isArray(channel.users) &&
+              channel.users.length > 0,
+          );
+        });
+
+        if (!hasAnyUserAllowlist) {
+          warnings.push(
+            `- Discord slash commands: no users allowlist configured; this allows any user in allowed guild channels to invoke /… commands. Set channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).`,
+          );
+        }
+      }
+
+      return warnings;
     },
   },
   groups: {

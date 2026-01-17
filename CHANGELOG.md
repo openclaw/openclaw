@@ -40,6 +40,7 @@
 - Sessions: reset `compactionCount` on `/new` and `/reset`, and preserve `sessions.json` file mode (0600).
 - Sessions: repair orphaned user turns before embedded prompts.
 - Channels: treat replies to the bot as implicit mentions across supported channels.
+- Security: lock down slash/control commands to sender allowlists across Discord/Slack/Telegram and extend `clawdbot security audit` coverage for missing allowlists and extensions.
 - Browser: remote profile tab operations prefer persistent Playwright and avoid silent HTTP fallbacks. (#1057) — thanks @mukhtharcm.
 - Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
 - WhatsApp: scope self-chat response prefix; inject pending-only group history and clear after any processed message.

@@ -20,6 +20,7 @@ import {
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import {
   formatOctal,
   isGroupReadable,
@@ -495,6 +496,81 @@ async function collectChannelSecurityFindings(params: {
           severity: classifyChannelWarningSeverity(trimmed),
           title: `${plugin.meta.label ?? plugin.id} security warning`,
           detail: trimmed.replace(/^-\s*/, ""),
+        });
+      }
+    }
+
+    if (plugin.id === "telegram") {
+      const allowTextCommands = params.cfg.commands?.text !== false;
+      if (!allowTextCommands) continue;
+
+      const telegramCfg =
+        (account as { config?: Record<string, unknown> } | null)?.config ?? ({} as Record<
+          string,
+          unknown
+        >);
+      const groupPolicy = (telegramCfg.groupPolicy as string | undefined) ?? "allowlist";
+      const groups = telegramCfg.groups as Record<string, unknown> | undefined;
+      const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
+      const groupAccessPossible =
+        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
+      if (!groupAccessPossible) continue;
+
+      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
+      const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom) ? telegramCfg.groupAllowFrom : [];
+      const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
+      const anyGroupOverride = Boolean(
+        groups &&
+          Object.values(groups).some((value) => {
+            if (!value || typeof value !== "object") return false;
+            const group = value as Record<string, unknown>;
+            const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
+            if (allowFrom.length > 0) return true;
+            const topics = group.topics;
+            if (!topics || typeof topics !== "object") return false;
+            return Object.values(topics as Record<string, unknown>).some((topicValue) => {
+              if (!topicValue || typeof topicValue !== "object") return false;
+              const topic = topicValue as Record<string, unknown>;
+              const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
+              return topicAllow.length > 0;
+            });
+          }),
+      );
+
+      const hasAnySenderAllowlist =
+        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
+
+      if (storeHasWildcard || groupAllowFromHasWildcard) {
+        findings.push({
+          checkId: "channels.telegram.groups.allowFrom.wildcard",
+          severity: "critical",
+          title: "Telegram group allowlist contains wildcard",
+          detail:
+            'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
+          remediation:
+            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit user ids/usernames.',
+        });
+        continue;
+      }
+
+      if (!hasAnySenderAllowlist) {
+        const providerSetting = (telegramCfg.commands as { nativeSkills?: unknown } | undefined)
+          ?.nativeSkills as any;
+        const skillsEnabled = resolveNativeSkillsEnabled({
+          providerId: "telegram",
+          providerSetting,
+          globalSetting: params.cfg.commands?.nativeSkills,
+        });
+        findings.push({
+          checkId: "channels.telegram.groups.allowFrom.missing",
+          severity: "critical",
+          title: "Telegram group commands have no sender allowlist",
+          detail:
+            `Telegram group access is enabled but no sender allowlist is configured; this allows any group member to invoke /… commands` +
+            (skillsEnabled ? " (including skill commands)." : "."),
+          remediation:
+            "Approve yourself via pairing (recommended), or set channels.telegram.groupAllowFrom (or per-group groups.<id>.allowFrom).",
         });
       }
     }

@@ -5,6 +5,7 @@ import JSON5 from "json5";
 
 import type { ClawdbotConfig, ConfigFileSnapshot } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
+import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
@@ -380,11 +381,70 @@ export async function collectPluginsTrustFindings(params: {
   const allow = params.cfg.plugins?.allow;
   const allowConfigured = Array.isArray(allow) && allow.length > 0;
   if (!allowConfigured) {
+    const hasString = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+    const hasAccountStringKey = (account: unknown, key: string) =>
+      Boolean(account && typeof account === "object" && hasString((account as Record<string, unknown>)[key]));
+
+    const discordConfigured =
+      hasString(params.cfg.channels?.discord?.token) ||
+      Boolean(
+        params.cfg.channels?.discord?.accounts &&
+          Object.values(params.cfg.channels.discord.accounts).some((a) => hasAccountStringKey(a, "token")),
+      ) ||
+      hasString(process.env.DISCORD_BOT_TOKEN);
+
+    const telegramConfigured =
+      hasString(params.cfg.channels?.telegram?.botToken) ||
+      hasString(params.cfg.channels?.telegram?.tokenFile) ||
+      Boolean(
+        params.cfg.channels?.telegram?.accounts &&
+          Object.values(params.cfg.channels.telegram.accounts).some(
+            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
+          ),
+      ) ||
+      hasString(process.env.TELEGRAM_BOT_TOKEN);
+
+    const slackConfigured =
+      hasString(params.cfg.channels?.slack?.botToken) ||
+      hasString(params.cfg.channels?.slack?.appToken) ||
+      Boolean(
+        params.cfg.channels?.slack?.accounts &&
+          Object.values(params.cfg.channels.slack.accounts).some(
+            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "appToken"),
+          ),
+      ) ||
+      hasString(process.env.SLACK_BOT_TOKEN) ||
+      hasString(process.env.SLACK_APP_TOKEN);
+
+    const skillCommandsLikelyExposed =
+      (discordConfigured &&
+        resolveNativeSkillsEnabled({
+          providerId: "discord",
+          providerSetting: params.cfg.channels?.discord?.commands?.nativeSkills,
+          globalSetting: params.cfg.commands?.nativeSkills,
+        })) ||
+      (telegramConfigured &&
+        resolveNativeSkillsEnabled({
+          providerId: "telegram",
+          providerSetting: params.cfg.channels?.telegram?.commands?.nativeSkills,
+          globalSetting: params.cfg.commands?.nativeSkills,
+        })) ||
+      (slackConfigured &&
+        resolveNativeSkillsEnabled({
+          providerId: "slack",
+          providerSetting: params.cfg.channels?.slack?.commands?.nativeSkills,
+          globalSetting: params.cfg.commands?.nativeSkills,
+        }));
+
     findings.push({
       checkId: "plugins.extensions_no_allowlist",
-      severity: "warn",
+      severity: skillCommandsLikelyExposed ? "critical" : "warn",
       title: "Extensions exist but plugins.allow is not set",
-      detail: `Found ${pluginDirs.length} extension(s) under ${extensionsDir}. Without plugins.allow, any discovered plugin id may load (depending on config and plugin behavior).`,
+      detail:
+        `Found ${pluginDirs.length} extension(s) under ${extensionsDir}. Without plugins.allow, any discovered plugin id may load (depending on config and plugin behavior).` +
+        (skillCommandsLikelyExposed
+          ? "\nNative skill commands are enabled on at least one configured chat surface; treat unpinned/unallowlisted extensions as high risk."
+          : ""),
       remediation: "Set plugins.allow to an explicit list of plugin ids you trust.",
     });
   }

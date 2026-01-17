@@ -26,7 +26,7 @@ import { sendMessageSlack } from "../../send.js";
 import type { SlackMessageEvent } from "../../types.js";
 
 import { allowListMatches, resolveSlackUserAllowed } from "../allow-list.js";
-import { isSlackSenderAllowListed, resolveSlackEffectiveAllowFrom } from "../auth.js";
+import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
@@ -217,18 +217,34 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const commandAuthorized =
-    isSlackSenderAllowListed({
-      allowListLower: allowFromLower,
-      senderId,
-      senderName,
-    }) && channelUserAuthorized;
-
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
     surface: "slack",
   });
+
+  const ownerAuthorized = allowListMatches({
+    allowList: allowFromLower,
+    id: senderId,
+    name: senderName,
+  });
+  const channelUsersAllowlistConfigured =
+    isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
+  const channelCommandAuthorized =
+    isRoom && channelUsersAllowlistConfigured
+      ? resolveSlackUserAllowed({
+          allowList: channelConfig?.users,
+          userId: senderId,
+          userName: senderName,
+        })
+      : false;
+  const commandAuthorized = ownerAuthorized || channelCommandAuthorized;
+
+  if (allowTextCommands && isRoomish && hasControlCommand(message.text ?? "", cfg) && !commandAuthorized) {
+    logVerbose(`Blocked slack control command from unauthorized sender ${senderId}`);
+    return null;
+  }
+
   const shouldRequireMention = isRoom
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;

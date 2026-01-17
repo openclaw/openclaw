@@ -13,6 +13,7 @@ import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatChannelMeta } from "../registry.js";
 import { SlackConfigSchema } from "../../config/zod-schema.providers-core.js";
+import { resolveNativeCommandsEnabled } from "../../config/commands.js";
 import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
@@ -135,19 +136,51 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
       };
     },
-    collectWarnings: ({ account }) => {
+    collectWarnings: ({ cfg, account }) => {
+      const warnings: string[] = [];
       const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
       const channelAllowlistConfigured =
         Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
-      if (channelAllowlistConfigured) {
-        return [
-          `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
-        ];
+      const roomAccessPossible =
+        groupPolicy === "open" || (groupPolicy === "allowlist" && channelAllowlistConfigured);
+
+      if (groupPolicy === "open") {
+        if (channelAllowlistConfigured) {
+          warnings.push(
+            `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+          );
+        } else {
+          warnings.push(
+            `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+          );
+        }
       }
-      return [
-        `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
-      ];
+
+      const nativeEnabled = resolveNativeCommandsEnabled({
+        providerId: "slack",
+        providerSetting: account.config.commands?.native,
+        globalSetting: cfg.commands?.native,
+      });
+      const slashCommandEnabled = nativeEnabled || account.config.slashCommand?.enabled === true;
+
+      if (slashCommandEnabled && roomAccessPossible) {
+        const hasAnyUserAllowlist = Object.values(account.config.channels ?? {}).some(
+          (channel) => Array.isArray(channel.users) && channel.users.length > 0,
+        );
+        if (!hasAnyUserAllowlist) {
+          warnings.push(
+            `- Slack slash commands: no channel users allowlist configured; this allows any user in allowed channels to invoke /… commands (including skill commands). Set channels.slack.channels.<id>.users.`,
+          );
+        }
+      }
+
+      if (slashCommandEnabled && cfg.commands?.useAccessGroups === false) {
+        warnings.push(
+          `- Slack slash commands: commands.useAccessGroups=false disables channel allowlist gating; this allows any channel to invoke /… commands (including skill commands). Set commands.useAccessGroups=true and configure channels.slack.groupPolicy/channels.`,
+        );
+      }
+
+      return warnings;
     },
   },
   groups: {

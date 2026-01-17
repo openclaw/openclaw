@@ -423,6 +423,18 @@ async function dispatchDiscordCommandInteraction(params: {
   const isGroupDm = channelType === ChannelType.GroupDM;
   const channelName = channel && "name" in channel ? (channel.name as string) : undefined;
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+  const ownerAllowList = normalizeDiscordAllowList(discordConfig?.dm?.allowFrom ?? [], [
+    "discord:",
+    "user:",
+  ]);
+  const ownerOk =
+    ownerAllowList && user
+      ? allowListMatches(ownerAllowList, {
+          id: user.id,
+          name: user.username,
+          tag: formatDiscordUserTag(user),
+        })
+      : false;
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
     guildEntries: discordConfig?.guilds,
@@ -508,17 +520,19 @@ async function dispatchDiscordCommandInteraction(params: {
   }
   if (!isDirectMessage) {
     const channelUsers = channelConfig?.users ?? guildInfo?.users;
-    if (Array.isArray(channelUsers) && channelUsers.length > 0) {
-      const userOk = resolveDiscordUserAllowed({
-        allowList: channelUsers,
-        userId: user.id,
-        userName: user.username,
-        userTag: formatDiscordUserTag(user),
-      });
-      if (!userOk) {
-        await respond("You are not authorized to use this command.");
-        return;
-      }
+    const hasUserAllowlist = Array.isArray(channelUsers) && channelUsers.length > 0;
+    const userOk = hasUserAllowlist
+      ? resolveDiscordUserAllowed({
+          allowList: channelUsers,
+          userId: user.id,
+          userName: user.username,
+          userTag: formatDiscordUserTag(user),
+        })
+      : false;
+    commandAuthorized = useAccessGroups ? ownerOk || userOk : hasUserAllowlist ? userOk : true;
+    if (!commandAuthorized) {
+      await respond("You are not authorized to use this command.", { ephemeral: true });
+      return;
     }
   }
   if (isGroupDm && discordConfig?.dm?.groupEnabled === false) {

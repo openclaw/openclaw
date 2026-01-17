@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { runSecurityAudit } from "./audit.js";
+import { discordPlugin } from "../channels/plugins/discord.js";
+import { slackPlugin } from "../channels/plugins/slack.js";
+import { telegramPlugin } from "../channels/plugins/telegram.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -222,6 +225,97 @@ describe("security audit", () => {
     );
   });
 
+  it("flags Discord native commands without a guild user allowlist", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          token: "t",
+          groupPolicy: "allowlist",
+          guilds: {
+            "123": {
+              channels: {
+                general: { allow: true },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [discordPlugin],
+    });
+
+    const finding = res.findings.find((f) => f.detail.includes("Discord slash commands"));
+    expect(finding?.severity).toBe("critical");
+  });
+
+  it("flags Slack slash commands without a channel users allowlist", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          groupPolicy: "open",
+          slashCommand: { enabled: true },
+        },
+      },
+    };
+
+    const res = await runSecurityAudit({
+      config: cfg,
+      includeFilesystem: false,
+      includeChannelSecurity: true,
+      plugins: [slackPlugin],
+    });
+
+    const finding = res.findings.find((f) => f.detail.includes("Slack slash commands"));
+    expect(finding?.severity).toBe("critical");
+  });
+
+  it("flags Telegram group commands without a sender allowlist", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-telegram-"));
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "t",
+            groupPolicy: "allowlist",
+            groups: { "-100123": {} },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [telegramPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.telegram.groups.allowFrom.missing",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
+  });
+
   it("adds a warning when deep probe fails", async () => {
     const cfg: ClawdbotConfig = { gateway: { mode: "local" } };
 
@@ -380,6 +474,14 @@ describe("security audit", () => {
   });
 
   it("flags extensions without plugins.allow", async () => {
+    const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    const prevSlackBotToken = process.env.SLACK_BOT_TOKEN;
+    const prevSlackAppToken = process.env.SLACK_APP_TOKEN;
+    delete process.env.DISCORD_BOT_TOKEN;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.SLACK_BOT_TOKEN;
+    delete process.env.SLACK_APP_TOKEN;
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-"));
     const stateDir = path.join(tmp, "state");
     await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
@@ -387,20 +489,69 @@ describe("security audit", () => {
       mode: 0o700,
     });
 
-    const cfg: ClawdbotConfig = {};
-    const res = await runSecurityAudit({
-      config: cfg,
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-      stateDir,
-      configPath: path.join(stateDir, "clawdbot.json"),
+    try {
+      const cfg: ClawdbotConfig = {};
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "clawdbot.json"),
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "plugins.extensions_no_allowlist", severity: "warn" }),
+        ]),
+      );
+    } finally {
+      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      if (prevTelegramToken == null) delete process.env.TELEGRAM_BOT_TOKEN;
+      else process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      if (prevSlackBotToken == null) delete process.env.SLACK_BOT_TOKEN;
+      else process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
+      if (prevSlackAppToken == null) delete process.env.SLACK_APP_TOKEN;
+      else process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+    }
+  });
+
+  it("flags unallowlisted extensions as critical when native skill commands are exposed", async () => {
+    const prevDiscordToken = process.env.DISCORD_BOT_TOKEN;
+    delete process.env.DISCORD_BOT_TOKEN;
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(path.join(stateDir, "extensions", "some-plugin"), {
+      recursive: true,
+      mode: 0o700,
     });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "plugins.extensions_no_allowlist", severity: "warn" }),
-      ]),
-    );
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          discord: { enabled: true, token: "t" },
+        },
+      };
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: true,
+        includeChannelSecurity: false,
+        stateDir,
+        configPath: path.join(stateDir, "clawdbot.json"),
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "plugins.extensions_no_allowlist",
+            severity: "critical",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
+      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+    }
   });
 
   it("flags open groupPolicy when tools.elevated is enabled", async () => {
