@@ -16,12 +16,12 @@ export function resolveGroupRequireMention(params: {
   const channel = normalizeChannelId(rawChannel);
   if (!channel) return true;
   const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
-  const groupRoom = ctx.GroupRoom?.trim() ?? ctx.GroupSubject?.trim();
+  const groupChannel = ctx.GroupChannel?.trim() ?? ctx.GroupSubject?.trim();
   const groupSpace = ctx.GroupSpace?.trim();
   const requireMention = getChannelDock(channel)?.groups?.resolveRequireMention?.({
     cfg,
     groupId,
-    groupRoom,
+    groupChannel,
     groupSpace,
     accountId: ctx.AccountId,
   });
@@ -62,13 +62,13 @@ export function buildGroupIntro(params: {
       ? "Activation: always-on (you receive every group message)."
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   const groupId = params.sessionCtx.From?.replace(/^group:/, "");
-  const groupRoom = params.sessionCtx.GroupRoom?.trim() ?? subject;
+  const groupChannel = params.sessionCtx.GroupChannel?.trim() ?? subject;
   const groupSpace = params.sessionCtx.GroupSpace?.trim();
   const providerIdsLine = providerId
     ? getChannelDock(providerId)?.groups?.resolveGroupIntroHint?.({
         cfg: params.cfg,
         groupId,
-        groupRoom,
+        groupChannel,
         groupSpace,
         accountId: params.sessionCtx.AccountId,
       })

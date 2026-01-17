@@ -242,14 +242,19 @@ export async function initSessionState(params: {
     const channel = groupResolution.channel;
     const subject = ctx.GroupSubject?.trim();
     const space = ctx.GroupSpace?.trim();
-    const explicitRoom = ctx.GroupRoom?.trim();
+    const explicitChannel = ctx.GroupChannel?.trim();
     const normalizedChannel = normalizeChannelId(channel);
-    const isRoomProvider = Boolean(
+    const isChannelProvider = Boolean(
       normalizedChannel &&
       getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
     );
     const nextRoom =
-      explicitRoom ?? (isRoomProvider && subject && subject.startsWith("#") ? subject : undefined);
+      explicitChannel ??
+      ((groupResolution.chatType === "channel" || isChannelProvider) &&
+      subject &&
+      subject.startsWith("#")
+        ? subject
+        : undefined);
     const nextSubject = nextRoom ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
     sessionEntry.channel = channel;

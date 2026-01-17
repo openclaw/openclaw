@@ -16,14 +16,14 @@ export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): b
   if (roomId.toLowerCase().startsWith("room:")) {
     roomId = roomId.slice("room:".length).trim();
   }
-  const groupRoom = params.groupRoom?.trim() ?? "";
-  const aliases = groupRoom ? [groupRoom] : [];
+  const groupChannel = params.groupChannel?.trim() ?? "";
+  const aliases = groupChannel ? [groupChannel] : [];
   const cfg = params.cfg as CoreConfig;
   const resolved = resolveMatrixRoomConfig({
     rooms: cfg.channels?.matrix?.rooms,
     roomId,
     aliases,
-    name: groupRoom || undefined,
+    name: groupChannel || undefined,
   }).config;
   if (resolved) {
     if (resolved.autoReply === true) return false;

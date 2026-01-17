@@ -1,4 +1,4 @@
-export function isSlackRoomAllowedByPolicy(params: {
+export function isSlackChannelAllowedByPolicy(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
   channelAllowlistConfigured: boolean;
   channelAllowed: boolean;
