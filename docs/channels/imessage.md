@@ -108,7 +108,7 @@ If you want iMessage on another Mac, set `channels.imessage.cliPath` to a wrappe
 Example wrapper:
 ```bash
 #!/usr/bin/env bash
-exec ssh -T mac-mini imsg "$@"
+exec ssh -T gateway-host imsg "$@"
 ```
 
 **Remote attachments:** When `cliPath` points to a remote host via SSH, attachment paths in the Messages database reference files on the remote machine. Clawdbot can automatically fetch these over SCP by setting `channels.imessage.remoteHost`:
@@ -118,7 +118,7 @@ exec ssh -T mac-mini imsg "$@"
   channels: {
     imessage: {
       cliPath: "~/imsg-ssh",                     // SSH wrapper to remote Mac
-      remoteHost: "clawdbot@192.168.64.3",       // for SCP file transfer
+      remoteHost: "user@gateway-host",           // for SCP file transfer
       includeAttachments: true
     }
   }
@@ -126,6 +126,48 @@ exec ssh -T mac-mini imsg "$@"
 ```
 
 If `remoteHost` is not set, Clawdbot attempts to auto-detect it by parsing the SSH command in your wrapper script. Explicit configuration is recommended for reliability.
+
+#### Remote Mac via Tailscale (example)
+If the Gateway runs on a Linux host/VM but iMessage must run on a Mac, Tailscale is the simplest bridge: the Gateway talks to the Mac over the tailnet, runs `imsg` via SSH, and SCPs attachments back.
+
+Architecture:
+```
+┌──────────────────────────────┐          SSH (imsg rpc)          ┌──────────────────────────┐
+│ Gateway host (Linux/VM)      │──────────────────────────────────▶│ Mac with Messages + imsg │
+│ - clawdbot gateway           │          SCP (attachments)        │ - Messages signed in     │
+│ - channels.imessage.cliPath  │◀──────────────────────────────────│ - Remote Login enabled   │
+└──────────────────────────────┘                                   └──────────────────────────┘
+              ▲
+              │ Tailscale tailnet (hostname or 100.x.y.z)
+              ▼
+        user@gateway-host
+```
+
+Concrete config example (Tailscale hostname):
+```json5
+{
+  channels: {
+    imessage: {
+      enabled: true,
+      cliPath: "~/.clawdbot/scripts/imsg-ssh",
+      remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
+      includeAttachments: true,
+      dbPath: "/Users/bot/Library/Messages/chat.db"
+    }
+  }
+}
+```
+
+Example wrapper (`~/.clawdbot/scripts/imsg-ssh`):
+```bash
+#!/usr/bin/env bash
+exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
+```
+
+Notes:
+- Ensure the Mac is signed in to Messages, and Remote Login is enabled.
+- Use SSH keys so `ssh bot@mac-mini.tailnet-1234.ts.net` works without prompts.
+- `remoteHost` should match the SSH target so SCP can fetch attachments.
 
 Multi-account support: use `channels.imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don't commit `~/.clawdbot/clawdbot.json` (it often contains tokens).
 
@@ -198,7 +240,7 @@ Provider options:
 - `channels.imessage.enabled`: enable/disable channel startup.
 - `channels.imessage.cliPath`: path to `imsg`.
 - `channels.imessage.dbPath`: Messages DB path.
-- `channels.imessage.remoteHost`: SSH host for SCP attachment transfer when `cliPath` points to a remote Mac (e.g., `clawdbot@192.168.64.3`). Auto-detected from SSH wrapper if not set.
+- `channels.imessage.remoteHost`: SSH host for SCP attachment transfer when `cliPath` points to a remote Mac (e.g., `user@gateway-host`). Auto-detected from SSH wrapper if not set.
 - `channels.imessage.service`: `imessage | sms | auto`.
 - `channels.imessage.region`: SMS region.
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).

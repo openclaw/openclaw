@@ -1206,6 +1206,7 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
       enabled: true,
       cliPath: "imsg",
       dbPath: "~/Library/Messages/chat.db",
+      remoteHost: "user@gateway-host", // SCP for remote attachments when using SSH wrapper
       dmPolicy: "pairing", // pairing | allowlist | open | disabled
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,    // include last N group messages as context (0 disables)
@@ -1225,11 +1226,12 @@ Notes:
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
 - `channels.imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
+- For remote SSH wrappers, set `channels.imessage.remoteHost` to fetch attachments via SCP when `includeAttachments` is enabled.
 
 Example wrapper:
 ```bash
 #!/usr/bin/env bash
-exec ssh -T mac-mini "imsg rpc"
+exec ssh -T gateway-host imsg "$@"
 ```
 
 ### `agents.defaults.workspace`
