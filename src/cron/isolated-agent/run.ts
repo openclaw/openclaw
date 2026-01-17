@@ -27,6 +27,7 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
   formatXHighModelHint,
   normalizeThinkLevel,
+  normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -245,8 +246,9 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     const sessionFile = resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId);
     const resolvedVerboseLevel =
-      (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
-      (agentCfg?.verboseDefault as "on" | "off" | undefined);
+      normalizeVerboseLevel(cronSession.sessionEntry.verboseLevel) ??
+      normalizeVerboseLevel(agentCfg?.verboseDefault) ??
+      "off";
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
       sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,

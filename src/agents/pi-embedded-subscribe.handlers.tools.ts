@@ -5,11 +5,27 @@ import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
+  extractToolResultText,
   extractMessagingToolSend,
   isToolResultError,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+
+const TOOL_OUTPUT_ALLOWLIST = new Set(["exec", "bash", "process"]);
+
+function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized !== "exec" && normalized !== "bash") return meta;
+  if (!args || typeof args !== "object") return meta;
+  const record = args as Record<string, unknown>;
+  const flags: string[] = [];
+  if (record.pty === true) flags.push("pty");
+  if (record.elevated === true) flags.push("elevated");
+  if (flags.length === 0) return meta;
+  const suffix = flags.join(" · ");
+  return meta ? `${meta} · ${suffix}` : suffix;
+}
 
 export async function handleToolExecutionStart(
   ctx: EmbeddedPiSubscribeContext,
@@ -36,7 +52,7 @@ export async function handleToolExecutionStart(
     }
   }
 
-  const meta = inferToolMetaFromArgs(toolName, args);
+  const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, meta);
   ctx.log.debug(
     `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
@@ -53,8 +69,8 @@ export async function handleToolExecutionStart(
       args: args as Record<string, unknown>,
     },
   });
-  // Await onAgentEvent to ensure typing indicator starts before tool summaries are emitted.
-  await ctx.params.onAgentEvent?.({
+  // Best-effort typing signal; do not block tool summaries on slow emitters.
+  void ctx.params.onAgentEvent?.({
     stream: "tool",
     data: { phase: "start", name: toolName, toolCallId },
   });
@@ -185,4 +201,15 @@ export function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+
+  if (
+    ctx.params.onToolResult &&
+    ctx.shouldEmitToolOutput() &&
+    TOOL_OUTPUT_ALLOWLIST.has(toolName.trim().toLowerCase())
+  ) {
+    const outputText = extractToolResultText(sanitizedResult);
+    if (outputText) {
+      ctx.emitToolOutput(toolName, meta, outputText);
+    }
+  }
 }

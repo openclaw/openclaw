@@ -227,7 +227,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
         });
-        if (queued.run.verboseLevel === "on") {
+        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,

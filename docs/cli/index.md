@@ -459,7 +459,7 @@ Options:
 - `--to <dest>` (for session key and optional delivery)
 - `--session-id <id>`
 - `--thinking <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
-- `--verbose <on|off>`
+- `--verbose <on|full|off>`
 - `--channel <whatsapp|telegram|discord|slack|signal|imessage>`
 - `--local`
 - `--deliver`

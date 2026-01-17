@@ -33,12 +33,13 @@ read_when:
 - **Embedded Pi**: the resolved level is passed to the in-process Pi agent runtime.
 
 ## Verbose directives (/verbose or /v)
-- Levels: `on|full` or `off` (default).
+- Levels: `on` (minimal) | `full` | `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Inline directive affects only that message; session/global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
-- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
+- When verbose is `full`, exec/process tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## Reasoning visibility (/reasoning)
 - Levels: `on|off|stream`.
