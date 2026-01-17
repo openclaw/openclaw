@@ -15,7 +15,7 @@ test("process send-keys encodes Enter for pty sessions", async () => {
   const processTool = createProcessTool();
   const result = await execTool.execute("toolcall", {
     command:
-      "node -e \"process.stdin.on('data', d => { process.stdout.write(d); if (d.includes(10) || d.includes(13)) process.exit(0); });\"",
+      'node -e "const dataEvent=String.fromCharCode(100,97,116,97);process.stdin.on(dataEvent,d=>{process.stdout.write(d);if(d.includes(10)||d.includes(13))process.exit(0);});"',
     pty: true,
     background: true,
   });
@@ -50,7 +50,7 @@ test("process submit sends Enter for pty sessions", async () => {
   const processTool = createProcessTool();
   const result = await execTool.execute("toolcall", {
     command:
-      "node -e \"process.stdin.on('data', d => { if (d.includes(10) || d.includes(13)) { process.stdout.write('submitted'); process.exit(0); } });\"",
+      'node -e "const dataEvent=String.fromCharCode(100,97,116,97);const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);process.stdin.on(dataEvent,d=>{if(d.includes(10)||d.includes(13)){process.stdout.write(submitted);process.exit(0);}});"',
     pty: true,
     background: true,
   });

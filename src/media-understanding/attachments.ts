@@ -104,7 +104,7 @@ export function resolveAttachmentKind(
   attachment: MediaAttachment,
 ): "image" | "audio" | "video" | "document" | "unknown" {
   const kind = kindFromMime(attachment.mime);
-  if (kind !== "unknown") return kind;
+  if (kind === "image" || kind === "audio" || kind === "video") return kind;
 
   const ext = getFileExtension(attachment.path ?? attachment.url);
   if (!ext) return "unknown";
