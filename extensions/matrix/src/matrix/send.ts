@@ -71,6 +71,12 @@ function normalizeTarget(raw: string): string {
   return trimmed;
 }
 
+function normalizeThreadId(raw?: string | number | null): string | null {
+  if (raw === undefined || raw === null) return null;
+  const trimmed = String(raw).trim();
+  return trimmed ? trimmed : null;
+}
+
 async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
   const trimmed = userId.trim();
   if (!trimmed.startsWith("@")) {
@@ -238,14 +244,10 @@ export async function sendMessageMatrix(
     const textLimit = resolveTextChunkLimit(cfg, "matrix");
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
     const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
-    const rawThreadId = opts.threadId;
-    const threadId =
-      rawThreadId !== undefined && rawThreadId !== null
-        ? String(rawThreadId).trim()
-        : null;
+    const threadId = normalizeThreadId(opts.threadId);
     const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
     const sendContent = (content: RoomMessageEventContent) =>
-      client.sendMessage(roomId, threadId ?? undefined, content);
+      threadId ? client.sendMessage(roomId, threadId, content) : client.sendMessage(roomId, content);
 
     let lastMessageId = "";
     if (opts.mediaUrl) {
@@ -316,17 +318,19 @@ export async function sendPollMatrix(
   try {
     const roomId = await resolveMatrixRoomId(client, to);
     const pollContent = buildPollStartContent(poll);
-    const rawThreadId = opts.threadId;
-    const threadId =
-      rawThreadId !== undefined && rawThreadId !== null
-        ? String(rawThreadId).trim()
-        : null;
-    const response = await client.sendEvent(
-      roomId,
-      threadId ?? undefined,
-      M_POLL_START as EventType.RoomMessage,
-      pollContent as unknown as RoomMessageEventContent,
-    );
+    const threadId = normalizeThreadId(opts.threadId);
+    const response = threadId
+      ? await client.sendEvent(
+          roomId,
+          threadId,
+          M_POLL_START,
+          pollContent,
+        )
+      : await client.sendEvent(
+          roomId,
+          M_POLL_START,
+          pollContent,
+        );
 
     return {
       eventId: response.event_id ?? "unknown",

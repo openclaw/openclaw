@@ -7,15 +7,17 @@
  * - m.poll.end - Closes a poll
  */
 
+import type { TimelineEvents } from "matrix-js-sdk/lib/@types/event.js";
+import type { ExtensibleAnyMessageEventContent } from "matrix-js-sdk/lib/@types/extensible_events.js";
 import type { PollInput } from "../../../../src/polls.js";
 
-export const M_POLL_START = "m.poll.start";
-export const M_POLL_RESPONSE = "m.poll.response";
-export const M_POLL_END = "m.poll.end";
+export const M_POLL_START = "m.poll.start" as const;
+export const M_POLL_RESPONSE = "m.poll.response" as const;
+export const M_POLL_END = "m.poll.end" as const;
 
-export const ORG_POLL_START = "org.matrix.msc3381.poll.start";
-export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response";
-export const ORG_POLL_END = "org.matrix.msc3381.poll.end";
+export const ORG_POLL_START = "org.matrix.msc3381.poll.start" as const;
+export const ORG_POLL_RESPONSE = "org.matrix.msc3381.poll.response" as const;
+export const ORG_POLL_END = "org.matrix.msc3381.poll.end" as const;
 
 export const POLL_EVENT_TYPES = [
   M_POLL_START,
@@ -32,9 +34,7 @@ export const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
 
 export type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
 
-export type TextContent = {
-  "m.text"?: string;
-  "org.matrix.msc1767.text"?: string;
+export type TextContent = ExtensibleAnyMessageEventContent & {
   body?: string;
 };
 
@@ -42,24 +42,7 @@ export type PollAnswer = {
   id: string;
 } & TextContent;
 
-export type PollStartContent = {
-  "m.poll"?: {
-    question: TextContent;
-    kind?: PollKind;
-    max_selections?: number;
-    answers: PollAnswer[];
-  };
-  "org.matrix.msc3381.poll.start"?: {
-    question: TextContent;
-    kind?: PollKind;
-    max_selections?: number;
-    answers: PollAnswer[];
-  };
-  "m.relates_to"?: {
-    rel_type: "m.reference";
-    event_id: string;
-  };
-};
+export type PollStartContent = TimelineEvents[typeof M_POLL_START];
 
 export type PollSummary = {
   eventId: string;
@@ -82,7 +65,7 @@ export function getTextContent(text?: TextContent): string {
 }
 
 export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const poll = content["m.poll"] ?? content["org.matrix.msc3381.poll.start"];
+  const poll = content[M_POLL_START] ?? content[ORG_POLL_START];
   if (!poll) return null;
 
   const question = getTextContent(poll.question);
@@ -121,6 +104,11 @@ function buildTextContent(body: string): TextContent {
   };
 }
 
+function buildPollFallbackText(question: string, answers: string[]): string {
+  if (answers.length === 0) return question;
+  return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
+}
+
 export function buildPollStartContent(poll: PollInput): PollStartContent {
   const question = poll.question.trim();
   const answers = poll.options
@@ -132,13 +120,19 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
     }));
 
   const maxSelections = poll.multiple ? Math.max(1, answers.length) : 1;
+  const fallbackText = buildPollFallbackText(
+    question,
+    answers.map((answer) => getTextContent(answer)),
+  );
 
   return {
-    "m.poll": {
+    [M_POLL_START]: {
       question: buildTextContent(question),
       kind: poll.multiple ? "m.poll.undisclosed" : "m.poll.disclosed",
       max_selections: maxSelections,
       answers,
     },
+    "m.text": fallbackText,
+    "org.matrix.msc1767.text": fallbackText,
   };
 }
