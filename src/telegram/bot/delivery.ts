@@ -16,6 +16,10 @@ import type { TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
+// Telegram limits media captions to 1024 characters.
+// Text beyond this must be sent as a separate follow-up message.
+const TELEGRAM_MAX_CAPTION_LENGTH = 1024;
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   chatId: string;
@@ -65,6 +69,9 @@ export async function deliverReplies(params: {
     }
     // media with optional caption on first item
     let first = true;
+    // Track if we need to send a follow-up text message after media
+    // (when caption exceeds Telegram's 1024-char limit)
+    let pendingFollowUpText: string | undefined;
     for (const mediaUrl of mediaList) {
       const media = await loadWebMedia(mediaUrl);
       const kind = mediaKindFromMime(media.contentType ?? undefined);
@@ -74,7 +81,13 @@ export async function deliverReplies(params: {
       });
       const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
       const file = new InputFile(media.buffer, fileName);
-      const caption = first ? (reply.text ?? undefined) : undefined;
+      // Caption only on first item; if text exceeds limit, defer to follow-up message.
+      const rawCaption = first ? (reply.text ?? undefined) : undefined;
+      const captionTooLong = rawCaption != null && rawCaption.length > TELEGRAM_MAX_CAPTION_LENGTH;
+      const caption = captionTooLong ? undefined : rawCaption;
+      if (captionTooLong && rawCaption) {
+        pendingFollowUpText = rawCaption;
+      }
       first = false;
       const replyToMessageId =
         replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
@@ -124,6 +137,23 @@ export async function deliverReplies(params: {
       }
       if (replyToId && !hasReplied) {
         hasReplied = true;
+      }
+    }
+    // Send deferred follow-up text when caption was too long for media.
+    // Chunk it in case it's extremely long (same logic as text-only replies).
+    if (pendingFollowUpText) {
+      const chunks = markdownToTelegramChunks(pendingFollowUpText, textLimit);
+      for (const chunk of chunks) {
+        await sendTelegramText(bot, chatId, chunk.html, runtime, {
+          replyToMessageId:
+            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+          messageThreadId,
+          textMode: "html",
+          plainText: chunk.text,
+        });
+        if (replyToId && !hasReplied) {
+          hasReplied = true;
+        }
       }
     }
   }
