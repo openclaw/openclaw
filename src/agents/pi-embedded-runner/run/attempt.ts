@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
@@ -69,7 +69,9 @@ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 
+import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { detectAndLoadPromptImages } from "./images.js";
 
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
@@ -133,6 +135,9 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
 
+    // Check if the model supports native image input
+    const modelHasVision = params.model.input?.includes("image") ?? false;
+
     const toolsRaw = createClawdbotCodingTools({
       exec: {
         ...params.execOverrides,
@@ -153,6 +158,7 @@ export async function runEmbeddedAttempt(
       currentThreadTs: params.currentThreadTs,
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
+      modelHasVision,
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
@@ -530,7 +536,60 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await abortable(activeSession.prompt(effectivePrompt, { images: params.images }));
+          // Detect and load images referenced in the prompt for vision-capable models.
+          // This eliminates the need for an explicit "view" tool call by injecting
+          // images directly into the prompt when the model supports it.
+          // Also scans conversation history to enable follow-up questions about earlier images.
+          const imageResult = await detectAndLoadPromptImages({
+            prompt: effectivePrompt,
+            workspaceDir: effectiveWorkspace,
+            model: params.model,
+            existingImages: params.images,
+            historyMessages: activeSession.messages,
+            maxBytes: MAX_IMAGE_BYTES,
+            // Enforce sandbox path restrictions when sandbox is enabled
+            sandboxRoot: sandbox?.enabled ? sandbox.workspaceDir : undefined,
+          });
+
+          // Inject history images into their original message positions.
+          // This ensures the model sees images in context (e.g., "compare to the first image").
+          if (imageResult.historyImagesByIndex.size > 0) {
+            for (const [msgIndex, images] of imageResult.historyImagesByIndex) {
+              // Bounds check: ensure index is valid before accessing
+              if (msgIndex < 0 || msgIndex >= activeSession.messages.length) continue;
+              const msg = activeSession.messages[msgIndex];
+              if (msg && msg.role === "user") {
+                // Convert string content to array format if needed
+                if (typeof msg.content === "string") {
+                  msg.content = [{ type: "text", text: msg.content }];
+                }
+                if (Array.isArray(msg.content)) {
+                  // Check for existing image content to avoid duplicates across turns
+                  const existingImageData = new Set(
+                    msg.content
+                      .filter((c): c is ImageContent =>
+                        c != null && typeof c === "object" && c.type === "image" && typeof c.data === "string",
+                      )
+                      .map((c) => c.data),
+                  );
+                  for (const img of images) {
+                    // Only add if this image isn't already in the message
+                    if (!existingImageData.has(img.data)) {
+                      msg.content.push(img);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // Only pass images option if there are actually images to pass
+          // This avoids potential issues with models that don't expect the images parameter
+          if (imageResult.images.length > 0) {
+            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+          } else {
+            await abortable(activeSession.prompt(effectivePrompt));
+          }
         } catch (err) {
           promptError = err;
         } finally {

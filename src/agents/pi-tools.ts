@@ -127,6 +127,8 @@ export function createClawdbotCodingTools(options?: {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** If true, the model has native vision capability */
+  modelHasVision?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -280,6 +282,7 @@ export function createClawdbotCodingTools(options?: {
       currentThreadTs: options?.currentThreadTs,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
+      modelHasVision: options?.modelHasVision,
     }),
   ];
   const pluginGroups = buildPluginToolGroups({
