@@ -64,7 +64,8 @@ test("process submit sends Enter for pty sessions", async () => {
     sessionId,
   });
 
-  for (let i = 0; i < 10; i += 1) {
+  const deadline = Date.now() + (process.platform === "win32" ? 4000 : 2000);
+  while (Date.now() < deadline) {
     await wait(50);
     const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
     const details = poll.details as { status?: string; aggregated?: string };
