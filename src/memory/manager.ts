@@ -69,6 +69,7 @@ type MemorySyncProgressUpdate = {
 type MemorySyncProgressState = {
   completed: number;
   total: number;
+  label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
@@ -799,7 +800,24 @@ export class MemoryIndexManager {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress: MemorySyncProgressState | null = params?.progress
-      ? { completed: 0, total: 0, report: params.progress }
+      ? {
+          completed: 0,
+          total: 0,
+          label: undefined,
+          report: (update) => {
+            if (!params.progress) return;
+            if (update.label) progress.label = update.label;
+            const label =
+              update.total > 0 && progress.label
+                ? `${progress.label} ${update.completed}/${update.total}`
+                : progress.label;
+            params.progress({
+              completed: update.completed,
+              total: update.total,
+              label,
+            });
+          },
+        }
       : null;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
