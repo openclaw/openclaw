@@ -200,11 +200,15 @@ describe("chrome extension relay server", () => {
         }>,
       (list) =>
         list.some(
-          (t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD",
+          (t) =>
+            t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD",
         ),
     );
     expect(
-      list2.some((t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD"),
+      list2.some(
+        (t) =>
+          t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD",
+      ),
     ).toBe(true);
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`);

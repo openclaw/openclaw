@@ -23,9 +23,7 @@ describe("resolveTelegramTargetChatType", () => {
     expect(resolveTelegramTargetChatType("tg:5232990709")).toBe("direct");
     expect(resolveTelegramTargetChatType("group:-123456789")).toBe("group");
     expect(resolveTelegramTargetChatType("telegram:group:-1001234567890")).toBe("group");
-    expect(resolveTelegramTargetChatType("telegram:group:-1001234567890:topic:456")).toBe(
-      "group",
-    );
+    expect(resolveTelegramTargetChatType("telegram:group:-1001234567890:topic:456")).toBe("group");
     expect(resolveTelegramTargetChatType("-1001234567890:456")).toBe("group");
   });
 
