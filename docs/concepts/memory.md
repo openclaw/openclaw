@@ -165,6 +165,7 @@ Notes:
 - Session updates are debounced and indexed lazily on the next `memory_search` (or manual `clawdbot memory index`).
 - Results still include snippets only; `memory_get` remains limited to memory files.
 - Session indexing is isolated per agent (only that agent’s session logs are indexed).
+- Session logs live on disk (`~/.clawdbot/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
 
 ### SQLite vector acceleration (sqlite-vec)
 
