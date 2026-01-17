@@ -30,7 +30,7 @@ export const DEFAULT_SKILLS_WATCH_IGNORED = [
   /(^|[\\/])\.git([\\/]|$)/,
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
-] as const;
+] as RegExp[];
 
 function bumpVersion(current: number): number {
   const now = Date.now();
