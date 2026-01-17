@@ -79,12 +79,17 @@ describe("memory manager sync failures", () => {
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
     manager = result.manager;
+    const syncSpy = vi.spyOn(manager, "sync");
 
     // Call the internal scheduler directly; it uses fire-and-forget sync.
     (manager as unknown as { scheduleWatchSync: () => void }).scheduleWatchSync();
 
     await vi.runAllTimersAsync();
-    await Promise.resolve();
+    const syncPromise = syncSpy.mock.results[0]?.value as Promise<void> | undefined;
+    if (syncPromise) {
+      await syncPromise.catch(() => undefined);
+    }
+    await vi.runOnlyPendingTimersAsync();
 
     process.off("unhandledRejection", handler);
     expect(unhandled).toHaveLength(0);
