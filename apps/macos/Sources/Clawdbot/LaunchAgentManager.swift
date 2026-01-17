@@ -72,11 +72,11 @@ enum LaunchAgentManager {
             let process = Process()
             process.launchPath = "/bin/launchctl"
             process.arguments = args
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
             do {
-                try process.run()
-                process.waitUntilExit()
+                _ = try process.runAndReadToEnd(from: pipe)
                 return process.terminationStatus
             } catch {
                 return -1
