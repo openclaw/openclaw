@@ -72,7 +72,7 @@ export async function maybeInstallDaemon(params: {
   }
 
   if (shouldInstall) {
-    let installError: unknown | null = null;
+    let installError: string | null = null;
     await withProgress(
       { label: "Gateway daemon", indeterminate: true, delayMs: 0 },
       async (progress) => {
@@ -128,13 +128,13 @@ export async function maybeInstallDaemon(params: {
           });
           progress.setLabel("Gateway daemon installed.");
         } catch (err) {
-          installError = err;
+          installError = err instanceof Error ? err.message : String(err);
           progress.setLabel("Gateway daemon install failed.");
         }
       },
     );
     if (installError) {
-      note(`Gateway daemon install failed: ${String(installError)}`, "Gateway");
+      note("Gateway daemon install failed: " + installError, "Gateway");
       if (process.platform === "win32") {
         note(
           "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install.",
