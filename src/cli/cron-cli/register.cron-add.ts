@@ -87,7 +87,13 @@ export function registerCronAddCommand(cron: Command) {
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
-      .option("--post-prefix <prefix>", "Prefix for summary system event", "Cron")
+      .option("--post-prefix <prefix>", "Prefix for main-session post", "Cron")
+      .option(
+        "--post-mode <mode>",
+        "What to post back to main for isolated jobs (summary|full)",
+        "summary",
+      )
+      .option("--post-max-chars <n>", "Max chars when --post-mode=full (default 8000)", "8000")
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>) => {
         try {
@@ -174,6 +180,14 @@ export function registerCronAddCommand(cron: Command) {
                     typeof opts.postPrefix === "string" && opts.postPrefix.trim()
                       ? opts.postPrefix.trim()
                       : "Cron",
+                  postToMainMode:
+                    opts.postMode === "full" || opts.postMode === "summary"
+                      ? opts.postMode
+                      : undefined,
+                  postToMainMaxChars:
+                    typeof opts.postMaxChars === "string" && /^\d+$/.test(opts.postMaxChars)
+                      ? Number.parseInt(opts.postMaxChars, 10)
+                      : undefined,
                 }
               : undefined;
 

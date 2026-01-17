@@ -2,7 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
-import { deliverOutboundPayloads, normalizeOutboundPayloads } from "./deliver.js";
+
+const mocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+}));
+
+vi.mock("../../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
+    "../../config/sessions.js",
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+  };
+});
+
+const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 describe("deliverOutboundPayloads", () => {
   it("chunks telegram markdown and passes through accountId", async () => {
@@ -192,5 +207,30 @@ describe("deliverOutboundPayloads", () => {
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(results).toEqual([{ channel: "whatsapp", messageId: "w2", toJid: "jid" }]);
+  });
+
+  it("mirrors delivered output when mirror options are provided", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const cfg: ClawdbotConfig = {
+      channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
+    };
+    mocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "caption", mediaUrl: "https://example.com/files/report.pdf?sig=1" }],
+      deps: { sendTelegram },
+      mirror: {
+        sessionKey: "agent:main:main",
+        text: "caption",
+        mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
+      },
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "report.pdf" }),
+    );
   });
 });

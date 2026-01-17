@@ -9,8 +9,13 @@ import {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  resolveMirroredTranscriptText,
+} from "../../config/sessions.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -119,6 +124,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 
 type MessageToolOptions = {
   agentAccountId?: string;
+  agentSessionKey?: string;
   config?: ClawdbotConfig;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -187,7 +193,35 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         defaultAccountId: accountId ?? undefined,
         gateway,
         toolContext,
+        sessionKey: options?.agentSessionKey,
+        agentId: options?.agentSessionKey
+          ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
+          : undefined,
       });
+
+      if (
+        action === "send" &&
+        options?.agentSessionKey &&
+        !result.dryRun &&
+        result.handledBy === "plugin"
+      ) {
+        const mediaUrl = typeof params.media === "string" ? params.media : undefined;
+        const mirrorText = resolveMirroredTranscriptText({
+          text: typeof params.message === "string" ? params.message : undefined,
+          mediaUrls: mediaUrl ? [mediaUrl] : undefined,
+        });
+        if (mirrorText) {
+          const agentId = resolveSessionAgentId({
+            sessionKey: options.agentSessionKey,
+            config: cfg,
+          });
+          await appendAssistantMessageToSessionTranscript({
+            agentId,
+            sessionKey: options.agentSessionKey,
+            text: mirrorText,
+          });
+        }
+      }
 
       if (result.toolResult) return result.toolResult;
       return jsonResult(result.payload);

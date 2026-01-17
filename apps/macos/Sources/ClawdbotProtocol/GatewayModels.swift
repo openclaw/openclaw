@@ -347,6 +347,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let sessionkey: String?
     public let idempotencykey: String
 
     public init(
@@ -356,6 +357,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        sessionkey: String? = nil,
         idempotencykey: String
     ) {
         self.to = to
@@ -364,6 +366,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
@@ -373,6 +376,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
 }

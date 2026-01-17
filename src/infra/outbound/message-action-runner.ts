@@ -36,6 +36,8 @@ export type RunMessageActionParams = {
   toolContext?: ChannelThreadingToolContext;
   gateway?: MessageActionRunnerGateway;
   deps?: OutboundSendDeps;
+  sessionKey?: string;
+  agentId?: string;
   dryRun?: boolean;
 };
 
@@ -265,6 +267,13 @@ export async function runMessageAction(
       bestEffort: bestEffort ?? undefined,
       deps: input.deps,
       gateway,
+      mirror:
+        input.sessionKey && !dryRun
+          ? {
+              sessionKey: input.sessionKey,
+              agentId: input.agentId,
+            }
+          : undefined,
     });
 
     return {

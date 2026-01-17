@@ -22,6 +22,7 @@
 - Skills: add user-invocable skill commands and expanded skill command registration.
 - Telegram: default reaction level to minimal and enable reaction notifications by default.
 - Telegram: allow reply-chain messages to bypass mention gating in groups. (#1038) — thanks @adityashaw2.
+- Messages: mirror delivered outbound text/media into session transcripts. (#1031) — thanks @TSavo.
 - Cron: isolated cron jobs now start a fresh session id on every run to prevent context buildup.
 - Docs: add `/help` hub, Node/npm PATH guide, and expand directory CLI docs.
 - Config: support env var substitution in config values. (#1044) — thanks @sebslight.

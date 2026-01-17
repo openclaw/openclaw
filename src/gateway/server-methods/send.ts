@@ -3,6 +3,7 @@ import type { ChannelId } from "../../channels/plugins/types.js";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { loadConfig } from "../../config/config.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
@@ -37,6 +38,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
+      sessionKey?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -94,7 +96,20 @@ export const sendHandlers: GatewayRequestHandlers = {
         accountId,
         payloads: [{ text: message, mediaUrl: request.mediaUrl }],
         gifPlayback: request.gifPlayback,
+        mirror:
+          typeof request.sessionKey === "string" && request.sessionKey.trim()
+            ? {
+                sessionKey: request.sessionKey.trim(),
+                agentId: resolveSessionAgentId({
+                  sessionKey: request.sessionKey.trim(),
+                  config: cfg,
+                }),
+                text: message,
+                mediaUrls: request.mediaUrl ? [request.mediaUrl] : undefined,
+              }
+            : undefined,
       });
+
       const result = results.at(-1);
       if (!result) {
         throw new Error("No delivery result");

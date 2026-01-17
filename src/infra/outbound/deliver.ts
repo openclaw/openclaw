@@ -11,6 +11,10 @@ import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  resolveMirroredTranscriptText,
+} from "../../config/sessions.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeOutboundPayloads } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
@@ -159,6 +163,12 @@ export async function deliverOutboundPayloads(params: {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
+  mirror?: {
+    sessionKey: string;
+    agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
+  };
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
@@ -277,6 +287,19 @@ export async function deliverOutboundPayloads(params: {
     } catch (err) {
       if (!params.bestEffort) throw err;
       params.onError?.(err, payload);
+    }
+  }
+  if (params.mirror && results.length > 0) {
+    const mirrorText = resolveMirroredTranscriptText({
+      text: params.mirror.text,
+      mediaUrls: params.mirror.mediaUrls,
+    });
+    if (mirrorText) {
+      await appendAssistantMessageToSessionTranscript({
+        agentId: params.mirror.agentId,
+        sessionKey: params.mirror.sessionKey,
+        text: mirrorText,
+      });
     }
   }
   return results;

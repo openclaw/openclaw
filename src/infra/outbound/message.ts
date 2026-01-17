@@ -42,6 +42,10 @@ type MessageSendParams = {
   cfg?: ClawdbotConfig;
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
+  mirror?: {
+    sessionKey: string;
+    agentId?: string;
+  };
 };
 
 export type MessageSendResult = {
@@ -142,6 +146,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      mirror: params.mirror
+        ? {
+            ...params.mirror,
+            text: params.content,
+            mediaUrls: params.mediaUrl ? [params.mediaUrl] : undefined,
+          }
+        : undefined,
     });
 
     return {
@@ -165,6 +176,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       channel,
+      sessionKey: params.mirror?.sessionKey,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
     },
     timeoutMs: gateway.timeoutMs,

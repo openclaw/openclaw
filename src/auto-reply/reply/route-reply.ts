@@ -113,7 +113,16 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: replyToId ?? null,
       threadId: threadId ?? null,
       abortSignal,
+      mirror: params.sessionKey
+        ? {
+            sessionKey: params.sessionKey,
+            agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }),
+            text,
+            mediaUrls,
+          }
+        : undefined,
     });
+
     const last = results.at(-1);
     return { ok: true, messageId: last?.messageId };
   } catch (err) {
