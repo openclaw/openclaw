@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
+import { createSubsystemLogger, shouldLogSubsystemToConsole } from "../logging.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
-import { shouldLogSubsystemToConsole } from "../logging.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;
@@ -21,6 +21,7 @@ const wsInflightCompact = new Map<string, WsInflightEntry>();
 let wsLastCompactConnId: string | undefined;
 const wsInflightOptimized = new Map<string, number>();
 const wsInflightSince = new Map<string, number>();
+const wsLog = createSubsystemLogger("gateway/ws");
 
 export function shortId(value: string): string {
   const s = value.trim();
@@ -167,7 +168,7 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
 
   const dirArrow = direction === "in" ? "←" : "→";
   const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
-  const prefix = `${chalk.gray("[gws]")} ${dirColor(dirArrow)} ${chalk.bold(kind)}`;
+  const prefix = `${dirColor(dirArrow)} ${chalk.bold(kind)}`;
 
   const headline =
     (kind === "req" || kind === "res") && method
@@ -206,7 +207,7 @@ export function logWs(direction: "in" | "out", kind: string, meta?: Record<strin
     (t): t is string => Boolean(t),
   );
 
-  console.log(tokens.join(" "));
+  wsLog.info(tokens.join(" "));
 }
 
 function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
@@ -225,9 +226,9 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
 
   if (kind === "parse-error") {
     const errorMsg = typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
-    console.log(
+    wsLog.warn(
       [
-        `${chalk.gray("[gws]")} ${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
+        `${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
         errorMsg ? `${chalk.dim("error")}=${errorMsg}` : undefined,
         `${chalk.dim("conn")}=${chalk.gray(shortId(connId ?? "?"))}`,
       ]
@@ -262,7 +263,7 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
   }
 
   const tokens = [
-    `${chalk.gray("[gws]")} ${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
+    `${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
     statusToken,
     method ? chalk.bold(method) : undefined,
     durationToken,
@@ -271,7 +272,7 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
     id ? `${chalk.dim("id")}=${chalk.gray(shortId(id))}` : undefined,
   ].filter((t): t is string => Boolean(t));
 
-  console.log(tokens.join(" "));
+  wsLog.info(tokens.join(" "));
 }
 
 function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
@@ -298,7 +299,7 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
         ? chalk.greenBright
         : chalk.cyanBright;
 
-  const prefix = `${chalk.gray("[gws]")} ${arrowColor(compactArrow)} ${chalk.bold(kind)}`;
+  const prefix = `${arrowColor(compactArrow)} ${chalk.bold(kind)}`;
 
   const statusToken =
     kind === "res" && ok !== undefined
@@ -346,5 +347,5 @@ function logWsCompact(direction: "in" | "out", kind: string, meta?: Record<strin
     (t): t is string => Boolean(t),
   );
 
-  console.log(tokens.join(" "));
+  wsLog.info(tokens.join(" "));
 }

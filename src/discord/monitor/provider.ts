@@ -13,7 +13,7 @@ import {
 import type { ClawdbotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
-import { getChildLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -178,7 +178,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ],
   );
 
-  const logger = getChildLogger({ module: "discord-auto-reply" });
+  const logger = createSubsystemLogger("discord/monitor");
   const guildHistories = new Map<string, HistoryEntry[]>();
   let botUserId: string | undefined;
 

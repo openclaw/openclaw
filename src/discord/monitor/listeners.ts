@@ -8,6 +8,7 @@ import {
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-duration.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeDiscordSlug,
@@ -19,7 +20,7 @@ import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
-type Logger = ReturnType<typeof import("../../logging.js").getChildLogger>;
+type Logger = ReturnType<typeof import("../../logging.js").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
@@ -28,6 +29,7 @@ export type DiscordMessageHandler = (data: DiscordMessageEvent, client: Client) 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 1000;
+const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
 function logSlowDiscordListener(params: {
   logger: Logger | undefined;
@@ -40,12 +42,15 @@ function logSlowDiscordListener(params: {
     decimals: 1,
     unit: "seconds",
   });
-  const message = `[EventQueue] Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
-  if (params.logger?.warn) {
-    params.logger.warn(message);
-  } else {
-    console.warn(message);
-  }
+  const message = `Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
+  const logger = params.logger ?? discordEventQueueLog;
+  logger.warn("Slow listener detected", {
+    listener: params.listener,
+    event: params.event,
+    durationMs: params.durationMs,
+    duration,
+    consoleMessage: message,
+  });
 }
 
 export function registerDiscordListener(listeners: Array<object>, listener: object) {
