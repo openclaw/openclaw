@@ -1,13 +1,5 @@
-import path from "node:path";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { withProgress } from "../cli/progress.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -89,32 +81,12 @@ export async function maybeInstallDaemon(params: {
 
         progress.setLabel("Preparing Gateway daemon…");
 
-        const devMode =
-          process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-          process.argv[1]?.endsWith(".ts");
-        const nodePath = await resolvePreferredNodePath({
-          env: process.env,
-          runtime: daemonRuntime,
-        });
-        const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-          port: params.port,
-          dev: devMode,
-          runtime: daemonRuntime,
-          nodePath,
-        });
-        if (daemonRuntime === "node") {
-          const systemNode = await resolveSystemNodeInfo({ env: process.env });
-          const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-          if (warning) note(warning, "Gateway runtime");
-        }
-        const environment = buildServiceEnvironment({
+        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port: params.port,
           token: params.gatewayToken,
-          launchdLabel:
-            process.platform === "darwin"
-              ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-              : undefined,
+          runtime: daemonRuntime,
+          warn: (message, title) => note(message, title),
         });
 
         progress.setLabel("Installing Gateway daemon…");
@@ -135,14 +107,7 @@ export async function maybeInstallDaemon(params: {
     );
     if (installError) {
       note("Gateway daemon install failed: " + installError, "Gateway");
-      if (process.platform === "win32") {
-        note(
-          "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install.",
-          "Gateway",
-        );
-      } else {
-        note("Tip: rerun `clawdbot daemon install` after fixing the error.", "Gateway");
-      }
+      note(gatewayInstallErrorHint(), "Gateway");
       return;
     }
     shouldCheckLinger = true;

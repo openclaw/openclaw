@@ -1,17 +1,7 @@
-import path from "node:path";
-
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
@@ -24,6 +14,10 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import {
+  buildGatewayInstallPlan,
+  gatewayInstallErrorHint,
+} from "./daemon-install-helpers.js";
 import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { healthCommand } from "./health.js";
@@ -81,41 +75,26 @@ export async function maybeRepairGatewayDaemon(params: {
           },
           DEFAULT_GATEWAY_DAEMON_RUNTIME,
         );
-        const devMode =
-          process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-          process.argv[1]?.endsWith(".ts");
         const port = resolveGatewayPort(params.cfg, process.env);
-        const nodePath = await resolvePreferredNodePath({
-          env: process.env,
-          runtime: daemonRuntime,
-        });
-        const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
-          port,
-          dev: devMode,
-          runtime: daemonRuntime,
-          nodePath,
-        });
-        if (daemonRuntime === "node") {
-          const systemNode = await resolveSystemNodeInfo({ env: process.env });
-          const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-          if (warning) note(warning, "Gateway runtime");
-        }
-        const environment = buildServiceEnvironment({
+        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
           env: process.env,
           port,
           token: params.cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-          launchdLabel:
-            process.platform === "darwin"
-              ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-              : undefined,
+          runtime: daemonRuntime,
+          warn: (message, title) => note(message, title),
         });
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          programArguments,
-          workingDirectory,
-          environment,
-        });
+        try {
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+        } catch (err) {
+          note(`Gateway daemon install failed: ${String(err)}`, "Gateway");
+          note(gatewayInstallErrorHint(), "Gateway");
+        }
       }
     }
     return;
