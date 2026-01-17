@@ -1,19 +1,24 @@
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { ClawdbotConfig } from "./config.js";
+import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
 
-function normalizeCapabilities(capabilities: string[] | undefined): string[] | undefined {
-  if (!capabilities) return undefined;
+type CapabilitiesConfig = TelegramCapabilitiesConfig;
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string");
+
+function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): string[] | undefined {
   // Handle object-format capabilities (e.g., { inlineButtons: "dm" }) gracefully.
   // Channel-specific handlers (like resolveTelegramInlineButtonsScope) process these separately.
-  if (!Array.isArray(capabilities)) return undefined;
+  if (!isStringArray(capabilities)) return undefined;
   const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
 }
 
 function resolveAccountCapabilities(params: {
-  cfg?: { accounts?: Record<string, { capabilities?: string[] }> } & {
-    capabilities?: string[];
+  cfg?: { accounts?: Record<string, { capabilities?: CapabilitiesConfig }> } & {
+    capabilities?: CapabilitiesConfig;
   };
   accountId?: string | null;
 }): string[] | undefined {
@@ -40,7 +45,7 @@ function resolveAccountCapabilities(params: {
 }
 
 export function resolveChannelCapabilities(params: {
-  cfg?: ClawdbotConfig;
+  cfg?: Partial<ClawdbotConfig>;
   channel?: string | null;
   accountId?: string | null;
 }): string[] | undefined {
@@ -51,8 +56,8 @@ export function resolveChannelCapabilities(params: {
   const channelsConfig = cfg.channels as Record<string, unknown> | undefined;
   const channelConfig = (channelsConfig?.[channel] ?? (cfg as Record<string, unknown>)[channel]) as
     | {
-        accounts?: Record<string, { capabilities?: string[] }>;
-        capabilities?: string[];
+        accounts?: Record<string, { capabilities?: CapabilitiesConfig }>;
+        capabilities?: CapabilitiesConfig;
       }
     | undefined;
   return resolveAccountCapabilities({
