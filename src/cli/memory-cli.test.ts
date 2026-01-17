@@ -30,6 +30,7 @@ describe("memory cli", () => {
     const close = vi.fn(async () => {});
     getMemorySearchManager.mockResolvedValueOnce({
       manager: {
+        probeVectorAvailability: vi.fn(async () => true),
         status: () => ({
           files: 2,
           chunks: 5,
@@ -68,6 +69,7 @@ describe("memory cli", () => {
     const close = vi.fn(async () => {});
     getMemorySearchManager.mockResolvedValueOnce({
       manager: {
+        probeVectorAvailability: vi.fn(async () => false),
         status: () => ({
           files: 0,
           chunks: 0,
