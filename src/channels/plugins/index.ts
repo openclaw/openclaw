@@ -74,4 +74,15 @@ export function normalizeChannelId(raw?: string | null): ChannelId | null {
 }
 
 export { discordPlugin, imessagePlugin, signalPlugin, slackPlugin, telegramPlugin, whatsappPlugin };
+export {
+  listDiscordDirectoryGroupsFromConfig,
+  listDiscordDirectoryPeersFromConfig,
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+  listWhatsAppDirectoryGroupsFromConfig,
+  listWhatsAppDirectoryPeersFromConfig,
+  type DirectoryConfigParams,
+} from "./directory-config.js";
 export type { ChannelId, ChannelPlugin } from "./types.js";

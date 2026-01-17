@@ -164,24 +164,6 @@ function resolveMatch(params: {
   return { kind: "ambiguous" as const, entries: matches };
 }
 
-function looksLikeTargetId(params: {
-  channel: ChannelId;
-  raw: string;
-  normalized: string;
-}): boolean {
-  const raw = params.raw.trim();
-  if (!raw) return false;
-  const plugin = getChannelPlugin(params.channel);
-  const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
-  if (lookup) return lookup(raw, params.normalized);
-  if (/^(channel|group|user):/i.test(raw)) return true;
-  if (/^[@#]/.test(raw)) return true;
-  if (/^\+?\d{6,}$/.test(raw)) return true;
-  if (raw.includes("@thread")) return true;
-  if (/^(conversation|user):/i.test(raw)) return true;
-  return false;
-}
-
 async function listDirectoryEntries(params: {
   cfg: ClawdbotConfig;
   channel: ChannelId;
@@ -288,7 +270,19 @@ export async function resolveMessagingTarget(params: {
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
-  if (looksLikeTargetId({ channel: params.channel, raw, normalized })) {
+  const looksLikeTargetId = (): boolean => {
+    const trimmed = raw.trim();
+    if (!trimmed) return false;
+    const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
+    if (lookup) return lookup(trimmed, normalized);
+    if (/^(channel|group|user):/i.test(trimmed)) return true;
+    if (/^[@#]/.test(trimmed)) return true;
+    if (/^\+?\d{6,}$/.test(trimmed)) return true;
+    if (trimmed.includes("@thread")) return true;
+    if (/^(conversation|user):/i.test(trimmed)) return true;
+    return false;
+  };
+  if (looksLikeTargetId()) {
     const directTarget = preserveTargetCase(params.channel, raw, normalized);
     return {
       ok: true,

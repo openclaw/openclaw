@@ -1,5 +1,7 @@
+import { formatTargetHint } from "./target-format.js";
+
 export function missingTargetMessage(provider: string, hint?: string): string {
-  return `Delivering to ${provider} requires target${formatHint(hint)}`;
+  return `Delivering to ${provider} requires target${formatTargetHint(hint)}`;
 }
 
 export function missingTargetError(provider: string, hint?: string): Error {
@@ -7,7 +9,7 @@ export function missingTargetError(provider: string, hint?: string): Error {
 }
 
 export function ambiguousTargetMessage(provider: string, raw: string, hint?: string): string {
-  return `Ambiguous target "${raw}" for ${provider}. Provide a unique name or an explicit id.${formatHint(hint, true)}`;
+  return `Ambiguous target "${raw}" for ${provider}. Provide a unique name or an explicit id.${formatTargetHint(hint, true)}`;
 }
 
 export function ambiguousTargetError(provider: string, raw: string, hint?: string): Error {
@@ -15,14 +17,9 @@ export function ambiguousTargetError(provider: string, raw: string, hint?: strin
 }
 
 export function unknownTargetMessage(provider: string, raw: string, hint?: string): string {
-  return `Unknown target "${raw}" for ${provider}.${formatHint(hint, true)}`;
+  return `Unknown target "${raw}" for ${provider}.${formatTargetHint(hint, true)}`;
 }
 
 export function unknownTargetError(provider: string, raw: string, hint?: string): Error {
   return new Error(unknownTargetMessage(provider, raw, hint));
-}
-
-function formatHint(hint?: string, withLabel = false): string {
-  if (!hint) return "";
-  return withLabel ? ` Hint: ${hint}` : ` ${hint}`;
 }

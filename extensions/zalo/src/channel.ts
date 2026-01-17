@@ -150,12 +150,14 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
   actions: zaloMessageActions,
   messaging: {
     normalizeTarget: normalizeZaloMessagingTarget,
-    looksLikeTargetId: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return false;
-      return /^\d{3,}$/.test(trimmed);
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        return /^\d{3,}$/.test(trimmed);
+      },
+      hint: "<chatId>",
     },
-    targetHint: "<chatId>",
   },
   directory: {
     self: async () => null,

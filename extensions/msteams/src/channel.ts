@@ -133,13 +133,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMSTeamsMessagingTarget,
-    looksLikeTargetId: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return false;
-      if (/^(conversation:|user:)/i.test(trimmed)) return true;
-      return trimmed.includes("@thread");
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        if (/^(conversation:|user:)/i.test(trimmed)) return true;
+        return trimmed.includes("@thread");
+      },
+      hint: "<conversationId|user:ID|conversation:ID>",
     },
-    targetHint: "<conversationId|user:ID|conversation:ID>",
   },
   directory: {
     self: async () => null,

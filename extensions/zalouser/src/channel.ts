@@ -218,12 +218,14 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       if (!trimmed) return undefined;
       return trimmed.replace(/^(zalouser|zlu):/i, "");
     },
-    looksLikeTargetId: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return false;
-      return /^\d{3,}$/.test(trimmed);
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        return /^\d{3,}$/.test(trimmed);
+      },
+      hint: "<threadId>",
     },
-    targetHint: "<threadId>",
   },
   directory: {
     self: async ({ cfg, accountId, runtime }) => {
