@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
-import { detectMime, getFileExtension, isAudioFileName } from "../media/mime.js";
+import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { fetchWithTimeout } from "./providers/shared.js";
 import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
@@ -100,23 +100,32 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   ];
 }
 
-export function isVideoAttachment(attachment: MediaAttachment): boolean {
-  if (attachment.mime?.startsWith("video/")) return true;
+export function resolveAttachmentKind(
+  attachment: MediaAttachment,
+): "image" | "audio" | "video" | "unknown" {
+  const kind = kindFromMime(attachment.mime);
+  if (kind !== "unknown") return kind;
+
   const ext = getFileExtension(attachment.path ?? attachment.url);
-  if (!ext) return false;
-  return [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"].includes(ext);
+  if (!ext) return "unknown";
+  if ([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"].includes(ext)) return "video";
+  if (isAudioFileName(attachment.path ?? attachment.url)) return "audio";
+  if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
+    return "image";
+  }
+  return "unknown";
+}
+
+export function isVideoAttachment(attachment: MediaAttachment): boolean {
+  return resolveAttachmentKind(attachment) === "video";
 }
 
 export function isAudioAttachment(attachment: MediaAttachment): boolean {
-  if (attachment.mime?.startsWith("audio/")) return true;
-  return isAudioFileName(attachment.path ?? attachment.url);
+  return resolveAttachmentKind(attachment) === "audio";
 }
 
 export function isImageAttachment(attachment: MediaAttachment): boolean {
-  if (attachment.mime?.startsWith("image/")) return true;
-  const ext = getFileExtension(attachment.path ?? attachment.url);
-  if (!ext) return false;
-  return [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext);
+  return resolveAttachmentKind(attachment) === "image";
 }
 
 function isAbortError(err: unknown): boolean {

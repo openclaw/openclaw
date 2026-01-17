@@ -424,4 +424,64 @@ describe("applyMediaUnderstanding", () => {
       ["[Audio 1/2]\nTranscript:\nnote-a.ogg", "[Audio 2/2]\nTranscript:\nnote-b.ogg"].join("\n\n"),
     );
   });
+
+  it("orders mixed media outputs as image, audio, video", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "note.ogg");
+    const videoPath = path.join(dir, "clip.mp4");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, "audio-bytes");
+    await fs.writeFile(videoPath, "video-bytes");
+
+    const ctx: MsgContext = {
+      Body: "<media:mixed>",
+      MediaPaths: [imagePath, audioPath, videoPath],
+      MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
+    };
+    const cfg: ClawdbotConfig = {
+      tools: {
+        media: {
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },
+          audio: { enabled: true, models: [{ provider: "groq" }] },
+          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: dir,
+      providers: {
+        openai: {
+          id: "openai",
+          describeImage: async () => ({ text: "image ok" }),
+        },
+        groq: {
+          id: "groq",
+          transcribeAudio: async () => ({ text: "audio ok" }),
+        },
+        google: {
+          id: "google",
+          describeVideo: async () => ({ text: "video ok" }),
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(result.appliedAudio).toBe(true);
+    expect(result.appliedVideo).toBe(true);
+    expect(ctx.Body).toBe(
+      [
+        "[Image]\nDescription:\nimage ok",
+        "[Audio]\nTranscript:\naudio ok",
+        "[Video]\nDescription:\nvideo ok",
+      ].join("\n\n"),
+    );
+    expect(ctx.Transcript).toBe("audio ok");
+    expect(ctx.CommandBody).toBe("audio ok");
+    expect(ctx.BodyForCommands).toBe("audio ok");
+  });
 });
