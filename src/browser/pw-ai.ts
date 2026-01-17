@@ -1,8 +1,11 @@
 export {
   type BrowserConsoleMessage,
+  closePageByTargetIdViaPlaywright,
   closePlaywrightBrowserConnection,
+  createPageViaPlaywright,
   ensurePageState,
   getPageForTargetId,
+  listPagesViaPlaywright,
   refLocator,
   type WithSnapshotForAI,
 } from "./pw-session.js";

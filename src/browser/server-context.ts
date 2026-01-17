@@ -100,6 +100,22 @@ function createProfileContext(
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
+    // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
+    if (!profile.cdpIsLoopback) {
+      try {
+        const mod = await import("./pw-ai.js");
+        const pages = await mod.listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        return pages.map((p) => ({
+          targetId: p.targetId,
+          title: p.title,
+          url: p.url,
+          type: p.type,
+        }));
+      } catch {
+        // Fall back to HTTP-based listing if Playwright is not available
+      }
+    }
+    
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -121,6 +137,30 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    // For remote profiles, use Playwright's persistent connection to create tabs
+    // This ensures the tab persists beyond a single request
+    if (!profile.cdpIsLoopback) {
+      try {
+        const mod = await import("./pw-ai.js");
+        const page = await mod.createPageViaPlaywright({ cdpUrl: profile.cdpUrl, url });
+        const profileState = getProfileState();
+        profileState.lastTargetId = page.targetId;
+        return {
+          targetId: page.targetId,
+          title: page.title,
+          url: page.url,
+          type: page.type,
+        };
+      } catch (err) {
+        // Fall back to HTTP-based tab creation if Playwright is not available
+        // (though it will likely be ephemeral for remote profiles)
+        if (String(err).includes("No browser context")) {
+          // This is a real error, not a missing Playwright issue
+          throw err;
+        }
+      }
+    }
+    
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
@@ -321,7 +361,11 @@ function createProfileContext(
     }
 
     const tabs = await listTabs();
-    const candidates = profile.driver === "extension" ? tabs : tabs.filter((t) => Boolean(t.wsUrl));
+    // For remote profiles using Playwright's persistent connection, we don't need wsUrl
+    // because we access pages directly through Playwright, not via individual WebSocket URLs.
+    const candidates = profile.driver === "extension" || !profile.cdpIsLoopback
+      ? tabs
+      : tabs.filter((t) => Boolean(t.wsUrl));
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -379,6 +423,21 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
+    
+    // For remote profiles, use Playwright's persistent connection to close tabs
+    if (!profile.cdpIsLoopback) {
+      try {
+        const mod = await import("./pw-ai.js");
+        await mod.closePageByTargetIdViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          targetId: resolved.targetId,
+        });
+        return;
+      } catch {
+        // Fall back to HTTP-based close if Playwright is not available
+      }
+    }
+    
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolved.targetId}`));
   };
 
