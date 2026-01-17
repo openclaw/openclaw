@@ -58,6 +58,7 @@
 - CLI: speed up `clawdbot sandbox-explain` by avoiding heavy plugin imports when normalizing channel ids.
 - Browser: remote profile tab operations prefer persistent Playwright and avoid silent HTTP fallbacks. (#1057) — thanks @mukhtharcm.
 - Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
+- Browser: refresh extension relay tab metadata after navigation so `/json/list` stays current. (#1073) — thanks @roshanasingh4.
 - WhatsApp: scope self-chat response prefix; inject pending-only group history and clear after any processed message.
 - Agents: drop unsigned Gemini tool calls and avoid JSON Schema `format` keyword collisions.
 - Agents: avoid duplicate sends by replying with `NO_REPLY` after `message` tool sends.
