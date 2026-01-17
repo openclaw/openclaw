@@ -1,15 +1,15 @@
-import type { ClawdbotConfig } from "../config/config.js";
 import { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { applyAuthProfileConfig } from "./onboard-auth.js";
-import { isRemoteEnvironment } from "./oauth-env.js";
-import { openUrl } from "./onboard-helpers.js";
-import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { applyAuthProfileConfig } from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
+import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
 
 const PLUGIN_ID = "qwen-portal-auth";
 const PROVIDER_ID = "qwen-portal";
@@ -116,15 +116,15 @@ export async function applyAuthChoiceQwenPortal(
   const provider = resolveProviderMatch(providers, PROVIDER_ID);
   if (!provider) {
     await params.prompter.note(
-      "Qwen Portal auth plugin is not available. Run `clawdbot plugins enable qwen-portal-auth` and re-run the wizard.",
-      "Qwen Portal",
+      "Qwen auth plugin is not available. Run `clawdbot plugins enable qwen-portal-auth` and re-run the wizard.",
+      "Qwen",
     );
     return { config: nextConfig };
   }
 
   const method = pickAuthMethod(provider, "device") ?? provider.auth[0];
   if (!method) {
-    await params.prompter.note("Qwen Portal auth method missing.", "Qwen Portal");
+    await params.prompter.note("Qwen auth method missing.", "Qwen");
     return { config: nextConfig };
   }
 
