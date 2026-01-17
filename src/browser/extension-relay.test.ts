@@ -152,8 +152,34 @@ describe("chrome extension relay server", () => {
     const list = (await fetch(`${cdpUrl}/json/list`).then((r) => r.json())) as Array<{
       id?: string;
       url?: string;
+      title?: string;
     }>;
     expect(list.some((t) => t.id === "t1" && t.url === "https://example.com")).toBe(true);
+
+    // Simulate navigation updating tab metadata.
+    ext.send(
+      JSON.stringify({
+        method: "forwardCDPEvent",
+        params: {
+          method: "Target.targetInfoChanged",
+          params: {
+            targetInfo: {
+              targetId: "t1",
+              type: "page",
+              title: "DER STANDARD",
+              url: "https://www.derstandard.at/",
+            },
+          },
+        },
+      }),
+    );
+
+    const list2 = (await fetch(`${cdpUrl}/json/list`).then((r) => r.json())) as Array<{
+      id?: string;
+      url?: string;
+      title?: string;
+    }>;
+    expect(list2.some((t) => t.id === "t1" && t.url === "https://www.derstandard.at/" && t.title === "DER STANDARD")).toBe(true);
 
     const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`);
     await waitForOpen(cdp);
