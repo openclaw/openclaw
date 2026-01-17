@@ -23,6 +23,10 @@ export type ResolvedMemorySearchConfig = {
   store: {
     driver: "sqlite";
     path: string;
+    vector: {
+      enabled: boolean;
+      extensionPath?: string;
+    };
   };
   chunking: {
     tokens: number;
@@ -77,9 +81,15 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
+  const vector = {
+    enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
+    extensionPath:
+      overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
+  };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
     path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    vector,
   };
   const chunking = {
     tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,

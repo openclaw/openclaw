@@ -42,14 +42,19 @@ type MemoryIndexMeta = {
   provider: string;
   chunkTokens: number;
   chunkOverlap: number;
+  vectorDims?: number;
 };
 
 const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
+const VECTOR_TABLE = "chunks_vec";
 
 const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
+
+const vectorToBlob = (embedding: number[]): Buffer =>
+  Buffer.from(new Float32Array(embedding).buffer);
 
 export class MemoryIndexManager {
   private readonly cacheKey: string;
@@ -61,6 +66,14 @@ export class MemoryIndexManager {
   private readonly requestedProvider: "openai" | "local";
   private readonly fallbackReason?: string;
   private readonly db: DatabaseSync;
+  private readonly vector: {
+    enabled: boolean;
+    available: boolean | null;
+    extensionPath?: string;
+    loadError?: string;
+    dims?: number;
+  };
+  private vectorReady: Promise<boolean> | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private intervalTimer: NodeJS.Timeout | null = null;
@@ -119,6 +132,15 @@ export class MemoryIndexManager {
     this.fallbackReason = params.providerResult.fallbackReason;
     this.db = this.openDatabase();
     this.ensureSchema();
+    this.vector = {
+      enabled: params.settings.store.vector.enabled,
+      available: null,
+      extensionPath: params.settings.store.vector.extensionPath,
+    };
+    const meta = this.readMeta();
+    if (meta?.vectorDims) {
+      this.vector.dims = meta.vectorDims;
+    }
     this.ensureWatcher();
     this.ensureIntervalSync();
     this.dirty = true;
@@ -146,8 +168,38 @@ export class MemoryIndexManager {
     }
     const cleaned = query.trim();
     if (!cleaned) return [];
+    const minScore = opts?.minScore ?? this.settings.query.minScore;
+    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const queryVec = await this.provider.embedQuery(cleaned);
     if (queryVec.length === 0) return [];
+    if (await this.ensureVectorReady(queryVec.length)) {
+      const rows = this.db
+        .prepare(
+          `SELECT c.path, c.start_line, c.end_line, c.text,
+                  vec_distance_cosine(v.embedding, ?) AS dist
+             FROM ${VECTOR_TABLE} v
+             JOIN chunks c ON c.id = v.id
+            WHERE c.model = ?
+            ORDER BY dist ASC
+            LIMIT ?`,
+        )
+        .all(vectorToBlob(queryVec), this.provider.model, maxResults) as Array<{
+        path: string;
+        start_line: number;
+        end_line: number;
+        text: string;
+        dist: number;
+      }>;
+      return rows
+        .map((row) => ({
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 1 - row.dist,
+          snippet: truncateUtf16Safe(row.text, SNIPPET_MAX_CHARS),
+        }))
+        .filter((entry) => entry.score >= minScore);
+    }
     const candidates = this.listChunks();
     const scored = candidates
       .map((chunk) => ({
@@ -155,8 +207,6 @@ export class MemoryIndexManager {
         score: cosineSimilarity(queryVec, chunk.embedding),
       }))
       .filter((entry) => Number.isFinite(entry.score));
-    const minScore = opts?.minScore ?? this.settings.query.minScore;
-    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     return scored
       .filter((entry) => entry.score >= minScore)
       .sort((a, b) => b.score - a.score)
@@ -212,6 +262,13 @@ export class MemoryIndexManager {
     model: string;
     requestedProvider: string;
     fallback?: { from: string; reason?: string };
+    vector?: {
+      enabled: boolean;
+      available?: boolean;
+      extensionPath?: string;
+      loadError?: string;
+      dims?: number;
+    };
   } {
     const files = this.db.prepare(`SELECT COUNT(*) as c FROM files`).get() as {
       c: number;
@@ -229,6 +286,13 @@ export class MemoryIndexManager {
       model: this.provider.model,
       requestedProvider: this.requestedProvider,
       fallback: this.fallbackReason ? { from: "local", reason: this.fallbackReason } : undefined,
+      vector: {
+        enabled: this.vector.enabled,
+        available: this.vector.available ?? undefined,
+        extensionPath: this.vector.extensionPath,
+        loadError: this.vector.loadError,
+        dims: this.vector.dims,
+      },
     };
   }
 
@@ -251,12 +315,76 @@ export class MemoryIndexManager {
     INDEX_CACHE.delete(this.cacheKey);
   }
 
+  private async ensureVectorReady(dimensions?: number): Promise<boolean> {
+    if (!this.vector.enabled) return false;
+    if (!this.vectorReady) {
+      this.vectorReady = this.loadVectorExtension();
+    }
+    const ready = await this.vectorReady;
+    if (ready && typeof dimensions === "number" && dimensions > 0) {
+      this.ensureVectorTable(dimensions);
+    }
+    return ready;
+  }
+
+  private async loadVectorExtension(): Promise<boolean> {
+    if (this.vector.available !== null) return this.vector.available;
+    if (!this.vector.enabled) {
+      this.vector.available = false;
+      return false;
+    }
+    try {
+      const sqliteVec = await import("sqlite-vec");
+      const extensionPath = this.vector.extensionPath?.trim()
+        ? resolveUserPath(this.vector.extensionPath)
+        : sqliteVec.getLoadablePath();
+      this.db.enableLoadExtension(true);
+      if (this.vector.extensionPath?.trim()) {
+        this.db.loadExtension(extensionPath);
+      } else {
+        sqliteVec.load(this.db);
+      }
+      this.vector.extensionPath = extensionPath;
+      this.vector.available = true;
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.vector.available = false;
+      this.vector.loadError = message;
+      log.warn(`sqlite-vec unavailable: ${message}`);
+      return false;
+    }
+  }
+
+  private ensureVectorTable(dimensions: number): void {
+    if (this.vector.dims === dimensions) return;
+    if (this.vector.dims && this.vector.dims !== dimensions) {
+      this.dropVectorTable();
+    }
+    this.db.exec(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS ${VECTOR_TABLE} USING vec0(\n` +
+        `  id TEXT PRIMARY KEY,\n` +
+        `  embedding FLOAT[${dimensions}]\n` +
+        `)`,
+    );
+    this.vector.dims = dimensions;
+  }
+
+  private dropVectorTable(): void {
+    try {
+      this.db.exec(`DROP TABLE IF EXISTS ${VECTOR_TABLE}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.debug(`Failed to drop ${VECTOR_TABLE}: ${message}`);
+    }
+  }
+
   private openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath);
+    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
   }
 
   private ensureSchema() {
@@ -360,6 +488,7 @@ export class MemoryIndexManager {
   }
 
   private async runSync(params?: { reason?: string; force?: boolean }) {
+    const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
       params?.force ||
@@ -367,7 +496,8 @@ export class MemoryIndexManager {
       meta.model !== this.provider.model ||
       meta.provider !== this.provider.id ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
-      meta.chunkOverlap !== this.settings.chunking.overlap;
+      meta.chunkOverlap !== this.settings.chunking.overlap ||
+      (vectorReady && !meta?.vectorDims);
     if (needsFullReindex) {
       this.resetIndex();
     }
@@ -397,18 +527,24 @@ export class MemoryIndexManager {
       this.db.prepare(`DELETE FROM chunks WHERE path = ?`).run(stale.path);
     }
 
-    this.writeMeta({
+    const nextMeta: MemoryIndexMeta = {
       model: this.provider.model,
       provider: this.provider.id,
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
-    });
+    };
+    if (this.vector.available && this.vector.dims) {
+      nextMeta.vectorDims = this.vector.dims;
+    }
+    this.writeMeta(nextMeta);
     this.dirty = false;
   }
 
   private resetIndex() {
     this.db.exec(`DELETE FROM files`);
     this.db.exec(`DELETE FROM chunks`);
+    this.dropVectorTable();
+    this.vector.dims = undefined;
   }
 
   private readMeta(): MemoryIndexMeta | null {
@@ -436,6 +572,8 @@ export class MemoryIndexManager {
     const content = await fs.readFile(entry.absPath, "utf-8");
     const chunks = chunkMarkdown(content, this.settings.chunking);
     const embeddings = await this.provider.embedBatch(chunks.map((chunk) => chunk.text));
+    const sample = embeddings.find((embedding) => embedding.length > 0);
+    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     const now = Date.now();
     this.db.prepare(`DELETE FROM chunks WHERE path = ?`).run(entry.path);
     for (let i = 0; i < chunks.length; i++) {
@@ -466,6 +604,11 @@ export class MemoryIndexManager {
           JSON.stringify(embedding),
           now,
         );
+      if (vectorReady && embedding.length > 0) {
+        this.db
+          .prepare(`INSERT OR REPLACE INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+          .run(id, vectorToBlob(embedding));
+      }
     }
     this.db
       .prepare(

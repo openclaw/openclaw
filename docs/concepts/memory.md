@@ -78,6 +78,7 @@ Defaults:
 - Watches memory files for changes (debounced).
 - Uses remote embeddings (OpenAI) unless configured for local.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
+- Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
 
 Remote embeddings **require** an API key for the embedding provider. By default
 this is OpenAI (`OPENAI_API_KEY` or `models.providers.openai.apiKey`). Codex
@@ -142,6 +143,37 @@ Local mode:
 - File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
 - Index storage: per-agent SQLite at `~/.clawdbot/state/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
 - Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval. Reindex triggers when embedding model/provider or chunk sizes change.
+
+### SQLite vector acceleration (sqlite-vec)
+
+When the sqlite-vec extension is available, Clawdbot stores embeddings in a
+SQLite virtual table (`vec0`) and performs vector distance queries in the
+database. This keeps search fast without loading every embedding into JS.
+
+Configuration (optional):
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      store: {
+        vector: {
+          enabled: true,
+          extensionPath: "/path/to/sqlite-vec"
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `enabled` defaults to true; when disabled, search falls back to in-process
+  cosine similarity over stored embeddings.
+- If the sqlite-vec extension is missing or fails to load, Clawdbot logs the
+  error and continues with the JS fallback (no vector table).
+- `extensionPath` overrides the bundled sqlite-vec path (useful for custom builds
+  or non-standard install locations).
 
 ### Local embedding auto-download
 

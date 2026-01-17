@@ -167,6 +167,12 @@ export type MemorySearchConfig = {
   store?: {
     driver?: "sqlite";
     path?: string;
+    vector?: {
+      /** Enable sqlite-vec extension for vector search (default: true). */
+      enabled?: boolean;
+      /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
+      extensionPath?: string;
+    };
   };
   /** Chunking configuration. */
   chunking?: {

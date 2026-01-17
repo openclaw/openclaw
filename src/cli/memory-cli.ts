@@ -56,6 +56,23 @@ export function registerMemoryCli(program: Command) {
         `Dirty: ${status.dirty ? "yes" : "no"}`,
         `Index: ${status.dbPath}`,
       ].filter(Boolean) as string[];
+      if (status.vector) {
+        const vectorState = status.vector.enabled
+          ? status.vector.available
+            ? "ready"
+            : "unavailable"
+          : "disabled";
+        lines.push(`Vector: ${vectorState}`);
+        if (status.vector.dims) {
+          lines.push(`Vector dims: ${status.vector.dims}`);
+        }
+        if (status.vector.extensionPath) {
+          lines.push(`Vector path: ${status.vector.extensionPath}`);
+        }
+        if (status.vector.loadError) {
+          lines.push(chalk.yellow(`Vector error: ${status.vector.loadError}`));
+        }
+      }
       if (status.fallback?.reason) {
         lines.push(chalk.gray(status.fallback.reason));
       }
