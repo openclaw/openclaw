@@ -378,7 +378,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Zalouser requires --to <threadId>"),
+          error: new Error("Delivering to Zalouser requires target <threadId>"),
         };
       }
       return { ok: true, to: trimmed };

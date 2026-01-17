@@ -15,7 +15,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       return {
         ok: false,
         error: new Error(
-          "Delivering to MS Teams requires --to <conversationId|user:ID|conversation:ID>",
+          "Delivering to MS Teams requires target <conversationId|user:ID|conversation:ID>",
         ),
       };
     }

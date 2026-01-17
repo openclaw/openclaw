@@ -497,7 +497,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Slack requires --to <channelId|user:ID|channel:ID>"),
+          error: new Error("Delivering to Slack requires target <channelId|user:ID|channel:ID>"),
         };
       }
       return { ok: true, to: trimmed };

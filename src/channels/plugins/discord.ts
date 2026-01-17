@@ -253,7 +253,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
         return "DISCORD_BOT_TOKEN can only be used for the default account.";
       }
       if (!input.useEnv && !input.token) {
-        return "Discord requires --token (or --use-env).";
+        return "Discord requires targetken (or --use-env).";
       }
       return null;
     },
@@ -314,7 +314,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to Discord requires --to <channelId|user:ID|channel:ID>"),
+          error: new Error("Delivering to Discord requires target <channelId|user:ID|channel:ID>"),
         };
       }
       return { ok: true, to: trimmed };

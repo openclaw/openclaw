@@ -11,7 +11,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     if (!trimmed) {
       return {
         ok: false,
-        error: new Error("Delivering to Matrix requires --to <room|alias|user>"),
+        error: new Error("Delivering to Matrix requires target <room|alias|user>"),
       };
     }
     return { ok: true, to: trimmed };

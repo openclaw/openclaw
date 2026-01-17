@@ -177,7 +177,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: new Error("Delivering to iMessage requires --to <handle|chat_id:ID>"),
+          error: new Error("Delivering to iMessage requires target <handle|chat_id:ID>"),
         };
       }
       return { ok: true, to: trimmed };

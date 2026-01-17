@@ -26,7 +26,7 @@ export type MSTeamsProactiveContext = {
 };
 
 /**
- * Parse the --to argument into a conversation reference lookup key.
+ * Parse the target value into a conversation reference lookup key.
  * Supported formats:
  * - conversation:19:abc@thread.tacv2 → lookup by conversation ID
  * - user:aad-object-id → lookup by user AAD object ID
@@ -40,7 +40,7 @@ function parseRecipient(to: string): {
   const finalize = (type: "conversation" | "user", id: string) => {
     const normalized = id.trim();
     if (!normalized) {
-      throw new Error(`Invalid --to value: missing ${type} id`);
+      throw new Error(`Invalid target value: missing ${type} id`);
     }
     return { type, id: normalized };
   };
