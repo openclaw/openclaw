@@ -145,6 +145,7 @@ describe("memory embedding batches", () => {
     });
 
     expect(updates.length).toBeGreaterThan(0);
+    expect(updates.some((update) => update.label?.includes("/"))).toBe(true);
     const last = updates[updates.length - 1];
     expect(last?.total).toBeGreaterThan(0);
     expect(last?.completed).toBe(last?.total);
