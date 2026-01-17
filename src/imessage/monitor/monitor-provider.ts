@@ -472,6 +472,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     check: async () => {
       const probe = await probeIMessage(2000, { cliPath, dbPath, runtime });
       if (probe.ok) return { ok: true };
+      if (probe.fatal) {
+        throw new Error(probe.error ?? "imsg rpc unavailable");
+      }
       return { ok: false, error: probe.error ?? "unreachable" };
     },
   });

@@ -92,6 +92,12 @@
 - Discord: allow emoji/sticker uploads + channel actions in config defaults. (#870) — thanks @JDIVE.
 
 ### Fixes
+- WhatsApp: default response prefix only for self-chat, using identity name when set.
+- Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
+- iMessage: treat missing `imsg rpc` support as fatal to avoid restart loops.
+- Auth: merge main auth profiles into per-agent stores for sub-agents and document inheritance. (#1013) — thanks @marcmarg.
+- Agents: avoid JSON Schema `format` collisions in tool params by renaming snapshot format fields. (#1013) — thanks @marcmarg.
+- Fix: make `clawdbot update` auto-update global installs when installed via a package manager.
 - Fix: list model picker entries as provider/model pairs for explicit selection. (#970) — thanks @mcinteerj.
 - Fix: align OpenAI image-gen defaults with DALL-E 3 standard quality and document output formats. (#880) — thanks @mkbehr.
 - Fix: persist `gateway.mode=local` after selecting Local run mode in `clawdbot configure`, even if no other sections are chosen.
