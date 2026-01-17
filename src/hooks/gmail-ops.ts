@@ -276,7 +276,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
   defaultRuntime.log(`- hook url: ${hookUrl}`);
   defaultRuntime.log(`- config: ${CONFIG_PATH_CLAWDBOT}`);
-  defaultRuntime.log("Next: clawdbot hooks gmail run");
+  defaultRuntime.log("Next: clawdbot webhooks gmail run");
 }
 
 export async function runGmailService(opts: GmailRunOptions) {

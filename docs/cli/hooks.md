@@ -1,28 +1,21 @@
 ---
-summary: "CLI reference for `clawdbot hooks` (internal hooks + Gmail Pub/Sub + webhook helpers)"
+summary: "CLI reference for `clawdbot hooks` (internal hooks)"
 read_when:
   - You want to manage internal agent hooks
-  - You want to wire Gmail Pub/Sub events into Clawdbot hooks
-  - You want to run the gog watch service and renew loop
+  - You want to install or update internal hooks
 ---
 
 # `clawdbot hooks`
 
-Webhook helpers and hook-based integrations.
+Manage internal agent hooks (event-driven automations for commands like `/new`, `/reset`, etc.).
 
 Related:
 - Internal Hooks: [Internal Agent Hooks](/internal-hooks)
-- Webhooks: [Webhook](/automation/webhook)
-- Gmail Pub/Sub: [Gmail Pub/Sub](/automation/gmail-pubsub)
 
-## Internal Hooks
-
-Manage internal agent hooks (event-driven automations for commands like `/new`, `/reset`, etc.).
-
-### List All Hooks
+## List All Hooks
 
 ```bash
-clawdbot hooks internal list
+clawdbot hooks list
 ```
 
 List all discovered internal hooks from workspace, managed, and bundled directories.
@@ -45,7 +38,7 @@ Ready:
 **Example (verbose):**
 
 ```bash
-clawdbot hooks internal list --verbose
+clawdbot hooks list --verbose
 ```
 
 Shows missing requirements for ineligible hooks.
@@ -53,15 +46,15 @@ Shows missing requirements for ineligible hooks.
 **Example (JSON):**
 
 ```bash
-clawdbot hooks internal list --json
+clawdbot hooks list --json
 ```
 
 Returns structured JSON for programmatic use.
 
-### Get Hook Information
+## Get Hook Information
 
 ```bash
-clawdbot hooks internal info <name>
+clawdbot hooks info <name>
 ```
 
 Show detailed information about a specific hook.
@@ -75,7 +68,7 @@ Show detailed information about a specific hook.
 **Example:**
 
 ```bash
-clawdbot hooks internal info session-memory
+clawdbot hooks info session-memory
 ```
 
 **Output:**
@@ -96,10 +89,10 @@ Requirements:
   Config: ✓ workspace.dir
 ```
 
-### Check Hooks Eligibility
+## Check Hooks Eligibility
 
 ```bash
-clawdbot hooks internal check
+clawdbot hooks check
 ```
 
 Show summary of hook eligibility status (how many are ready vs. not ready).
@@ -117,10 +110,10 @@ Ready: 2
 Not ready: 0
 ```
 
-### Enable a Hook
+## Enable a Hook
 
 ```bash
-clawdbot hooks internal enable <name>
+clawdbot hooks enable <name>
 ```
 
 Enable a specific hook by adding it to your config (`~/.clawdbot/config.json`).
@@ -131,7 +124,7 @@ Enable a specific hook by adding it to your config (`~/.clawdbot/config.json`).
 **Example:**
 
 ```bash
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 ```
 
 **Output:**
@@ -148,10 +141,10 @@ clawdbot hooks internal enable session-memory
 **After enabling:**
 - Restart the gateway so hooks reload (menu bar app restart on macOS, or restart your gateway process in dev).
 
-### Disable a Hook
+## Disable a Hook
 
 ```bash
-clawdbot hooks internal disable <name>
+clawdbot hooks disable <name>
 ```
 
 Disable a specific hook by updating your config.
@@ -162,7 +155,7 @@ Disable a specific hook by updating your config.
 **Example:**
 
 ```bash
-clawdbot hooks internal disable command-logger
+clawdbot hooks disable command-logger
 ```
 
 **Output:**
@@ -174,6 +167,53 @@ clawdbot hooks internal disable command-logger
 **After disabling:**
 - Restart the gateway so hooks reload
 
+## Install Hooks
+
+```bash
+clawdbot hooks install <path-or-spec>
+```
+
+Install a hook pack from a local folder/archive or npm.
+
+**What it does:**
+- Copies the hook pack into `~/.clawdbot/hooks/<id>`
+- Enables the installed hooks in `hooks.internal.entries.*`
+- Records the install under `hooks.internal.installs`
+
+**Options:**
+- `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
+
+**Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
+
+**Examples:**
+
+```bash
+# Local directory
+clawdbot hooks install ./my-hook-pack
+
+# Local archive
+clawdbot hooks install ./my-hook-pack.zip
+
+# NPM package
+clawdbot hooks install @clawdbot/my-hook-pack
+
+# Link a local directory without copying
+clawdbot hooks install -l ./my-hook-pack
+```
+
+## Update Hooks
+
+```bash
+clawdbot hooks update <id>
+clawdbot hooks update --all
+```
+
+Update installed hook packs (npm installs only).
+
+**Options:**
+- `--all`: Update all tracked hook packs
+- `--dry-run`: Show what would change without writing
+
 ## Bundled Hooks
 
 ### session-memory
@@ -183,7 +223,7 @@ Saves session context to memory when you issue `/new`.
 **Enable:**
 
 ```bash
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 ```
 
 **Output:** `~/clawd/memory/YYYY-MM-DD-slug.md`
@@ -197,7 +237,7 @@ Logs all command events to a centralized audit file.
 **Enable:**
 
 ```bash
-clawdbot hooks internal enable command-logger
+clawdbot hooks enable command-logger
 ```
 
 **Output:** `~/.clawdbot/logs/commands.log`
@@ -216,12 +256,3 @@ grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/internal-hooks#command-logger)
-
-## Gmail
-
-```bash
-clawdbot hooks gmail setup --account you@example.com
-clawdbot hooks gmail run
-```
-
-See [Gmail Pub/Sub documentation](/automation/gmail-pubsub) for details.

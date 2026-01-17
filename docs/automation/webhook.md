@@ -96,7 +96,7 @@ Mapping options (summary):
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
 - Set `deliver: true` + `channel`/`to` on mappings to route replies to a chat surface
   (`channel` defaults to `last` and falls back to WhatsApp).
-- `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
+- `clawdbot webhooks gmail setup` writes `hooks.gmail` config for `clawdbot webhooks gmail run`.
 See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Responses

@@ -62,7 +62,7 @@ No configuration needed. The hook automatically:
 To disable this hook:
 
 ```bash
-clawdbot hooks internal disable command-logger
+clawdbot hooks disable command-logger
 ```
 
 Or via config:

@@ -28,10 +28,18 @@ clawdbot plugins update --all
 ### Install
 
 ```bash
-clawdbot plugins install <npm-spec>
+clawdbot plugins install <path-or-spec>
 ```
 
 Security note: treat plugin installs like running code. Prefer pinned versions.
+
+Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
+
+Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
+
+```bash
+clawdbot plugins install -l ./my-plugin
+```
 
 ### Update
 

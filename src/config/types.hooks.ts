@@ -79,6 +79,16 @@ export type HookConfig = {
   [key: string]: unknown;
 };
 
+export type HookInstallRecord = {
+  source: "npm" | "archive" | "path";
+  spec?: string;
+  sourcePath?: string;
+  installPath?: string;
+  version?: string;
+  installedAt?: string;
+  hooks?: string[];
+};
+
 export type InternalHooksConfig = {
   /** Enable internal hooks system */
   enabled?: boolean;
@@ -91,6 +101,8 @@ export type InternalHooksConfig = {
     /** Additional hook directories to scan */
     extraDirs?: string[];
   };
+  /** Install records for hook packs or hooks */
+  installs?: Record<string, HookInstallRecord>;
 };
 
 export type HooksConfig = {

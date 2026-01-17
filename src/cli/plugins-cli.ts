@@ -6,9 +6,10 @@ import type { Command } from "commander";
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveArchiveKind } from "../infra/archive.js";
 import {
-  installPluginFromArchive,
   installPluginFromNpmSpec,
+  installPluginFromPath,
   resolvePluginInstallDir,
 } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -236,23 +237,19 @@ export function registerPluginsCli(program: Command) {
   plugins
     .command("install")
     .description("Install a plugin (path, archive, or npm spec)")
-    .argument("<path-or-spec>", "Path (.ts/.js/.tgz) or an npm package spec")
-    .action(async (raw: string) => {
+    .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
+    .option("-l, --link", "Link a local path instead of copying", false)
+    .action(async (raw: string, opts: { link?: boolean }) => {
       const resolved = resolveUserPath(raw);
       const cfg = loadConfig();
 
       if (fs.existsSync(resolved)) {
-        const ext = path.extname(resolved).toLowerCase();
-        if (ext === ".tgz" || resolved.endsWith(".tar.gz")) {
-          const result = await installPluginFromArchive({
-            archivePath: resolved,
-            logger: {
-              info: (msg) => defaultRuntime.log(msg),
-              warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
-            },
-          });
-          if (!result.ok) {
-            defaultRuntime.error(result.error);
+        if (opts.link) {
+          const existing = cfg.plugins?.load?.paths ?? [];
+          const merged = Array.from(new Set([...existing, resolved]));
+          const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+          if (!probe.ok) {
+            defaultRuntime.error(probe.error);
             process.exit(1);
           }
 
@@ -260,44 +257,74 @@ export function registerPluginsCli(program: Command) {
             ...cfg,
             plugins: {
               ...cfg.plugins,
+              load: {
+                ...cfg.plugins?.load,
+                paths: merged,
+              },
               entries: {
                 ...cfg.plugins?.entries,
-                [result.pluginId]: {
-                  ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
+                [probe.pluginId]: {
+                  ...(cfg.plugins?.entries?.[probe.pluginId] as object | undefined),
                   enabled: true,
                 },
               },
             },
           };
           next = recordPluginInstall(next, {
-            pluginId: result.pluginId,
-            source: "archive",
+            pluginId: probe.pluginId,
+            source: "path",
             sourcePath: resolved,
-            installPath: result.targetDir,
-            version: result.version,
+            installPath: resolved,
+            version: probe.version,
           });
           await writeConfigFile(next);
-          defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+          defaultRuntime.log(`Linked plugin path: ${resolved}`);
           defaultRuntime.log(`Restart the gateway to load plugins.`);
           return;
         }
 
-        const existing = cfg.plugins?.load?.paths ?? [];
-        const merged = Array.from(new Set([...existing, resolved]));
-        const next = {
+        const result = await installPluginFromPath({
+          path: resolved,
+          logger: {
+            info: (msg) => defaultRuntime.log(msg),
+            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          },
+        });
+        if (!result.ok) {
+          defaultRuntime.error(result.error);
+          process.exit(1);
+        }
+
+        let next: ClawdbotConfig = {
           ...cfg,
           plugins: {
             ...cfg.plugins,
-            load: {
-              ...cfg.plugins?.load,
-              paths: merged,
+            entries: {
+              ...cfg.plugins?.entries,
+              [result.pluginId]: {
+                ...(cfg.plugins?.entries?.[result.pluginId] as object | undefined),
+                enabled: true,
+              },
             },
           },
         };
+        const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+        next = recordPluginInstall(next, {
+          pluginId: result.pluginId,
+          source,
+          sourcePath: resolved,
+          installPath: result.targetDir,
+          version: result.version,
+        });
         await writeConfigFile(next);
-        defaultRuntime.log(`Added plugin path: ${resolved}`);
+        defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
         defaultRuntime.log(`Restart the gateway to load plugins.`);
         return;
+      }
+
+      if (opts.link) {
+        defaultRuntime.error("`--link` requires a local path.");
+        process.exit(1);
       }
 
       const looksLikePath =
@@ -309,7 +336,9 @@ export function registerPluginsCli(program: Command) {
         raw.endsWith(".mjs") ||
         raw.endsWith(".cjs") ||
         raw.endsWith(".tgz") ||
-        raw.endsWith(".tar.gz");
+        raw.endsWith(".tar.gz") ||
+        raw.endsWith(".tar") ||
+        raw.endsWith(".zip");
       if (looksLikePath) {
         defaultRuntime.error(`Path not found: ${resolved}`);
         process.exit(1);

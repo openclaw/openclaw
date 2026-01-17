@@ -1,9 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import {
+  extractArchive,
+  fileExists,
+  readJsonFile,
+  resolveArchiveKind,
+  resolvePackedRootDir,
+} from "../infra/archive.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -42,41 +48,8 @@ function safeDirName(input: string): string {
   return trimmed.replaceAll("/", "__");
 }
 
-async function readJsonFile<T>(filePath: string): Promise<T> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(raw) as T;
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolvePackedPackageDir(extractDir: string): Promise<string> {
-  const direct = path.join(extractDir, "package");
-  if (await fileExists(direct)) return direct;
-
-  const entries = await fs.readdir(extractDir, { withFileTypes: true });
-  const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-  if (dirs.length !== 1) {
-    throw new Error(`unexpected archive layout (dirs: ${dirs.join(", ")})`);
-  }
-  const onlyDir = dirs[0];
-  if (!onlyDir) {
-    throw new Error("unexpected archive layout (no package dir found)");
-  }
-  return path.join(extractDir, onlyDir);
-}
-
-export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
-  const extensionsBase = extensionsDir
-    ? resolveUserPath(extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  return path.join(extensionsBase, safeDirName(pluginId));
+function safeFileName(input: string): string {
+  return safeDirName(input);
 }
 
 async function ensureClawdbotExtensions(manifest: PackageManifest) {
@@ -91,25 +64,15 @@ async function ensureClawdbotExtensions(manifest: PackageManifest) {
   return list;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
+export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string): string {
+  const extensionsBase = extensionsDir
+    ? resolveUserPath(extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  return path.join(extensionsBase, safeDirName(pluginId));
 }
 
-export async function installPluginFromArchive(params: {
-  archivePath: string;
+async function installPluginFromPackageDir(params: {
+  packageDir: string;
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
@@ -122,35 +85,7 @@ export async function installPluginFromArchive(params: {
   const mode = params.mode ?? "install";
   const dryRun = params.dryRun ?? false;
 
-  const archivePath = resolveUserPath(params.archivePath);
-  if (!(await fileExists(archivePath))) {
-    return { ok: false, error: `archive not found: ${archivePath}` };
-  }
-
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  await fs.mkdir(extensionsDir, { recursive: true });
-
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-plugin-"));
-  const extractDir = path.join(tmpDir, "extract");
-  await fs.mkdir(extractDir, { recursive: true });
-
-  logger.info?.(`Extracting ${archivePath}…`);
-  try {
-    await withTimeout(tar.x({ file: archivePath, cwd: extractDir }), timeoutMs, "extract archive");
-  } catch (err) {
-    return { ok: false, error: `failed to extract archive: ${String(err)}` };
-  }
-
-  let packageDir = "";
-  try {
-    packageDir = await resolvePackedPackageDir(extractDir);
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-
-  const manifestPath = path.join(packageDir, "package.json");
+  const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await fileExists(manifestPath))) {
     return { ok: false, error: "extracted package missing package.json" };
   }
@@ -177,6 +112,12 @@ export async function installPluginFromArchive(params: {
       error: `plugin id mismatch: expected ${params.expectedPluginId}, got ${pluginId}`,
     };
   }
+
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  await fs.mkdir(extensionsDir, { recursive: true });
+
   const targetDir = path.join(extensionsDir, safeDirName(pluginId));
 
   if (mode === "install" && (await fileExists(targetDir))) {
@@ -204,7 +145,7 @@ export async function installPluginFromArchive(params: {
     await fs.rename(targetDir, backupDir);
   }
   try {
-    await fs.cp(packageDir, targetDir, { recursive: true });
+    await fs.cp(params.packageDir, targetDir, { recursive: true });
   } catch (err) {
     if (backupDir) {
       await fs.rm(targetDir, { recursive: true, force: true }).catch(() => undefined);
@@ -251,6 +192,144 @@ export async function installPluginFromArchive(params: {
     manifestName: pkgName || undefined,
     version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
+  };
+}
+
+export async function installPluginFromArchive(params: {
+  archivePath: string;
+  extensionsDir?: string;
+  timeoutMs?: number;
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
+}): Promise<InstallPluginResult> {
+  const logger = params.logger ?? defaultLogger;
+  const timeoutMs = params.timeoutMs ?? 120_000;
+  const mode = params.mode ?? "install";
+
+  const archivePath = resolveUserPath(params.archivePath);
+  if (!(await fileExists(archivePath))) {
+    return { ok: false, error: `archive not found: ${archivePath}` };
+  }
+
+  if (!resolveArchiveKind(archivePath)) {
+    return { ok: false, error: `unsupported archive: ${archivePath}` };
+  }
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-plugin-"));
+  const extractDir = path.join(tmpDir, "extract");
+  await fs.mkdir(extractDir, { recursive: true });
+
+  logger.info?.(`Extracting ${archivePath}…`);
+  try {
+    await extractArchive({
+      archivePath,
+      destDir: extractDir,
+      timeoutMs,
+      logger,
+    });
+  } catch (err) {
+    return { ok: false, error: `failed to extract archive: ${String(err)}` };
+  }
+
+  let packageDir = "";
+  try {
+    packageDir = await resolvePackedRootDir(extractDir);
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+
+  return await installPluginFromPackageDir({
+    packageDir,
+    extensionsDir: params.extensionsDir,
+    timeoutMs,
+    logger,
+    mode,
+    dryRun: params.dryRun,
+    expectedPluginId: params.expectedPluginId,
+  });
+}
+
+export async function installPluginFromDir(params: {
+  dirPath: string;
+  extensionsDir?: string;
+  timeoutMs?: number;
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
+}): Promise<InstallPluginResult> {
+  const dirPath = resolveUserPath(params.dirPath);
+  if (!(await fileExists(dirPath))) {
+    return { ok: false, error: `directory not found: ${dirPath}` };
+  }
+  const stat = await fs.stat(dirPath);
+  if (!stat.isDirectory()) {
+    return { ok: false, error: `not a directory: ${dirPath}` };
+  }
+
+  return await installPluginFromPackageDir({
+    packageDir: dirPath,
+    extensionsDir: params.extensionsDir,
+    timeoutMs: params.timeoutMs,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
+    expectedPluginId: params.expectedPluginId,
+  });
+}
+
+export async function installPluginFromFile(params: {
+  filePath: string;
+  extensionsDir?: string;
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+}): Promise<InstallPluginResult> {
+  const logger = params.logger ?? defaultLogger;
+  const mode = params.mode ?? "install";
+  const dryRun = params.dryRun ?? false;
+
+  const filePath = resolveUserPath(params.filePath);
+  if (!(await fileExists(filePath))) {
+    return { ok: false, error: `file not found: ${filePath}` };
+  }
+
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  await fs.mkdir(extensionsDir, { recursive: true });
+
+  const base = path.basename(filePath, path.extname(filePath));
+  const pluginId = base || "plugin";
+  const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
+
+  if (mode === "install" && (await fileExists(targetFile))) {
+    return { ok: false, error: `plugin already exists: ${targetFile} (delete it first)` };
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      pluginId,
+      targetDir: targetFile,
+      manifestName: undefined,
+      version: undefined,
+      extensions: [path.basename(targetFile)],
+    };
+  }
+
+  logger.info?.(`Installing to ${targetFile}…`);
+  await fs.copyFile(filePath, targetFile);
+
+  return {
+    ok: true,
+    pluginId,
+    targetDir: targetFile,
+    manifestName: undefined,
+    version: undefined,
+    extensions: [path.basename(targetFile)],
   };
 }
 
@@ -303,5 +382,54 @@ export async function installPluginFromNpmSpec(params: {
     mode,
     dryRun,
     expectedPluginId,
+  });
+}
+
+export async function installPluginFromPath(params: {
+  path: string;
+  extensionsDir?: string;
+  timeoutMs?: number;
+  logger?: PluginInstallLogger;
+  mode?: "install" | "update";
+  dryRun?: boolean;
+  expectedPluginId?: string;
+}): Promise<InstallPluginResult> {
+  const resolved = resolveUserPath(params.path);
+  if (!(await fileExists(resolved))) {
+    return { ok: false, error: `path not found: ${resolved}` };
+  }
+
+  const stat = await fs.stat(resolved);
+  if (stat.isDirectory()) {
+    return await installPluginFromDir({
+      dirPath: resolved,
+      extensionsDir: params.extensionsDir,
+      timeoutMs: params.timeoutMs,
+      logger: params.logger,
+      mode: params.mode,
+      dryRun: params.dryRun,
+      expectedPluginId: params.expectedPluginId,
+    });
+  }
+
+  const archiveKind = resolveArchiveKind(resolved);
+  if (archiveKind) {
+    return await installPluginFromArchive({
+      archivePath: resolved,
+      extensionsDir: params.extensionsDir,
+      timeoutMs: params.timeoutMs,
+      logger: params.logger,
+      mode: params.mode,
+      dryRun: params.dryRun,
+      expectedPluginId: params.expectedPluginId,
+    });
+  }
+
+  return await installPluginFromFile({
+    filePath: resolved,
+    extensionsDir: params.extensionsDir,
+    logger: params.logger,
+    mode: params.mode,
+    dryRun: params.dryRun,
   });
 }
