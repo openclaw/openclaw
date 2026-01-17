@@ -97,6 +97,7 @@ export async function statusCommand(
         async () =>
           await callGateway<HealthSummary>({
             method: "health",
+            params: { probe: true },
             timeoutMs: opts.timeoutMs,
           }),
       )
@@ -211,6 +212,22 @@ export async function statusCommand(
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
+  const heartbeatValue = (() => {
+    const parts = summary.heartbeat.agents
+      .map((agent) => {
+        if (!agent.enabled || !agent.everyMs) return `disabled (${agent.agentId})`;
+        const everyLabel = agent.every;
+        return `${everyLabel} (${agent.agentId})`;
+      })
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : "disabled";
+  })();
+
+  const storeLabel =
+    summary.sessions.paths.length > 1
+      ? `${summary.sessions.paths.length} stores`
+      : summary.sessions.paths[0] ?? "unknown";
+
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
@@ -232,10 +249,10 @@ export async function statusCommand(
     { Item: "Agents", Value: agentsValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
-    { Item: "Heartbeat", Value: `${summary.heartbeatSeconds}s` },
+    { Item: "Heartbeat", Value: heartbeatValue },
     {
       Item: "Sessions",
-      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · store ${summary.sessions.path}`,
+      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
     },
   ];
 
@@ -396,7 +413,7 @@ export async function statusCommand(
       Detail: `${health.durationMs}ms`,
     });
 
-    for (const line of formatHealthChannelLines(health)) {
+    for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
       const colon = line.indexOf(":");
       if (colon === -1) continue;
       const item = line.slice(0, colon).trim();
