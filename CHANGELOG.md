@@ -43,6 +43,7 @@
 - Plugins: add zip installs and `--link` to avoid copying local paths.
 
 ### Fixes
+- Telegram: accept tg/group/telegram prefixes + topic targets for inline button validation. (#1072) — thanks @danielz1z.
 - Sub-agents: normalize announce delivery origin + queue bucketing by accountId to keep multi-account routing stable. (#1061, #1058) — thanks @adam91holt.
 - Sessions: include deliveryContext in sessions.list and reuse normalized delivery routing for announce/restart fallbacks. (#1058)
 - Sessions: propagate deliveryContext into last-route updates to keep account/channel routing stable. (#1058)
