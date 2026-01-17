@@ -8,6 +8,18 @@ type FetchMediaResult = {
   fileName?: string;
 };
 
+export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+export class MediaFetchError extends Error {
+  readonly code: MediaFetchErrorCode;
+
+  constructor(code: MediaFetchErrorCode, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "MediaFetchError";
+  }
+}
+
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type FetchMediaOptions = {
@@ -62,7 +74,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   try {
     res = await fetcher(url);
   } catch (err) {
-    throw new Error(`Failed to fetch media from ${url}: ${String(err)}`);
+    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
   }
 
   if (!res.ok) {
@@ -75,14 +87,18 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       const snippet = await readErrorBodySnippet(res);
       if (snippet) detail += `; body: ${snippet}`;
     }
-    throw new Error(`Failed to fetch media from ${url}${redirected}: ${detail}`);
+    throw new MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${url}${redirected}: ${detail}`,
+    );
   }
 
   const contentLength = res.headers.get("content-length");
   if (maxBytes && contentLength) {
     const length = Number(contentLength);
     if (Number.isFinite(length) && length > maxBytes) {
-      throw new Error(
+      throw new MediaFetchError(
+        "max_bytes",
         `Failed to fetch media from ${url}: content length ${length} exceeds maxBytes ${maxBytes}`,
       );
     }
@@ -128,7 +144,8 @@ async function readResponseWithLimit(res: Response, maxBytes: number): Promise<B
   if (!body || typeof body.getReader !== "function") {
     const fallback = Buffer.from(await res.arrayBuffer());
     if (fallback.length > maxBytes) {
-      throw new Error(
+      throw new MediaFetchError(
+        "max_bytes",
         `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
       );
     }
@@ -148,7 +165,8 @@ async function readResponseWithLimit(res: Response, maxBytes: number): Promise<B
           try {
             await reader.cancel();
           } catch {}
-          throw new Error(
+          throw new MediaFetchError(
+            "max_bytes",
             `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
           );
         }

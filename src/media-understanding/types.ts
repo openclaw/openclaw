@@ -3,6 +3,8 @@ export type MediaUnderstandingKind =
   | "video.description"
   | "image.description";
 
+export type MediaUnderstandingCapability = "image" | "audio" | "video";
+
 export type MediaAttachment = {
   path?: string;
   url?: string;
@@ -55,8 +57,29 @@ export type VideoDescriptionResult = {
   model?: string;
 };
 
+export type ImageDescriptionRequest = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+  model: string;
+  provider: string;
+  prompt?: string;
+  maxTokens?: number;
+  timeoutMs: number;
+  profile?: string;
+  preferredProfile?: string;
+  agentDir: string;
+  cfg: import("../config/config.js").ClawdbotConfig;
+};
+
+export type ImageDescriptionResult = {
+  text: string;
+  model?: string;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
+  describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
 };
