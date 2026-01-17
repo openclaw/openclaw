@@ -148,7 +148,15 @@ function formatConsoleLine(opts: {
           ? color.gray
           : color.cyan;
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
-  const time = opts.style === "pretty" ? color.gray(new Date().toISOString().slice(11, 19)) : "";
+  const time = (() => {
+    if (opts.style === "pretty") {
+      return color.gray(new Date().toISOString().slice(11, 19));
+    }
+    if (loggingState.consoleTimestampPrefix) {
+      return color.gray(new Date().toISOString());
+    }
+    return "";
+  })();
   const prefixToken = prefixColor(prefix);
   const head = [time, prefixToken].filter(Boolean).join(" ");
   return `${head} ${levelColor(displayMessage)}`;
