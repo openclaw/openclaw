@@ -230,9 +230,13 @@ enum GatewayEnvironment {
 
     static func installGlobal(versionString: String?, statusHandler: @escaping @Sendable (String) -> Void) async {
         let preferred = CommandResolver.preferredPaths().joined(separator: ":")
-        let target = versionString?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .flatMap { $0.isEmpty ? nil : $0 } ?? "latest"
+        let trimmed = versionString?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target: String
+        if let trimmed, !trimmed.isEmpty {
+            target = trimmed
+        } else {
+            target = "latest"
+        }
         let npm = CommandResolver.findExecutable(named: "npm")
         let pnpm = CommandResolver.findExecutable(named: "pnpm")
         let bun = CommandResolver.findExecutable(named: "bun")
