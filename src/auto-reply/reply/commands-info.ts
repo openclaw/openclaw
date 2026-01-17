@@ -68,6 +68,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
+    mediaDecisions: params.ctx.MediaUnderstandingDecisions,
   });
   return { shouldContinue: false, reply };
 };

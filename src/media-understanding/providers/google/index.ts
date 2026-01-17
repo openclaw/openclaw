@@ -4,6 +4,7 @@ import { describeGeminiVideo } from "./video.js";
 
 export const googleProvider: MediaUnderstandingProvider = {
   id: "google",
+  capabilities: ["image", "audio", "video"],
   describeImage: describeImageWithModel,
   describeVideo: describeGeminiVideo,
 };

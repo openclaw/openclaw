@@ -4,6 +4,7 @@ import { transcribeOpenAiCompatibleAudio } from "./audio.js";
 
 export const openaiProvider: MediaUnderstandingProvider = {
   id: "openai",
+  capabilities: ["image"],
   describeImage: describeImageWithModel,
   transcribeAudio: transcribeOpenAiCompatibleAudio,
 };

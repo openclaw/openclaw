@@ -188,6 +188,7 @@ export async function applyInlineDirectiveOverrides(params: {
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
         isGroup,
         defaultGroupActivation: defaultActivation,
+        mediaDecisions: ctx.MediaUnderstandingDecisions,
       });
     }
     typing.cleanup();

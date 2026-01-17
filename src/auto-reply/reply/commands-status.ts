@@ -24,6 +24,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
+import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
 
 function formatApiKeySnippet(apiKey: string): string {
   const compact = apiKey.replace(/\s+/g, "");
@@ -105,6 +106,7 @@ export async function buildStatusReply(params: {
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
+  mediaDecisions?: MediaUnderstandingDecision[];
 }): Promise<ReplyPayload | undefined> {
   const {
     cfg,
@@ -200,6 +202,7 @@ export async function buildStatusReply(params: {
       dropPolicy: queueSettings.dropPolicy,
       showDetails: queueOverrides,
     },
+    mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
   });
 

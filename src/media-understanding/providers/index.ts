@@ -29,7 +29,16 @@ export function buildMediaUnderstandingRegistry(
   }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
-      registry.set(normalizeMediaProviderId(key), provider);
+      const normalizedKey = normalizeMediaProviderId(key);
+      const existing = registry.get(normalizedKey);
+      const merged = existing
+        ? {
+            ...existing,
+            ...provider,
+            capabilities: provider.capabilities ?? existing.capabilities,
+          }
+        : provider;
+      registry.set(normalizedKey, merged);
     }
   }
   return registry;

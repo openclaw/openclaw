@@ -90,6 +90,59 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("elevated");
   });
 
+  it("includes media understanding decisions when present", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: { sessionId: "media", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "image",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "success",
+                  provider: "openai",
+                  model: "gpt-5.2",
+                },
+              ],
+              chosen: {
+                type: "provider",
+                outcome: "success",
+                provider: "openai",
+                model: "gpt-5.2",
+              },
+            },
+          ],
+        },
+        {
+          capability: "audio",
+          outcome: "skipped",
+          attachments: [
+            {
+              attachmentIndex: 1,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "skipped",
+                  reason: "maxBytes: too large",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)");
+  });
+
   it("does not show elevated label when session explicitly disables it", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5", elevatedDefault: "on" },
