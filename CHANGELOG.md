@@ -58,7 +58,8 @@
 - Sessions: reset `compactionCount` on `/new` and `/reset`, and preserve `sessions.json` file mode (0600).
 - Sessions: repair orphaned user turns before embedded prompts.
 - Channels: treat replies to the bot as implicit mentions across supported channels.
-- Security: lock down slash/control commands to sender allowlists across Discord/Slack/Telegram/Signal/iMessage/WhatsApp (+ plugin channels like Matrix/Teams) and add stable `clawdbot security audit` checkIds for Slack/Discord command allowlists.
+- Security: default-deny slash/control commands unless a channel computed `CommandAuthorized` (fixes accidental “open” behavior), and ensure WhatsApp + Zalo plugin channels gate inline `/…` tokens correctly.
+- Security: redact sensitive text in gateway WS logs.
 - CLI: speed up `clawdbot sandbox-explain` by avoiding heavy plugin imports when normalizing channel ids.
 - Browser: remote profile tab operations prefer persistent Playwright and avoid silent HTTP fallbacks. (#1057) — thanks @mukhtharcm.
 - Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
@@ -77,6 +78,7 @@
 - Models: align ZAI thinking toggles.
 - iMessage/Signal: include sender metadata for non-queued group messages. (#1059)
 - Discord: preserve whitespace when chunking long lines so message splits keep spacing intact.
+- Skills: fix skills watcher ignored list typing (tsc).
 
 ## 2026.1.15
 
