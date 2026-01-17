@@ -4,6 +4,13 @@ export type QueueSummaryState = {
   summaryLines: string[];
 };
 
+export type QueueDropPolicy = QueueSummaryState["dropPolicy"];
+
+export type QueueState<T> = QueueSummaryState & {
+  items: T[];
+  cap: number;
+};
+
 export function elideQueueText(text: string, limit = 140): string {
   if (text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
@@ -12,6 +19,36 @@ export function elideQueueText(text: string, limit = 140): string {
 export function buildQueueSummaryLine(text: string, limit = 160): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   return elideQueueText(cleaned, limit);
+}
+
+export function shouldSkipQueueItem<T>(params: {
+  item: T;
+  items: T[];
+  dedupe?: (item: T, items: T[]) => boolean;
+}): boolean {
+  if (!params.dedupe) return false;
+  return params.dedupe(params.item, params.items);
+}
+
+export function applyQueueDropPolicy<T>(params: {
+  queue: QueueState<T>;
+  summarize: (item: T) => string;
+  summaryLimit?: number;
+}): boolean {
+  const cap = params.queue.cap;
+  if (cap <= 0 || params.queue.items.length < cap) return true;
+  if (params.queue.dropPolicy === "new") return false;
+  const dropCount = params.queue.items.length - cap + 1;
+  const dropped = params.queue.items.splice(0, dropCount);
+  if (params.queue.dropPolicy === "summarize") {
+    for (const item of dropped) {
+      params.queue.droppedCount += 1;
+      params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
+    }
+    const limit = Math.max(0, params.summaryLimit ?? cap);
+    while (params.queue.summaryLines.length > limit) params.queue.summaryLines.shift();
+  }
+  return true;
 }
 
 export function waitForQueueDebounce(queue: {
