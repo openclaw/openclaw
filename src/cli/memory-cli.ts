@@ -75,8 +75,14 @@ export function registerMemoryCli(program: Command) {
         defaultRuntime.log(error ?? "Memory search disabled.");
         return;
       }
-      await manager.sync({ reason: "cli", force: opts.force });
-      defaultRuntime.log("Memory index updated.");
+      try {
+        await manager.sync({ reason: "cli", force: opts.force });
+        defaultRuntime.log("Memory index updated.");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        defaultRuntime.error(`Memory index failed: ${message}`);
+        process.exitCode = 1;
+      }
     });
 
   memory
@@ -105,10 +111,18 @@ export function registerMemoryCli(program: Command) {
           defaultRuntime.log(error ?? "Memory search disabled.");
           return;
         }
-        const results = await manager.search(query, {
-          maxResults: opts.maxResults,
-          minScore: opts.minScore,
-        });
+        let results: Awaited<ReturnType<typeof manager.search>>;
+        try {
+          results = await manager.search(query, {
+            maxResults: opts.maxResults,
+            minScore: opts.minScore,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          defaultRuntime.error(`Memory search failed: ${message}`);
+          process.exitCode = 1;
+          return;
+        }
         if (opts.json) {
           defaultRuntime.log(JSON.stringify({ results }, null, 2));
           return;
