@@ -284,6 +284,11 @@ const DeepgramAudioSchema = z
   })
   .optional();
 
+const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const ProviderOptionsSchema = z
+  .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
+  .optional();
+
 export const MediaUnderstandingModelSchema = z
   .object({
     provider: z.string().optional(),
@@ -297,6 +302,7 @@ export const MediaUnderstandingModelSchema = z
     maxBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     language: z.string().optional(),
+    providerOptions: ProviderOptionsSchema,
     deepgram: DeepgramAudioSchema,
     baseUrl: z.string().optional(),
     headers: z.record(z.string(), z.string()).optional(),
@@ -314,6 +320,7 @@ export const ToolsMediaUnderstandingSchema = z
     prompt: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     language: z.string().optional(),
+    providerOptions: ProviderOptionsSchema,
     deepgram: DeepgramAudioSchema,
     baseUrl: z.string().optional(),
     headers: z.record(z.string(), z.string()).optional(),

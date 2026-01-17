@@ -41,9 +41,9 @@ DEEPGRAM_API_KEY=dg_...
 
 - `model`: Deepgram model id (default: `nova-3`)
 - `language`: language hint (optional)
-- `tools.media.audio.deepgram.detectLanguage`: enable language detection (optional)
-- `tools.media.audio.deepgram.punctuate`: enable punctuation (optional)
-- `tools.media.audio.deepgram.smartFormat`: enable smart formatting (optional)
+- `tools.media.audio.providerOptions.deepgram.detect_language`: enable language detection (optional)
+- `tools.media.audio.providerOptions.deepgram.punctuate`: enable punctuation (optional)
+- `tools.media.audio.providerOptions.deepgram.smart_format`: enable smart formatting (optional)
 
 Example with language:
 ```json5
@@ -68,10 +68,12 @@ Example with Deepgram options:
     media: {
       audio: {
         enabled: true,
-        deepgram: {
-          detectLanguage: true,
-          punctuate: true,
-          smartFormat: true
+        providerOptions: {
+          deepgram: {
+            detect_language: true,
+            punctuate: true,
+            smart_format: true
+          }
         },
         models: [{ provider: "deepgram", model: "nova-3" }]
       }
