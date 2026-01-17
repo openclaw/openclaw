@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ImageContent } from "@mariozechner/pi-ai";
 
@@ -119,6 +120,18 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     refs.push({ raw, type: "url", resolved: raw });
   }
 
+  // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
+  const fileUrlPattern =
+    /file:\/\/[^\s<>"'`\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif)/gi;
+  while ((match = fileUrlPattern.exec(prompt)) !== null) {
+    const raw = match[0];
+    if (seen.has(raw.toLowerCase())) continue;
+    seen.add(raw.toLowerCase());
+    // Use fileURLToPath for proper handling (e.g., file://localhost/path)
+    const resolved = fileURLToPath(raw);
+    refs.push({ raw, type: "path", resolved });
+  }
+
   // Pattern for file paths (absolute, relative, or home)
   // Matches:
   // - /absolute/path/to/file.ext (including paths with special chars like Messages/Attachments)
@@ -127,8 +140,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // - ~/home/path.ext
   const pathPattern = /(?:^|\s|["'`(])((\.\.?\/|[~/])[^\s"'`()[\]]*\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))/gi;
   while ((match = pathPattern.exec(prompt)) !== null) {
-    const raw = match[1] || match[0];
-    addPathRef(raw);
+    // Use capture group 1 (the path without delimiter prefix); skip if undefined
+    if (match[1]) addPathRef(match[1]);
   }
 
   return refs;
@@ -205,7 +218,8 @@ export async function loadImageFromRef(
     }
 
     // EXIF orientation is already normalized by loadWebMedia -> resizeToJpeg
-    const mimeType = media.contentType ?? "image/png";
+    // Default to JPEG since optimization converts images to JPEG format
+    const mimeType = media.contentType ?? "image/jpeg";
     const data = media.buffer.toString("base64");
 
     return { type: "image", data, mimeType };

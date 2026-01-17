@@ -161,23 +161,27 @@ export async function optimizeImageToJpeg(
 
   for (const side of sides) {
     for (const quality of qualities) {
-      const out = await resizeToJpeg({
-        buffer,
-        maxSide: side,
-        quality,
-        withoutEnlargement: true,
-      });
-      const size = out.length;
-      if (!smallest || size < smallest.size) {
-        smallest = { buffer: out, size, resizeSide: side, quality };
-      }
-      if (size <= maxBytes) {
-        return {
-          buffer: out,
-          optimizedSize: size,
-          resizeSide: side,
+      try {
+        const out = await resizeToJpeg({
+          buffer,
+          maxSide: side,
           quality,
-        };
+          withoutEnlargement: true,
+        });
+        const size = out.length;
+        if (!smallest || size < smallest.size) {
+          smallest = { buffer: out, size, resizeSide: side, quality };
+        }
+        if (size <= maxBytes) {
+          return {
+            buffer: out,
+            optimizedSize: size,
+            resizeSide: side,
+            quality,
+          };
+        }
+      } catch {
+        // Continue trying other size/quality combinations
       }
     }
   }
