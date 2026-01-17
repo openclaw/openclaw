@@ -5,14 +5,21 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.js";
 
-export type PersistedSubagentRegistryVersion = 1;
+export type PersistedSubagentRegistryVersion = 1 | 2;
 
-type PersistedSubagentRegistry = {
+type PersistedSubagentRegistryV1 = {
   version: 1;
+  runs: Record<string, LegacySubagentRunRecord>;
+};
+
+type PersistedSubagentRegistryV2 = {
+  version: 2;
   runs: Record<string, PersistedSubagentRunRecord>;
 };
 
-const REGISTRY_VERSION = 1 as const;
+type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
+
+const REGISTRY_VERSION = 2 as const;
 
 type PersistedSubagentRunRecord = SubagentRunRecord;
 
@@ -32,22 +39,30 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   const raw = loadJsonFile(pathname);
   if (!raw || typeof raw !== "object") return new Map();
   const record = raw as Partial<PersistedSubagentRegistry>;
-  if (record.version !== REGISTRY_VERSION) return new Map();
+  if (record.version !== 1 && record.version !== 2) return new Map();
   const runsRaw = record.runs;
   if (!runsRaw || typeof runsRaw !== "object") return new Map();
   const out = new Map<string, SubagentRunRecord>();
+  const isLegacy = record.version === 1;
+  let migrated = false;
   for (const [runId, entry] of Object.entries(runsRaw)) {
     if (!entry || typeof entry !== "object") continue;
     const typed = entry as LegacySubagentRunRecord;
     if (!typed.runId || typeof typed.runId !== "string") continue;
     const legacyCompletedAt =
-      typeof typed.announceCompletedAt === "number" ? typed.announceCompletedAt : undefined;
+      isLegacy && typeof typed.announceCompletedAt === "number"
+        ? typed.announceCompletedAt
+        : undefined;
     const cleanupCompletedAt =
-      typeof typed.cleanupCompletedAt === "number" ? typed.cleanupCompletedAt : legacyCompletedAt;
+      typeof typed.cleanupCompletedAt === "number"
+        ? typed.cleanupCompletedAt
+        : legacyCompletedAt;
     const cleanupHandled =
       typeof typed.cleanupHandled === "boolean"
         ? typed.cleanupHandled
-        : Boolean(typed.announceHandled ?? cleanupCompletedAt);
+        : isLegacy
+          ? Boolean(typed.announceHandled ?? cleanupCompletedAt)
+          : undefined;
     const requesterOrigin = normalizeDeliveryContext(
       typed.requesterOrigin ?? {
         channel: typeof typed.requesterChannel === "string" ? typed.requesterChannel : undefined,
@@ -68,6 +83,14 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
       cleanupCompletedAt,
       cleanupHandled,
     });
+    if (isLegacy) migrated = true;
+  }
+  if (migrated) {
+    try {
+      saveSubagentRegistryToDisk(out);
+    } catch {
+      // ignore migration write failures
+    }
   }
   return out;
 }

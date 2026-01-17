@@ -107,7 +107,7 @@ describe("subagent registry persistence", () => {
 
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     const persisted = {
-      version: 1,
+      version: 2,
       runs: {
         "run-2": {
           runId: "run-2",
@@ -177,6 +177,9 @@ describe("subagent registry persistence", () => {
     expect(entry?.cleanupCompletedAt).toBe(9);
     expect(entry?.requesterOrigin?.channel).toBe("whatsapp");
     expect(entry?.requesterOrigin?.accountId).toBe("legacy-account");
+
+    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
+    expect(after.version).toBe(2);
   });
 
   it("retries cleanup announce after a failed announce", async () => {
@@ -185,7 +188,7 @@ describe("subagent registry persistence", () => {
 
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
     const persisted = {
-      version: 1,
+      version: 2,
       runs: {
         "run-3": {
           runId: "run-3",
