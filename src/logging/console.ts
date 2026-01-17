@@ -90,7 +90,16 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) return false;
-  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix));
+  if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
+    return true;
+  }
+  if (
+    message.startsWith("[EventQueue] Slow listener detected") &&
+    message.includes("DiscordMessageListener")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isEpipeError(err: unknown): boolean {
