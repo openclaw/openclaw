@@ -1,6 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const agentSpy = vi.fn(async () => ({ runId: "run-main", status: "ok" }));
+const embeddedRunMock = {
+  isEmbeddedPiRunActive: vi.fn(() => false),
+  isEmbeddedPiRunStreaming: vi.fn(() => false),
+  queueEmbeddedPiMessage: vi.fn(() => false),
+  waitForEmbeddedPiRunEnd: vi.fn(async () => true),
+};
+let sessionStore: Record<string, Record<string, unknown>> = {};
+let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+  session: {
+    mainKey: "main",
+    scope: "per-sender",
+  },
+};
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (req: unknown) => {
@@ -22,20 +35,36 @@ vi.mock("./tools/agent-step.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: vi.fn(() => ({})),
+  loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions.json",
+  resolveMainSessionKey: () => "agent:main:main",
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    session: { mainKey: "agent:main:main" },
-  }),
-}));
+vi.mock("./pi-embedded.js", () => embeddedRunMock);
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => configOverride,
+  };
+});
 
 describe("subagent announce formatting", () => {
   beforeEach(() => {
     agentSpy.mockClear();
+    embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
+    embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
+    embeddedRunMock.waitForEmbeddedPiRunEnd.mockReset().mockResolvedValue(true);
+    sessionStore = {};
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+    };
   });
 
   it("sends instructional message to main agent with status and findings", async () => {
@@ -87,5 +116,41 @@ describe("subagent announce formatting", () => {
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("completed successfully");
+  });
+
+  it("steers announcements into an active run when queue mode is steer", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
+    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-123",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "steer",
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-789",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(embeddedRunMock.queueEmbeddedPiMessage).toHaveBeenCalledWith(
+      "session-123",
+      expect.stringContaining("background task"),
+    );
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 });
