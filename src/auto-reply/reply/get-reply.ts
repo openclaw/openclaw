@@ -100,7 +100,6 @@ export async function getReplyFromConfig(
   let {
     sessionCtx,
     sessionEntry,
-    previousSessionEntry,
     sessionStore,
     sessionKey,
     sessionId,
