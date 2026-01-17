@@ -117,6 +117,7 @@ describe("trigger handling", () => {
           Body: "/compact focus on decisions",
           From: "+1003",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {

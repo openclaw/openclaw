@@ -116,6 +116,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
         },
         {},
         makeCfg(home),
@@ -138,6 +139,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {
@@ -162,6 +164,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {
@@ -193,6 +196,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1002",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {
@@ -217,6 +221,7 @@ describe("trigger handling", () => {
           Body: "[Dec 5 10:00] stop",
           From: "+1000",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         makeCfg(home),
@@ -233,6 +238,7 @@ describe("trigger handling", () => {
           Body: "/stop",
           From: "+1003",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         makeCfg(home),

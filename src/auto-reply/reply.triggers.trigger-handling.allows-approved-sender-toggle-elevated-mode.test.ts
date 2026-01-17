@@ -123,6 +123,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
         },
         {},
         cfg,

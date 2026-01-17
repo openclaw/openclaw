@@ -18,6 +18,14 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(obj)).toBe("Oops: failed: code=E1");
   });
 
+  test("formatForLog redacts obvious secrets", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const out = formatForLog({ token });
+    expect(out).toContain("token");
+    expect(out).not.toContain(token);
+    expect(out).toContain("…");
+  });
+
   test("summarizeAgentEventForWsLog extracts useful fields", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",

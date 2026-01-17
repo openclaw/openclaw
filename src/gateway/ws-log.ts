@@ -1,10 +1,15 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
+import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { shouldLogSubsystemToConsole } from "../logging.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const WS_LOG_REDACT_OPTIONS = {
+  mode: "tools" as const,
+  patterns: getDefaultRedactPatterns(),
+};
 
 type WsInflightEntry = {
   ts: number;
@@ -61,7 +66,8 @@ export function formatForLog(value: unknown): string {
         ? String(value)
         : JSON.stringify(value);
     if (!str) return "";
-    return str.length > LOG_VALUE_LIMIT ? `${str.slice(0, LOG_VALUE_LIMIT)}...` : str;
+    const redacted = redactSensitiveText(str, WS_LOG_REDACT_OPTIONS);
+    return redacted.length > LOG_VALUE_LIMIT ? `${redacted.slice(0, LOG_VALUE_LIMIT)}...` : redacted;
   } catch {
     return String(value);
   }

@@ -70,6 +70,7 @@ describe("abort detection", () => {
       ctx: {
         CommandBody: "/stop",
         RawBody: "/stop",
+        CommandAuthorized: true,
         SessionKey: "telegram:123",
         Provider: "telegram",
         Surface: "telegram",
@@ -132,6 +133,7 @@ describe("abort detection", () => {
       ctx: {
         CommandBody: "/stop",
         RawBody: "/stop",
+        CommandAuthorized: true,
         SessionKey: sessionKey,
         Provider: "telegram",
         Surface: "telegram",
@@ -188,6 +190,7 @@ describe("abort detection", () => {
       ctx: {
         CommandBody: "/stop",
         RawBody: "/stop",
+        CommandAuthorized: true,
         SessionKey: sessionKey,
         Provider: "telegram",
         Surface: "telegram",

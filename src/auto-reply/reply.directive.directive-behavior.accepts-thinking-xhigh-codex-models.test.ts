@@ -81,6 +81,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -90,7 +91,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -108,6 +109,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -117,7 +119,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -135,6 +137,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -144,7 +147,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -164,6 +167,7 @@ describe("directive behavior", () => {
           Body: "/help",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -201,6 +205,7 @@ describe("directive behavior", () => {
           Body: "/demo_skill",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -232,6 +237,7 @@ describe("directive behavior", () => {
           Body: "/queue collect debounce:bogus cap:zero drop:maybe",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -263,6 +269,7 @@ describe("directive behavior", () => {
           From: "+1222",
           To: "+1222",
           Provider: "whatsapp",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -300,7 +307,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
 
       const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222" },
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {

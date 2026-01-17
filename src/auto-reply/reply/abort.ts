@@ -132,7 +132,7 @@ export async function tryFastAbortFromMessage(params: {
   const abortRequested = normalized === "/stop" || isAbortTrigger(stripped);
   if (!abortRequested) return { handled: false, aborted: false };
 
-  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const commandAuthorized = ctx.CommandAuthorized ?? false;
   const auth = resolveCommandAuthorization({
     ctx,
     cfg,
