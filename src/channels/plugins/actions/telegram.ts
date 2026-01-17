@@ -42,11 +42,12 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
-      const content = readStringParam(params, "message", {
-        required: true,
-        allowEmpty: true,
-      });
       const mediaUrl = readStringParam(params, "media", { trim: false });
+      const content =
+        readStringParam(params, "message", {
+          required: !mediaUrl,
+          allowEmpty: true,
+        }) ?? "";
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
       const buttons = params.buttons;
