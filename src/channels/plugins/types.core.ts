@@ -216,13 +216,15 @@ export type ChannelThreadingToolContext = {
 
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
-  looksLikeTargetId?: (raw: string, normalized?: string) => boolean;
+  targetResolver?: {
+    looksLikeId?: (raw: string, normalized?: string) => boolean;
+    hint?: string;
+  };
   formatTargetDisplay?: (params: {
     target: string;
     display?: string;
     kind?: ChannelDirectoryEntryKind;
   }) => string;
-  targetHint?: string;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

@@ -172,7 +172,7 @@ function looksLikeTargetId(params: {
   const raw = params.raw.trim();
   if (!raw) return false;
   const plugin = getChannelPlugin(params.channel);
-  const lookup = plugin?.messaging?.looksLikeTargetId;
+  const lookup = plugin?.messaging?.targetResolver?.looksLikeId;
   if (lookup) return lookup(raw, params.normalized);
   if (/^(channel|group|user):/i.test(raw)) return true;
   if (/^[@#]/.test(raw)) return true;
@@ -285,7 +285,7 @@ export async function resolveMessagingTarget(params: {
   }
   const plugin = getChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
-  const hint = plugin?.messaging?.targetHint;
+  const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(raw, params.preferredKind);
   const normalized = normalizeTargetForProvider(params.channel, raw) ?? raw;
   if (looksLikeTargetId({ channel: params.channel, raw, normalized })) {

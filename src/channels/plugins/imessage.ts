@@ -107,14 +107,16 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     resolveRequireMention: resolveIMessageGroupRequireMention,
   },
   messaging: {
-    looksLikeTargetId: (raw) => {
-      const trimmed = raw.trim();
-      if (!trimmed) return false;
-      if (/^(imessage:|chat_id:)/i.test(trimmed)) return true;
-      if (trimmed.includes("@")) return true;
-      return /^\+?\d{3,}$/.test(trimmed);
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        if (/^(imessage:|chat_id:)/i.test(trimmed)) return true;
+        if (trimmed.includes("@")) return true;
+        return /^\+?\d{3,}$/.test(trimmed);
+      },
+      hint: "<handle|chat_id:ID>",
     },
-    targetHint: "<handle|chat_id:ID>",
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

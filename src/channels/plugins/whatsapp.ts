@@ -39,6 +39,10 @@ import { collectWhatsAppStatusIssues } from "./status-issues/whatsapp.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
 import { resolveWhatsAppHeartbeatRecipients } from "./whatsapp-heartbeat.js";
 import { missingTargetError } from "../../infra/outbound/target-errors.js";
+import {
+  listWhatsAppDirectoryGroupsFromConfig,
+  listWhatsAppDirectoryPeersFromConfig,
+} from "./directory-config.js";
 
 const meta = getChatChannelMeta("whatsapp");
 
@@ -222,8 +226,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeWhatsAppMessagingTarget,
-    looksLikeTargetId: looksLikeWhatsAppTargetId,
-    targetHint: "<E.164|group JID>",
+    targetResolver: {
+      looksLikeId: looksLikeWhatsAppTargetId,
+      hint: "<E.164|group JID>",
+    },
   },
   directory: {
     self: async ({ cfg, accountId }) => {
@@ -238,31 +244,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         raw: { e164, jid },
       };
     },
-    listPeers: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveWhatsAppAccount({ cfg, accountId });
-      const q = query?.trim().toLowerCase() || "";
-      const peers = (account.allowFrom ?? [])
-        .map((entry) => String(entry).trim())
-        .filter((entry) => Boolean(entry) && entry !== "*")
-        .map((entry) => normalizeWhatsAppTarget(entry) ?? "")
-        .filter(Boolean)
-        .filter((id) => !isWhatsAppGroupJid(id))
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }) as const);
-      return peers;
-    },
-    listGroups: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveWhatsAppAccount({ cfg, accountId });
-      const q = query?.trim().toLowerCase() || "";
-      const groups = Object.keys(account.groups ?? {})
-        .map((id) => id.trim())
-        .filter((id) => Boolean(id) && id !== "*")
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "group", id }) as const);
-      return groups;
-    },
+    listPeers: async (params) => listWhatsAppDirectoryPeersFromConfig(params),
+    listGroups: async (params) => listWhatsAppDirectoryGroupsFromConfig(params),
   },
   actions: {
     listActions: ({ cfg }) => {

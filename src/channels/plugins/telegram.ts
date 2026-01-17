@@ -38,6 +38,10 @@ import {
 } from "./setup-helpers.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ChannelPlugin } from "./types.js";
+import {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "./directory-config.js";
 
 const meta = getChatChannelMeta("telegram");
 
@@ -160,50 +164,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
-    looksLikeTargetId: looksLikeTelegramTargetId,
-    targetHint: "<chatId>",
+    targetResolver: {
+      looksLikeId: looksLikeTelegramTargetId,
+      hint: "<chatId>",
+    },
   },
   directory: {
     self: async () => null,
-    listPeers: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveTelegramAccount({ cfg, accountId });
-      const q = query?.trim().toLowerCase() || "";
-      const raw = [
-        ...(account.config.allowFrom ?? []).map((entry) => String(entry)),
-        ...Object.keys(account.config.dms ?? {}),
-      ];
-      const peers = Array.from(
-        new Set(
-          raw
-            .map((entry) => entry.trim())
-            .filter(Boolean)
-            .map((entry) => entry.replace(/^(telegram|tg):/i, "")),
-        ),
-      )
-        .map((entry) => {
-          const trimmed = entry.trim();
-          if (!trimmed) return null;
-          if (/^-?\d+$/.test(trimmed)) return trimmed;
-          const withAt = trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
-          return withAt;
-        })
-        .filter((id): id is string => Boolean(id))
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "user", id }) as const);
-      return peers;
-    },
-    listGroups: async ({ cfg, accountId, query, limit }) => {
-      const account = resolveTelegramAccount({ cfg, accountId });
-      const q = query?.trim().toLowerCase() || "";
-      const groups = Object.keys(account.config.groups ?? {})
-        .map((id) => id.trim())
-        .filter((id) => Boolean(id) && id !== "*")
-        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
-        .slice(0, limit && limit > 0 ? limit : undefined)
-        .map((id) => ({ kind: "group", id }) as const);
-      return groups;
-    },
+    listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),
+    listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
   setup: {

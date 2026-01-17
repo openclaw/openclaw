@@ -146,7 +146,7 @@ export function resolveOutboundTarget(params: {
   if (trimmed) {
     return { ok: true, to: trimmed };
   }
-  const hint = plugin.messaging?.targetHint;
+  const hint = plugin.messaging?.targetResolver?.hint;
   return {
     ok: false,
     error: missingTargetError(plugin.meta.label ?? params.channel, hint),
