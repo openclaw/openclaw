@@ -1,7 +1,7 @@
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
-const PROVIDER_LABEL = "Qwen Portal OAuth";
+const PROVIDER_LABEL = "Qwen";
 const DEFAULT_MODEL = "qwen-portal/coder-model";
 const DEFAULT_BASE_URL = "https://portal.qwen.ai/v1";
 const DEFAULT_CONTEXT_WINDOW = 128000;
@@ -28,8 +28,8 @@ function buildModelDefinition(params: { id: string; name: string; input: Array<"
 
 const qwenPortalPlugin = {
   id: "qwen-portal-auth",
-  name: "Qwen Portal OAuth",
-  description: "OAuth flow for Qwen Portal (free-tier) models",
+  name: "Qwen OAuth",
+  description: "OAuth flow for Qwen (free-tier) models",
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -79,12 +79,12 @@ const qwenPortalPlugin = {
                         models: [
                           buildModelDefinition({
                             id: "coder-model",
-                            name: "Qwen Coder (Portal)",
+                            name: "Qwen Coder",
                             input: ["text"],
                           }),
                           buildModelDefinition({
                             id: "vision-model",
-                            name: "Qwen Vision (Portal)",
+                            name: "Qwen Vision",
                             input: ["text", "image"],
                           }),
                         ],

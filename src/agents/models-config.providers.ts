@@ -234,7 +234,7 @@ function buildQwenPortalProvider(): ProviderConfig {
     models: [
       {
         id: "coder-model",
-        name: "Qwen Coder (Portal)",
+        name: "Qwen Coder",
         reasoning: false,
         input: ["text"],
         cost: QWEN_PORTAL_DEFAULT_COST,
@@ -243,7 +243,7 @@ function buildQwenPortalProvider(): ProviderConfig {
       },
       {
         id: "vision-model",
-        name: "Qwen Vision (Portal)",
+        name: "Qwen Vision",
         reasoning: false,
         input: ["text", "image"],
         cost: QWEN_PORTAL_DEFAULT_COST,

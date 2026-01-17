@@ -1,6 +1,6 @@
-# Qwen Portal OAuth (Clawdbot plugin)
+# Qwen OAuth (Clawdbot plugin)
 
-OAuth provider plugin for **Qwen Portal** (free-tier OAuth).
+OAuth provider plugin for **Qwen** (free-tier OAuth).
 
 ## Enable
 

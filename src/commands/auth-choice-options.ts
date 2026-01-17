@@ -196,7 +196,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
-  options.push({ value: "qwen-portal", label: "Qwen Portal OAuth" });
+  options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({

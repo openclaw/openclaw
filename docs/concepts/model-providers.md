@@ -183,9 +183,9 @@ Kimi Code uses a dedicated endpoint and key (separate from Moonshot):
 }
 ```
 
-### Qwen Portal OAuth (free tier)
+### Qwen OAuth (free tier)
 
-Qwen Portal provides OAuth access to Qwen Coder + Vision via a device-code flow.
+Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
 Enable the bundled plugin, then log in:
 
 ```bash
