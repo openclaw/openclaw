@@ -43,7 +43,6 @@ type FirecrawlFetchConfig =
       timeoutSeconds?: number;
     }
   | undefined;
-
 type CacheEntry<T> = {
   value: T;
   expiresAt: number;
