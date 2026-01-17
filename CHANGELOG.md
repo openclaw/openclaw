@@ -2,7 +2,13 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.17 (Unreleased)
+## 2026.1.17-2 (Unreleased)
+
+### Changes
+
+### Fixes
+
+## 2026.1.17-1
 
 ### Changes
 - Telegram: enrich forwarded message context with normalized origin details + legacy fallback. (#1090) — thanks @sleontenko.
@@ -10,11 +16,13 @@ Docs: https://docs.clawd.bot
 - macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
 - CLI: surface update availability in `clawdbot status`.
 - CLI: add `clawdbot memory status --deep/--index` probes.
+- CLI: add playful update completion quips.
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
 - Hooks: parse multi-line/YAML frontmatter metadata blocks (JSON5-friendly). (#1114) — thanks @sebslight.
 - CLI: add WSL2/systemd unavailable hints in daemon status/doctor output.
+- Windows: install gateway scheduled task as the current user; show friendly guidance instead of failing on access denied.
 - Status: show both usage windows with reset hints when usage data is available. (#1101) — thanks @rhjoh.
 - Memory: probe sqlite-vec availability in `clawdbot memory status`.
 - Memory: split embedding batches to avoid OpenAI token limits during indexing.
