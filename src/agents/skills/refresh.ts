@@ -31,7 +31,6 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])node_modules([\\/]|$)/,
   /(^|[\\/])dist([\\/]|$)/,
 ];
-];
 
 function bumpVersion(current: number): number {
   const now = Date.now();
