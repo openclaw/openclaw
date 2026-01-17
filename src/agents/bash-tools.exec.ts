@@ -29,6 +29,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
@@ -451,7 +452,17 @@ export function createExecTool(
       };
 
       if (pty) {
-        pty.onData(handleStdout);
+        const cursorResponse = buildCursorPositionResponse();
+        pty.onData((data) => {
+          const raw = data.toString();
+          const { cleaned, requests } = stripDsrRequests(raw);
+          if (requests > 0) {
+            for (let i = 0; i < requests; i += 1) {
+              pty.write(cursorResponse);
+            }
+          }
+          handleStdout(cleaned);
+        });
       } else if (child) {
         child.stdout.on("data", handleStdout);
         child.stderr.on("data", handleStderr);

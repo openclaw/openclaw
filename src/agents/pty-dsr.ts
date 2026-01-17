@@ -1,0 +1,14 @@
+const DSR_PATTERN = /\x1b\[\??6n/g;
+
+export function stripDsrRequests(input: string): { cleaned: string; requests: number } {
+  let requests = 0;
+  const cleaned = input.replace(DSR_PATTERN, () => {
+    requests += 1;
+    return "";
+  });
+  return { cleaned, requests };
+}
+
+export function buildCursorPositionResponse(row = 1, col = 1): string {
+  return `\x1b[${row};${col}R`;
+}
