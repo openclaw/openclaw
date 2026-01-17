@@ -100,6 +100,78 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("prints embeddings status when deep", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability,
+        status: () => ({
+          files: 1,
+          chunks: 1,
+          dirty: false,
+          workspaceDir: "/tmp/clawd",
+          dbPath: "/tmp/memory.sqlite",
+          provider: "openai",
+          model: "text-embedding-3-small",
+          requestedProvider: "openai",
+          vector: { enabled: true, available: true },
+        }),
+        close,
+      },
+    });
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "status", "--deep"], { from: "user" });
+
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("reindexes on status --index", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        probeEmbeddingAvailability,
+        sync,
+        status: () => ({
+          files: 1,
+          chunks: 1,
+          dirty: false,
+          workspaceDir: "/tmp/clawd",
+          dbPath: "/tmp/memory.sqlite",
+          provider: "openai",
+          model: "text-embedding-3-small",
+          requestedProvider: "openai",
+          vector: { enabled: true, available: true },
+        }),
+        close,
+      },
+    });
+
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "status", "--index"], { from: "user" });
+
+    expect(sync).toHaveBeenCalledWith({ reason: "cli" });
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+  });
+
   it("closes manager after index", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");

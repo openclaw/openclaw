@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 - macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
 - CLI: surface update availability in `clawdbot status`.
+- CLI: add `clawdbot memory status --deep/--index` probes.
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.

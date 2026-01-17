@@ -10,6 +10,8 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 type MemoryCommandOptions = {
   agent?: string;
   json?: boolean;
+  deep?: boolean;
+  index?: boolean;
 };
 
 function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
@@ -33,6 +35,8 @@ export function registerMemoryCli(program: Command) {
     .description("Show memory search index status")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--json", "Print JSON")
+    .option("--deep", "Probe embedding provider availability")
+    .option("--index", "Reindex if dirty (implies --deep)")
     .action(async (opts: MemoryCommandOptions) => {
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
@@ -43,9 +47,33 @@ export function registerMemoryCli(program: Command) {
       }
       try {
         await manager.probeVectorAvailability();
+        const deep = Boolean(opts.deep || opts.index);
+        const embeddingProbe = deep ? await manager.probeEmbeddingAvailability() : undefined;
+        let indexError: string | undefined;
+        if (opts.index) {
+          try {
+            await manager.sync({ reason: "cli" });
+          } catch (err) {
+            indexError = err instanceof Error ? err.message : String(err);
+            defaultRuntime.error(`Memory index failed: ${indexError}`);
+            process.exitCode = 1;
+          }
+        }
         const status = manager.status();
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(status, null, 2));
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                ...status,
+                embeddings: embeddingProbe
+                  ? { ok: embeddingProbe.ok, error: embeddingProbe.error }
+                  : undefined,
+                indexError,
+              },
+              null,
+              2,
+            ),
+          );
           return;
         }
         const rich = isRich();
@@ -68,6 +96,14 @@ export function registerMemoryCli(program: Command) {
           `${label("Store")} ${info(status.dbPath)}`,
           `${label("Workspace")} ${info(status.workspaceDir)}`,
         ].filter(Boolean) as string[];
+        if (embeddingProbe) {
+          const state = embeddingProbe.ok ? "ready" : "unavailable";
+          const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
+          lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
+          if (embeddingProbe.error) {
+            lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
+          }
+        }
         if (status.sourceCounts?.length) {
           lines.push(label("By source"));
           for (const entry of status.sourceCounts) {
@@ -103,6 +139,9 @@ export function registerMemoryCli(program: Command) {
         }
         if (status.fallback?.reason) {
           lines.push(muted(status.fallback.reason));
+        }
+        if (indexError) {
+          lines.push(`${label("Index error")} ${warn(indexError)}`);
         }
         defaultRuntime.log(lines.join("\n"));
       } finally {

@@ -16,7 +16,8 @@ Related:
 
 ```bash
 clawdbot memory status
+clawdbot memory status --deep
+clawdbot memory status --deep --index
 clawdbot memory index
 clawdbot memory search "release checklist"
 ```
-

@@ -377,6 +377,16 @@ export class MemoryIndexManager {
     return this.ensureVectorReady();
   }
 
+  async probeEmbeddingAvailability(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      await this.provider.embedQuery("ping");
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
