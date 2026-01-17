@@ -46,6 +46,7 @@ export type ChannelUiMetadata = {
 
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
+  update: "Update",
   logging: "Logging",
   gateway: "Gateway",
   agents: "Agents",
@@ -71,6 +72,7 @@ const GROUP_LABELS: Record<string, string> = {
 
 const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
+  update: 25,
   gateway: 30,
   agents: 40,
   tools: 50,
@@ -95,6 +97,7 @@ const GROUP_ORDER: Record<string, number> = {
 };
 
 const FIELD_LABELS: Record<string, string> = {
+  "update.channel": "Update Channel",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -273,6 +276,7 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HELP: Record<string, string> = {
+  "update.channel": 'Update channel for npm installs ("stable" or "beta").',
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",

@@ -50,6 +50,20 @@ pnpm add -g clawdbot@latest
 ```
 We do **not** recommend Bun for the Gateway runtime (WhatsApp/Telegram bugs).
 
+To stay on the beta channel for CLI updates:
+
+```bash
+clawdbot update --channel beta
+```
+
+Switch back to stable later:
+
+```bash
+clawdbot update --channel stable
+```
+
+Use `--tag <dist-tag|version>` for a one-off install tag/version.
+
 Then:
 
 ```bash
@@ -75,7 +89,7 @@ It runs a safe-ish update flow:
 - Fetches + rebases against the configured upstream.
 - Installs deps, builds, builds the Control UI, and runs `clawdbot doctor`.
 
-If you installed via **npm/pnpm** (no git metadata), `clawdbot update` will skip. Use “Update (global install)” instead.
+If you installed via **npm/pnpm** (no git metadata), `clawdbot update` will try to update via your package manager. If it can’t detect the install, use “Update (global install)” instead.
 
 ## Update (Control UI / RPC)
 

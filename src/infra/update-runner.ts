@@ -52,6 +52,7 @@ export type UpdateStepProgress = {
 type UpdateRunnerOptions = {
   cwd?: string;
   argv1?: string;
+  tag?: string;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -267,10 +268,17 @@ function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
   return ["npm", "install"];
 }
 
-function globalUpdateArgs(manager: "pnpm" | "npm" | "bun") {
-  if (manager === "pnpm") return ["pnpm", "add", "-g", "clawdbot@latest"];
-  if (manager === "bun") return ["bun", "add", "-g", "clawdbot@latest"];
-  return ["npm", "i", "-g", "clawdbot@latest"];
+function normalizeTag(tag?: string) {
+  const trimmed = tag?.trim();
+  if (!trimmed) return "latest";
+  return trimmed.startsWith("clawdbot@") ? trimmed.slice("clawdbot@".length) : trimmed;
+}
+
+function globalUpdateArgs(manager: "pnpm" | "npm" | "bun", tag?: string) {
+  const spec = `clawdbot@${normalizeTag(tag)}`;
+  if (manager === "pnpm") return ["pnpm", "add", "-g", spec];
+  if (manager === "bun") return ["bun", "add", "-g", spec];
+  return ["npm", "i", "-g", spec];
 }
 
 // Total number of visible steps in a successful git update flow
@@ -472,7 +480,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const updateStep = await runStep({
       runCommand,
       name: "global update",
-      argv: globalUpdateArgs(globalManager),
+      argv: globalUpdateArgs(globalManager, opts.tag),
       cwd: pkgRoot,
       timeoutMs,
       progress,

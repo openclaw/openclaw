@@ -30,6 +30,12 @@ export type RegistryStatus = {
   error?: string;
 };
 
+export type NpmTagStatus = {
+  tag: string;
+  version: string | null;
+  error?: string;
+};
+
 export type UpdateCheckResult = {
   root: string | null;
   installKind: "git" | "package" | "unknown";
@@ -263,17 +269,32 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 export async function fetchNpmLatestVersion(params?: {
   timeoutMs?: number;
 }): Promise<RegistryStatus> {
+  const res = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params?.timeoutMs });
+  return {
+    latestVersion: res.version,
+    error: res.error,
+  };
+}
+
+export async function fetchNpmTagVersion(params: {
+  tag: string;
+  timeoutMs?: number;
+}): Promise<NpmTagStatus> {
   const timeoutMs = params?.timeoutMs ?? 3500;
+  const tag = params.tag;
   try {
-    const res = await fetchWithTimeout("https://registry.npmjs.org/clawdbot/latest", timeoutMs);
+    const res = await fetchWithTimeout(
+      `https://registry.npmjs.org/clawdbot/${encodeURIComponent(tag)}`,
+      timeoutMs,
+    );
     if (!res.ok) {
-      return { latestVersion: null, error: `HTTP ${res.status}` };
+      return { tag, version: null, error: `HTTP ${res.status}` };
     }
     const json = (await res.json()) as { version?: unknown };
-    const latestVersion = typeof json?.version === "string" ? json.version : null;
-    return { latestVersion };
+    const version = typeof json?.version === "string" ? json.version : null;
+    return { tag, version };
   } catch (err) {
-    return { latestVersion: null, error: String(err) };
+    return { tag, version: null, error: String(err) };
   }
 }
 
