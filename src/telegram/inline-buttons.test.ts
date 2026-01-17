@@ -19,6 +19,16 @@ describe("resolveTelegramTargetChatType", () => {
     expect(resolveTelegramTargetChatType("TELEGRAM:5232990709")).toBe("direct");
   });
 
+  it("handles tg/group prefixes and topic suffixes", () => {
+    expect(resolveTelegramTargetChatType("tg:5232990709")).toBe("direct");
+    expect(resolveTelegramTargetChatType("group:-123456789")).toBe("group");
+    expect(resolveTelegramTargetChatType("telegram:group:-1001234567890")).toBe("group");
+    expect(resolveTelegramTargetChatType("telegram:group:-1001234567890:topic:456")).toBe(
+      "group",
+    );
+    expect(resolveTelegramTargetChatType("-1001234567890:456")).toBe("group");
+  });
+
   it("returns 'unknown' for usernames", () => {
     expect(resolveTelegramTargetChatType("@username")).toBe("unknown");
     expect(resolveTelegramTargetChatType("telegram:@username")).toBe("unknown");
