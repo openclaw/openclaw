@@ -203,10 +203,7 @@ actor PortGuardian {
         proc.standardOutput = pipe
         proc.standardError = Pipe()
         do {
-            try proc.run()
-            // Read pipe before waitUntilExit to avoid potential deadlock
-            let data = pipe.fileHandleForReading.readToEndSafely()
-            proc.waitUntilExit()
+            let data = try proc.runAndReadToEnd(from: pipe)
             guard !data.isEmpty else { return nil }
             return String(data: data, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)

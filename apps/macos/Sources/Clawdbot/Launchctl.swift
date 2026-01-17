@@ -16,12 +16,7 @@ enum Launchctl {
             process.standardOutput = pipe
             process.standardError = pipe
             do {
-                try process.run()
-                // Read pipe output BEFORE waitUntilExit to avoid deadlock.
-                // If the process writes enough to fill the pipe buffer (~64KB),
-                // it will block until someone reads. Reading first prevents this.
-                let data = pipe.fileHandleForReading.readToEndSafely()
-                process.waitUntilExit()
+                let data = try process.runAndReadToEnd(from: pipe)
                 let output = String(data: data, encoding: .utf8) ?? ""
                 return Result(status: process.terminationStatus, output: output)
             } catch {
