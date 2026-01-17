@@ -1,7 +1,10 @@
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
-import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  formatThreadStarterEnvelope,
+} from "../../../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntry,
@@ -340,11 +343,13 @@ export async function prepareSlackMessage(params: {
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
-  const body = formatAgentEnvelope({
+  const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     body: textWithId,
+    chatType: isDirectMessage ? "direct" : "channel",
+    sender: { name: senderName, id: senderId },
   });
 
   let combinedBody = body;
@@ -355,13 +360,15 @@ export async function prepareSlackMessage(params: {
       limit: ctx.historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatAgentEnvelope({
+        formatInboundEnvelope({
           channel: "Slack",
           from: roomLabel,
           timestamp: entry.timestamp,
-          body: `${entry.sender}: ${entry.body}${
+          body: `${entry.body}${
             entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
           }`,
+          chatType: "channel",
+          senderLabel: entry.sender,
         }),
     });
   }

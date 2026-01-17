@@ -11,7 +11,7 @@ import {
 } from "../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -363,11 +363,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const fromLabel = isGroup
       ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
       : `${senderNormalized} id:${sender}`;
-    const body = formatAgentEnvelope({
+    const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
       body: bodyText,
+      chatType: isGroup ? "group" : "direct",
+      sender: { name: senderNormalized, id: sender },
     });
     let combinedBody = body;
     if (isGroup && historyKey && historyLimit > 0) {
@@ -377,13 +379,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          formatAgentEnvelope({
+          formatInboundEnvelope({
             channel: "iMessage",
             from: fromLabel,
             timestamp: entry.timestamp,
-            body: `${entry.sender}: ${entry.body}${
-              entry.messageId ? ` [id:${entry.messageId}]` : ""
-            }`,
+            body: `${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+            chatType: "group",
+            senderLabel: entry.sender,
           }),
       });
     }

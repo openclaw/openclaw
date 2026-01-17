@@ -8,7 +8,7 @@ import {
   type ResponsePrefixContext,
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
-import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
 import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
@@ -95,11 +95,13 @@ export async function processMessage(params: {
           const bodyWithId = entry.messageId
             ? `${entry.body}\n[message_id: ${entry.messageId}]`
             : entry.body;
-          return formatAgentEnvelope({
+          return formatInboundEnvelope({
             channel: "WhatsApp",
             from: conversationId,
             timestamp: entry.timestamp,
-            body: `${entry.sender}: ${bodyWithId}`,
+            body: bodyWithId,
+            chatType: "group",
+            senderLabel: entry.sender,
           });
         },
       });

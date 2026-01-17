@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatAgentEnvelope } from "./envelope.js";
+import { formatAgentEnvelope, formatInboundEnvelope } from "./envelope.js";
 
 describe("formatAgentEnvelope", () => {
   it("includes channel, from, ip, host, and timestamp", () => {
@@ -41,5 +41,40 @@ describe("formatAgentEnvelope", () => {
   it("handles missing optional fields", () => {
     const body = formatAgentEnvelope({ channel: "Telegram", body: "hi" });
     expect(body).toBe("[Telegram] hi");
+  });
+});
+
+describe("formatInboundEnvelope", () => {
+  it("prefixes sender for non-direct chats", () => {
+    const body = formatInboundEnvelope({
+      channel: "Discord",
+      from: "Guild #general",
+      body: "hi",
+      chatType: "channel",
+      senderLabel: "Alice",
+    });
+    expect(body).toBe("[Discord Guild #general] Alice: hi");
+  });
+
+  it("uses sender fields when senderLabel is missing", () => {
+    const body = formatInboundEnvelope({
+      channel: "Signal",
+      from: "Signal Group id:123",
+      body: "ping",
+      chatType: "group",
+      sender: { name: "Bob", id: "42" },
+    });
+    expect(body).toBe("[Signal Signal Group id:123] Bob (42): ping");
+  });
+
+  it("keeps direct messages unprefixed", () => {
+    const body = formatInboundEnvelope({
+      channel: "iMessage",
+      from: "+1555",
+      body: "hello",
+      chatType: "direct",
+      senderLabel: "Alice",
+    });
+    expect(body).toBe("[iMessage +1555] hello");
   });
 });

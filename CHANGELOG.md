@@ -36,6 +36,7 @@
 - Gateway: honor explicit delivery targets without implicit accountId fallback; preserve lastAccountId for implicit routing.
 - Repo: fix oxlint config filename and move ignore pattern into config. (#1064) — thanks @connorshea.
 - Messages: `/stop` now hard-aborts queued followups and sub-agent runs; suppress zero-count stop notes.
+- Messages: include sender labels for live group messages across channels, matching queued/history formatting. (#1059)
 - Sessions: reset `compactionCount` on `/new` and `/reset`, and preserve `sessions.json` file mode (0600).
 - Sessions: repair orphaned user turns before embedded prompts.
 - Channels: treat replies to the bot as implicit mentions across supported channels.

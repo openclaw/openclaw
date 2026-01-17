@@ -1,3 +1,6 @@
+import { normalizeChatType } from "../channels/chat-type.js";
+import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+
 export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
@@ -33,6 +36,27 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ts) parts.push(ts);
   const header = `[${parts.join(" ")}]`;
   return `${header} ${params.body}`;
+}
+
+export function formatInboundEnvelope(params: {
+  channel: string;
+  from: string;
+  body: string;
+  timestamp?: number | Date;
+  chatType?: string;
+  senderLabel?: string;
+  sender?: SenderLabelParams;
+}): string {
+  const chatType = normalizeChatType(params.chatType);
+  const isDirect = !chatType || chatType === "direct";
+  const resolvedSender = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  return formatAgentEnvelope({
+    channel: params.channel,
+    from: params.from,
+    timestamp: params.timestamp,
+    body,
+  });
 }
 
 export function formatThreadStarterEnvelope(params: {

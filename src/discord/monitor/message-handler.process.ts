@@ -8,7 +8,10 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  formatThreadStarterEnvelope,
+} from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -118,6 +121,12 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channelName: channelName ?? message.channelId,
         channelId: message.channelId,
       });
+  const senderTag = formatDiscordUserTag(author);
+  const senderDisplay = data.member?.nickname ?? author.globalName ?? author.username;
+  const senderLabel =
+    senderDisplay && senderTag && senderDisplay !== senderTag
+      ? `${senderDisplay} (${senderTag})`
+      : senderDisplay ?? senderTag ?? author.id;
   const groupRoom = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupRoom;
   const channelDescription = channelInfo?.topic?.trim();
@@ -127,11 +136,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  let combinedBody = formatAgentEnvelope({
+  let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
     body: text,
+    chatType: isDirectMessage ? "direct" : "channel",
+    senderLabel,
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
@@ -142,11 +153,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       limit: historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatAgentEnvelope({
+        formatInboundEnvelope({
           channel: "Discord",
           from: fromLabel,
           timestamp: entry.timestamp,
-          body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
+          body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
+          chatType: "channel",
+          senderLabel: entry.sender,
         }),
     });
   }

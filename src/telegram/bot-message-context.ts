@@ -2,7 +2,7 @@
 import { resolveAckReaction } from "../agents/identity.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntry,
@@ -325,14 +325,21 @@ export const buildTelegramMessageContext = async ({
       }]\n${replyTarget.body}\n[/Replying]`
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+  const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
     ? (groupLabel ?? `group:${chatId}`)
     : buildSenderLabel(msg, senderId || chatId);
-  const body = formatAgentEnvelope({
+  const body = formatInboundEnvelope({
     channel: "Telegram",
     from: conversationLabel,
     timestamp: msg.date ? msg.date * 1000 : undefined,
     body: `${bodyText}${replySuffix}`,
+    chatType: isGroup ? "group" : "direct",
+    sender: {
+      name: senderName,
+      username: senderUsername || undefined,
+      id: senderId || undefined,
+    },
   });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
@@ -342,11 +349,13 @@ export const buildTelegramMessageContext = async ({
       limit: historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatAgentEnvelope({
+        formatInboundEnvelope({
           channel: "Telegram",
           from: groupLabel ?? `group:${chatId}`,
           timestamp: entry.timestamp,
-          body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
+          body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${chatId}]`,
+          chatType: "group",
+          senderLabel: entry.sender,
         }),
     });
   }
@@ -371,7 +380,7 @@ export const buildTelegramMessageContext = async ({
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
     GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
-    SenderName: buildSenderName(msg),
+    SenderName: senderName,
     SenderId: senderId || undefined,
     SenderUsername: senderUsername || undefined,
     Provider: "telegram",

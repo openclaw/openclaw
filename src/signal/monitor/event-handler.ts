@@ -8,7 +8,7 @@ import {
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -68,11 +68,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const fromLabel = entry.isGroup
       ? `${entry.groupName ?? "Signal Group"} id:${entry.groupId}`
       : `${entry.senderName} id:${entry.senderDisplay}`;
-    const body = formatAgentEnvelope({
+    const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
       timestamp: entry.timestamp ?? undefined,
       body: entry.bodyText,
+      chatType: entry.isGroup ? "group" : "direct",
+      sender: { name: entry.senderName, id: entry.senderDisplay },
     });
     let combinedBody = body;
     const historyKey = entry.isGroup ? String(entry.groupId ?? "unknown") : undefined;
@@ -83,13 +85,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         limit: deps.historyLimit,
         currentMessage: combinedBody,
         formatEntry: (historyEntry) =>
-          formatAgentEnvelope({
+          formatInboundEnvelope({
             channel: "Signal",
             from: fromLabel,
             timestamp: historyEntry.timestamp,
-            body: `${historyEntry.sender}: ${historyEntry.body}${
+            body: `${historyEntry.body}${
               historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""
             }`,
+            chatType: "group",
+            senderLabel: historyEntry.sender,
           }),
       });
     }
