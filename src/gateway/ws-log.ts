@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createSubsystemLogger, shouldLogSubsystemToConsole } from "../logging.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
@@ -88,11 +89,21 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   const runId = typeof rec.runId === "string" ? rec.runId : undefined;
   const stream = typeof rec.stream === "string" ? rec.stream : undefined;
   const seq = typeof rec.seq === "number" ? rec.seq : undefined;
+  const sessionKey = typeof rec.sessionKey === "string" ? rec.sessionKey : undefined;
   const data =
     rec.data && typeof rec.data === "object" ? (rec.data as Record<string, unknown>) : undefined;
 
   const extra: Record<string, unknown> = {};
   if (runId) extra.run = shortId(runId);
+  if (sessionKey) {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed) {
+      extra.agent = parsed.agentId;
+      extra.session = parsed.rest;
+    } else {
+      extra.session = sessionKey;
+    }
+  }
   if (stream) extra.stream = stream;
   if (seq !== undefined) extra.aseq = seq;
 
