@@ -159,7 +159,7 @@ export type MemorySearchConfig = {
     apiKey?: string;
     headers?: Record<string, string>;
     batch?: {
-      /** Enable OpenAI Batch API for embedding indexing (default: false). */
+      /** Enable OpenAI Batch API for embedding indexing (default: true). */
       enabled?: boolean;
       /** Wait for batch completion (default: true). */
       wait?: boolean;

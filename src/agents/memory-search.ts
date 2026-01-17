@@ -96,7 +96,7 @@ function mergeConfig(
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
   const hasRemote = Boolean(defaults?.remote || overrides?.remote);
   const batch = {
-    enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? false,
+    enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
     wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
     pollIntervalMs:
       overrides?.remote?.batch?.pollIntervalMs ??

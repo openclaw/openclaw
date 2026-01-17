@@ -98,7 +98,7 @@ describe("memory search config", () => {
       apiKey: "default-key",
       headers: { "X-Default": "on" },
       batch: {
-        enabled: false,
+        enabled: true,
         wait: true,
         pollIntervalMs: 5000,
         timeoutMinutes: 60,

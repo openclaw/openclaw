@@ -367,7 +367,7 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
   "agents.defaults.memorySearch.remote.batch.enabled":
-    "Enable OpenAI Batch API for memory embeddings (default: false).",
+    "Enable OpenAI Batch API for memory embeddings (default: true).",
   "agents.defaults.memorySearch.remote.batch.wait":
     "Wait for OpenAI batch completion when indexing (default: true).",
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs":

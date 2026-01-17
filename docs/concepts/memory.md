@@ -109,7 +109,7 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 `memorySearch.fallback = "none"`.
 
 Batch indexing (OpenAI only):
-- Set `agents.defaults.memorySearch.remote.batch.enabled = true` to submit embeddings via the OpenAI Batch API.
+- Enabled by default for OpenAI embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
 - Batch mode currently applies only when `memorySearch.provider = "openai"` and uses your OpenAI API key.
 
@@ -123,7 +123,7 @@ agents: {
       model: "text-embedding-3-small",
       fallback: "openai",
       remote: {
-        batch: { enabled: true }
+        batch: { enabled: false }
       },
       sync: { watch: true }
     }
