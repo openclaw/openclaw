@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { withProgress } from "./progress.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -46,18 +47,32 @@ export function registerMemoryCli(program: Command) {
         return;
       }
       try {
-        await manager.probeVectorAvailability();
         const deep = Boolean(opts.deep || opts.index);
-        const embeddingProbe = deep ? await manager.probeEmbeddingAvailability() : undefined;
+        let embeddingProbe: Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>> | undefined;
         let indexError: string | undefined;
-        if (opts.index) {
-          try {
-            await manager.sync({ reason: "cli" });
-          } catch (err) {
-            indexError = err instanceof Error ? err.message : String(err);
-            defaultRuntime.error(`Memory index failed: ${indexError}`);
-            process.exitCode = 1;
-          }
+        if (deep) {
+          const total = opts.index ? 3 : 2;
+          await withProgress({ label: "Checking memory…", total }, async (progress) => {
+            progress.setLabel("Probing vector…");
+            await manager.probeVectorAvailability();
+            progress.tick();
+            progress.setLabel("Probing embeddings…");
+            embeddingProbe = await manager.probeEmbeddingAvailability();
+            progress.tick();
+            if (opts.index) {
+              progress.setLabel("Indexing memory…");
+              try {
+                await manager.sync({ reason: "cli" });
+              } catch (err) {
+                indexError = err instanceof Error ? err.message : String(err);
+                defaultRuntime.error(`Memory index failed: ${indexError}`);
+                process.exitCode = 1;
+              }
+              progress.tick();
+            }
+          });
+        } else {
+          await manager.probeVectorAvailability();
         }
         const status = manager.status();
         if (opts.json) {
