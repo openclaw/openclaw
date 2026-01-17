@@ -40,6 +40,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
+- [`webhooks`](/cli/webhooks)
 - [`pairing`](/cli/pairing)
 - [`plugins`](/cli/plugins) (plugin commands)
 - [`channels`](/cli/channels)
@@ -212,6 +213,14 @@ clawdbot [--dev] [--profile <name>] <command>
     console
     pdf
   hooks
+    list
+    info
+    check
+    enable
+    disable
+    install
+    update
+  webhooks
     gmail setup|run
   pairing
     list
@@ -414,12 +423,12 @@ Subcommands:
 - `pairing list <channel> [--json]`
 - `pairing approve <channel> <code> [--notify]`
 
-### `hooks gmail`
+### `webhooks gmail`
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Subcommands:
-- `hooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
-- `hooks gmail run` (runtime overrides for the same flags)
+- `webhooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
+- `webhooks gmail run` (runtime overrides for the same flags)
 
 ### `dns setup`
 Wide-area discovery DNS helper (CoreDNS + Tailscale). See [/gateway/discovery](/gateway/discovery).

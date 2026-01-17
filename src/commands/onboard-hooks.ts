@@ -73,9 +73,9 @@ export async function setupInternalHooks(
       `Enabled ${selected.length} hook${selected.length > 1 ? "s" : ""}: ${selected.join(", ")}`,
       "",
       "You can manage hooks later with:",
-      "  clawdbot hooks internal list",
-      "  clawdbot hooks internal enable <name>",
-      "  clawdbot hooks internal disable <name>",
+      "  clawdbot hooks list",
+      "  clawdbot hooks enable <name>",
+      "  clawdbot hooks disable <name>",
     ].join("\n"),
     "Hooks Configured",
   );

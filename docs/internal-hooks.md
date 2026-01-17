@@ -13,7 +13,7 @@ Internal hooks provide an extensible event-driven system for automating actions 
 Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Internal hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
-- **Web-based hooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook).
+- **Web-based hooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook) or use `clawdbot webhooks` for Gmail helper commands.
 
 Common uses:
 - Save a memory snapshot when you reset a session
@@ -43,25 +43,25 @@ Clawdbot ships with two bundled hooks that are automatically discovered:
 List available hooks:
 
 ```bash
-clawdbot hooks internal list
+clawdbot hooks list
 ```
 
 Enable a hook:
 
 ```bash
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 ```
 
 Check hook status:
 
 ```bash
-clawdbot hooks internal check
+clawdbot hooks check
 ```
 
 Get detailed information:
 
 ```bash
-clawdbot hooks internal info session-memory
+clawdbot hooks info session-memory
 ```
 
 ### Onboarding
@@ -76,6 +76,8 @@ Hooks are automatically discovered from three directories (in order of precedenc
 2. **Managed hooks**: `~/.clawdbot/hooks/` (user-installed, shared across workspaces)
 3. **Bundled hooks**: `<clawdbot>/dist/hooks/bundled/` (shipped with Clawdbot)
 
+Managed hook directories can be either a **single hook** or a **hook pack** (package directory).
+
 Each hook is a directory containing:
 
 ```
@@ -83,6 +85,30 @@ my-hook/
 ├── HOOK.md          # Metadata + documentation
 └── handler.ts       # Handler implementation
 ```
+
+## Hook Packs (npm/archives)
+
+Hook packs are standard npm packages that export one or more hooks via `clawdbot.hooks` in
+`package.json`. Install them with:
+
+```bash
+clawdbot hooks install <path-or-spec>
+```
+
+Example `package.json`:
+
+```json
+{
+  "name": "@acme/my-hooks",
+  "version": "0.1.0",
+  "clawdbot": {
+    "hooks": ["./hooks/my-hook", "./hooks/other-hook"]
+  }
+}
+```
+
+Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
+Hook packs can ship dependencies; they will be installed under `~/.clawdbot/hooks/<id>`.
 
 ## Hook Structure
 
@@ -252,10 +278,10 @@ export default handler;
 
 ```bash
 # Verify hook is discovered
-clawdbot hooks internal list
+clawdbot hooks list
 
 # Enable it
-clawdbot hooks internal enable my-hook
+clawdbot hooks enable my-hook
 
 # Restart your gateway process (menu bar app restart on macOS, or restart your dev process)
 
@@ -349,46 +375,46 @@ The old config format still works for backwards compatibility:
 
 ```bash
 # List all hooks
-clawdbot hooks internal list
+clawdbot hooks list
 
 # Show only eligible hooks
-clawdbot hooks internal list --eligible
+clawdbot hooks list --eligible
 
 # Verbose output (show missing requirements)
-clawdbot hooks internal list --verbose
+clawdbot hooks list --verbose
 
 # JSON output
-clawdbot hooks internal list --json
+clawdbot hooks list --json
 ```
 
 ### Hook Information
 
 ```bash
 # Show detailed info about a hook
-clawdbot hooks internal info session-memory
+clawdbot hooks info session-memory
 
 # JSON output
-clawdbot hooks internal info session-memory --json
+clawdbot hooks info session-memory --json
 ```
 
 ### Check Eligibility
 
 ```bash
 # Show eligibility summary
-clawdbot hooks internal check
+clawdbot hooks check
 
 # JSON output
-clawdbot hooks internal check --json
+clawdbot hooks check --json
 ```
 
 ### Enable/Disable
 
 ```bash
 # Enable a hook
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 
 # Disable a hook
-clawdbot hooks internal disable command-logger
+clawdbot hooks disable command-logger
 ```
 
 ## Bundled Hooks
@@ -427,7 +453,7 @@ Saves session context to memory when you issue `/new`.
 **Enable**:
 
 ```bash
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 ```
 
 ### command-logger
@@ -468,7 +494,7 @@ grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 **Enable**:
 
 ```bash
-clawdbot hooks internal enable command-logger
+clawdbot hooks enable command-logger
 ```
 
 ## Best Practices
@@ -550,7 +576,7 @@ Registered hook: command-logger -> command
 List all discovered hooks:
 
 ```bash
-clawdbot hooks internal list --verbose
+clawdbot hooks list --verbose
 ```
 
 ### Check Registration
@@ -569,7 +595,7 @@ const handler: InternalHookHandler = async (event) => {
 Check why a hook isn't eligible:
 
 ```bash
-clawdbot hooks internal info my-hook
+clawdbot hooks info my-hook
 ```
 
 Look for missing requirements in the output.
@@ -618,7 +644,7 @@ test('my handler works', async () => {
 - **`src/hooks/config.ts`**: Eligibility checking
 - **`src/hooks/hooks-status.ts`**: Status reporting
 - **`src/hooks/loader.ts`**: Dynamic module loader
-- **`src/cli/hooks-internal-cli.ts`**: CLI commands
+- **`src/cli/hooks-cli.ts`**: CLI commands
 - **`src/gateway/server-startup.ts`**: Loads hooks at gateway start
 - **`src/auto-reply/reply/commands-core.ts`**: Triggers command events
 
@@ -672,7 +698,7 @@ Session reset
 
 3. List all discovered hooks:
    ```bash
-   clawdbot hooks internal list
+   clawdbot hooks list
    ```
 
 ### Hook Not Eligible
@@ -680,7 +706,7 @@ Session reset
 Check requirements:
 
 ```bash
-clawdbot hooks internal info my-hook
+clawdbot hooks info my-hook
 ```
 
 Look for missing:
@@ -693,7 +719,7 @@ Look for missing:
 
 1. Verify hook is enabled:
    ```bash
-   clawdbot hooks internal list
+   clawdbot hooks list
    # Should show ✓ next to enabled hooks
    ```
 
@@ -772,7 +798,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 4. Verify and restart your gateway process:
    ```bash
-   clawdbot hooks internal list
+   clawdbot hooks list
    # Should show: 🎯 my-hook ✓
    ```
 
@@ -785,7 +811,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 ## See Also
 
-- [CLI Reference: hooks internal](/cli/hooks)
+- [CLI Reference: hooks](/cli/hooks)
 - [Bundled Hooks README](https://github.com/clawdbot/clawdbot/tree/main/src/hooks/bundled)
 - [Webhook Hooks](/automation/webhook)
 - [Configuration](/gateway/configuration#hooks)

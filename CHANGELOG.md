@@ -15,6 +15,8 @@
 - **BREAKING:** Drop legacy `chatType: "room"` support; use `chatType: "channel"`.
 - **BREAKING:** remove legacy provider-specific target resolution fallbacks; target resolution is centralized with plugin hints + directory lookups.
 - **BREAKING:** drop legacy target normalization helpers; use outbound target normalization and resolver flows.
+- **BREAKING:** `clawdbot hooks` is now `clawdbot webhooks`; internal hooks live under `clawdbot hooks`.
+- **BREAKING:** `clawdbot plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
 
 ### Changes
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
@@ -37,6 +39,8 @@
 - Docs: add `/help` hub, Node/npm PATH guide, and expand directory CLI docs.
 - Config: support env var substitution in config values. (#1044) — thanks @sebslight.
 - Health: add per-agent session summaries and account-level health details, and allow selective probes. (#1047) — thanks @gumadeiras.
+- Hooks: add hook pack installs (npm/path/zip/tar) with `clawdbot.hooks` manifests and `clawdbot hooks install/update`.
+- Plugins: add zip installs and `--link` to avoid copying local paths.
 
 ### Fixes
 - Sub-agents: normalize announce delivery origin + queue bucketing by accountId to keep multi-account routing stable. (#1061, #1058) — thanks @adam91holt.

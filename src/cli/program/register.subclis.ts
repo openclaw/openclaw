@@ -9,6 +9,7 @@ import { registerDirectoryCli } from "../directory-cli.js";
 import { registerDocsCli } from "../docs-cli.js";
 import { registerGatewayCli } from "../gateway-cli.js";
 import { registerHooksCli } from "../hooks-cli.js";
+import { registerWebhooksCli } from "../webhooks-cli.js";
 import { registerLogsCli } from "../logs-cli.js";
 import { registerMemoryCli } from "../memory-cli.js";
 import { registerModelsCli } from "../models-cli.js";
@@ -34,6 +35,7 @@ export function registerSubCliCommands(program: Command) {
   registerDnsCli(program);
   registerDocsCli(program);
   registerHooksCli(program);
+  registerWebhooksCli(program);
   registerPairingCli(program);
   registerPluginsCli(program);
   registerChannelsCli(program);

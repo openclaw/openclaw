@@ -15,7 +15,7 @@ Automatically saves session context to memory when you issue `/new`.
 **Enable**:
 
 ```bash
-clawdbot hooks internal enable session-memory
+clawdbot hooks enable session-memory
 ```
 
 ### 📝 command-logger
@@ -29,7 +29,7 @@ Logs all command events to a centralized audit file.
 **Enable**:
 
 ```bash
-clawdbot hooks internal enable command-logger
+clawdbot hooks enable command-logger
 ```
 
 ## Hook Structure
@@ -88,26 +88,26 @@ Custom hooks follow the same structure as bundled hooks.
 List all hooks:
 
 ```bash
-clawdbot hooks internal list
+clawdbot hooks list
 ```
 
 Show hook details:
 
 ```bash
-clawdbot hooks internal info session-memory
+clawdbot hooks info session-memory
 ```
 
 Check hook status:
 
 ```bash
-clawdbot hooks internal check
+clawdbot hooks check
 ```
 
 Enable/disable:
 
 ```bash
-clawdbot hooks internal enable session-memory
-clawdbot hooks internal disable command-logger
+clawdbot hooks enable session-memory
+clawdbot hooks disable command-logger
 ```
 
 ## Configuration
@@ -184,7 +184,7 @@ Test your hooks by:
 
 1. Place hook in workspace hooks directory
 2. Restart gateway: `pkill -9 -f 'clawdbot.*gateway' && pnpm clawdbot gateway`
-3. Enable the hook: `clawdbot hooks internal enable my-hook`
+3. Enable the hook: `clawdbot hooks enable my-hook`
 4. Trigger the event (e.g., send `/new` command)
 5. Check gateway logs for hook execution
 

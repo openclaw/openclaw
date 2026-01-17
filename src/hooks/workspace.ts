@@ -18,6 +18,11 @@ import type {
   ParsedHookFrontmatter,
 } from "./types.js";
 
+type HookPackageManifest = {
+  name?: string;
+  clawdbot?: { hooks?: string[] };
+};
+
 function filterHookEntries(
   entries: HookEntry[],
   config?: ClawdbotConfig,
@@ -26,13 +31,69 @@ function filterHookEntries(
   return entries.filter((entry) => shouldIncludeHook({ entry, config, eligibility }));
 }
 
+function readHookPackageManifest(dir: string): HookPackageManifest | null {
+  const manifestPath = path.join(dir, "package.json");
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf-8");
+    return JSON.parse(raw) as HookPackageManifest;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePackageHooks(manifest: HookPackageManifest): string[] {
+  const raw = manifest.clawdbot?.hooks;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function loadHookFromDir(params: { hookDir: string; source: string; nameHint?: string }): Hook | null {
+  const hookMdPath = path.join(params.hookDir, "HOOK.md");
+  if (!fs.existsSync(hookMdPath)) return null;
+
+  try {
+    const content = fs.readFileSync(hookMdPath, "utf-8");
+    const frontmatter = parseFrontmatter(content);
+
+    const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
+    const description = frontmatter.description || "";
+
+    const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
+    let handlerPath: string | undefined;
+    for (const candidate of handlerCandidates) {
+      const candidatePath = path.join(params.hookDir, candidate);
+      if (fs.existsSync(candidatePath)) {
+        handlerPath = candidatePath;
+        break;
+      }
+    }
+
+    if (!handlerPath) {
+      console.warn(`[hooks] Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
+      return null;
+    }
+
+    return {
+      name,
+      description,
+      source: params.source as Hook["source"],
+      filePath: hookMdPath,
+      baseDir: params.hookDir,
+      handlerPath,
+    };
+  } catch (err) {
+    console.warn(`[hooks] Failed to load hook from ${params.hookDir}:`, err);
+    return null;
+  }
+}
+
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
 function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
   const { dir, source } = params;
 
-  // Check if directory exists
   if (!fs.existsSync(dir)) return [];
 
   const stat = fs.statSync(dir);
@@ -45,49 +106,24 @@ function loadHooksFromDir(params: { dir: string; source: string }): Hook[] {
     if (!entry.isDirectory()) continue;
 
     const hookDir = path.join(dir, entry.name);
-    const hookMdPath = path.join(hookDir, "HOOK.md");
+    const manifest = readHookPackageManifest(hookDir);
+    const packageHooks = manifest ? resolvePackageHooks(manifest) : [];
 
-    // Skip if no HOOK.md file
-    if (!fs.existsSync(hookMdPath)) continue;
-
-    try {
-      // Read HOOK.md to extract name and description
-      const content = fs.readFileSync(hookMdPath, "utf-8");
-      const frontmatter = parseFrontmatter(content);
-
-      const name = frontmatter.name || entry.name;
-      const description = frontmatter.description || "";
-
-      // Locate handler file (handler.ts, handler.js, index.ts, index.js)
-      const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
-
-      let handlerPath: string | undefined;
-      for (const candidate of handlerCandidates) {
-        const candidatePath = path.join(hookDir, candidate);
-        if (fs.existsSync(candidatePath)) {
-          handlerPath = candidatePath;
-          break;
-        }
+    if (packageHooks.length > 0) {
+      for (const hookPath of packageHooks) {
+        const resolvedHookDir = path.resolve(hookDir, hookPath);
+        const hook = loadHookFromDir({
+          hookDir: resolvedHookDir,
+          source,
+          nameHint: path.basename(resolvedHookDir),
+        });
+        if (hook) hooks.push(hook);
       }
-
-      // Skip if no handler file found
-      if (!handlerPath) {
-        console.warn(`[hooks] Hook "${name}" has HOOK.md but no handler file in ${hookDir}`);
-        continue;
-      }
-
-      hooks.push({
-        name,
-        description,
-        source: source as Hook["source"],
-        filePath: hookMdPath,
-        baseDir: hookDir,
-        handlerPath,
-      });
-    } catch (err) {
-      console.warn(`[hooks] Failed to load hook from ${hookDir}:`, err);
       continue;
     }
+
+    const hook = loadHookFromDir({ hookDir, source, nameHint: entry.name });
+    if (hook) hooks.push(hook);
   }
 
   return hooks;

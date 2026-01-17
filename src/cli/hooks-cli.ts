@@ -1,176 +1,775 @@
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import chalk from "chalk";
 import type { Command } from "commander";
-
-import { danger } from "../globals.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import { resolveArchiveKind } from "../infra/archive.js";
 import {
-  DEFAULT_GMAIL_LABEL,
-  DEFAULT_GMAIL_MAX_BYTES,
-  DEFAULT_GMAIL_RENEW_MINUTES,
-  DEFAULT_GMAIL_SERVE_BIND,
-  DEFAULT_GMAIL_SERVE_PATH,
-  DEFAULT_GMAIL_SERVE_PORT,
-  DEFAULT_GMAIL_SUBSCRIPTION,
-  DEFAULT_GMAIL_TOPIC,
-} from "../hooks/gmail.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
+  buildWorkspaceHookStatus,
+  type HookStatusEntry,
+  type HookStatusReport,
+} from "../hooks/hooks-status.js";
+import { loadConfig, writeConfigFile } from "../config/io.js";
+import { installHooksFromNpmSpec, installHooksFromPath, resolveHookInstallDir } from "../hooks/install.js";
+import { recordHookInstall } from "../hooks/installs.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { registerInternalHooksSubcommands } from "./hooks-internal-cli.js";
+import { resolveUserPath } from "../utils.js";
 
-export function registerHooksCli(program: Command) {
+export type HooksListOptions = {
+  json?: boolean;
+  eligible?: boolean;
+  verbose?: boolean;
+};
+
+export type HookInfoOptions = {
+  json?: boolean;
+};
+
+export type HooksCheckOptions = {
+  json?: boolean;
+};
+
+export type HooksUpdateOptions = {
+  all?: boolean;
+  dryRun?: boolean;
+};
+
+/**
+ * Format a single hook for display in the list
+ */
+function formatHookLine(hook: HookStatusEntry, verbose = false): string {
+  const emoji = hook.emoji ?? "🔗";
+  const status = hook.eligible
+    ? chalk.green("✓")
+    : hook.disabled
+      ? chalk.yellow("disabled")
+      : chalk.red("missing reqs");
+
+  const name = hook.eligible ? chalk.white(hook.name) : chalk.gray(hook.name);
+
+  const desc = chalk.gray(
+    hook.description.length > 50 ? `${hook.description.slice(0, 47)}...` : hook.description,
+  );
+
+  if (verbose) {
+    const missing: string[] = [];
+    if (hook.missing.bins.length > 0) {
+      missing.push(`bins: ${hook.missing.bins.join(", ")}`);
+    }
+    if (hook.missing.anyBins.length > 0) {
+      missing.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
+    }
+    if (hook.missing.env.length > 0) {
+      missing.push(`env: ${hook.missing.env.join(", ")}`);
+    }
+    if (hook.missing.config.length > 0) {
+      missing.push(`config: ${hook.missing.config.join(", ")}`);
+    }
+    if (hook.missing.os.length > 0) {
+      missing.push(`os: ${hook.missing.os.join(", ")}`);
+    }
+    const missingStr = missing.length > 0 ? chalk.red(` [${missing.join("; ")}]`) : "";
+    return `${emoji} ${name} ${status}${missingStr}\n   ${desc}`;
+  }
+
+  return `${emoji} ${name} ${status} - ${desc}`;
+}
+
+async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  try {
+    const raw = await fsp.readFile(path.join(dir, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Format the hooks list output
+ */
+export function formatHooksList(report: HookStatusReport, opts: HooksListOptions): string {
+  const hooks = opts.eligible ? report.hooks.filter((h) => h.eligible) : report.hooks;
+
+  if (opts.json) {
+    const jsonReport = {
+      workspaceDir: report.workspaceDir,
+      managedHooksDir: report.managedHooksDir,
+      hooks: hooks.map((h) => ({
+        name: h.name,
+        description: h.description,
+        emoji: h.emoji,
+        eligible: h.eligible,
+        disabled: h.disabled,
+        source: h.source,
+        events: h.events,
+        homepage: h.homepage,
+        missing: h.missing,
+      })),
+    };
+    return JSON.stringify(jsonReport, null, 2);
+  }
+
+  if (hooks.length === 0) {
+    const message = opts.eligible
+      ? "No eligible hooks found. Run `clawdbot hooks list` to see all hooks."
+      : "No hooks found.";
+    return message;
+  }
+
+  const eligible = hooks.filter((h) => h.eligible);
+  const notEligible = hooks.filter((h) => !h.eligible);
+
+  const lines: string[] = [];
+  lines.push(
+    chalk.bold.cyan("Internal Hooks") + chalk.gray(` (${eligible.length}/${hooks.length} ready)`),
+  );
+  lines.push("");
+
+  if (eligible.length > 0) {
+    lines.push(chalk.bold.green("Ready:"));
+    for (const hook of eligible) {
+      lines.push(`  ${formatHookLine(hook, opts.verbose)}`);
+    }
+  }
+
+  if (notEligible.length > 0 && !opts.eligible) {
+    if (eligible.length > 0) lines.push("");
+    lines.push(chalk.bold.yellow("Not ready:"));
+    for (const hook of notEligible) {
+      lines.push(`  ${formatHookLine(hook, opts.verbose)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format detailed info for a single hook
+ */
+export function formatHookInfo(
+  report: HookStatusReport,
+  hookName: string,
+  opts: HookInfoOptions,
+): string {
+  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
+
+  if (!hook) {
+    if (opts.json) {
+      return JSON.stringify({ error: "not found", hook: hookName }, null, 2);
+    }
+    return `Hook "${hookName}" not found. Run \`clawdbot hooks list\` to see available hooks.`;
+  }
+
+  if (opts.json) {
+    return JSON.stringify(hook, null, 2);
+  }
+
+  const lines: string[] = [];
+  const emoji = hook.emoji ?? "🔗";
+  const status = hook.eligible
+    ? chalk.green("✓ Ready")
+    : hook.disabled
+      ? chalk.yellow("⏸ Disabled")
+      : chalk.red("✗ Missing requirements");
+
+  lines.push(`${emoji} ${chalk.bold.cyan(hook.name)} ${status}`);
+  lines.push("");
+  lines.push(chalk.white(hook.description));
+  lines.push("");
+
+  // Details
+  lines.push(chalk.bold("Details:"));
+  lines.push(`  Source: ${hook.source}`);
+  lines.push(`  Path: ${chalk.gray(hook.filePath)}`);
+  lines.push(`  Handler: ${chalk.gray(hook.handlerPath)}`);
+  if (hook.homepage) {
+    lines.push(`  Homepage: ${chalk.blue(hook.homepage)}`);
+  }
+  if (hook.events.length > 0) {
+    lines.push(`  Events: ${hook.events.join(", ")}`);
+  }
+
+  // Requirements
+  const hasRequirements =
+    hook.requirements.bins.length > 0 ||
+    hook.requirements.anyBins.length > 0 ||
+    hook.requirements.env.length > 0 ||
+    hook.requirements.config.length > 0 ||
+    hook.requirements.os.length > 0;
+
+  if (hasRequirements) {
+    lines.push("");
+    lines.push(chalk.bold("Requirements:"));
+    if (hook.requirements.bins.length > 0) {
+      const binsStatus = hook.requirements.bins.map((bin) => {
+        const missing = hook.missing.bins.includes(bin);
+        return missing ? chalk.red(`✗ ${bin}`) : chalk.green(`✓ ${bin}`);
+      });
+      lines.push(`  Binaries: ${binsStatus.join(", ")}`);
+    }
+    if (hook.requirements.anyBins.length > 0) {
+      const anyBinsStatus =
+        hook.missing.anyBins.length > 0
+          ? chalk.red(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
+          : chalk.green(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
+      lines.push(`  Any binary: ${anyBinsStatus}`);
+    }
+    if (hook.requirements.env.length > 0) {
+      const envStatus = hook.requirements.env.map((env) => {
+        const missing = hook.missing.env.includes(env);
+        return missing ? chalk.red(`✗ ${env}`) : chalk.green(`✓ ${env}`);
+      });
+      lines.push(`  Environment: ${envStatus.join(", ")}`);
+    }
+    if (hook.requirements.config.length > 0) {
+      const configStatus = hook.configChecks.map((check) => {
+        return check.satisfied ? chalk.green(`✓ ${check.path}`) : chalk.red(`✗ ${check.path}`);
+      });
+      lines.push(`  Config: ${configStatus.join(", ")}`);
+    }
+    if (hook.requirements.os.length > 0) {
+      const osStatus =
+        hook.missing.os.length > 0
+          ? chalk.red(`✗ (${hook.requirements.os.join(", ")})`)
+          : chalk.green(`✓ (${hook.requirements.os.join(", ")})`);
+      lines.push(`  OS: ${osStatus}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format check output
+ */
+export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
+  if (opts.json) {
+    const eligible = report.hooks.filter((h) => h.eligible);
+    const notEligible = report.hooks.filter((h) => !h.eligible);
+    return JSON.stringify(
+      {
+        total: report.hooks.length,
+        eligible: eligible.length,
+        notEligible: notEligible.length,
+        hooks: {
+          eligible: eligible.map((h) => h.name),
+          notEligible: notEligible.map((h) => ({
+            name: h.name,
+            missing: h.missing,
+          })),
+        },
+      },
+      null,
+      2,
+    );
+  }
+
+  const eligible = report.hooks.filter((h) => h.eligible);
+  const notEligible = report.hooks.filter((h) => !h.eligible);
+
+  const lines: string[] = [];
+  lines.push(chalk.bold.cyan("Internal Hooks Status"));
+  lines.push("");
+  lines.push(`Total hooks: ${report.hooks.length}`);
+  lines.push(chalk.green(`Ready: ${eligible.length}`));
+  lines.push(chalk.yellow(`Not ready: ${notEligible.length}`));
+
+  if (notEligible.length > 0) {
+    lines.push("");
+    lines.push(chalk.bold.yellow("Hooks not ready:"));
+    for (const hook of notEligible) {
+      const reasons = [];
+      if (hook.disabled) reasons.push("disabled");
+      if (hook.missing.bins.length > 0) reasons.push(`bins: ${hook.missing.bins.join(", ")}`);
+      if (hook.missing.anyBins.length > 0)
+        reasons.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
+      if (hook.missing.env.length > 0) reasons.push(`env: ${hook.missing.env.join(", ")}`);
+      if (hook.missing.config.length > 0) reasons.push(`config: ${hook.missing.config.join(", ")}`);
+      if (hook.missing.os.length > 0) reasons.push(`os: ${hook.missing.os.join(", ")}`);
+      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export async function enableHook(hookName: string): Promise<void> {
+  const config = loadConfig();
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const report = buildWorkspaceHookStatus(workspaceDir, { config });
+  const hook = report.hooks.find((h) => h.name === hookName);
+
+  if (!hook) {
+    throw new Error(`Hook "${hookName}" not found`);
+  }
+
+  if (!hook.eligible) {
+    throw new Error(`Hook "${hookName}" is not eligible (missing requirements)`);
+  }
+
+  // Update config
+  const entries = { ...config.hooks?.internal?.entries };
+  entries[hookName] = { ...entries[hookName], enabled: true };
+
+  const nextConfig = {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      internal: {
+        ...config.hooks?.internal,
+        enabled: true,
+        entries,
+      },
+    },
+  };
+
+  await writeConfigFile(nextConfig);
+  console.log(`${chalk.green("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${hookName}`);
+}
+
+export async function disableHook(hookName: string): Promise<void> {
+  const config = loadConfig();
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const report = buildWorkspaceHookStatus(workspaceDir, { config });
+  const hook = report.hooks.find((h) => h.name === hookName);
+
+  if (!hook) {
+    throw new Error(`Hook "${hookName}" not found`);
+  }
+
+  // Update config
+  const entries = { ...config.hooks?.internal?.entries };
+  entries[hookName] = { ...entries[hookName], enabled: false };
+
+  const nextConfig = {
+    ...config,
+    hooks: {
+      ...config.hooks,
+      internal: {
+        ...config.hooks?.internal,
+        entries,
+      },
+    },
+  };
+
+  await writeConfigFile(nextConfig);
+  console.log(`${chalk.yellow("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${hookName}`);
+}
+
+export function registerHooksCli(program: Command): void {
   const hooks = program
     .command("hooks")
-    .description("Webhook helpers and hook-based integrations")
+    .description("Manage internal agent hooks")
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.clawd.bot/cli/hooks")}\n`,
     );
 
-  // Register internal hooks management subcommands
-  registerInternalHooksSubcommands(hooks);
-
-  const gmail = hooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
-
-  gmail
-    .command("setup")
-    .description("Configure Gmail watch + Pub/Sub + Clawdbot hooks")
-    .requiredOption("--account <email>", "Gmail account to watch")
-    .option("--project <id>", "GCP project id (OAuth client owner)")
-    .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
-    .option("--subscription <name>", "Pub/Sub subscription name", DEFAULT_GMAIL_SUBSCRIPTION)
-    .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
-    .option("--hook-url <url>", "Clawdbot hook URL")
-    .option("--hook-token <token>", "Clawdbot hook token")
-    .option("--push-token <token>", "Push token for gog watch serve")
-    .option("--bind <host>", "gog watch serve bind host", DEFAULT_GMAIL_SERVE_BIND)
-    .option("--port <port>", "gog watch serve port", String(DEFAULT_GMAIL_SERVE_PORT))
-    .option("--path <path>", "gog watch serve path", DEFAULT_GMAIL_SERVE_PATH)
-    .option("--include-body", "Include email body snippets", true)
-    .option("--max-bytes <n>", "Max bytes for body snippets", String(DEFAULT_GMAIL_MAX_BYTES))
-    .option(
-      "--renew-minutes <n>",
-      "Renew watch every N minutes",
-      String(DEFAULT_GMAIL_RENEW_MINUTES),
-    )
-    .option("--tailscale <mode>", "Expose push endpoint via tailscale (funnel|serve|off)", "funnel")
-    .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
-    .option(
-      "--tailscale-target <target>",
-      "Tailscale serve/funnel target (port, host:port, or URL)",
-    )
-    .option("--push-endpoint <url>", "Explicit Pub/Sub push endpoint")
-    .option("--json", "Output JSON summary", false)
+  hooks
+    .command("list")
+    .description("List all internal hooks")
+    .option("--eligible", "Show only eligible hooks", false)
+    .option("--json", "Output as JSON", false)
+    .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) => {
       try {
-        const parsed = parseGmailSetupOptions(opts);
-        await runGmailSetup(parsed);
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const report = buildWorkspaceHookStatus(workspaceDir, { config });
+        console.log(formatHooksList(report, opts));
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
+        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        process.exit(1);
       }
     });
 
-  gmail
-    .command("run")
-    .description("Run gog watch serve + auto-renew loop")
-    .option("--account <email>", "Gmail account to watch")
-    .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)")
-    .option("--subscription <name>", "Pub/Sub subscription name")
-    .option("--label <label>", "Gmail label to watch")
-    .option("--hook-url <url>", "Clawdbot hook URL")
-    .option("--hook-token <token>", "Clawdbot hook token")
-    .option("--push-token <token>", "Push token for gog watch serve")
-    .option("--bind <host>", "gog watch serve bind host")
-    .option("--port <port>", "gog watch serve port")
-    .option("--path <path>", "gog watch serve path")
-    .option("--include-body", "Include email body snippets")
-    .option("--max-bytes <n>", "Max bytes for body snippets")
-    .option("--renew-minutes <n>", "Renew watch every N minutes")
-    .option("--tailscale <mode>", "Expose push endpoint via tailscale (funnel|serve|off)")
-    .option("--tailscale-path <path>", "Path for tailscale serve/funnel")
-    .option(
-      "--tailscale-target <target>",
-      "Tailscale serve/funnel target (port, host:port, or URL)",
-    )
-    .action(async (opts) => {
+  hooks
+    .command("info <name>")
+    .description("Show detailed information about a hook")
+    .option("--json", "Output as JSON", false)
+    .action(async (name, opts) => {
       try {
-        const parsed = parseGmailRunOptions(opts);
-        await runGmailService(parsed);
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const report = buildWorkspaceHookStatus(workspaceDir, { config });
+        console.log(formatHookInfo(report, name, opts));
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
+        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        process.exit(1);
       }
     });
-}
 
-function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
-  const accountRaw = raw.account;
-  const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
-  if (!account) throw new Error("--account is required");
-  return {
-    account,
-    project: stringOption(raw.project),
-    topic: stringOption(raw.topic),
-    subscription: stringOption(raw.subscription),
-    label: stringOption(raw.label),
-    hookUrl: stringOption(raw.hookUrl),
-    hookToken: stringOption(raw.hookToken),
-    pushToken: stringOption(raw.pushToken),
-    bind: stringOption(raw.bind),
-    port: numberOption(raw.port),
-    path: stringOption(raw.path),
-    includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailSetupOptions["tailscale"],
-    tailscalePath: stringOption(raw.tailscalePath),
-    tailscaleTarget: stringOption(raw.tailscaleTarget),
-    pushEndpoint: stringOption(raw.pushEndpoint),
-    json: Boolean(raw.json),
-  };
-}
+  hooks
+    .command("check")
+    .description("Check hooks eligibility status")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const report = buildWorkspaceHookStatus(workspaceDir, { config });
+        console.log(formatHooksCheck(report, opts));
+      } catch (err) {
+        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
 
-function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
-  return {
-    account: stringOption(raw.account),
-    topic: stringOption(raw.topic),
-    subscription: stringOption(raw.subscription),
-    label: stringOption(raw.label),
-    hookUrl: stringOption(raw.hookUrl),
-    hookToken: stringOption(raw.hookToken),
-    pushToken: stringOption(raw.pushToken),
-    bind: stringOption(raw.bind),
-    port: numberOption(raw.port),
-    path: stringOption(raw.path),
-    includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
-    tailscale: stringOption(raw.tailscale) as GmailRunOptions["tailscale"],
-    tailscalePath: stringOption(raw.tailscalePath),
-    tailscaleTarget: stringOption(raw.tailscaleTarget),
-  };
-}
+  hooks
+    .command("enable <name>")
+    .description("Enable a hook")
+    .action(async (name) => {
+      try {
+        await enableHook(name);
+      } catch (err) {
+        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
 
-function stringOption(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
+  hooks
+    .command("disable <name>")
+    .description("Disable a hook")
+    .action(async (name) => {
+      try {
+        await disableHook(name);
+      } catch (err) {
+        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    });
 
-function numberOption(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return Math.floor(n);
-}
+  hooks
+    .command("install")
+    .description("Install a hook pack (path, archive, or npm spec)")
+    .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
+    .option("-l, --link", "Link a local path instead of copying", false)
+    .action(async (raw: string, opts: { link?: boolean }) => {
+      const resolved = resolveUserPath(raw);
+      const cfg = loadConfig();
 
-function booleanOption(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) return undefined;
-  return Boolean(value);
+      if (fs.existsSync(resolved)) {
+        if (opts.link) {
+          const stat = fs.statSync(resolved);
+          if (!stat.isDirectory()) {
+            defaultRuntime.error("Linked hook paths must be directories.");
+            process.exit(1);
+          }
+
+          const existing = cfg.hooks?.internal?.load?.extraDirs ?? [];
+          const merged = Array.from(new Set([...existing, resolved]));
+          const probe = await installHooksFromPath({ path: resolved, dryRun: true });
+          if (!probe.ok) {
+            defaultRuntime.error(probe.error);
+            process.exit(1);
+          }
+
+          let next: ClawdbotConfig = {
+            ...cfg,
+            hooks: {
+              ...cfg.hooks,
+              internal: {
+                ...cfg.hooks?.internal,
+                enabled: true,
+                load: {
+                  ...cfg.hooks?.internal?.load,
+                  extraDirs: merged,
+                },
+              },
+            },
+          };
+
+          for (const hookName of probe.hooks) {
+            next = {
+              ...next,
+              hooks: {
+                ...next.hooks,
+                internal: {
+                  ...next.hooks?.internal,
+                  entries: {
+                    ...next.hooks?.internal?.entries,
+                    [hookName]: {
+                      ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                      enabled: true,
+                    },
+                  },
+                },
+              },
+            };
+          }
+
+          next = recordHookInstall(next, {
+            hookId: probe.hookPackId,
+            source: "path",
+            sourcePath: resolved,
+            installPath: resolved,
+            version: probe.version,
+            hooks: probe.hooks,
+          });
+
+          await writeConfigFile(next);
+          defaultRuntime.log(`Linked hook path: ${resolved}`);
+          defaultRuntime.log(`Restart the gateway to load hooks.`);
+          return;
+        }
+
+        const result = await installHooksFromPath({
+          path: resolved,
+          logger: {
+            info: (msg) => defaultRuntime.log(msg),
+            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          },
+        });
+        if (!result.ok) {
+          defaultRuntime.error(result.error);
+          process.exit(1);
+        }
+
+        let next: ClawdbotConfig = {
+          ...cfg,
+          hooks: {
+            ...cfg.hooks,
+            internal: {
+              ...cfg.hooks?.internal,
+              enabled: true,
+              entries: {
+                ...cfg.hooks?.internal?.entries,
+              },
+            },
+          },
+        };
+
+        for (const hookName of result.hooks) {
+          next = {
+            ...next,
+            hooks: {
+              ...next.hooks,
+              internal: {
+                ...next.hooks?.internal,
+                entries: {
+                  ...next.hooks?.internal?.entries,
+                  [hookName]: {
+                    ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          };
+        }
+
+        const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
+
+        next = recordHookInstall(next, {
+          hookId: result.hookPackId,
+          source,
+          sourcePath: resolved,
+          installPath: result.targetDir,
+          version: result.version,
+          hooks: result.hooks,
+        });
+
+        await writeConfigFile(next);
+        defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
+        defaultRuntime.log(`Restart the gateway to load hooks.`);
+        return;
+      }
+
+      if (opts.link) {
+        defaultRuntime.error("`--link` requires a local path.");
+        process.exit(1);
+      }
+
+      const looksLikePath =
+        raw.startsWith(".") ||
+        raw.startsWith("~") ||
+        path.isAbsolute(raw) ||
+        raw.endsWith(".zip") ||
+        raw.endsWith(".tgz") ||
+        raw.endsWith(".tar.gz") ||
+        raw.endsWith(".tar");
+      if (looksLikePath) {
+        defaultRuntime.error(`Path not found: ${resolved}`);
+        process.exit(1);
+      }
+
+      const result = await installHooksFromNpmSpec({
+        spec: raw,
+        logger: {
+          info: (msg) => defaultRuntime.log(msg),
+          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+        },
+      });
+      if (!result.ok) {
+        defaultRuntime.error(result.error);
+        process.exit(1);
+      }
+
+      let next: ClawdbotConfig = {
+        ...cfg,
+        hooks: {
+          ...cfg.hooks,
+          internal: {
+            ...cfg.hooks?.internal,
+            enabled: true,
+            entries: {
+              ...cfg.hooks?.internal?.entries,
+            },
+          },
+        },
+      };
+
+      for (const hookName of result.hooks) {
+        next = {
+          ...next,
+          hooks: {
+            ...next.hooks,
+            internal: {
+              ...next.hooks?.internal,
+              entries: {
+                ...next.hooks?.internal?.entries,
+                [hookName]: {
+                  ...(next.hooks?.internal?.entries?.[hookName] as object | undefined),
+                  enabled: true,
+                },
+              },
+            },
+          },
+        };
+      }
+
+      next = recordHookInstall(next, {
+        hookId: result.hookPackId,
+        source: "npm",
+        spec: raw,
+        installPath: result.targetDir,
+        version: result.version,
+        hooks: result.hooks,
+      });
+      await writeConfigFile(next);
+      defaultRuntime.log(`Installed hooks: ${result.hooks.join(", ")}`);
+      defaultRuntime.log(`Restart the gateway to load hooks.`);
+    });
+
+  hooks
+    .command("update")
+    .description("Update installed hooks (npm installs only)")
+    .argument("[id]", "Hook pack id (omit with --all)")
+    .option("--all", "Update all tracked hooks", false)
+    .option("--dry-run", "Show what would change without writing", false)
+    .action(async (id: string | undefined, opts: HooksUpdateOptions) => {
+      const cfg = loadConfig();
+      const installs = cfg.hooks?.internal?.installs ?? {};
+      const targets = opts.all ? Object.keys(installs) : id ? [id] : [];
+
+      if (targets.length === 0) {
+        defaultRuntime.error("Provide a hook id or use --all.");
+        process.exit(1);
+      }
+
+      let nextCfg = cfg;
+      let updatedCount = 0;
+
+      for (const hookId of targets) {
+        const record = installs[hookId];
+        if (!record) {
+          defaultRuntime.log(chalk.yellow(`No install record for \"${hookId}\".`));
+          continue;
+        }
+        if (record.source !== "npm") {
+          defaultRuntime.log(chalk.yellow(`Skipping \"${hookId}\" (source: ${record.source}).`));
+          continue;
+        }
+        if (!record.spec) {
+          defaultRuntime.log(chalk.yellow(`Skipping \"${hookId}\" (missing npm spec).`));
+          continue;
+        }
+
+        const installPath = record.installPath ?? resolveHookInstallDir(hookId);
+        const currentVersion = await readInstalledPackageVersion(installPath);
+
+        if (opts.dryRun) {
+          const probe = await installHooksFromNpmSpec({
+            spec: record.spec,
+            mode: "update",
+            dryRun: true,
+            expectedHookPackId: hookId,
+            logger: {
+              info: (msg) => defaultRuntime.log(msg),
+              warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+            },
+          });
+          if (!probe.ok) {
+            defaultRuntime.log(chalk.red(`Failed to check ${hookId}: ${probe.error}`));
+            continue;
+          }
+
+          const nextVersion = probe.version ?? "unknown";
+          const currentLabel = currentVersion ?? "unknown";
+          if (currentVersion && probe.version && currentVersion === probe.version) {
+            defaultRuntime.log(`${hookId} is up to date (${currentLabel}).`);
+          } else {
+            defaultRuntime.log(`Would update ${hookId}: ${currentLabel} → ${nextVersion}.`);
+          }
+          continue;
+        }
+
+        const result = await installHooksFromNpmSpec({
+          spec: record.spec,
+          mode: "update",
+          expectedHookPackId: hookId,
+          logger: {
+            info: (msg) => defaultRuntime.log(msg),
+            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          },
+        });
+        if (!result.ok) {
+          defaultRuntime.log(chalk.red(`Failed to update ${hookId}: ${result.error}`));
+          continue;
+        }
+
+        const nextVersion =
+          result.version ?? (await readInstalledPackageVersion(result.targetDir));
+        nextCfg = recordHookInstall(nextCfg, {
+          hookId,
+          source: "npm",
+          spec: record.spec,
+          installPath: result.targetDir,
+          version: nextVersion,
+          hooks: result.hooks,
+        });
+        updatedCount += 1;
+
+        const currentLabel = currentVersion ?? "unknown";
+        const nextLabel = nextVersion ?? "unknown";
+        if (currentVersion && nextVersion && currentVersion === nextVersion) {
+          defaultRuntime.log(`${hookId} already at ${currentLabel}.`);
+        } else {
+          defaultRuntime.log(`Updated ${hookId}: ${currentLabel} → ${nextLabel}.`);
+        }
+      }
+
+      if (updatedCount > 0) {
+        await writeConfigFile(nextCfg);
+        defaultRuntime.log("Restart the gateway to load hooks.");
+      }
+    });
+
+  hooks.action(async () => {
+    try {
+      const config = loadConfig();
+      const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+      const report = buildWorkspaceHookStatus(workspaceDir, { config });
+      console.log(formatHooksList(report, {}));
+    } catch (err) {
+      console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
 }

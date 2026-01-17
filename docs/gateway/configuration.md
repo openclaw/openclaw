@@ -2757,7 +2757,7 @@ Mapping notes:
 - If there is no prior delivery route, set `channel` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage/MS Teams).
 - `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agents.defaults.models` is set).
 
-Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
+Gmail helper config (used by `clawdbot webhooks gmail setup` / `run`):
 
 ```json5
 {

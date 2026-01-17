@@ -106,6 +106,9 @@ importers:
       json5:
         specifier: ^2.2.3
         version: 2.2.3
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
@@ -185,9 +188,6 @@ importers:
       docx-preview:
         specifier: ^0.3.7
         version: 0.3.7
-      jszip:
-        specifier: ^3.10.1
-        version: 3.10.1
       lit:
         specifier: ^3.3.2
         version: 3.3.2

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
@@ -170,6 +171,37 @@ describe("installPluginFromArchive", () => {
     expect(second.ok).toBe(false);
     if (second.ok) return;
     expect(second.error).toContain("already exists");
+  });
+
+  it("installs from a zip archive", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "plugin.zip");
+
+    const zip = new JSZip();
+    zip.file(
+      "package/package.json",
+      JSON.stringify({
+        name: "@clawdbot/zipper",
+        version: "0.0.1",
+        clawdbot: { extensions: ["./dist/index.js"] },
+      }),
+    );
+    zip.file("package/dist/index.js", "export {};");
+    const buffer = await zip.generateAsync({ type: "nodebuffer" });
+    fs.writeFileSync(archivePath, buffer);
+
+    const result = await withStateDir(stateDir, async () => {
+      const { installPluginFromArchive } = await import("./install.js");
+      return await installPluginFromArchive({ archivePath });
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.pluginId).toBe("zipper");
+    expect(result.targetDir).toBe(path.join(stateDir, "extensions", "zipper"));
+    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
   });
 
   it("allows updates when mode is update", async () => {

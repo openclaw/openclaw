@@ -54,6 +54,18 @@ const HookConfigSchema = z
   })
   .passthrough();
 
+const HookInstallRecordSchema = z
+  .object({
+    source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
+    spec: z.string().optional(),
+    sourcePath: z.string().optional(),
+    installPath: z.string().optional(),
+    version: z.string().optional(),
+    installedAt: z.string().optional(),
+    hooks: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
 export const InternalHooksSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -64,6 +76,7 @@ export const InternalHooksSchema = z
         extraDirs: z.array(z.string()).optional(),
       })
       .optional(),
+    installs: z.record(z.string(), HookInstallRecordSchema).optional(),
   })
   .optional();
 
