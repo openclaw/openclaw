@@ -16,8 +16,8 @@ import {
 import { zalouserOnboardingAdapter } from "./onboarding.js";
 import { sendMessageZalouser } from "./send.js";
 import { checkZcaInstalled, parseJsonOutput, runZca, runZcaInteractive } from "./zca.js";
-import {
 import { missingTargetError } from "../../../src/infra/outbound/target-errors.js";
+import {
   DEFAULT_ACCOUNT_ID,
   type CoreConfig,
   type ZalouserConfig,

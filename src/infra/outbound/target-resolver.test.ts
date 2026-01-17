@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+  normalizeChannelId: (value: string) => value,
 }));
 
 describe("resolveMessagingTarget (directory fallback)", () => {
