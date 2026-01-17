@@ -52,7 +52,7 @@ describe("subagent registry persistence", () => {
       runId: "run-1",
       childSessionKey: "agent:main:subagent:test",
       requesterSessionKey: "agent:main:main",
-      requesterAccountId: "acct-main",
+      requesterOrigin: { channel: " whatsapp ", accountId: " acct-main " },
       requesterDisplayKey: "main",
       task: "do the thing",
       cleanup: "keep",
@@ -62,8 +62,18 @@ describe("subagent registry persistence", () => {
     const raw = await fs.readFile(registryPath, "utf8");
     const parsed = JSON.parse(raw) as { runs?: Record<string, unknown> };
     expect(parsed.runs && Object.keys(parsed.runs)).toContain("run-1");
-    const run = parsed.runs?.["run-1"] as { requesterAccountId?: string } | undefined;
-    expect(run?.requesterAccountId).toBe("acct-main");
+    const run = parsed.runs?.["run-1"] as
+      | {
+        requesterOrigin?: { channel?: string; accountId?: string };
+      }
+      | undefined;
+    expect(run).toBeDefined();
+    if (run) {
+      expect("requesterAccountId" in run).toBe(false);
+      expect("requesterChannel" in run).toBe(false);
+    }
+    expect(run?.requesterOrigin?.channel).toBe("whatsapp");
+    expect(run?.requesterOrigin?.accountId).toBe("acct-main");
 
     // Simulate a process restart: module re-import should load persisted runs
     // and trigger the announce flow once the run resolves.
@@ -80,17 +90,18 @@ describe("subagent registry persistence", () => {
       childSessionKey: string;
       childRunId: string;
       requesterSessionKey: string;
-      requesterAccountId?: string;
+      requesterOrigin?: { channel?: string; accountId?: string };
       task: string;
       cleanup: string;
       label?: string;
     };
     const first = announceSpy.mock.calls[0]?.[0] as unknown as AnnounceParams;
     expect(first.childSessionKey).toBe("agent:main:subagent:test");
-    expect(first.requesterAccountId).toBe("acct-main");
+    expect(first.requesterOrigin?.channel).toBe("whatsapp");
+    expect(first.requesterOrigin?.accountId).toBe("acct-main");
   });
 
-  it("skips cleanup when cleanupHandled/announceHandled was persisted", async () => {
+  it("skips cleanup when cleanupHandled was persisted", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-subagent-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
 
@@ -128,6 +139,44 @@ describe("subagent registry persistence", () => {
         (params as { childSessionKey?: string }).childSessionKey === "agent:main:subagent:two",
     );
     expect(match).toBeFalsy();
+  });
+
+  it("maps legacy announce fields into cleanup state", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-subagent-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const persisted = {
+      version: 1,
+      runs: {
+        "run-legacy": {
+          runId: "run-legacy",
+          childSessionKey: "agent:main:subagent:legacy",
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "legacy announce",
+          cleanup: "keep",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 2,
+          announceCompletedAt: 9,
+          announceHandled: true,
+          requesterChannel: "whatsapp",
+          requesterAccountId: "legacy-account",
+        },
+      },
+    };
+    await fs.mkdir(path.dirname(registryPath), { recursive: true });
+    await fs.writeFile(registryPath, `${JSON.stringify(persisted)}\n`, "utf8");
+
+    vi.resetModules();
+    const { loadSubagentRegistryFromDisk } = await import("./subagent-registry.store.js");
+    const runs = loadSubagentRegistryFromDisk();
+    const entry = runs.get("run-legacy");
+    expect(entry?.cleanupHandled).toBe(true);
+    expect(entry?.cleanupCompletedAt).toBe(9);
+    expect(entry?.requesterOrigin?.channel).toBe("whatsapp");
+    expect(entry?.requesterOrigin?.accountId).toBe("legacy-account");
   });
 
   it("retries cleanup announce after a failed announce", async () => {

@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.js";
 
 export type PersistedSubagentRegistryVersion = 1;
@@ -13,8 +14,13 @@ type PersistedSubagentRegistry = {
 
 const REGISTRY_VERSION = 1 as const;
 
-type PersistedSubagentRunRecord = Omit<SubagentRunRecord, "announceHandled"> & {
-  announceHandled?: boolean;
+type PersistedSubagentRunRecord = SubagentRunRecord;
+
+type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
+  announceCompletedAt?: unknown;
+  announceHandled?: unknown;
+  requesterChannel?: unknown;
+  requesterAccountId?: unknown;
 };
 
 export function resolveSubagentRegistryPath(): string {
@@ -32,25 +38,33 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   const out = new Map<string, SubagentRunRecord>();
   for (const [runId, entry] of Object.entries(runsRaw)) {
     if (!entry || typeof entry !== "object") continue;
-    const typed = entry as PersistedSubagentRunRecord;
+    const typed = entry as LegacySubagentRunRecord;
     if (!typed.runId || typeof typed.runId !== "string") continue;
-    // Back-compat: map legacy announce fields into cleanup fields.
-    const announceCompletedAt =
+    const legacyCompletedAt =
       typeof typed.announceCompletedAt === "number" ? typed.announceCompletedAt : undefined;
     const cleanupCompletedAt =
-      typeof typed.cleanupCompletedAt === "number" ? typed.cleanupCompletedAt : announceCompletedAt;
+      typeof typed.cleanupCompletedAt === "number" ? typed.cleanupCompletedAt : legacyCompletedAt;
     const cleanupHandled =
       typeof typed.cleanupHandled === "boolean"
         ? typed.cleanupHandled
-        : Boolean(typed.announceHandled ?? announceCompletedAt ?? cleanupCompletedAt);
-    const announceHandled =
-      typeof typed.announceHandled === "boolean"
-        ? typed.announceHandled
-        : Boolean(announceCompletedAt);
+        : Boolean(typed.announceHandled ?? cleanupCompletedAt);
+    const requesterOrigin = normalizeDeliveryContext(
+      typed.requesterOrigin ?? {
+        channel: typeof typed.requesterChannel === "string" ? typed.requesterChannel : undefined,
+        accountId:
+          typeof typed.requesterAccountId === "string" ? typed.requesterAccountId : undefined,
+      },
+    );
+    const {
+      announceCompletedAt: _announceCompletedAt,
+      announceHandled: _announceHandled,
+      requesterChannel: _channel,
+      requesterAccountId: _accountId,
+      ...rest
+    } = typed;
     out.set(runId, {
-      ...typed,
-      announceCompletedAt,
-      announceHandled,
+      ...rest,
+      requesterOrigin,
       cleanupCompletedAt,
       cleanupHandled,
     });
@@ -62,8 +76,7 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
   for (const [runId, entry] of runs.entries()) {
-    const { announceHandled: _ignored, ...persisted } = entry;
-    serialized[runId] = persisted;
+    serialized[runId] = entry;
   }
   const out: PersistedSubagentRegistry = {
     version: REGISTRY_VERSION,
