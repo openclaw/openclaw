@@ -251,7 +251,12 @@ export const MediaUnderstandingScopeSchema = z
             .object({
               channel: z.string().optional(),
               chatType: z
-                .union([z.literal("direct"), z.literal("group"), z.literal("room")])
+                .union([
+                  z.literal("direct"),
+                  z.literal("group"),
+                  z.literal("channel"),
+                  z.literal("room"),
+                ])
                 .optional(),
               keyPrefix: z.string().optional(),
             })

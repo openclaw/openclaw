@@ -186,7 +186,7 @@ export function createSlackMonitorContext(params: {
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
-    const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "room";
+    const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
     return resolveSessionKey(
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },

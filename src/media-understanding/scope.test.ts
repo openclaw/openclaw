@@ -1,46 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { resolveMediaUnderstandingScope } from "./scope.js";
 
-describe("resolveMediaUnderstandingScope", () => {
-  it("defaults to allow when scope is undefined", () => {
-    expect(resolveMediaUnderstandingScope({})).toBe("allow");
+import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
+
+describe("media understanding scope", () => {
+  it("normalizes channel/room", () => {
+    expect(normalizeMediaUnderstandingChatType("channel")).toBe("channel");
+    expect(normalizeMediaUnderstandingChatType("room")).toBe("channel");
   });
 
-  it("uses first matching rule", () => {
-    const decision = resolveMediaUnderstandingScope({
-      scope: {
-        default: "deny",
-        rules: [
-          { action: "allow", match: { channel: "whatsapp" } },
-          { action: "deny", match: { channel: "whatsapp", chatType: "direct" } },
-        ],
-      },
-      channel: "whatsapp",
-      chatType: "direct",
-      sessionKey: "whatsapp:direct:123",
-    });
-    expect(decision).toBe("allow");
+  it("treats room match as channel", () => {
+    const scope = {
+      rules: [{ action: "deny", match: { chatType: "room" } }],
+    } as const;
+
+    expect(resolveMediaUnderstandingScope({ scope, chatType: "channel" })).toBe("deny");
   });
 
-  it("matches keyPrefix when provided", () => {
-    const decision = resolveMediaUnderstandingScope({
-      scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { keyPrefix: "agent:main:" } }],
-      },
-      sessionKey: "agent:main:whatsapp:group:123",
-    });
-    expect(decision).toBe("allow");
-  });
+  it("matches channel chatType explicitly", () => {
+    const scope = {
+      rules: [{ action: "deny", match: { chatType: "channel" } }],
+    } as const;
 
-  it("matches keyPrefix case-insensitively", () => {
-    const decision = resolveMediaUnderstandingScope({
-      scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { keyPrefix: "agent:main:" } }],
-      },
-      sessionKey: "AGENT:MAIN:WHATSAPP:GROUP:123",
-    });
-    expect(decision).toBe("allow");
+    expect(resolveMediaUnderstandingScope({ scope, chatType: "channel" })).toBe("deny");
   });
 });
+

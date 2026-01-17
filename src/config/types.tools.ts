@@ -2,7 +2,7 @@ import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./ty
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
-  chatType?: "direct" | "group" | "room";
+  chatType?: "direct" | "group" | "channel" | "room";
   keyPrefix?: string;
 };
 
