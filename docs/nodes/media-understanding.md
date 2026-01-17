@@ -108,6 +108,7 @@ lists, Clawdbot can infer defaults:
 - `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
 - `groq`: **audio**
+- `deepgram`: **audio**
 
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
@@ -116,7 +117,7 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 | Capability | Provider integration | Notes |
 |------------|----------------------|-------|
 | Image | OpenAI / Anthropic / Google / others via `pi-ai` | Any image-capable model in the registry works. |
-| Audio | OpenAI, Groq | Provider transcription (Whisper). |
+| Audio | OpenAI, Groq, Deepgram | Provider transcription (Whisper/Deepgram). |
 | Video | Google (Gemini API) | Provider video understanding. |
 
 ## Recommended providers
@@ -125,8 +126,9 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 - Good defaults: `openai/gpt-5.2`, `anthropic/claude-opus-4-5`, `google/gemini-3-pro-preview`.
 
 **Audio**
-- `openai/whisper-1` or `groq/whisper-large-v3-turbo`.
+- `openai/whisper-1`, `groq/whisper-large-v3-turbo`, or `deepgram/nova-3`.
 - CLI fallback: `whisper` binary.
+- Deepgram setup: [Deepgram (audio transcription)](/providers/deepgram).
 
 **Video**
 - `google/gemini-3-flash-preview` (fast), `google/gemini-3-pro-preview` (richer).
