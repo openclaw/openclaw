@@ -30,7 +30,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-stale",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -115,7 +115,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-account",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -160,7 +160,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-explicit",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -205,7 +205,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-explicit-account",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -251,7 +251,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-implicit",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -294,7 +294,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-images",
             updatedAt: Date.now(),
           },
@@ -347,7 +347,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-missing-provider",
             updatedAt: Date.now(),
           },
@@ -388,7 +388,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main-whatsapp",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -433,7 +433,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
             lastChannel: "telegram",
@@ -477,7 +477,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-discord",
             updatedAt: Date.now(),
             lastChannel: "discord",
@@ -521,7 +521,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-slack",
             updatedAt: Date.now(),
             lastChannel: "slack",
@@ -565,7 +565,7 @@ describe("gateway server agent", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-signal",
             updatedAt: Date.now(),
             lastChannel: "signal",

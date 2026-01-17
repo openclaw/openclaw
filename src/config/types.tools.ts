@@ -1,8 +1,9 @@
+import type { NormalizedChatType } from "../channels/chat-type.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 
 export type MediaUnderstandingScopeMatch = {
   channel?: string;
-  chatType?: "direct" | "group" | "channel";
+  chatType?: NormalizedChatType;
   keyPrefix?: string;
 };
 

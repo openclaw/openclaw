@@ -52,11 +52,6 @@ function resolveSessionEntryForKey(
   if (!store || !sessionKey) return {};
   const direct = store[sessionKey];
   if (direct) return { entry: direct, key: sessionKey };
-  const parsed = parseAgentSessionKey(sessionKey);
-  const legacyKey = parsed?.rest;
-  if (legacyKey && store[legacyKey]) {
-    return { entry: store[legacyKey], key: legacyKey };
-  }
   return {};
 }
 

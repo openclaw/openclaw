@@ -4,6 +4,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import type { NormalizedChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
@@ -138,7 +139,7 @@ export type ChannelGroupContext = {
 };
 
 export type ChannelCapabilities = {
-  chatTypes: Array<"direct" | "group" | "channel" | "thread">;
+  chatTypes: Array<NormalizedChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
   threads?: boolean;

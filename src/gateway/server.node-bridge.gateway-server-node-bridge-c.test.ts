@@ -46,7 +46,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
@@ -83,7 +83,7 @@ describe("gateway server node/bridge", () => {
       string,
       { sessionId?: string } | undefined
     >;
-    expect(stored.main?.sessionId).toBe("sess-main");
+    expect(stored["agent:main:main"]?.sessionId).toBe("sess-main");
     expect(stored["node-ios-node"]).toBeUndefined();
 
     await server.close();
@@ -96,7 +96,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -187,7 +187,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },

@@ -221,7 +221,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -278,7 +278,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -335,7 +335,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },
@@ -412,7 +412,7 @@ describe("gateway server node/bridge", () => {
       testState.sessionStorePath,
       JSON.stringify(
         {
-          main: {
+          "agent:main:main": {
             sessionId: "sess-main",
             updatedAt: Date.now(),
           },

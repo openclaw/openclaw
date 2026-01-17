@@ -19,7 +19,6 @@ import {
   clearHistoryEntries,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import { formatInboundBodyWithSenderMeta } from "../../auto-reply/reply/inbound-sender-meta.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -134,7 +133,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingChannel: "signal" as const,
       OriginatingTo: signalTo,
     });
-    ctxPayload.Body = formatInboundBodyWithSenderMeta({ ctx: ctxPayload, body: ctxPayload.Body });
 
     if (!entry.isGroup) {
       const sessionCfg = deps.cfg.session;

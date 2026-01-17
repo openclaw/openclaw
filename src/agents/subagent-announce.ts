@@ -136,11 +136,7 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const legacyKey = canonicalKey.startsWith("agent:")
-    ? canonicalKey.split(":").slice(2).join(":")
-    : undefined;
-  const entry =
-    store[canonicalKey] ?? store[requesterSessionKey] ?? (legacyKey ? store[legacyKey] : undefined);
+  const entry = store[canonicalKey];
   return { cfg, entry, canonicalKey };
 }
 
