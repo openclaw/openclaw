@@ -22,6 +22,7 @@ import {
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteBridge,
 } from "../infra/skills-remote.js";
+import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -406,6 +407,7 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+  scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
   const tailscaleCleanup = await startGatewayTailscaleExposure({
     tailscaleMode,
     resetOnExit: tailscaleConfig.resetOnExit,

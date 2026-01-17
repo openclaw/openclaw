@@ -52,6 +52,8 @@ export type ClawdbotConfig = {
   update?: {
     /** Update channel for npm installs ("stable" or "beta"). */
     channel?: "stable" | "beta";
+    /** Check for updates on gateway start (npm installs only). */
+    checkOnStart?: boolean;
   };
   browser?: BrowserConfig;
   ui?: {
