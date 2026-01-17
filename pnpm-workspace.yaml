@@ -5,6 +5,7 @@ packages:
 
 onlyBuiltDependencies:
   - '@whiskeysockets/baileys'
+  - '@lydell/node-pty'
   - authenticate-pam
   - esbuild
   - protobufjs
