@@ -72,6 +72,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -99,6 +100,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -153,6 +155,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         cfg,
@@ -164,6 +167,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         cfg,
@@ -176,6 +180,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         cfg,
@@ -203,6 +208,7 @@ describe("directive behavior", () => {
           Provider: "whatsapp",
           SenderE164: "+1222",
           SessionKey: "agent:restricted:main",
+          CommandAuthorized: true,
         },
         {},
         {

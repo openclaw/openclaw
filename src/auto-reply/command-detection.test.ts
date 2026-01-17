@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasControlCommand } from "./command-detection.js";
+import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
@@ -70,6 +70,14 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/status please")).toBe(false);
     expect(hasControlCommand("prefix /send on")).toBe(false);
     expect(hasControlCommand("/send on")).toBe(true);
+  });
+
+  it("detects inline command tokens", () => {
+    expect(hasInlineCommandTokens("hello /status")).toBe(true);
+    expect(hasInlineCommandTokens("hey /think high")).toBe(true);
+    expect(hasInlineCommandTokens("plain text")).toBe(false);
+    expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
+    expect(hasInlineCommandTokens("stop")).toBe(false);
   });
 
   it("ignores telegram commands addressed to other bots", () => {

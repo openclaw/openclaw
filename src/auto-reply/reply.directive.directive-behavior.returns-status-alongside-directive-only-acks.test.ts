@@ -72,6 +72,7 @@ describe("directive behavior", () => {
           To: "+1222",
           Provider: "whatsapp",
           SenderE164: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -115,6 +116,7 @@ describe("directive behavior", () => {
           Provider: "whatsapp",
           SenderE164: "+1222",
           SessionKey: "agent:restricted:main",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -153,7 +155,7 @@ describe("directive behavior", () => {
       const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
-        { Body: "/queue interrupt", From: "+1222", To: "+1222" },
+        { Body: "/queue interrupt", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {
@@ -185,6 +187,7 @@ describe("directive behavior", () => {
           Body: "/queue collect debounce:2s cap:5 drop:old",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -219,7 +222,7 @@ describe("directive behavior", () => {
       const storePath = path.join(home, "sessions.json");
 
       await getReplyFromConfig(
-        { Body: "/queue interrupt", From: "+1222", To: "+1222" },
+        { Body: "/queue interrupt", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {
@@ -234,7 +237,7 @@ describe("directive behavior", () => {
       );
 
       const res = await getReplyFromConfig(
-        { Body: "/queue reset", From: "+1222", To: "+1222" },
+        { Body: "/queue reset", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {

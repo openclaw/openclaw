@@ -108,6 +108,7 @@ describe("trigger handling", () => {
           Body: "please /commands now",
           From: "+1002",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {
@@ -141,6 +142,7 @@ describe("trigger handling", () => {
           From: "+1002",
           To: "+2000",
           SenderId: "12345",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {

@@ -209,6 +209,7 @@ describe("trigger handling", () => {
           ChatType: "group",
           Provider: "whatsapp",
           SenderE164: "+2000",
+          CommandAuthorized: true,
         },
         {},
         cfg,

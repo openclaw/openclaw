@@ -109,6 +109,7 @@ describe("trigger handling", () => {
           Body: "/reset",
           From: "+1003",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -173,6 +174,7 @@ describe("trigger handling", () => {
           Body: "/reset",
           From: "+1003",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {

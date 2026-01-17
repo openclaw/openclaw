@@ -269,6 +269,52 @@ describe("security audit", () => {
     }
   });
 
+  it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const tmp = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-security-audit-discord-allowfrom-snowflake-"),
+    );
+    process.env.CLAWDBOT_STATE_DIR = tmp;
+    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dm: { allowFrom: ["387380367612706819"] },
+            groupPolicy: "allowlist",
+            guilds: {
+              "123": {
+                channels: {
+                  general: { allow: true },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.commands.native.no_allowlists",
+          }),
+        ]),
+      );
+    } finally {
+      if (prevStateDir == null) delete process.env.CLAWDBOT_STATE_DIR;
+      else process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+    }
+  });
+
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-security-audit-discord-open-"));

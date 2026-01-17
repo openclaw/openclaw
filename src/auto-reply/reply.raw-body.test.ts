@@ -54,6 +54,7 @@ describe("RawBody directive parsing", () => {
         From: "+1222",
         To: "+1222",
         ChatType: "group",
+        CommandAuthorized: true,
       };
 
       const res = await getReplyFromConfig(
@@ -87,6 +88,7 @@ describe("RawBody directive parsing", () => {
         From: "+1222",
         To: "+1222",
         ChatType: "group",
+        CommandAuthorized: true,
       };
 
       const res = await getReplyFromConfig(
@@ -123,6 +125,7 @@ describe("RawBody directive parsing", () => {
         From: "+1222",
         To: "+1222",
         ChatType: "group",
+        CommandAuthorized: true,
       };
 
       const res = await getReplyFromConfig(
@@ -160,6 +163,7 @@ describe("RawBody directive parsing", () => {
         Provider: "whatsapp",
         Surface: "whatsapp",
         SenderE164: "+1222",
+        CommandAuthorized: true,
       };
 
       const res = await getReplyFromConfig(
@@ -207,6 +211,7 @@ describe("RawBody directive parsing", () => {
         From: "+1222",
         To: "+1222",
         ChatType: "group",
+        CommandAuthorized: true,
       };
 
       const res = await getReplyFromConfig(
