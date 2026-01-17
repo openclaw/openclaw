@@ -18,3 +18,23 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     accountId,
   };
 }
+
+export function mergeDeliveryContext(
+  primary?: DeliveryContext,
+  fallback?: DeliveryContext,
+): DeliveryContext | undefined {
+  const normalizedPrimary = normalizeDeliveryContext(primary);
+  const normalizedFallback = normalizeDeliveryContext(fallback);
+  if (!normalizedPrimary && !normalizedFallback) return undefined;
+  return normalizeDeliveryContext({
+    channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
+    to: normalizedPrimary?.to ?? normalizedFallback?.to,
+    accountId: normalizedPrimary?.accountId ?? normalizedFallback?.accountId,
+  });
+}
+
+export function deliveryContextKey(context?: DeliveryContext): string | undefined {
+  const normalized = normalizeDeliveryContext(context);
+  if (!normalized?.channel || !normalized?.to) return undefined;
+  return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}`;
+}

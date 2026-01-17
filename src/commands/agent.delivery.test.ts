@@ -101,4 +101,44 @@ describe("deliverAgentCommandResult", () => {
       expect.objectContaining({ accountId: "legacy" }),
     );
   });
+
+  it("does not infer accountId for explicit delivery targets", async () => {
+    const cfg = {} as ClawdbotConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const sessionEntry = {
+      lastAccountId: "legacy",
+    } as SessionEntry;
+    const result = {
+      payloads: [{ text: "hi" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+        to: "+15551234567",
+        deliveryTargetMode: "explicit",
+      },
+      sessionEntry,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: undefined, mode: "explicit" }),
+    );
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: undefined }),
+    );
+  });
 });

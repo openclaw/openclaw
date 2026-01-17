@@ -26,6 +26,19 @@ type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
 
+function resolveDeliveryAccountId(params: {
+  opts: AgentCommandOpts;
+  sessionEntry?: SessionEntry;
+  targetMode: ChannelOutboundTargetMode;
+}) {
+  return (
+    normalizeAccountId(params.opts.accountId) ??
+    (params.targetMode === "implicit"
+      ? normalizeAccountId(params.sessionEntry?.lastAccountId)
+      : undefined)
+  );
+}
+
 export async function deliverAgentCommandResult(params: {
   cfg: ClawdbotConfig;
   deps: CliDeps;
@@ -49,9 +62,7 @@ export async function deliverAgentCommandResult(params: {
 
   const targetMode: ChannelOutboundTargetMode =
     opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedAccountId =
-    normalizeAccountId(opts.accountId) ??
-    (targetMode === "implicit" ? normalizeAccountId(sessionEntry?.lastAccountId) : undefined);
+  const resolvedAccountId = resolveDeliveryAccountId({ opts, sessionEntry, targetMode });
   const resolvedTarget =
     deliver && isDeliveryChannelKnown && deliveryChannel
       ? resolveOutboundTarget({

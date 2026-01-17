@@ -16,7 +16,12 @@ import {
 } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  type DeliveryContext,
+  deliveryContextKey,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
 import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
@@ -224,18 +229,17 @@ function hasCrossChannelItems(items: AnnounceQueueItem[]): boolean {
   const keys = new Set<string>();
   let hasUnkeyed = false;
   for (const item of items) {
-    const origin = item.origin;
-    const channel = origin?.channel;
-    const to = origin?.to;
-    const accountId = origin?.accountId;
-    if (!channel && !to && !accountId) {
+    const origin = normalizeDeliveryContext(item.origin);
+    if (!origin) {
       hasUnkeyed = true;
       continue;
     }
-    if (!channel || !to) {
+    if (!origin.channel || !origin.to) {
       return true;
     }
-    keys.add([channel, to, accountId || ""].join("|"));
+    const key = deliveryContextKey(origin);
+    if (!key) return true;
+    keys.add(key);
   }
   if (keys.size === 0) return false;
   if (hasUnkeyed) return true;
@@ -348,24 +352,11 @@ function loadRequesterSessionEntry(requesterSessionKey: string) {
   return { cfg, entry, canonicalKey };
 }
 
-function resolveAnnounceOrigin(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  fallbackAccountId?: string;
-}) {
-  return normalizeDeliveryContext({
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId ?? params.fallbackAccountId,
-  });
-}
-
 async function maybeQueueSubagentAnnounce(params: {
   requesterSessionKey: string;
   triggerMessage: string;
   summaryLine?: string;
-  requesterAccountId?: string;
+  requesterOrigin?: DeliveryContext;
 }): Promise<"steered" | "queued" | "none"> {
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
@@ -391,12 +382,14 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = resolveAnnounceOrigin({
-      channel: entry?.lastChannel,
-      to: entry?.lastTo,
-      accountId: entry?.lastAccountId,
-      fallbackAccountId: params.requesterAccountId,
-    });
+    const origin = mergeDeliveryContext(
+      {
+        channel: entry?.lastChannel,
+        to: entry?.lastTo,
+        accountId: entry?.lastAccountId,
+      },
+      params.requesterOrigin,
+    );
     enqueueAnnounce(
       canonicalKey,
       {
@@ -469,7 +462,7 @@ async function buildSubagentStatsLine(params: {
 
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
-  requesterChannel?: string;
+  requesterOrigin?: DeliveryContext;
   childSessionKey: string;
   label?: string;
   task?: string;
@@ -510,7 +503,9 @@ export function buildSubagentSystemPrompt(params: {
     "## Session Context",
     params.label ? `- Label: ${params.label}` : undefined,
     params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
-    params.requesterChannel ? `- Requester channel: ${params.requesterChannel}.` : undefined,
+    params.requesterOrigin?.channel
+      ? `- Requester channel: ${params.requesterOrigin.channel}.`
+      : undefined,
     `- Your session: ${params.childSessionKey}.`,
     "",
   ].filter((line): line is string => line !== undefined);
@@ -526,8 +521,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
-  requesterChannel?: string;
-  requesterAccountId?: string;
+  requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -541,6 +535,7 @@ export async function runSubagentAnnounceFlow(params: {
 }): Promise<boolean> {
   let didAnnounce = false;
   try {
+    const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
@@ -623,7 +618,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterSessionKey: params.requesterSessionKey,
       triggerMessage,
       summaryLine: taskLabel,
-      requesterAccountId: params.requesterAccountId,
+      requesterOrigin,
     });
     if (queued === "steered") {
       didAnnounce = true;
@@ -635,10 +630,15 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     // Send to main agent - it will respond in its own voice
-    const directOrigin = resolveAnnounceOrigin({
-      channel: params.requesterChannel,
-      accountId: params.requesterAccountId,
-    });
+    let directOrigin = requesterOrigin;
+    if (!directOrigin) {
+      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+      directOrigin = normalizeDeliveryContext({
+        channel: entry?.lastChannel ?? entry?.channel,
+        to: entry?.lastTo,
+        accountId: entry?.lastAccountId,
+      });
+    }
     await callGateway({
       method: "agent",
       params: {
