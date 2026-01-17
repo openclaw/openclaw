@@ -2,11 +2,12 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.17-2 (Unreleased)
+## 2026.1.17-2
 
 ### Changes
 
 ### Fixes
+- Tools: show exec elevated flag before the command and keep it outside markdown in tool summaries.
 - Memory: split overly long lines to keep embeddings under token limits.
 
 ## 2026.1.17-1
