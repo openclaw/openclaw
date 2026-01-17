@@ -33,14 +33,16 @@ type WebFetchConfig = NonNullable<ClawdbotConfig["tools"]>["web"] extends infer 
     : undefined
   : undefined;
 
-type FirecrawlFetchConfig = {
-  enabled?: boolean;
-  apiKey?: string;
-  baseUrl?: string;
-  onlyMainContent?: boolean;
-  maxAgeMs?: number;
-  timeoutSeconds?: number;
-} | undefined;
+type FirecrawlFetchConfig =
+  | {
+      enabled?: boolean;
+      apiKey?: string;
+      baseUrl?: string;
+      onlyMainContent?: boolean;
+      maxAgeMs?: number;
+      timeoutSeconds?: number;
+    }
+  | undefined;
 
 type CacheEntry<T> = {
   value: T;
@@ -497,7 +499,7 @@ async function runWebSearch(params: {
   ui_lang?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) return { ...cached.value, cached: true };
@@ -701,7 +703,9 @@ async function runWebFetch(params: {
         }
       }
     } else {
-      throw new Error("Web fetch extraction failed: Readability disabled and Firecrawl unavailable.");
+      throw new Error(
+        "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
+      );
     }
   } else if (contentType.includes("application/json")) {
     try {
