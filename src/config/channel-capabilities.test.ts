@@ -105,6 +105,26 @@ describe("resolveChannelCapabilities", () => {
       }),
     ).toEqual(["polls"]);
   });
+
+  it("handles object-format capabilities gracefully (e.g., { inlineButtons: 'dm' })", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          // Object format - used for granular control like inlineButtons scope.
+          // Channel-specific handlers (resolveTelegramInlineButtonsScope) process these.
+          capabilities: { inlineButtons: "dm" },
+        },
+      },
+    };
+
+    // Should return undefined (not crash), allowing channel-specific handlers to process it.
+    expect(
+      resolveChannelCapabilities({
+        cfg: cfg as ClawdbotConfig,
+        channel: "telegram",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
