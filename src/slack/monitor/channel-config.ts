@@ -10,6 +10,8 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  matchKey?: string;
+  matchSource?: "direct" | "wildcard";
 };
 
 function firstDefined<T>(...values: Array<T | undefined>) {
@@ -84,7 +86,12 @@ export function resolveSlackChannelConfig(params: {
     directName,
     normalizedName,
   );
-  const { entry: matched, wildcardEntry: fallback } = resolveChannelEntryMatch({
+  const {
+    entry: matched,
+    key: matchedKey,
+    wildcardEntry: fallback,
+    wildcardKey,
+  } = resolveChannelEntryMatch({
     entries,
     keys: candidates,
     wildcardKey: "*",
@@ -109,7 +116,22 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
-  return { allowed, requireMention, allowBots, users, skills, systemPrompt };
+  const result: SlackChannelConfigResolved = {
+    allowed,
+    requireMention,
+    allowBots,
+    users,
+    skills,
+    systemPrompt,
+  };
+  if (matchedKey) {
+    result.matchKey = matchedKey;
+    result.matchSource = "direct";
+  } else if (wildcardKey && fallback) {
+    result.matchKey = wildcardKey;
+    result.matchSource = "wildcard";
+  }
+  return result;
 }
 
 export type { SlackMessageEvent };

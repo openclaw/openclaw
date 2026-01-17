@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   type Client,
   MessageCreateListener,
   MessageReactionAddListener,
@@ -12,11 +13,12 @@ import { createSubsystemLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeDiscordSlug,
-  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
+import { resolveDiscordChannelInfo } from "./message-utils.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -189,11 +191,34 @@ async function handleDiscordReactionEvent(params: {
     if (!channel) return;
     const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
     const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelConfig = resolveDiscordChannelConfig({
+    const channelType = "type" in channel ? channel.type : undefined;
+    const isThreadChannel =
+      channelType === ChannelType.PublicThread ||
+      channelType === ChannelType.PrivateThread ||
+      channelType === ChannelType.AnnouncementThread;
+    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    let parentName: string | undefined;
+    let parentSlug = "";
+    if (isThreadChannel) {
+      if (!parentId) {
+        const channelInfo = await resolveDiscordChannelInfo(client, data.channel_id);
+        parentId = channelInfo?.parentId;
+      }
+      if (parentId) {
+        const parentInfo = await resolveDiscordChannelInfo(client, parentId);
+        parentName = parentInfo?.name;
+        parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
+      }
+    }
+    const channelConfig = resolveDiscordChannelConfigWithFallback({
       guildInfo,
       channelId: data.channel_id,
       channelName,
       channelSlug,
+      parentId,
+      parentName,
+      parentSlug,
+      scope: isThreadChannel ? "thread" : "channel",
     });
     if (channelConfig?.allowed === false) return;
 
