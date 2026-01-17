@@ -7,6 +7,7 @@ import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
+import { probeMSTeams } from "./probe.js";
 import { sendMessageMSTeams } from "./send.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -218,7 +219,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
+    probeAccount: async ({ cfg }) => await probeMSTeams(cfg.channels?.msteams),
+    buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
       enabled: account.enabled,
       configured: account.configured,
@@ -227,6 +229,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       lastStopAt: runtime?.lastStopAt ?? null,
       lastError: runtime?.lastError ?? null,
       port: runtime?.port ?? null,
+      probe,
     }),
   },
   gateway: {

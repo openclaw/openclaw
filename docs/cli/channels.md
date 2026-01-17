@@ -56,4 +56,4 @@ clawdbot channels capabilities --channel discord --target channel:123
 Notes:
 - `--channel` is optional; omit it to list every channel (including extensions).
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
-- This probes provider APIs where possible (Discord intents, Telegram webhook, Slack auth test, Signal daemon); channels without probes report `Probe: unavailable`.
+- Probes are provider-specific: Discord intents + optional channel permissions; Slack token scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes when available. Channels without probes report `Probe: unavailable`.

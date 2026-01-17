@@ -7,7 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
 - macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
-- CLI: add `channels capabilities` to summarize channel support and provider probes.
+- CLI: add `channels capabilities` with provider probes (Discord intents, Slack scopes, Teams Graph).
 
 ### Fixes
 - Doctor: avoid re-adding WhatsApp ack reaction config when only legacy auth files exist. (#1087) — thanks @YuriNachos.
