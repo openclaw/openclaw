@@ -185,6 +185,7 @@ export async function handleInlineActions(params: {
       resolveDefaultThinkingLevel,
       isGroup,
       defaultGroupActivation: defaultActivation,
+      mediaDecisions: ctx.MediaUnderstandingDecisions,
     });
     await sendInlineReply(inlineStatusReply);
     directives = { ...directives, hasStatusDirective: false };

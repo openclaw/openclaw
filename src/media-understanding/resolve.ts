@@ -77,36 +77,22 @@ export function resolveScopeDecision(params: {
   });
 }
 
-export function inferProviderCapabilities(
-  providerId?: string,
-): MediaUnderstandingCapability[] | undefined {
-  const provider = normalizeMediaProviderId(providerId ?? "");
-  if (!provider) return undefined;
-  if (provider === "openai" || provider === "anthropic" || provider === "minimax") {
-    return ["image"];
-  }
-  if (provider === "google") {
-    return ["image", "audio", "video"];
-  }
-  if (provider === "groq") {
-    return ["audio"];
-  }
-  return undefined;
-}
-
-function inferCapabilities(
-  entry: MediaUnderstandingModelConfig,
-): MediaUnderstandingCapability[] | undefined {
-  if ((entry.type ?? (entry.command ? "cli" : "provider")) === "cli") {
-    return undefined;
-  }
-  return inferProviderCapabilities(entry.provider);
+function resolveEntryCapabilities(params: {
+  entry: MediaUnderstandingModelConfig;
+  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+}): MediaUnderstandingCapability[] | undefined {
+  const entryType = params.entry.type ?? (params.entry.command ? "cli" : "provider");
+  if (entryType === "cli") return undefined;
+  const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
+  if (!providerId) return undefined;
+  return params.providerRegistry.get(providerId)?.capabilities;
 }
 
 export function resolveModelEntries(params: {
   cfg: ClawdbotConfig;
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
+  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
 }): MediaUnderstandingModelConfig[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
@@ -122,7 +108,7 @@ export function resolveModelEntries(params: {
         entry.capabilities && entry.capabilities.length > 0
           ? entry.capabilities
           : source === "shared"
-            ? inferCapabilities(entry)
+            ? resolveEntryCapabilities({ entry, providerRegistry: params.providerRegistry })
             : undefined;
       if (!caps || caps.length === 0) {
         if (source === "shared") {
@@ -148,13 +134,32 @@ export function resolveConcurrency(cfg: ClawdbotConfig): number {
   return DEFAULT_MEDIA_CONCURRENCY;
 }
 
-export function resolveCapabilityEnabled(params: {
+export function resolveEntriesWithActiveFallback(params: {
   cfg: ClawdbotConfig;
+  capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
-}): boolean {
-  if (params.config?.enabled === false) return false;
-  const sharedModels = params.cfg.tools?.media?.models ?? [];
-  const hasModels = (params.config?.models?.length ?? 0) > 0 || sharedModels.length > 0;
-  if (!hasModels) return false;
-  return true;
+  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  activeModel?: { provider: string; model?: string };
+}): MediaUnderstandingModelConfig[] {
+  const entries = resolveModelEntries({
+    cfg: params.cfg,
+    capability: params.capability,
+    config: params.config,
+    providerRegistry: params.providerRegistry,
+  });
+  if (entries.length > 0) return entries;
+  if (params.config?.enabled !== true) return entries;
+  const activeProviderRaw = params.activeModel?.provider?.trim();
+  if (!activeProviderRaw) return entries;
+  const activeProvider = normalizeMediaProviderId(activeProviderRaw);
+  if (!activeProvider) return entries;
+  const capabilities = params.providerRegistry.get(activeProvider)?.capabilities;
+  if (!capabilities || !capabilities.includes(params.capability)) return entries;
+  return [
+    {
+      type: "provider",
+      provider: activeProvider,
+      model: params.activeModel?.model,
+    },
+  ];
 }
