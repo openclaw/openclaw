@@ -342,7 +342,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       }
       return {
         ok: false,
-        error: missingTargetError("WhatsApp", "<E.164|group JID> or channels.whatsapp.allowFrom[0]"),
+        error: missingTargetError(
+          "WhatsApp",
+          "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
+        ),
       };
     },
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {

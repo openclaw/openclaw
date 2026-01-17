@@ -409,7 +409,7 @@ export async function resolveReplyDirectives(params: {
   return {
     kind: "continue",
     result: {
-    commandSource: commandText,
+      commandSource: commandText,
       command,
       allowTextCommands,
       skillCommands,

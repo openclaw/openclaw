@@ -16,4 +16,3 @@ describe("normalizeInboundTextNewlines", () => {
     expect(normalizeInboundTextNewlines("a\\nb")).toBe("a\nb");
   });
 });
-

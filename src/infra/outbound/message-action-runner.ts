@@ -13,7 +13,10 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import { listConfiguredMessageChannels, resolveMessageChannelSelection } from "./channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "./channel-selection.js";
 import { applyTargetToParams } from "./channel-target.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -483,10 +486,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
 
 async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
-  const action = input.action as Exclude<
-    ChannelMessageActionName,
-    "send" | "poll" | "broadcast"
-  >;
+  const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
     return {
       kind: "action",

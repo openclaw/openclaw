@@ -18,4 +18,3 @@ export function expectInboundContextContract(ctx: MsgContext) {
     expect(label).toBeTruthy();
   }
 }
-

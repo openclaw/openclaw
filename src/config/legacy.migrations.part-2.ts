@@ -332,9 +332,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           const tools = ensureRecord(raw, "tools");
           const media = ensureRecord(tools, "media");
           const mediaAudio = ensureRecord(media, "audio");
-          const models = Array.isArray(mediaAudio.models)
-            ? (mediaAudio.models as unknown[])
-            : [];
+          const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
           if (models.length === 0) {
             mediaAudio.enabled = true;
             mediaAudio.models = [mapped];
@@ -355,9 +353,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
           const tools = ensureRecord(raw, "tools");
           const media = ensureRecord(tools, "media");
           const mediaAudio = ensureRecord(media, "audio");
-          const models = Array.isArray(mediaAudio.models)
-            ? (mediaAudio.models as unknown[])
-            : [];
+          const models = Array.isArray(mediaAudio.models) ? (mediaAudio.models as unknown[]) : [];
           if (models.length === 0) {
             mediaAudio.enabled = true;
             mediaAudio.models = [mapped];

@@ -38,13 +38,11 @@ describe("delivery context helpers", () => {
   });
 
   it("builds stable keys only when channel and to are present", () => {
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe(
-      "whatsapp|+1555|",
-    );
+    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe("whatsapp|+1555|");
     expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
-    expect(
-      deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" }),
-    ).toBe("whatsapp|+1555|acct-1");
+    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" })).toBe(
+      "whatsapp|+1555|acct-1",
+    );
   });
 
   it("derives delivery context from a session entry", () => {

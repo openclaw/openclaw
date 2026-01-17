@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-
 const dispatchMock = vi.fn();
 const readAllowFromMock = vi.fn();
 
@@ -8,7 +7,6 @@ vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: (...args: unknown[]) => readAllowFromMock(...args),
   upsertChannelPairingRequest: vi.fn(),
 }));
-
 
 describe("signal event handler sender prefix", () => {
   beforeEach(() => {

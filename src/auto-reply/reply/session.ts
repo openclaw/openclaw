@@ -129,7 +129,8 @@ export async function initSessionState(params: {
 
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const normalizedChatType = normalizeChatType(ctx.ChatType);
-  const isGroup = normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+  const isGroup =
+    normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";

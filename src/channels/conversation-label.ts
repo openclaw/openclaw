@@ -43,4 +43,3 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   if (base.startsWith("#") || base.startsWith("@")) return base;
   return `${base} id:${id}`;
 }
-

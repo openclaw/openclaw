@@ -383,13 +383,19 @@ export async function collectPluginsTrustFindings(params: {
   if (!allowConfigured) {
     const hasString = (value: unknown) => typeof value === "string" && value.trim().length > 0;
     const hasAccountStringKey = (account: unknown, key: string) =>
-      Boolean(account && typeof account === "object" && hasString((account as Record<string, unknown>)[key]));
+      Boolean(
+        account &&
+        typeof account === "object" &&
+        hasString((account as Record<string, unknown>)[key]),
+      );
 
     const discordConfigured =
       hasString(params.cfg.channels?.discord?.token) ||
       Boolean(
         params.cfg.channels?.discord?.accounts &&
-          Object.values(params.cfg.channels.discord.accounts).some((a) => hasAccountStringKey(a, "token")),
+        Object.values(params.cfg.channels.discord.accounts).some((a) =>
+          hasAccountStringKey(a, "token"),
+        ),
       ) ||
       hasString(process.env.DISCORD_BOT_TOKEN);
 
@@ -398,9 +404,9 @@ export async function collectPluginsTrustFindings(params: {
       hasString(params.cfg.channels?.telegram?.tokenFile) ||
       Boolean(
         params.cfg.channels?.telegram?.accounts &&
-          Object.values(params.cfg.channels.telegram.accounts).some(
-            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
-          ),
+        Object.values(params.cfg.channels.telegram.accounts).some(
+          (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "tokenFile"),
+        ),
       ) ||
       hasString(process.env.TELEGRAM_BOT_TOKEN);
 
@@ -409,9 +415,9 @@ export async function collectPluginsTrustFindings(params: {
       hasString(params.cfg.channels?.slack?.appToken) ||
       Boolean(
         params.cfg.channels?.slack?.accounts &&
-          Object.values(params.cfg.channels.slack.accounts).some(
-            (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "appToken"),
-          ),
+        Object.values(params.cfg.channels.slack.accounts).some(
+          (a) => hasAccountStringKey(a, "botToken") || hasAccountStringKey(a, "appToken"),
+        ),
       ) ||
       hasString(process.env.SLACK_BOT_TOKEN) ||
       hasString(process.env.SLACK_APP_TOKEN);

@@ -274,7 +274,9 @@ export const MediaUnderstandingAttachmentsSchema = z
   .object({
     mode: z.union([z.literal("first"), z.literal("all")]).optional(),
     maxAttachments: z.number().int().positive().optional(),
-    prefer: z.union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")]).optional(),
+    prefer: z
+      .union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")])
+      .optional(),
   })
   .optional();
 

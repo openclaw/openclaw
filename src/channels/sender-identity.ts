@@ -25,8 +25,10 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
   }
 
   if (senderUsername) {
-    if (senderUsername.includes("@")) issues.push(`SenderUsername should not include "@": ${senderUsername}`);
-    if (/\s/.test(senderUsername)) issues.push(`SenderUsername should not include whitespace: ${senderUsername}`);
+    if (senderUsername.includes("@"))
+      issues.push(`SenderUsername should not include "@": ${senderUsername}`);
+    if (/\s/.test(senderUsername))
+      issues.push(`SenderUsername should not include whitespace: ${senderUsername}`);
   }
 
   if (ctx.SenderId != null && !senderId) {
@@ -35,4 +37,3 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
 
   return issues;
 }
-

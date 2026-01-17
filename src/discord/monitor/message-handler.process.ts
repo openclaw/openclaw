@@ -8,10 +8,7 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import {
-  formatInboundEnvelope,
-  formatThreadStarterEnvelope,
-} from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -126,7 +123,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const senderLabel =
     senderDisplay && senderTag && senderDisplay !== senderTag
       ? `${senderDisplay} (${senderTag})`
-      : senderDisplay ?? senderTag ?? author.id;
+      : (senderDisplay ?? senderTag ?? author.id);
   const groupRoom = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupRoom;
   const channelDescription = channelInfo?.topic?.trim();

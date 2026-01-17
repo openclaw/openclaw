@@ -68,9 +68,7 @@ export function buildEmbeddedRunPayloads(params: {
   if (errorText) replyItems.push({ text: errorText, isError: true });
 
   const inlineToolResults =
-    params.inlineToolResultsAllowed &&
-    params.verboseLevel !== "off" &&
-    params.toolMetas.length > 0;
+    params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : []);

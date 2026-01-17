@@ -20,4 +20,3 @@ export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
     sendIMessage: deps.sendMessageIMessage,
   };
 }
-

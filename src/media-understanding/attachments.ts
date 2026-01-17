@@ -317,10 +317,7 @@ export class MediaAttachmentCache {
       timeoutMs: params.timeoutMs,
     });
     const extension = path.extname(bufferResult.fileName || "") || "";
-    const tmpPath = path.join(
-      os.tmpdir(),
-      `clawdbot-media-${crypto.randomUUID()}${extension}`,
-    );
+    const tmpPath = path.join(os.tmpdir(), `clawdbot-media-${crypto.randomUUID()}${extension}`);
     await fs.writeFile(tmpPath, bufferResult.buffer);
     entry.tempPath = tmpPath;
     entry.tempCleanup = async () => {
@@ -348,8 +345,9 @@ export class MediaAttachmentCache {
       }
       return existing;
     }
-    const attachment =
-      this.attachments.find((item) => item.index === attachmentIndex) ?? { index: attachmentIndex };
+    const attachment = this.attachments.find((item) => item.index === attachmentIndex) ?? {
+      index: attachmentIndex,
+    };
     const entry: AttachmentCacheEntry = {
       attachment,
       resolvedPath: this.resolveLocalPath(attachment),

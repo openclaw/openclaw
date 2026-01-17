@@ -88,7 +88,5 @@ export function formatMediaUnderstandingBody(params: {
 
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
   if (outputs.length === 1) return outputs[0].text;
-  return outputs
-    .map((output, index) => `Audio ${index + 1}:\n${output.text}`)
-    .join("\n\n");
+  return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
 }

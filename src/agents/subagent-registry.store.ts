@@ -54,9 +54,7 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
         ? typed.announceCompletedAt
         : undefined;
     const cleanupCompletedAt =
-      typeof typed.cleanupCompletedAt === "number"
-        ? typed.cleanupCompletedAt
-        : legacyCompletedAt;
+      typeof typed.cleanupCompletedAt === "number" ? typed.cleanupCompletedAt : legacyCompletedAt;
     const cleanupHandled =
       typeof typed.cleanupHandled === "boolean"
         ? typed.cleanupHandled

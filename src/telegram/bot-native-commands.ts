@@ -251,7 +251,9 @@ export const registerTelegramNativeCommands = ({
           const groupSystemPrompt =
             systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
           const conversationLabel = isGroup
-            ? (msg.chat.title ? `${msg.chat.title} id:${chatId}` : `group:${chatId}`)
+            ? msg.chat.title
+              ? `${msg.chat.title} id:${chatId}`
+              : `group:${chatId}`
             : (buildSenderName(msg) ?? String(senderId || chatId));
           const ctxPayload = finalizeInboundContext({
             Body: prompt,

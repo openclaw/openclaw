@@ -34,9 +34,7 @@ function resolveDeliveryAccountId(params: {
   const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
   return (
     normalizeAccountId(params.opts.accountId) ??
-    (params.targetMode === "implicit"
-      ? normalizeAccountId(sessionOrigin?.accountId)
-      : undefined)
+    (params.targetMode === "implicit" ? normalizeAccountId(sessionOrigin?.accountId) : undefined)
   );
 }
 

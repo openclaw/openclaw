@@ -31,7 +31,11 @@ describe("web processMessage inbound contract", () => {
         groupSubject: "Test Group",
         groupParticipants: [],
       } as any,
-      route: { agentId: "main", accountId: "default", sessionKey: "agent:main:whatsapp:group:123" } as any,
+      route: {
+        agentId: "main",
+        accountId: "default",
+        sessionKey: "agent:main:whatsapp:group:123",
+      } as any,
       groupHistoryKey: "123@g.us",
       groupHistories: new Map(),
       groupMemberNames: new Map(),

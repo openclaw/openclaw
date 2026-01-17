@@ -20,13 +20,20 @@ describe("resolveConversationLabel", () => {
   });
 
   it("does not append ids for #rooms/channels", () => {
-    const ctx: MsgContext = { ChatType: "channel", GroupSubject: "#general", From: "slack:channel:C123" };
+    const ctx: MsgContext = {
+      ChatType: "channel",
+      GroupSubject: "#general",
+      From: "slack:channel:C123",
+    };
     expect(resolveConversationLabel(ctx)).toBe("#general");
   });
 
   it("appends ids for WhatsApp-like group ids when a subject exists", () => {
-    const ctx: MsgContext = { ChatType: "group", GroupSubject: "Family", From: "whatsapp:group:123@g.us" };
+    const ctx: MsgContext = {
+      ChatType: "group",
+      GroupSubject: "Family",
+      From: "whatsapp:group:123@g.us",
+    };
     expect(resolveConversationLabel(ctx)).toBe("Family id:123@g.us");
   });
 });
-

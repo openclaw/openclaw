@@ -26,9 +26,7 @@ const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
-    target: Type.Optional(
-      channelTargetSchema({ description: "Target channel/user id or name." }),
-    ),
+    target: Type.Optional(channelTargetSchema({ description: "Target channel/user id or name." })),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
     dryRun: Type.Optional(Type.Boolean()),
@@ -187,7 +185,6 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean }) {
     ...buildChannelManagementSchema(),
   };
 }
-
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],

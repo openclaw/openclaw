@@ -8,7 +8,10 @@ import {
 } from "../../config/sessions.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "../../infra/outbound/targets.js";
+import {
+  resolveOutboundTarget,
+  resolveSessionDeliveryTarget,
+} from "../../infra/outbound/targets.js";
 
 export async function resolveDeliveryTarget(
   cfg: ClawdbotConfig,

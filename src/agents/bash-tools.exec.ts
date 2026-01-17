@@ -97,7 +97,8 @@ const execSchema = Type.Object({
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description: "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
+      description:
+        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
     }),
   ),
   elevated: Type.Optional(
@@ -272,22 +273,22 @@ export function createExecTool(
 
       if (sandbox) {
         child = spawn(
-            "docker",
-            buildDockerExecArgs({
-              containerName: sandbox.containerName,
-              command: params.command,
-              workdir: containerWorkdir ?? sandbox.containerWorkdir,
-              env,
-              tty: params.pty === true,
-            }),
-            {
-              cwd: workdir,
-              env: process.env,
-              detached: process.platform !== "win32",
-              stdio: ["pipe", "pipe", "pipe"],
-              windowsHide: true,
-            },
-          ) as ChildProcessWithoutNullStreams;
+          "docker",
+          buildDockerExecArgs({
+            containerName: sandbox.containerName,
+            command: params.command,
+            workdir: containerWorkdir ?? sandbox.containerWorkdir,
+            env,
+            tty: params.pty === true,
+          }),
+          {
+            cwd: workdir,
+            env: process.env,
+            detached: process.platform !== "win32",
+            stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
+          },
+        ) as ChildProcessWithoutNullStreams;
         stdin = child.stdin;
       } else if (usePty) {
         const ptyModule = (await import("@lydell/node-pty")) as unknown as {
@@ -326,11 +327,11 @@ export function createExecTool(
         };
       } else {
         child = spawn(shell, [...shellArgs, params.command], {
-            cwd: workdir,
-            env,
-            detached: process.platform !== "win32",
-            stdio: ["pipe", "pipe", "pipe"],
-            windowsHide: true,
+          cwd: workdir,
+          env,
+          detached: process.platform !== "win32",
+          stdio: ["pipe", "pipe", "pipe"],
+          windowsHide: true,
         }) as ChildProcessWithoutNullStreams;
         stdin = child.stdin;
       }

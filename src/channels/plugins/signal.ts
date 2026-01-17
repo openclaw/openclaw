@@ -202,10 +202,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       if (!trimmed) {
         return {
           ok: false,
-          error: missingTargetError(
-            "Signal",
-            "<E.164|group:ID|signal:group:ID|signal:+E.164>",
-          ),
+          error: missingTargetError("Signal", "<E.164|group:ID|signal:group:ID|signal:+E.164>"),
         };
       }
       return { ok: true, to: trimmed };

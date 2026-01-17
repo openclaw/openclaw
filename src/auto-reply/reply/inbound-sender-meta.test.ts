@@ -44,8 +44,6 @@ describe("formatInboundBodyWithSenderMeta", () => {
 
   it("does not append when the body already includes a sender prefix", () => {
     const ctx: MsgContext = { ChatType: "group", SenderName: "Alice", SenderId: "A1" };
-    expect(formatInboundBodyWithSenderMeta({ ctx, body: "Alice (A1): hi" })).toBe(
-      "Alice (A1): hi",
-    );
+    expect(formatInboundBodyWithSenderMeta({ ctx, body: "Alice (A1): hi" })).toBe("Alice (A1): hi");
   });
 });

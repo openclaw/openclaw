@@ -11,7 +11,9 @@ describe("validateSenderIdentity", () => {
 
   it("requires some sender identity for non-direct chats", () => {
     const ctx: MsgContext = { ChatType: "group" };
-    expect(validateSenderIdentity(ctx)).toContain("missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)");
+    expect(validateSenderIdentity(ctx)).toContain(
+      "missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)",
+    );
   });
 
   it("validates SenderE164 and SenderUsername shape", () => {
@@ -27,4 +29,3 @@ describe("validateSenderIdentity", () => {
     ]);
   });
 });
-

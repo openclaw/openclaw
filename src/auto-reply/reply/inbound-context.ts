@@ -42,9 +42,9 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   const bodyForCommandsSource = opts.forceBodyForCommands
     ? (normalized.CommandBody ?? normalized.RawBody ?? normalized.Body)
     : (normalized.BodyForCommands ??
-        normalized.CommandBody ??
-        normalized.RawBody ??
-        normalized.Body);
+      normalized.CommandBody ??
+      normalized.RawBody ??
+      normalized.Body);
   normalized.BodyForCommands = normalizeInboundTextNewlines(bodyForCommandsSource);
 
   const explicitLabel = normalized.ConversationLabel?.trim();

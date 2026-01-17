@@ -240,7 +240,12 @@ export async function prepareSlackMessage(params: {
       : false;
   const commandAuthorized = ownerAuthorized || channelCommandAuthorized;
 
-  if (allowTextCommands && isRoomish && hasControlCommand(message.text ?? "", cfg) && !commandAuthorized) {
+  if (
+    allowTextCommands &&
+    isRoomish &&
+    hasControlCommand(message.text ?? "", cfg) &&
+    !commandAuthorized
+  ) {
     logVerbose(`Blocked slack control command from unauthorized sender ${senderId}`);
     return null;
   }

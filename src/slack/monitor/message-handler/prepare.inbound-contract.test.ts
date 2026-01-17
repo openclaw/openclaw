@@ -49,7 +49,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       mediaMaxBytes: 1024,
       removeAckAfterReply: false,
     });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" } as any);
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
 
     const account: ResolvedSlackAccount = {
       accountId: "default",
@@ -78,4 +78,3 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectInboundContextContract(prepared!.ctxPayload as any);
   });
 });
-

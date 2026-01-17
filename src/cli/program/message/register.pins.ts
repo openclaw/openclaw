@@ -21,7 +21,9 @@ export function registerMessagePinCommands(message: Command, helpers: MessageCli
       }),
     helpers
       .withMessageBase(
-        helpers.withRequiredMessageTarget(message.command("pins").description("List pinned messages")),
+        helpers.withRequiredMessageTarget(
+          message.command("pins").description("List pinned messages"),
+        ),
       )
       .option("--limit <n>", "Result limit")
       .action(async (opts) => {

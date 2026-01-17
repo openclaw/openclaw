@@ -64,8 +64,8 @@ describe("subagent registry persistence", () => {
     expect(parsed.runs && Object.keys(parsed.runs)).toContain("run-1");
     const run = parsed.runs?.["run-1"] as
       | {
-        requesterOrigin?: { channel?: string; accountId?: string };
-      }
+          requesterOrigin?: { channel?: string; accountId?: string };
+        }
       | undefined;
     expect(run).toBeDefined();
     if (run) {

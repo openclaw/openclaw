@@ -87,4 +87,3 @@ describe("discord processDiscordMessage inbound contract", () => {
     expectInboundContextContract(capturedCtx!);
   });
 });
-

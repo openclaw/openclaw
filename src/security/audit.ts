@@ -505,10 +505,8 @@ async function collectChannelSecurityFindings(params: {
       if (!allowTextCommands) continue;
 
       const telegramCfg =
-        (account as { config?: Record<string, unknown> } | null)?.config ?? ({} as Record<
-          string,
-          unknown
-        >);
+        (account as { config?: Record<string, unknown> } | null)?.config ??
+        ({} as Record<string, unknown>);
       const groupPolicy = (telegramCfg.groupPolicy as string | undefined) ?? "allowlist";
       const groups = telegramCfg.groups as Record<string, unknown> | undefined;
       const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
@@ -518,24 +516,26 @@ async function collectChannelSecurityFindings(params: {
 
       const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
-      const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom) ? telegramCfg.groupAllowFrom : [];
+      const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
+        ? telegramCfg.groupAllowFrom
+        : [];
       const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
       const anyGroupOverride = Boolean(
         groups &&
-          Object.values(groups).some((value) => {
-            if (!value || typeof value !== "object") return false;
-            const group = value as Record<string, unknown>;
-            const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
-            if (allowFrom.length > 0) return true;
-            const topics = group.topics;
-            if (!topics || typeof topics !== "object") return false;
-            return Object.values(topics as Record<string, unknown>).some((topicValue) => {
-              if (!topicValue || typeof topicValue !== "object") return false;
-              const topic = topicValue as Record<string, unknown>;
-              const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-              return topicAllow.length > 0;
-            });
-          }),
+        Object.values(groups).some((value) => {
+          if (!value || typeof value !== "object") return false;
+          const group = value as Record<string, unknown>;
+          const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
+          if (allowFrom.length > 0) return true;
+          const topics = group.topics;
+          if (!topics || typeof topics !== "object") return false;
+          return Object.values(topics as Record<string, unknown>).some((topicValue) => {
+            if (!topicValue || typeof topicValue !== "object") return false;
+            const topic = topicValue as Record<string, unknown>;
+            const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
+            return topicAllow.length > 0;
+          });
+        }),
       );
 
       const hasAnySenderAllowlist =
