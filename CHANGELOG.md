@@ -24,6 +24,7 @@
 - Cron: isolated cron jobs now start a fresh session id on every run to prevent context buildup.
 - Docs: add `/help` hub, Node/npm PATH guide, and expand directory CLI docs.
 - Config: support env var substitution in config values. (#1044) — thanks @sebslight.
+- Health: add per-agent session summaries and account-level health details, and allow selective probes. (#1047) — thanks @gumadeiras.
 
 ### Fixes
 - Messages: `/stop` now hard-aborts queued followups and sub-agent runs; suppress zero-count stop notes.
@@ -38,6 +39,7 @@
 - Signal/iMessage: bound transport readiness waits to 30s with periodic logging. (#1014) — thanks @Szpadel.
 - OpenAI image-gen: remove deprecated `response_format` and use URL downloads.
 - CLI: auto-update global installs when installed via a package manager.
+- Routing: migrate legacy `accountID` bindings to `accountId` and remove legacy fallback lookups. (#1047) — thanks @gumadeiras.
 - Discord: truncate skill command descriptions to 100 chars for slash command limits. (#1018) — thanks @evalexpr.
 - Security: bump `tar` to 7.5.3.
 - Models: align ZAI thinking toggles.
