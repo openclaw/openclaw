@@ -164,6 +164,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const senderRaw = message.sender ?? "";
     const sender = senderRaw.trim();
     if (!sender) return;
+    const senderNormalized = normalizeIMessageHandle(sender);
     if (message.is_from_me) return;
 
     const chatId = message.chat_id ?? undefined;
@@ -346,7 +347,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           historyKey,
           limit: historyLimit,
           entry: {
-            sender: normalizeIMessageHandle(sender),
+            sender: senderNormalized,
             body: bodyText,
             timestamp: createdAt,
             messageId: message.id ? String(message.id) : undefined,
@@ -359,7 +360,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const chatTarget = formatIMessageChatTarget(chatId);
     const fromLabel = isGroup
       ? `${message.chat_name || "iMessage Group"} id:${chatId ?? "unknown"}`
-      : `${normalizeIMessageHandle(sender)} id:${sender}`;
+      : `${senderNormalized} id:${sender}`;
     const body = formatAgentEnvelope({
       channel: "iMessage",
       from: fromLabel,
@@ -397,7 +398,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
       GroupMembers: isGroup ? (message.participants ?? []).filter(Boolean).join(", ") : undefined,
-      SenderName: sender,
+      SenderName: senderNormalized,
       SenderId: sender,
       Provider: "imessage",
       Surface: "imessage",
