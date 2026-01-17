@@ -145,6 +145,13 @@ export type AgentToolsConfig = {
 export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
+  /** Sources to index and search (default: ["memory"]). */
+  sources?: Array<"memory" | "sessions">;
+  /** Experimental memory search settings. */
+  experimental?: {
+    /** Enable session transcript indexing (experimental, default: false). */
+    sessionMemory?: boolean;
+  };
   /** Embedding provider mode. */
   provider?: "openai" | "local";
   remote?: {

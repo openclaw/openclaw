@@ -51,6 +51,7 @@ export function registerMemoryCli(program: Command) {
         `${chalk.bold.cyan("Memory Search")} (${agentId})`,
         `Provider: ${status.provider} (requested: ${status.requestedProvider})`,
         status.fallback ? chalk.yellow(`Fallback: ${status.fallback.from}`) : null,
+        status.sources?.length ? `Sources: ${status.sources.join(", ")}` : null,
         `Files: ${status.files}`,
         `Chunks: ${status.chunks}`,
         `Dirty: ${status.dirty ? "yes" : "no"}`,

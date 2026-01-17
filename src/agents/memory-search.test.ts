@@ -99,4 +99,42 @@ describe("memory search config", () => {
       headers: { "X-Default": "on" },
     });
   });
+
+  it("gates session sources behind experimental flag", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            sources: ["memory", "sessions"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              experimental: { sessionMemory: false },
+            },
+          },
+        ],
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
+
+  it("allows session sources when experimental flag is enabled", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            sources: ["memory", "sessions"],
+            experimental: { sessionMemory: true },
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.sources).toContain("sessions");
+  });
 });
