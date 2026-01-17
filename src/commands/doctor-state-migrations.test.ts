@@ -69,7 +69,7 @@ describe("doctor legacy state migrations", () => {
     ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:main"]?.sessionId).toBe("b");
     expect(store["agent:main:slack:channel:C123"]?.sessionId).toBe("c");
-    expect(store["group:abc"]?.sessionId).toBe("d");
+    expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
   });
 

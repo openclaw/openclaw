@@ -65,6 +65,7 @@ export type SessionEntry = {
   label?: string;
   displayName?: string;
   channel?: string;
+  groupId?: string;
   subject?: string;
   room?: string;
   space?: string;

@@ -22,7 +22,7 @@ describe("resolveGroupRequireMention", () => {
     };
     const ctx: TemplateContext = {
       Provider: "discord",
-      From: "group:123",
+      From: "discord:group:123",
       GroupChannel: "#general",
       GroupSpace: "145",
     };

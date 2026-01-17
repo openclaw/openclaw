@@ -9,7 +9,7 @@ describe("finalizeInboundContext", () => {
       Body: "a\\nb\r\nc",
       RawBody: "raw\\nline",
       ChatType: "channel",
-      From: "group:123@g.us",
+      From: "whatsapp:group:123@g.us",
       GroupSubject: "Test",
     };
 

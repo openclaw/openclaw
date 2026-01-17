@@ -534,7 +534,7 @@ async function processMessageWithPipeline(params: {
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: isGroup ? `group:${chatId}` : `zalo:${senderId}`,
+    From: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
     To: `zalo:${chatId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,

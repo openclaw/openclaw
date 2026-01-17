@@ -23,11 +23,13 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   if (!channelRaw) return null;
   const normalizedChannel = normalizeChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
-  const kindTarget = normalizedChannel
-    ? kind === "channel"
-      ? `channel:${id}`
-      : `group:${id}`
-    : id;
+  const kindTarget = (() => {
+    if (!normalizedChannel) return id;
+    if (normalizedChannel === "discord" || normalizedChannel === "slack") {
+      return `channel:${id}`;
+    }
+    return kind === "channel" ? `channel:${id}` : `group:${id}`;
+  })();
   const normalized = normalizedChannel
     ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
     : undefined;

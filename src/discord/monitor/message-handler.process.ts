@@ -223,7 +223,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
-    : (autoThreadContext?.From ?? `group:${message.channelId}`);
+    : (autoThreadContext?.From ?? `discord:channel:${message.channelId}`);
   const effectiveTo = autoThreadContext?.To ?? replyTarget;
   if (!effectiveTo) {
     runtime.error?.(danger("discord: missing reply target"));

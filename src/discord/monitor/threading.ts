@@ -194,7 +194,7 @@ export function resolveDiscordAutoThreadContext(params: {
 
   return {
     createdThreadId,
-    From: `group:${createdThreadId}`,
+    From: `${params.channel}:channel:${createdThreadId}`,
     To: `channel:${createdThreadId}`,
     OriginatingTo: `channel:${createdThreadId}`,
     SessionKey: threadSessionKey,

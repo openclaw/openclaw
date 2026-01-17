@@ -293,8 +293,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry?.chatType === "group" ||
     entry?.chatType === "channel" ||
     Boolean(args.sessionKey?.includes(":group:")) ||
-    Boolean(args.sessionKey?.includes(":channel:")) ||
-    Boolean(args.sessionKey?.startsWith("group:"));
+    Boolean(args.sessionKey?.includes(":channel:"));
   const groupActivationValue = isGroupSession
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;

@@ -13,10 +13,6 @@ export function normalizeSlackMessagingTarget(raw: string): string | undefined {
     const id = trimmed.slice(8).trim();
     return id ? `channel:${id}`.toLowerCase() : undefined;
   }
-  if (trimmed.startsWith("group:")) {
-    const id = trimmed.slice(6).trim();
-    return id ? `channel:${id}`.toLowerCase() : undefined;
-  }
   if (trimmed.startsWith("slack:")) {
     const id = trimmed.slice(6).trim();
     return id ? `user:${id}`.toLowerCase() : undefined;
@@ -36,7 +32,7 @@ export function looksLikeSlackTargetId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) return false;
   if (/^<@([A-Z0-9]+)>$/i.test(trimmed)) return true;
-  if (/^(user|channel|group):/i.test(trimmed)) return true;
+  if (/^(user|channel):/i.test(trimmed)) return true;
   if (/^slack:/i.test(trimmed)) return true;
   if (/^[@#]/.test(trimmed)) return true;
   return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
@@ -55,10 +51,6 @@ export function normalizeDiscordMessagingTarget(raw: string): string | undefined
     const id = trimmed.slice(8).trim();
     return id ? `channel:${id}`.toLowerCase() : undefined;
   }
-  if (trimmed.startsWith("group:")) {
-    const id = trimmed.slice(6).trim();
-    return id ? `channel:${id}`.toLowerCase() : undefined;
-  }
   if (trimmed.startsWith("discord:")) {
     const id = trimmed.slice(8).trim();
     return id ? `user:${id}`.toLowerCase() : undefined;
@@ -74,7 +66,7 @@ export function looksLikeDiscordTargetId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) return false;
   if (/^<@!?\d+>$/.test(trimmed)) return true;
-  if (/^(user|channel|group|discord):/i.test(trimmed)) return true;
+  if (/^(user|channel|discord):/i.test(trimmed)) return true;
   if (/^\d{6,}$/.test(trimmed)) return true;
   return false;
 }
@@ -87,8 +79,6 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
     normalized = normalized.slice("telegram:".length).trim();
   } else if (normalized.startsWith("tg:")) {
     normalized = normalized.slice("tg:".length).trim();
-  } else if (normalized.startsWith("group:")) {
-    normalized = normalized.slice("group:".length).trim();
   }
   if (!normalized) return undefined;
   const tmeMatch =
@@ -102,7 +92,7 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
 export function looksLikeTelegramTargetId(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) return false;
-  if (/^(telegram|tg|group):/i.test(trimmed)) return true;
+  if (/^(telegram|tg):/i.test(trimmed)) return true;
   if (trimmed.startsWith("@")) return true;
   return /^-?\d{6,}$/.test(trimmed);
 }

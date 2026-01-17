@@ -195,9 +195,8 @@ async function processMessage(
     },
   });
 
-	  const fromLabel = isGroup
-	    ? `group:${chatId}`
-	    : senderName || `user:${senderId}`;
+	  const rawBody = content.trim();
+	  const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
 	  const body = deps.formatAgentEnvelope({
 	    channel: "Zalo Personal",
 	    from: fromLabel,
@@ -209,7 +208,7 @@ async function processMessage(
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
-    From: isGroup ? `group:${chatId}` : `zalouser:${senderId}`,
+    From: isGroup ? `zalouser:group:${chatId}` : `zalouser:${senderId}`,
     To: `zalouser:${chatId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,

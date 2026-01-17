@@ -68,7 +68,7 @@ export function classifySessionKind(params: {
   if (key.startsWith("hook:")) return "hook";
   if (key.startsWith("node-") || key.startsWith("node:")) return "node";
   if (params.gatewayKind === "group") return "group";
-  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
+  if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "other";

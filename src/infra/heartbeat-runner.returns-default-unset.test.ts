@@ -220,7 +220,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const entry = {
       ...baseEntry,
       lastChannel: "whatsapp" as const,
-      lastTo: "whatsapp:group:120363401234567890@G.US",
+      lastTo: "whatsapp:120363401234567890@G.US",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",

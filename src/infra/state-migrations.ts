@@ -61,7 +61,15 @@ function isSurfaceGroupKey(key: string): boolean {
 }
 
 function isLegacyGroupKey(key: string): boolean {
-  return key.startsWith("group:") || key.includes("@g.us");
+  const trimmed = key.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("group:")) return true;
+  const lower = trimmed.toLowerCase();
+  if (!lower.includes("@g.us")) return false;
+  // Legacy WhatsApp group keys: bare JID or "whatsapp:<jid>" without explicit ":group:" kind.
+  if (!trimmed.includes(":")) return true;
+  if (lower.startsWith("whatsapp:") && !trimmed.includes(":group:")) return true;
+  return false;
 }
 
 function normalizeSessionKeyForAgent(key: string, agentId: string): string {
@@ -71,6 +79,22 @@ function normalizeSessionKeyForAgent(key: string, agentId: string): string {
   if (raw.toLowerCase().startsWith("subagent:")) {
     const rest = raw.slice("subagent:".length);
     return `agent:${normalizeAgentId(agentId)}:subagent:${rest}`;
+  }
+  if (raw.startsWith("group:")) {
+    const id = raw.slice("group:".length).trim();
+    if (!id) return raw;
+    const channel = id.toLowerCase().includes("@g.us") ? "whatsapp" : "unknown";
+    return `agent:${normalizeAgentId(agentId)}:${channel}:group:${id}`;
+  }
+  if (!raw.includes(":") && raw.toLowerCase().includes("@g.us")) {
+    return `agent:${normalizeAgentId(agentId)}:whatsapp:group:${raw}`;
+  }
+  if (raw.toLowerCase().startsWith("whatsapp:") && raw.toLowerCase().includes("@g.us")) {
+    const remainder = raw.slice("whatsapp:".length).trim();
+    const cleaned = remainder.replace(/^group:/i, "").trim();
+    if (cleaned && !isSurfaceGroupKey(raw)) {
+      return `agent:${normalizeAgentId(agentId)}:whatsapp:group:${cleaned}`;
+    }
   }
   if (isSurfaceGroupKey(raw)) {
     return `agent:${normalizeAgentId(agentId)}:${raw}`;

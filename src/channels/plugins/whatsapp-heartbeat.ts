@@ -13,10 +13,7 @@ function getSessionRecipients(cfg: ClawdbotConfig) {
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
-    key.startsWith("group:") ||
-    key.includes(":group:") ||
-    key.includes(":channel:") ||
-    key.includes("@g.us");
+    key.includes(":group:") || key.includes(":channel:") || key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
 
   const recipients = Object.entries(store)

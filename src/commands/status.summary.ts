@@ -22,7 +22,7 @@ const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] =
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
-  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
+  if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "direct";

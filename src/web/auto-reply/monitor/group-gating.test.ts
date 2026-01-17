@@ -41,7 +41,7 @@ describe("applyGroupGating", () => {
         sendMedia: async () => {},
       },
       conversationId: "123@g.us",
-      groupHistoryKey: "group:123@g.us",
+      groupHistoryKey: "whatsapp:default:group:123@g.us",
       agentId: "main",
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       baseMentionConfig: { mentionRegexes: [] },

@@ -135,7 +135,7 @@ describe("trigger handling", () => {
 
       const ctx = {
         Body: "hi",
-        From: "group:whatsapp:demo",
+        From: "whatsapp:group:demo",
         To: "+2000",
         ChatType: "group" as const,
         Provider: "whatsapp" as const,

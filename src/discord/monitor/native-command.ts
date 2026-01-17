@@ -601,7 +601,11 @@ async function dispatchDiscordCommandInteraction(params: {
     RawBody: prompt,
     CommandBody: prompt,
     CommandArgs: commandArgs,
-    From: isDirectMessage ? `discord:${user.id}` : `group:${channelId}`,
+    From: isDirectMessage
+      ? `discord:${user.id}`
+      : isGroupDm
+        ? `discord:group:${channelId}`
+        : `discord:channel:${channelId}`,
     To: `slash:${user.id}`,
     SessionKey: `agent:${route.agentId}:${sessionPrefix}:${user.id}`,
     CommandTargetSessionKey: route.sessionKey,

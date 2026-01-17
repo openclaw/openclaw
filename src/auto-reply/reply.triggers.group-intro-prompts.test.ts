@@ -109,7 +109,7 @@ describe("group intro prompts", () => {
       await getReplyFromConfig(
         {
           Body: "status update",
-          From: "group:dev",
+          From: "discord:group:dev",
           To: "+1888",
           ChatType: "group",
           GroupSubject: "Release Squad",
@@ -172,7 +172,7 @@ describe("group intro prompts", () => {
       await getReplyFromConfig(
         {
           Body: "ping",
-          From: "group:tg",
+          From: "telegram:group:tg",
           To: "+1777",
           ChatType: "group",
           GroupSubject: "Dev Chat",

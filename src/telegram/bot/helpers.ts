@@ -59,7 +59,7 @@ export function buildTelegramGroupPeerId(chatId: number | string, messageThreadI
 }
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
-  return messageThreadId != null ? `group:${chatId}:topic:${messageThreadId}` : `group:${chatId}`;
+  return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
 export function buildSenderName(msg: TelegramMessage) {

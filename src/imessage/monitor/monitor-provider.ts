@@ -422,7 +422,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       Body: combinedBody,
       RawBody: bodyText,
       CommandBody: bodyText,
-      From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
+      From: isGroup ? `imessage:group:${chatId ?? "unknown"}` : `imessage:${sender}`,
       To: imessageTo,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,

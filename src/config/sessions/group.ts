@@ -35,7 +35,7 @@ export function buildGroupDisplayName(params: {
     (room && space
       ? `${space}${room.startsWith("#") ? "" : "#"}${room}`
       : room || subject || space || "") || "";
-  const fallbackId = params.id?.trim() || params.key.replace(/^group:/, "");
+  const fallbackId = params.id?.trim() || params.key;
   const rawLabel = detail || fallbackId;
   let token = normalizeGroupLabel(rawLabel);
   if (!token) {
@@ -52,84 +52,49 @@ export function buildGroupDisplayName(params: {
 
 export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
-  if (!from) return null;
   const chatType = ctx.ChatType?.trim().toLowerCase();
-  const isGroup =
-    chatType === "group" ||
-    from.startsWith("group:") ||
-    from.includes("@g.us") ||
+  const normalizedChatType =
+    chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
+
+  const isWhatsAppGroupId = from.toLowerCase().endsWith("@g.us");
+  const looksLikeGroup =
+    normalizedChatType === "group" ||
+    normalizedChatType === "channel" ||
     from.includes(":group:") ||
-    from.includes(":channel:");
-  if (!isGroup) return null;
+    from.includes(":channel:") ||
+    isWhatsAppGroupId;
+  if (!looksLikeGroup) return null;
 
   const providerHint = ctx.Provider?.trim().toLowerCase();
-  const hasGroupPrefix = from.startsWith("group:");
-  const raw = (hasGroupPrefix ? from.slice("group:".length) : from).trim();
 
-  let provider: string | undefined;
-  let kind: "group" | "channel" | undefined;
-  let id = "";
+  const parts = from.split(":").filter(Boolean);
+  const head = parts[0]?.trim().toLowerCase() ?? "";
+  const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
-  const parseKind = (value: string) => {
-    if (value === "channel") return "channel";
-    return "group";
-  };
+  const provider = headIsSurface
+    ? head
+    : (providerHint ?? (isWhatsAppGroupId ? "whatsapp" : undefined));
+  if (!provider) return null;
 
-  const parseParts = (parts: string[]) => {
-    if (parts.length >= 2 && getGroupSurfaces().has(parts[0])) {
-      provider = parts[0];
-      if (parts.length >= 3) {
-        const kindCandidate = parts[1];
-        if (["group", "channel"].includes(kindCandidate)) {
-          kind = parseKind(kindCandidate);
-          id = parts.slice(2).join(":");
-        } else {
-          id = parts.slice(1).join(":");
-        }
-      } else {
-        id = parts[1];
-      }
-      return;
-    }
-    if (parts.length >= 2 && ["group", "channel"].includes(parts[0])) {
-      kind = parseKind(parts[0]);
-      id = parts.slice(1).join(":");
-    }
-  };
-
-  if (hasGroupPrefix) {
-    const legacyParts = raw.split(":").filter(Boolean);
-    if (legacyParts.length > 1) {
-      parseParts(legacyParts);
-    } else {
-      id = raw;
-    }
-  } else if (from.includes("@g.us") && !from.includes(":")) {
-    id = from;
-  } else {
-    parseParts(from.split(":").filter(Boolean));
-    if (!id) {
-      id = raw || from;
-    }
-  }
-
-  const resolvedProvider = provider ?? providerHint;
-  if (!resolvedProvider) {
-    const legacy = hasGroupPrefix ? `group:${raw}` : `group:${from}`;
-    return {
-      key: legacy,
-      id: raw || from,
-      chatType: "group",
-    };
-  }
-
-  const resolvedKind = kind === "channel" ? "channel" : "group";
-  const key = `${resolvedProvider}:${resolvedKind}:${id || raw || from}`;
+  const second = parts[1]?.trim().toLowerCase();
+  const secondIsKind = second === "group" || second === "channel";
+  const kind = secondIsKind
+    ? (second as "group" | "channel")
+    : from.includes(":channel:") || normalizedChatType === "channel"
+      ? "channel"
+      : "group";
+  const id = headIsSurface
+    ? secondIsKind
+      ? parts.slice(2).join(":")
+      : parts.slice(1).join(":")
+    : from;
+  const finalId = id.trim();
+  if (!finalId) return null;
 
   return {
-    key,
-    channel: resolvedProvider,
-    id: id || raw || from,
-    chatType: resolvedKind === "channel" ? "channel" : "group",
+    key: `${provider}:${kind}:${finalId}`,
+    channel: provider,
+    id: finalId,
+    chatType: kind === "channel" ? "channel" : "group",
   };
 }

@@ -60,7 +60,7 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
-  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
+  if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "direct";
@@ -71,10 +71,6 @@ export function parseGroupKey(
 ): { channel?: string; kind?: "group" | "channel"; id?: string } | null {
   const agentParsed = parseAgentSessionKey(key);
   const rawKey = agentParsed?.rest ?? key;
-  if (rawKey.startsWith("group:")) {
-    const raw = rawKey.slice("group:".length);
-    return raw ? { id: raw } : null;
-  }
   const parts = rawKey.split(":").filter(Boolean);
   if (parts.length >= 3) {
     const [channel, kind, ...rest] = parts;

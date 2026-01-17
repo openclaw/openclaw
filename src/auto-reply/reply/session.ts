@@ -227,6 +227,7 @@ export async function initSessionState(params: {
     displayName: baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
+    groupId: baseEntry?.groupId,
     subject: baseEntry?.subject,
     room: baseEntry?.room,
     space: baseEntry?.space,
@@ -256,6 +257,7 @@ export async function initSessionState(params: {
     const nextSubject = nextRoom ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
     sessionEntry.channel = channel;
+    sessionEntry.groupId = groupResolution.id;
     if (nextSubject) sessionEntry.subject = nextSubject;
     if (nextRoom) sessionEntry.room = nextRoom;
     if (space) sessionEntry.space = space;

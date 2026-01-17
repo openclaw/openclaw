@@ -75,7 +75,7 @@ describe("buildThreadingToolContext", () => {
     const sessionCtx = {
       Provider: "imessage",
       ChatType: "group",
-      From: "group:7",
+      From: "imessage:group:7",
       To: "chat_id:7",
     } as TemplateContext;
 

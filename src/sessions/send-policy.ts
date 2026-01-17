@@ -27,7 +27,7 @@ function deriveChannelFromKey(key?: string) {
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   if (!key) return undefined;
-  if (key.startsWith("group:") || key.includes(":group:")) return "group";
+  if (key.includes(":group:")) return "group";
   if (key.includes(":channel:")) return "channel";
   return undefined;
 }

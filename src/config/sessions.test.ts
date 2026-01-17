@@ -30,7 +30,9 @@ describe("sessions", () => {
   });
 
   it("keeps group chats distinct", () => {
-    expect(deriveSessionKey("per-sender", { From: "12345-678@g.us" })).toBe("group:12345-678@g.us");
+    expect(deriveSessionKey("per-sender", { From: "12345-678@g.us" })).toBe(
+      "whatsapp:group:12345-678@g.us",
+    );
   });
 
   it("prefixes group keys with provider when available", () => {
@@ -45,7 +47,7 @@ describe("sessions", () => {
 
   it("keeps explicit provider when provided in group key", () => {
     expect(
-      resolveSessionKey("per-sender", { From: "group:discord:12345", ChatType: "group" }, "main"),
+      resolveSessionKey("per-sender", { From: "discord:group:12345", ChatType: "group" }, "main"),
     ).toBe("agent:main:discord:group:12345");
   });
 
@@ -87,7 +89,7 @@ describe("sessions", () => {
 
   it("leaves groups untouched even with main key", () => {
     expect(resolveSessionKey("per-sender", { From: "12345-678@g.us" }, "main")).toBe(
-      "agent:main:group:12345-678@g.us",
+      "agent:main:whatsapp:group:12345-678@g.us",
     );
   });
 
