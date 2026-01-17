@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
+- Models: add Kimi Code provider onboarding and docs. (#1085) — thanks @dan-dr.
 
 ### Fixes
 - Matrix: send voice/image-specific media payloads and keep legacy poll parsing. (#1088) — thanks @sibbl.

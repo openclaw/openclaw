@@ -100,6 +100,7 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "moonshot-api-key")).toBe(true);
+    expect(options.some((opt) => opt.value === "kimi-code-api-key")).toBe(true);
   });
 
   it("includes Vercel AI Gateway auth choice", () => {
