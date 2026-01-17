@@ -26,6 +26,12 @@ const workspaceVersions = new Map<string, number>();
 const watchers = new Map<string, SkillsWatchState>();
 let globalVersion = 0;
 
+export const DEFAULT_SKILLS_WATCH_IGNORED = [
+  /(^|[\\/])\.git([\\/]|$)/,
+  /(^|[\\/])node_modules([\\/]|$)/,
+  /(^|[\\/])dist([\\/]|$)/,
+] as const;
+
 function bumpVersion(current: number): number {
   const now = Date.now();
   return now <= current ? current + 1 : now;
@@ -127,11 +133,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Cla
     },
     // Avoid FD exhaustion on macOS when a workspace contains huge trees.
     // This watcher only needs to react to skill changes.
-    ignored: [
-      /(^|[\\/])\../, // dotfiles (includes .git)
-      /(^|[\\/])node_modules([\\/]|$)/,
-      /(^|[\\/])dist([\\/]|$)/,
-    ],
+    ignored: DEFAULT_SKILLS_WATCH_IGNORED,
   });
 
   const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
