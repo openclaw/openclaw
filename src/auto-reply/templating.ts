@@ -96,7 +96,7 @@ export type MsgContext = {
    */
   OriginatingTo?: string;
   /**
-   * Messages from internal hooks to be included in the response.
+   * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];

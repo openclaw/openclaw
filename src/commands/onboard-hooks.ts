@@ -11,12 +11,12 @@ export async function setupInternalHooks(
 ): Promise<ClawdbotConfig> {
   await prompter.note(
     [
-      "Internal hooks let you automate actions when agent commands are issued.",
+      "Hooks let you automate actions when agent commands are issued.",
       "Example: Save session context to memory when you issue /new.",
       "",
-      "Learn more: https://docs.clawd.bot/internal-hooks",
+      "Learn more: https://docs.clawd.bot/hooks",
     ].join("\n"),
-    "Internal Hooks",
+    "Hooks",
   );
 
   // Discover available hooks using the hook discovery system
@@ -35,7 +35,7 @@ export async function setupInternalHooks(
   }
 
   const toEnable = await prompter.multiselect({
-    message: "Enable internal hooks?",
+    message: "Enable hooks?",
     options: [
       { value: "__skip__", label: "Skip for now" },
       ...recommendedHooks.map((hook) => ({

@@ -144,7 +144,7 @@ describe("handleCommands identity", () => {
   });
 });
 
-describe("handleCommands internal hooks", () => {
+describe("handleCommands hooks", () => {
   it("triggers hooks for /new with arguments", async () => {
     const cfg = {
       commands: { text: true },

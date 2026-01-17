@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
+import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
@@ -84,6 +85,54 @@ describe("installHooksFromArchive", () => {
     expect(
       fs.existsSync(path.join(result.targetDir, "hooks", "zip-hook", "HOOK.md")),
     ).toBe(true);
+  });
+
+  it("installs hook packs from tar archives", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "hooks.tar");
+    const pkgDir = path.join(workDir, "package");
+
+    fs.mkdirSync(path.join(pkgDir, "hooks", "tar-hook"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@clawdbot/tar-hooks",
+        version: "0.0.1",
+        clawdbot: { hooks: ["./hooks/tar-hook"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "tar-hook", "HOOK.md"),
+      [
+        "---",
+        "name: tar-hook",
+        "description: Tar hook",
+        "metadata: {\"clawdbot\":{\"events\":[\"command:new\"]}}",
+        "---",
+        "",
+        "# Tar Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "tar-hook", "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+
+    const result = await withStateDir(stateDir, async () => {
+      const { installHooksFromArchive } = await import("./install.js");
+      return await installHooksFromArchive({ archivePath });
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.hookPackId).toBe("tar-hooks");
+    expect(result.hooks).toContain("tar-hook");
+    expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
   });
 });
 

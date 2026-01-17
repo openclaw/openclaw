@@ -1,5 +1,5 @@
 /**
- * Dynamic loader for internal hook handlers
+ * Dynamic loader for hook handlers
  *
  * Loads hook handlers from external modules based on configuration
  * and from directory-based discovery (bundled, managed, workspace)
@@ -15,7 +15,7 @@ import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 
 /**
- * Load and register all internal hook handlers
+ * Load and register all hook handlers
  *
  * Loads hooks from both:
  * 1. Directory-based discovery (bundled, managed, workspace)
@@ -30,14 +30,14 @@ import { shouldIncludeHook } from "./config.js";
  * const config = await loadConfig();
  * const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
  * const count = await loadInternalHooks(config, workspaceDir);
- * console.log(`Loaded ${count} internal hook handlers`);
+ * console.log(`Loaded ${count} hook handlers`);
  * ```
  */
 export async function loadInternalHooks(
   cfg: ClawdbotConfig,
   workspaceDir: string,
 ): Promise<number> {
-  // Check if internal hooks are enabled
+  // Check if hooks are enabled
   if (!cfg.hooks?.internal?.enabled) {
     return 0;
   }
@@ -71,7 +71,7 @@ export async function loadInternalHooks(
 
         if (typeof handler !== "function") {
           console.error(
-            `Internal hook error: Handler '${exportName}' from ${entry.hook.name} is not a function`,
+            `Hook error: Handler '${exportName}' from ${entry.hook.name} is not a function`,
           );
           continue;
         }
@@ -80,7 +80,7 @@ export async function loadInternalHooks(
         const events = entry.clawdbot?.events ?? [];
         if (events.length === 0) {
           console.warn(
-            `Internal hook warning: Hook '${entry.hook.name}' has no events defined in metadata`,
+            `Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`,
           );
           continue;
         }
@@ -90,12 +90,12 @@ export async function loadInternalHooks(
         }
 
         console.log(
-          `Registered internal hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
+          `Registered hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
         );
         loadedCount++;
       } catch (err) {
         console.error(
-          `Failed to load internal hook ${entry.hook.name}:`,
+          `Failed to load hook ${entry.hook.name}:`,
           err instanceof Error ? err.message : String(err),
         );
       }
@@ -127,7 +127,7 @@ export async function loadInternalHooks(
 
       if (typeof handler !== "function") {
         console.error(
-          `Internal hook error: Handler '${exportName}' from ${modulePath} is not a function`,
+          `Hook error: Handler '${exportName}' from ${modulePath} is not a function`,
         );
         continue;
       }
@@ -135,12 +135,12 @@ export async function loadInternalHooks(
       // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
       console.log(
-        `Registered internal hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
+        `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
     } catch (err) {
       console.error(
-        `Failed to load internal hook handler from ${handlerConfig.module}:`,
+        `Failed to load hook handler from ${handlerConfig.module}:`,
         err instanceof Error ? err.message : String(err),
       );
     }

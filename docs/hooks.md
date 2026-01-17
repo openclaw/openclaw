@@ -1,19 +1,19 @@
 ---
-summary: "Internal agent hooks: event-driven automation for commands and lifecycle events"
+summary: "Hooks: event-driven automation for commands and lifecycle events"
 read_when:
   - You want event-driven automation for /new, /reset, /stop, and agent lifecycle events
-  - You want to build, install, or debug internal hooks
+  - You want to build, install, or debug hooks
 ---
-# Internal Agent Hooks
+# Hooks
 
-Internal hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in Clawdbot.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in Clawdbot.
 
 ## Getting Oriented
 
 Hooks are small scripts that run when something happens. There are two kinds:
 
-- **Internal hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
-- **Web-based hooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook) or use `clawdbot webhooks` for Gmail helper commands.
+- **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
+- **Webhooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook) or use `clawdbot webhooks` for Gmail helper commands.
 
 Common uses:
 - Save a memory snapshot when you reset a session
@@ -21,11 +21,11 @@ Common uses:
 - Trigger follow-up automation when a session starts or ends
 - Write files into the agent workspace or call external APIs when events fire
 
-If you can write a small TypeScript function, you can write an internal hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
+If you can write a small TypeScript function, you can write a hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
 
 ## Overview
 
-The internal hooks system allows you to:
+The hooks system allows you to:
 - Save session context to memory when `/new` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
@@ -120,7 +120,7 @@ The `HOOK.md` file contains metadata in YAML frontmatter plus Markdown documenta
 ---
 name: my-hook
 description: "Short description of what this hook does"
-homepage: https://docs.clawd.bot/internal-hooks#my-hook
+homepage: https://docs.clawd.bot/hooks#my-hook
 metadata: {"clawdbot":{"emoji":"🔗","events":["command:new"],"requires":{"bins":["node"]}}}
 ---
 
@@ -162,12 +162,12 @@ The `metadata.clawdbot` object supports:
 
 ### Handler Implementation
 
-The `handler.ts` file exports an `InternalHookHandler` function:
+The `handler.ts` file exports a `HookHandler` function:
 
 ```typescript
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
+import type { HookHandler } from '../../src/hooks/hooks.js';
 
-const myHandler: InternalHookHandler = async (event) => {
+const myHandler: HookHandler = async (event) => {
   // Only trigger on 'new' command
   if (event.type !== 'command' || event.action !== 'new') {
     return;
@@ -260,9 +260,9 @@ This hook does something useful when you issue `/new`.
 ### 4. Create handler.ts
 
 ```typescript
-import type { InternalHookHandler } from '../../src/hooks/internal-hooks.js';
+import type { HookHandler } from '../../src/hooks/hooks.js';
 
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   if (event.type !== 'command' || event.action !== 'new') {
     return;
   }
@@ -505,12 +505,12 @@ Hooks run during command processing. Keep them lightweight:
 
 ```typescript
 // ✓ Good - async work, returns immediately
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   void processInBackground(event); // Fire and forget
 };
 
 // ✗ Bad - blocks command processing
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   await slowDatabaseQuery(event);
   await evenSlowerAPICall(event);
 };
@@ -521,7 +521,7 @@ const handler: InternalHookHandler = async (event) => {
 Always wrap risky operations:
 
 ```typescript
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   try {
     await riskyOperation(event);
   } catch (err) {
@@ -536,7 +536,7 @@ const handler: InternalHookHandler = async (event) => {
 Return early if the event isn't relevant:
 
 ```typescript
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   // Only handle 'new' commands
   if (event.type !== 'command' || event.action !== 'new') {
     return;
@@ -584,7 +584,7 @@ clawdbot hooks list --verbose
 In your handler, log when it's called:
 
 ```typescript
-const handler: InternalHookHandler = async (event) => {
+const handler: HookHandler = async (event) => {
   console.log('[my-handler] Triggered:', event.type, event.action);
   // Your logic
 };
@@ -620,11 +620,11 @@ Test your handlers in isolation:
 
 ```typescript
 import { test } from 'vitest';
-import { createInternalHookEvent } from './src/hooks/internal-hooks.js';
+import { createHookEvent } from './src/hooks/hooks.js';
 import myHandler from './hooks/my-hook/handler.js';
 
 test('my handler works', async () => {
-  const event = createInternalHookEvent('command', 'new', 'test-session', {
+  const event = createHookEvent('command', 'new', 'test-session', {
     foo: 'bar'
   });
 

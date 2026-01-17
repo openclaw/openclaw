@@ -405,7 +405,7 @@ export async function runOnboardingWizard(
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
   }
 
-  // Setup internal hooks (session memory on /new)
+  // Setup hooks (session memory on /new)
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });

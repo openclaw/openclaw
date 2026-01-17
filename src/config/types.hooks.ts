@@ -90,7 +90,7 @@ export type HookInstallRecord = {
 };
 
 export type InternalHooksConfig = {
-  /** Enable internal hooks system */
+  /** Enable hooks system */
   enabled?: boolean;
   /** Legacy: List of internal hook handlers to register (still supported) */
   handlers?: InternalHookHandlerConfig[];

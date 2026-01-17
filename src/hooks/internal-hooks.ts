@@ -1,7 +1,7 @@
 /**
- * Internal hook system for clawdbot agent events
+ * Hook system for clawdbot agent events
  *
- * Provides an extensible event-driven hook system for internal agent events
+ * Provides an extensible event-driven hook system for agent events
  * like command processing, session lifecycle, etc.
  */
 
@@ -91,7 +91,7 @@ export function getRegisteredEventKeys(): string[] {
 }
 
 /**
- * Trigger an internal hook event
+ * Trigger a hook event
  *
  * Calls all handlers registered for:
  * 1. The general event type (e.g., 'command')
@@ -117,7 +117,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
       await handler(event);
     } catch (err) {
       console.error(
-        `Internal hook error [${event.type}:${event.action}]:`,
+        `Hook error [${event.type}:${event.action}]:`,
         err instanceof Error ? err.message : String(err),
       );
     }
@@ -125,7 +125,7 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
 }
 
 /**
- * Create an internal hook event with common fields filled in
+ * Create a hook event with common fields filled in
  *
  * @param type - The event type
  * @param action - The action within that type

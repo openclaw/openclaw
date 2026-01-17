@@ -103,7 +103,7 @@ export async function startGatewaySidecars(params: {
       );
     }
   } catch (err) {
-    params.logHooks.error(`failed to load internal hooks: ${String(err)}`);
+    params.logHooks.error(`failed to load hooks: ${String(err)}`);
   }
 
   // Launch configured channels so gateway replies via the surface the message came from.

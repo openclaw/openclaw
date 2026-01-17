@@ -7,7 +7,7 @@
 - Plugins: add Zalo Personal plugin (`@clawdbot/zalouser`) and unify channel directory for plugins. (#1032) — thanks @suminhthanh.
 - Models: add Vercel AI Gateway auth choice + onboarding updates. (#1016) — thanks @timolins.
 - Sessions: add `session.identityLinks` for cross-platform DM session linking. (#1033) — thanks @thewilloftheshadow.
-- Hooks: add internal hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake.
+- Hooks: add hooks system with bundled hooks, CLI tooling, and docs. (#1028) — thanks @ThomsenDrake.
 
 ### Breaking
 - **BREAKING:** Channel auth now prefers config over env for Discord/Telegram/Matrix (env is fallback only). (#1040) — thanks @thewilloftheshadow.
@@ -15,7 +15,7 @@
 - **BREAKING:** Drop legacy `chatType: "room"` support; use `chatType: "channel"`.
 - **BREAKING:** remove legacy provider-specific target resolution fallbacks; target resolution is centralized with plugin hints + directory lookups.
 - **BREAKING:** drop legacy target normalization helpers; use outbound target normalization and resolver flows.
-- **BREAKING:** `clawdbot hooks` is now `clawdbot webhooks`; internal hooks live under `clawdbot hooks`.
+- **BREAKING:** `clawdbot hooks` is now `clawdbot webhooks`; hooks live under `clawdbot hooks`.
 - **BREAKING:** `clawdbot plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
 
 ### Changes

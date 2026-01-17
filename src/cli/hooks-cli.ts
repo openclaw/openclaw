@@ -125,9 +125,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
   const notEligible = hooks.filter((h) => !h.eligible);
 
   const lines: string[] = [];
-  lines.push(
-    chalk.bold.cyan("Internal Hooks") + chalk.gray(` (${eligible.length}/${hooks.length} ready)`),
-  );
+  lines.push(chalk.bold.cyan("Hooks") + chalk.gray(` (${eligible.length}/${hooks.length} ready)`));
   lines.push("");
 
   if (eligible.length > 0) {
@@ -273,7 +271,7 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
   const notEligible = report.hooks.filter((h) => !h.eligible);
 
   const lines: string[] = [];
-  lines.push(chalk.bold.cyan("Internal Hooks Status"));
+  lines.push(chalk.bold.cyan("Hooks Status"));
   lines.push("");
   lines.push(`Total hooks: ${report.hooks.length}`);
   lines.push(chalk.green(`Ready: ${eligible.length}`));
@@ -373,7 +371,7 @@ export function registerHooksCli(program: Command): void {
 
   hooks
     .command("list")
-    .description("List all internal hooks")
+    .description("List all hooks")
     .option("--eligible", "Show only eligible hooks", false)
     .option("--json", "Output as JSON", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
