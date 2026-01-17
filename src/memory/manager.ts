@@ -876,7 +876,9 @@ export class MemoryIndexManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progress = params?.progress ? this.createSyncProgress(params.progress) : null;
+    const progress = params?.progress
+      ? this.createSyncProgress(params.progress)
+      : undefined;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
