@@ -27,7 +27,11 @@ async function loadWebMediaInternal(
   const { maxBytes, optimizeImages = true } = options;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
-    mediaUrl = fileURLToPath(mediaUrl);
+    try {
+      mediaUrl = fileURLToPath(mediaUrl);
+    } catch {
+      throw new Error(`Invalid file:// URL: ${mediaUrl}`);
+    }
   }
 
   const optimizeAndClampImage = async (buffer: Buffer, cap: number) => {
