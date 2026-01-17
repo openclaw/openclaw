@@ -2,7 +2,7 @@ import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
-import { withProgress } from "./progress.js";
+import { withProgress, withProgressTotals } from "./progress.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -51,26 +51,38 @@ export function registerMemoryCli(program: Command) {
         let embeddingProbe: Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>> | undefined;
         let indexError: string | undefined;
         if (deep) {
-          const total = opts.index ? 3 : 2;
-          await withProgress({ label: "Checking memory…", total }, async (progress) => {
+          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
             progress.setLabel("Probing vector…");
             await manager.probeVectorAvailability();
             progress.tick();
             progress.setLabel("Probing embeddings…");
             embeddingProbe = await manager.probeEmbeddingAvailability();
             progress.tick();
-            if (opts.index) {
-              progress.setLabel("Indexing memory…");
-              try {
-                await manager.sync({ reason: "cli" });
-              } catch (err) {
-                indexError = err instanceof Error ? err.message : String(err);
-                defaultRuntime.error(`Memory index failed: ${indexError}`);
-                process.exitCode = 1;
-              }
-              progress.tick();
-            }
           });
+          if (opts.index) {
+            await withProgressTotals(
+              { label: "Indexing memory…", total: 0 },
+              async (update, progress) => {
+                try {
+                  await manager.sync({
+                    reason: "cli",
+                    progress: (syncUpdate) => {
+                      update({
+                        completed: syncUpdate.completed,
+                        total: syncUpdate.total,
+                        label: syncUpdate.label,
+                      });
+                      if (syncUpdate.label) progress.setLabel(syncUpdate.label);
+                    },
+                  });
+                } catch (err) {
+                  indexError = err instanceof Error ? err.message : String(err);
+                  defaultRuntime.error(`Memory index failed: ${indexError}`);
+                  process.exitCode = 1;
+                }
+              },
+            );
+          }
         } else {
           await manager.probeVectorAvailability();
         }
