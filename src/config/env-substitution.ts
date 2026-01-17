@@ -43,30 +43,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function readEnvVarName(
-  value: string,
-  start: number,
-): { name: string | null; end: number } {
-  const end = value.indexOf("}", start);
-  if (end === -1) {
-    return { name: null, end: -1 };
-  }
-
-  const name = value.slice(start, end);
-  if (!ENV_VAR_NAME_PATTERN.test(name)) {
-    return { name: null, end: -1 };
-  }
-
-  return { name, end };
-}
-
 function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: string): string {
-  let result = "";
+  if (!value.includes("$")) {
+    return value;
+  }
+
+  const chunks: string[] = [];
 
   for (let i = 0; i < value.length; i += 1) {
     const char = value[i];
     if (char !== "$") {
-      result += char;
+      chunks.push(char);
       continue;
     }
 
@@ -75,33 +62,41 @@ function substituteString(value: string, env: NodeJS.ProcessEnv, configPath: str
 
     // Escaped: $${VAR} -> ${VAR}
     if (next === "$" && afterNext === "{") {
-      const { name, end } = readEnvVarName(value, i + 3);
-      if (name !== null) {
-        result += `\${${name}}`;
-        i = end;
-        continue;
+      const start = i + 3;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          chunks.push(`\${${name}}`);
+          i = end;
+          continue;
+        }
       }
     }
 
     // Substitution: ${VAR} -> value
     if (next === "{") {
-      const { name, end } = readEnvVarName(value, i + 2);
-      if (name !== null) {
-        const envValue = env[name];
-        if (envValue === undefined || envValue === "") {
-          throw new MissingEnvVarError(name, configPath);
+      const start = i + 2;
+      const end = value.indexOf("}", start);
+      if (end !== -1) {
+        const name = value.slice(start, end);
+        if (ENV_VAR_NAME_PATTERN.test(name)) {
+          const envValue = env[name];
+          if (envValue === undefined || envValue === "") {
+            throw new MissingEnvVarError(name, configPath);
+          }
+          chunks.push(envValue);
+          i = end;
+          continue;
         }
-        result += envValue;
-        i = end;
-        continue;
       }
     }
 
     // Leave untouched if not a recognized pattern
-    result += char;
+    chunks.push(char);
   }
 
-  return result;
+  return chunks.join("");
 }
 
 function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): unknown {
