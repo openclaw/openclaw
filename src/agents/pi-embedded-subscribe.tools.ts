@@ -57,8 +57,10 @@ export function extractMessagingToolSend(
     const toRaw = typeof args.to === "string" ? args.to : undefined;
     if (!toRaw) return undefined;
     const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const providerId = providerRaw ? normalizeChannelId(providerRaw) : null;
-    const provider = providerId ?? (providerRaw ? providerRaw.toLowerCase() : "message");
+    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerHint = providerRaw || channelRaw;
+    const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }
