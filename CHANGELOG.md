@@ -27,6 +27,7 @@
 - Tools: add tmux-style `process send-keys` and bracketed paste helpers for PTY sessions.
 - Tools: add `process submit` helper to send CR for PTY sessions.
 - Tools: respond to PTY cursor position queries to unblock interactive TUIs.
+- TUI: refresh session token counts after runs complete or fail. (#1079) — thanks @d-ploutarchos.
 - Status: trim `/status` to current-provider usage only and drop the OAuth/token block.
 - Directory: unify `clawdbot directory` across channels and plugin channels.
 - UI: allow deleting sessions from the Control UI.
