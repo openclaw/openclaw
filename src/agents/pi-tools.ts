@@ -182,6 +182,7 @@ export function createClawdbotCodingTools(options?: {
     allowBackground,
     scopeKey,
     sessionKey: options?.sessionKey,
+    messageProvider: options?.messageProvider,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

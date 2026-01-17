@@ -75,6 +75,7 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
 };
@@ -220,6 +221,11 @@ export function createExecTool(
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
+          const contextParts: string[] = [];
+          const provider = defaults?.messageProvider?.trim();
+          const sessionKey = defaults?.sessionKey?.trim();
+          if (provider) contextParts.push(`provider=${provider}`);
+          if (sessionKey) contextParts.push(`session=${sessionKey}`);
           if (!elevatedDefaults?.enabled) {
             gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
           } else {
@@ -231,12 +237,15 @@ export function createExecTool(
             [
               `elevated is not available right now (runtime=${runtime}).`,
               `Failing gates: ${gates.join(", ")}`,
+              contextParts.length > 0 ? `Context: ${contextParts.join(" ")}` : undefined,
               "Fix-it keys:",
               "- tools.elevated.enabled",
               "- tools.elevated.allowFrom.<provider>",
               "- agents.list[].tools.elevated.enabled",
               "- agents.list[].tools.elevated.allowFrom.<provider>",
-            ].join("\n"),
+            ]
+              .filter(Boolean)
+              .join("\n"),
           );
         }
         logInfo(

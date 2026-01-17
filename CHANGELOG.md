@@ -67,6 +67,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - macOS: drain subprocess pipes before waiting to avoid deadlocks. (#1081) — thanks @thesash.
 - Verbose: wrap tool summaries/output in markdown only for markdown-capable channels.
+- Tools: include provider/session context in elevated exec denial errors.
 - Telegram: accept tg/group/telegram prefixes + topic targets for inline button validation. (#1072) — thanks @danielz1z.
 - Telegram: split long captions into follow-up messages.
 - Config: block startup on invalid config, preserve best-effort doctor config, and keep rolling config backups. (#1083) — thanks @mukhtharcm.
