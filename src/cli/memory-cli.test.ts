@@ -20,6 +20,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 afterEach(() => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockReset();
+  process.exitCode = undefined;
 });
 
 describe("memory cli", () => {
@@ -95,5 +96,54 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
     expect(close).toHaveBeenCalled();
+  });
+
+  it("closes manager after index", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const sync = vi.fn(async () => {});
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        sync,
+        close,
+      },
+    });
+
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "index"], { from: "user" });
+
+    expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
+    expect(close).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Memory index updated.");
+  });
+
+  it("closes manager after search error", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { defaultRuntime } = await import("../runtime.js");
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        search,
+        close,
+      },
+    });
+
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "search", "oops"], { from: "user" });
+
+    expect(search).toHaveBeenCalled();
+    expect(close).toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory search failed: boom"));
+    expect(process.exitCode).toBe(1);
   });
 });
