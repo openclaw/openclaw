@@ -1,4 +1,7 @@
-import { buildQueueSummaryLine } from "../../../utils/queue-helpers.js";
+import {
+  applyQueueDropPolicy,
+  shouldSkipQueueItem,
+} from "../../../utils/queue-helpers.js";
 import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
 
@@ -28,36 +31,23 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
 ): boolean {
   const queue = getFollowupQueue(key, settings);
+  const dedupe =
+    dedupeMode === "none"
+      ? undefined
+      : (item: FollowupRun, items: FollowupRun[]) =>
+          isRunAlreadyQueued(item, items, dedupeMode === "prompt");
 
   // Deduplicate: skip if the same message is already queued.
-  if (dedupeMode !== "none") {
-    if (dedupeMode === "message-id" && isRunAlreadyQueued(run, queue.items)) {
-      return false;
-    }
-    if (dedupeMode === "prompt" && isRunAlreadyQueued(run, queue.items, true)) {
-      return false;
-    }
-  }
+  if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) return false;
 
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
 
-  const cap = queue.cap;
-  if (cap > 0 && queue.items.length >= cap) {
-    if (queue.dropPolicy === "new") {
-      return false;
-    }
-    const dropCount = queue.items.length - cap + 1;
-    const dropped = queue.items.splice(0, dropCount);
-    if (queue.dropPolicy === "summarize") {
-      for (const item of dropped) {
-        queue.droppedCount += 1;
-        const base = item.summaryLine?.trim() || item.prompt.trim();
-        queue.summaryLines.push(buildQueueSummaryLine(base));
-      }
-      while (queue.summaryLines.length > cap) queue.summaryLines.shift();
-    }
-  }
+  const shouldEnqueue = applyQueueDropPolicy({
+    queue,
+    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+  });
+  if (!shouldEnqueue) return false;
 
   queue.items.push(run);
   return true;

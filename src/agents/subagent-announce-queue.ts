@@ -6,8 +6,8 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
 import {
+  applyQueueDropPolicy,
   buildCollectPrompt,
-  buildQueueSummaryLine,
   buildQueueSummaryPrompt,
   hasCrossChannelItems,
   waitForQueueDebounce,
@@ -156,22 +156,15 @@ export function enqueueAnnounce(params: {
   const queue = getAnnounceQueue(params.key, params.settings, params.send);
   queue.lastEnqueuedAt = Date.now();
 
-  const cap = queue.cap;
-  if (cap > 0 && queue.items.length >= cap) {
+  const shouldEnqueue = applyQueueDropPolicy({
+    queue,
+    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+  });
+  if (!shouldEnqueue) {
     if (queue.dropPolicy === "new") {
       scheduleAnnounceDrain(params.key);
-      return false;
     }
-    const dropCount = queue.items.length - cap + 1;
-    const dropped = queue.items.splice(0, dropCount);
-    if (queue.dropPolicy === "summarize") {
-      for (const droppedItem of dropped) {
-        queue.droppedCount += 1;
-        const base = droppedItem.summaryLine?.trim() || droppedItem.prompt.trim();
-        queue.summaryLines.push(buildQueueSummaryLine(base));
-      }
-      while (queue.summaryLines.length > cap) queue.summaryLines.shift();
-    }
+    return false;
   }
 
   const origin = normalizeDeliveryContext(params.item.origin);
