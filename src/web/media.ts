@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
@@ -24,8 +25,9 @@ async function loadWebMediaInternal(
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
   const { maxBytes, optimizeImages = true } = options;
+  // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
-    mediaUrl = mediaUrl.replace("file://", "");
+    mediaUrl = fileURLToPath(mediaUrl);
   }
 
   const optimizeAndClampImage = async (buffer: Buffer, cap: number) => {
@@ -57,7 +59,7 @@ async function loadWebMediaInternal(
     kind: MediaKind;
     fileName?: string;
   }): Promise<WebMediaResult> => {
-    const cap = Math.min(maxBytes ?? maxBytesForKind(params.kind), maxBytesForKind(params.kind));
+    const cap = maxBytes !== undefined ? Math.min(maxBytes, maxBytesForKind(params.kind)) : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {

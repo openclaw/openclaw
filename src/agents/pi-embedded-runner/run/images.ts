@@ -163,6 +163,8 @@ export async function loadImageFromRef(
     // For file paths, resolve relative to the appropriate root:
     // - When sandbox is enabled, resolve relative to sandboxRoot for security
     // - Otherwise, resolve relative to workspaceDir
+    // Note: ref.resolved may already be absolute (e.g., after ~ expansion in detectImageReferences),
+    // in which case we skip relative resolution.
     if (ref.type === "path" && !path.isAbsolute(targetPath)) {
       const resolveRoot = options?.sandboxRoot ?? workspaceDir;
       targetPath = path.resolve(resolveRoot, targetPath);
