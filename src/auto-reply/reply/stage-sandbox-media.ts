@@ -33,7 +33,9 @@ export async function stageSandboxMedia(params: {
   });
 
   // For remote attachments without sandbox, use ~/.clawdbot/media (not agent workspace for privacy)
-  const remoteMediaCacheDir = ctx.MediaRemoteHost ? path.join(CONFIG_DIR, "media", "remote-cache", sessionKey) : null;
+  const remoteMediaCacheDir = ctx.MediaRemoteHost
+    ? path.join(CONFIG_DIR, "media", "remote-cache", sessionKey)
+    : null;
   const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir;
   if (!effectiveWorkspaceDir) return;
 
@@ -53,7 +55,9 @@ export async function stageSandboxMedia(params: {
 
   try {
     // For sandbox: <workspace>/media/inbound, for remote cache: use dir directly
-    const destDir = sandbox ? path.join(effectiveWorkspaceDir, "media", "inbound") : effectiveWorkspaceDir;
+    const destDir = sandbox
+      ? path.join(effectiveWorkspaceDir, "media", "inbound")
+      : effectiveWorkspaceDir;
     await fs.mkdir(destDir, { recursive: true });
 
     const usedNames = new Set<string>();

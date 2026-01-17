@@ -394,9 +394,7 @@ export async function closePlaywrightBrowserConnection(): Promise<void> {
  * List all pages/tabs from the persistent Playwright connection.
  * Used for remote profiles where HTTP-based /json/list is ephemeral.
  */
-export async function listPagesViaPlaywright(opts: {
-  cdpUrl: string;
-}): Promise<
+export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
   Array<{
     targetId: string;
     title: string;
@@ -432,25 +430,15 @@ export async function listPagesViaPlaywright(opts: {
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: {
-  cdpUrl: string;
-  url: string;
-}): Promise<{
+export async function createPageViaPlaywright(opts: { cdpUrl: string; url: string }): Promise<{
   targetId: string;
   title: string;
   url: string;
   type: string;
 }> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const contexts = browser.contexts();
-  // Use the first context if available, otherwise this is a fresh connection
-  // and we need to use the default context that Browserless provides
-  let context = contexts[0];
-  if (!context) {
-    // For Browserless over CDP, there should be at least one context
-    // If not, we can try accessing pages directly from contexts
-    throw new Error("No browser context available for creating a new page");
-  }
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  ensureContextState(context);
 
   const page = await context.newPage();
   ensurePageState(page);
