@@ -121,8 +121,10 @@ describe("sessions", () => {
     await updateLastRoute({
       storePath,
       sessionKey: mainSessionKey,
-      channel: "telegram",
-      to: "  12345  ",
+      deliveryContext: {
+        channel: "telegram",
+        to: "  12345  ",
+      },
     });
 
     const store = loadSessionStore(storePath);
@@ -140,6 +142,36 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.elevatedLevel).toBe("on");
     expect(store[mainSessionKey]?.authProfileOverride).toBe("auth-1");
     expect(store[mainSessionKey]?.compactionCount).toBe(2);
+  });
+
+  it("updateLastRoute prefers explicit deliveryContext", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      channel: "whatsapp",
+      to: "111",
+      accountId: "legacy",
+      deliveryContext: {
+        channel: "telegram",
+        to: "222",
+        accountId: "primary",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.lastChannel).toBe("telegram");
+    expect(store[mainSessionKey]?.lastTo).toBe("222");
+    expect(store[mainSessionKey]?.lastAccountId).toBe("primary");
+    expect(store[mainSessionKey]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "222",
+      accountId: "primary",
+    });
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {

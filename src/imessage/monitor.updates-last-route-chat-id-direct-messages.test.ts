@@ -121,8 +121,10 @@ describe("monitorIMessageProvider", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "imessage",
-        to: "+15550004444",
+        deliveryContext: expect.objectContaining({
+          channel: "imessage",
+          to: "+15550004444",
+        }),
       }),
     );
   });

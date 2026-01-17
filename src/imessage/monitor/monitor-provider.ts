@@ -453,9 +453,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,
-          channel: "imessage",
-          to,
-          accountId: route.accountId,
+          deliveryContext: {
+            channel: "imessage",
+            to,
+            accountId: route.accountId,
+          },
         });
       }
     }
