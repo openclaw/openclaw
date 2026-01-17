@@ -352,7 +352,12 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyOpencodeZenConfig(nextConfig);
   }
 
-  if (authChoice === "oauth" || authChoice === "chutes" || authChoice === "openai-codex") {
+  if (
+    authChoice === "oauth" ||
+    authChoice === "chutes" ||
+    authChoice === "openai-codex" ||
+    authChoice === "qwen-portal"
+  ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;

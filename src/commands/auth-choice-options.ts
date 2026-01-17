@@ -19,7 +19,8 @@ export type AuthChoiceGroupId =
   | "zai"
   | "opencode-zen"
   | "minimax"
-  | "synthetic";
+  | "synthetic"
+  | "qwen";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -51,6 +52,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "MiniMax",
     hint: "M2.1 (recommended)",
     choices: ["minimax-api", "minimax-api-lightning"],
+  },
+  {
+    value: "qwen",
+    label: "Qwen",
+    hint: "Portal OAuth",
+    choices: ["qwen-portal"],
   },
   {
     value: "synthetic",
@@ -189,6 +196,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
+  options.push({ value: "qwen-portal", label: "Qwen Portal OAuth" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({
