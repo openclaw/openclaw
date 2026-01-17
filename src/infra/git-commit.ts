@@ -51,6 +51,18 @@ const readCommitFromPackageJson = () => {
   }
 };
 
+const readCommitFromBuildInfo = () => {
+  try {
+    const require = createRequire(import.meta.url);
+    const info = require("../build-info.json") as {
+      commit?: string | null;
+    };
+    return formatCommit(info.commit ?? null);
+  } catch {
+    return null;
+  }
+};
+
 export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) => {
   if (cachedCommit !== undefined) return cachedCommit;
   const env = options.env ?? process.env;
@@ -58,6 +70,11 @@ export const resolveCommitHash = (options: { cwd?: string; env?: NodeJS.ProcessE
   const normalized = formatCommit(envCommit);
   if (normalized) {
     cachedCommit = normalized;
+    return cachedCommit;
+  }
+  const buildInfoCommit = readCommitFromBuildInfo();
+  if (buildInfoCommit) {
+    cachedCommit = buildInfoCommit;
     return cachedCommit;
   }
   const pkgCommit = readCommitFromPackageJson();
