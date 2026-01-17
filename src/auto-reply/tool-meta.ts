@@ -1,6 +1,10 @@
 import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
+type ToolAggregateOptions = {
+  markdown?: boolean;
+};
+
 export function shortenPath(p: string): string {
   return shortenHomePath(p);
 }
@@ -14,7 +18,11 @@ export function shortenMeta(meta: string): string {
   return `${shortenHomeInString(base)}${rest}`;
 }
 
-export function formatToolAggregate(toolName?: string, metas?: string[]): string {
+export function formatToolAggregate(
+  toolName?: string,
+  metas?: string[],
+  options?: ToolAggregateOptions,
+): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const display = resolveToolDisplay({ name: toolName });
   const prefix = `${display.emoji} ${display.label}`;
@@ -51,7 +59,8 @@ export function formatToolAggregate(toolName?: string, metas?: string[]): string
   });
 
   const allSegments = [...rawSegments, ...segments];
-  return `${prefix}: ${allSegments.join("; ")}`;
+  const meta = allSegments.join("; ");
+  return `${prefix}: ${maybeWrapMarkdown(meta, options?.markdown)}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
@@ -67,4 +76,10 @@ function isPathLike(value: string): boolean {
   if (value.includes("·")) return false;
   if (value.includes("&&") || value.includes("||")) return false;
   return /^~?(\/[^\s]+)+$/.test(value);
+}
+
+function maybeWrapMarkdown(value: string, markdown?: boolean): string {
+  if (!markdown) return value;
+  if (value.includes("`")) return value;
+  return `\`${value}\``;
 }

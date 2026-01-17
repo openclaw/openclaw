@@ -36,6 +36,12 @@ describe("tool meta formatting", () => {
     expect(out).toContain("a→b");
   });
 
+  it("wraps aggregate meta in backticks when markdown is enabled", () => {
+    vi.stubEnv("HOME", "/Users/test");
+    const out = formatToolAggregate("fs", ["/Users/test/dir/a.txt"], { markdown: true });
+    expect(out).toContain("`~/dir/a.txt`");
+  });
+
   it("formats prefixes with default labels", () => {
     vi.stubEnv("HOME", "/Users/test");
     expect(formatToolPrefix(undefined, undefined)).toBe("🧩 tool");

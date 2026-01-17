@@ -6,7 +6,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
-import type { BlockReplyChunking } from "../../pi-embedded-subscribe.js";
+import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 
@@ -38,6 +38,7 @@ export type EmbeddedRunAttemptParams = {
   thinkLevel: ThinkLevel;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  toolResultFormat?: ToolResultFormat;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;

@@ -15,6 +15,7 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
 
@@ -26,6 +27,7 @@ export function buildEmbeddedRunPayloads(params: {
   sessionKey: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
+  toolResultFormat?: ToolResultFormat;
   inlineToolResultsAllowed: boolean;
 }): Array<{
   text?: string;
@@ -47,6 +49,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyToCurrent?: boolean;
   }> = [];
 
+  const useMarkdown = params.toolResultFormat === "markdown";
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText = params.lastAssistant
     ? formatAssistantErrorText(params.lastAssistant, {
@@ -71,7 +74,9 @@ export function buildEmbeddedRunPayloads(params: {
     params.inlineToolResultsAllowed && params.verboseLevel !== "off" && params.toolMetas.length > 0;
   if (inlineToolResults) {
     for (const { toolName, meta } of params.toolMetas) {
-      const agg = formatToolAggregate(toolName, meta ? [meta] : []);
+      const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
+        markdown: useMarkdown,
+      });
       const {
         text: cleanedText,
         mediaUrls,
