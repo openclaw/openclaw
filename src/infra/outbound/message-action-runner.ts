@@ -150,6 +150,7 @@ function applyCrossContextMessageDecoration({
   }
   return applied.message;
 }
+
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
   if (typeof raw === "boolean") return raw;
@@ -227,295 +228,291 @@ async function resolveActionTarget(params: {
   }
 }
 
-export async function runMessageAction(
-  input: RunMessageActionParams,
-): Promise<MessageActionRunResult> {
-  const cfg = input.cfg;
-  const params = { ...input.params };
-  parseButtonsParam(params);
+type ResolvedActionContext = {
+  cfg: ClawdbotConfig;
+  params: Record<string, unknown>;
+  channel: ChannelId;
+  accountId?: string | null;
+  dryRun: boolean;
+  gateway?: MessageActionRunnerGateway;
+  input: RunMessageActionParams;
+};
 
-  const action = input.action;
-  if (action === "broadcast") {
-    const broadcastEnabled = cfg.tools?.message?.broadcast?.enabled !== false;
-    if (!broadcastEnabled) {
-      throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
-    }
-    const rawTargets = readStringArrayParam(params, "targets", { required: true }) ?? [];
-    if (rawTargets.length === 0) {
-      throw new Error("Broadcast requires at least one target in --targets.");
-    }
-    const channelHint = readStringParam(params, "channel");
-    const configured = await listConfiguredMessageChannels(cfg);
-    if (configured.length === 0) {
-      throw new Error("Broadcast requires at least one configured channel.");
-    }
-    const targetChannels =
-      channelHint && channelHint.trim().toLowerCase() !== "all"
-        ? [await resolveChannel(cfg, { channel: channelHint })]
-        : configured;
-    const results: Array<{
-      channel: ChannelId;
-      to: string;
-      ok: boolean;
-      error?: string;
-      result?: MessageSendResult;
-    }> = [];
-    for (const targetChannel of targetChannels) {
-      for (const target of rawTargets) {
-        try {
-          const resolved = await resolveMessagingTarget({
-            cfg,
-            channel: targetChannel,
-            input: target,
-          });
-          if (!resolved.ok) throw resolved.error;
-          const sendResult = await runMessageAction({
-            ...input,
-            action: "send",
-            params: {
-              ...params,
-              channel: targetChannel,
-              to: resolved.target.to,
-            },
-          });
-          results.push({
+function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
+  if (!input.gateway) return undefined;
+  return {
+    url: input.gateway.url,
+    token: input.gateway.token,
+    timeoutMs: input.gateway.timeoutMs,
+    clientName: input.gateway.clientName,
+    clientDisplayName: input.gateway.clientDisplayName,
+    mode: input.gateway.mode,
+  };
+}
+
+async function handleBroadcastAction(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): Promise<MessageActionRunResult> {
+  const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
+  if (!broadcastEnabled) {
+    throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
+  }
+  const rawTargets = readStringArrayParam(params, "targets", { required: true }) ?? [];
+  if (rawTargets.length === 0) {
+    throw new Error("Broadcast requires at least one target in --targets.");
+  }
+  const channelHint = readStringParam(params, "channel");
+  const configured = await listConfiguredMessageChannels(input.cfg);
+  if (configured.length === 0) {
+    throw new Error("Broadcast requires at least one configured channel.");
+  }
+  const targetChannels =
+    channelHint && channelHint.trim().toLowerCase() !== "all"
+      ? [await resolveChannel(input.cfg, { channel: channelHint })]
+      : configured;
+  const results: Array<{
+    channel: ChannelId;
+    to: string;
+    ok: boolean;
+    error?: string;
+    result?: MessageSendResult;
+  }> = [];
+  for (const targetChannel of targetChannels) {
+    for (const target of rawTargets) {
+      try {
+        const resolved = await resolveMessagingTarget({
+          cfg: input.cfg,
+          channel: targetChannel,
+          input: target,
+        });
+        if (!resolved.ok) throw resolved.error;
+        const sendResult = await runMessageAction({
+          ...input,
+          action: "send",
+          params: {
+            ...params,
             channel: targetChannel,
             to: resolved.target.to,
-            ok: true,
-            result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
-          });
-        } catch (err) {
-          results.push({
-            channel: targetChannel,
-            to: target,
-            ok: false,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+          },
+        });
+        results.push({
+          channel: targetChannel,
+          to: resolved.target.to,
+          ok: true,
+          result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
+        });
+      } catch (err) {
+        results.push({
+          channel: targetChannel,
+          to: target,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
-    return {
-      kind: "broadcast",
-      channel: (targetChannels[0] ?? "discord") as ChannelId,
-      action: "broadcast",
-      handledBy: input.dryRun ? "dry-run" : "core",
-      payload: { results },
-      dryRun: Boolean(input.dryRun),
-    };
+  }
+  return {
+    kind: "broadcast",
+    channel: (targetChannels[0] ?? "discord") as ChannelId,
+    action: "broadcast",
+    handledBy: input.dryRun ? "dry-run" : "core",
+    payload: { results },
+    dryRun: Boolean(input.dryRun),
+  };
+}
+
+async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
+  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const action: ChannelMessageActionName = "send";
+  const to = readStringParam(params, "to", { required: true });
+  // Allow message to be omitted when sending media-only (e.g., voice notes)
+  const mediaHint = readStringParam(params, "media", { trim: false });
+  let message =
+    readStringParam(params, "message", {
+      required: !mediaHint, // Only require message if no media hint
+      allowEmpty: true,
+    }) ?? "";
+
+  const parsed = parseReplyDirectives(message);
+  message = parsed.text;
+  params.message = message;
+  if (!params.replyTo && parsed.replyToId) params.replyTo = parsed.replyToId;
+  if (!params.media) {
+    params.media = parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
   }
 
-  const channel = await resolveChannel(cfg, params);
-  const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
-  const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-
-  await resolveActionTarget({
-    cfg,
-    channel,
-    action,
-    args: params,
-    accountId,
-  });
-
-  enforceCrossContextPolicy({
-    channel,
-    action,
-    args: params,
-    toolContext: input.toolContext,
-    cfg,
-  });
-
-  const gateway = input.gateway
-    ? {
-        url: input.gateway.url,
-        token: input.gateway.token,
-        timeoutMs: input.gateway.timeoutMs,
-        clientName: input.gateway.clientName,
-        clientDisplayName: input.gateway.clientDisplayName,
-        mode: input.gateway.mode,
-      }
-    : undefined;
-
-  if (action === "send") {
-    const to = readStringParam(params, "to", { required: true });
-    // Allow message to be omitted when sending media-only (e.g., voice notes)
-    const mediaHint = readStringParam(params, "media", { trim: false });
-    let message =
-      readStringParam(params, "message", {
-        required: !mediaHint, // Only require message if no media hint
-        allowEmpty: true,
-      }) ?? "";
-
-    const parsed = parseReplyDirectives(message);
-    message = parsed.text;
-    params.message = message;
-    if (!params.replyTo && parsed.replyToId) params.replyTo = parsed.replyToId;
-    if (!params.media) {
-      params.media = parsed.mediaUrls?.[0] || parsed.mediaUrl || undefined;
-    }
-
-    const decoration =
-      shouldApplyCrossContextMarker(action) && input.toolContext
-        ? await buildCrossContextDecoration({
-            cfg,
-            channel,
-            target: to,
-            toolContext: input.toolContext,
-            accountId: accountId ?? undefined,
-          })
-        : null;
-    if (decoration) {
-      message = applyCrossContextMessageDecoration({
-        params,
-        message,
-        decoration,
-        preferEmbeds: true,
-      });
-    }
-
-    const mediaUrl = readStringParam(params, "media", { trim: false });
-    const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
-    const bestEffort = readBooleanParam(params, "bestEffort");
-    if (!dryRun) {
-      const handled = await dispatchChannelMessageAction({
-        channel,
-        action,
-        cfg,
-        params,
-        accountId: accountId ?? undefined,
-        gateway,
-        toolContext: input.toolContext,
-        dryRun,
-      });
-      if (handled) {
-        return {
-          kind: "send",
+  const decoration =
+    shouldApplyCrossContextMarker(action) && input.toolContext
+      ? await buildCrossContextDecoration({
+          cfg,
           channel,
-          action,
-          to,
-          handledBy: "plugin",
-          payload: extractToolPayload(handled),
-          toolResult: handled,
-          dryRun,
-        };
-      }
-    }
+          target: to,
+          toolContext: input.toolContext,
+          accountId: accountId ?? undefined,
+        })
+      : null;
+  if (decoration) {
+    message = applyCrossContextMessageDecoration({
+      params,
+      message,
+      decoration,
+      preferEmbeds: true,
+    });
+  }
 
-    const result: MessageSendResult = await sendMessage({
+  const mediaUrl = readStringParam(params, "media", { trim: false });
+  const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
+  const bestEffort = readBooleanParam(params, "bestEffort");
+  if (!dryRun) {
+    const handled = await dispatchChannelMessageAction({
+      channel,
+      action,
       cfg,
-      to,
-      content: message,
-      mediaUrl: mediaUrl || undefined,
-      channel: channel || undefined,
+      params,
       accountId: accountId ?? undefined,
-      gifPlayback,
-      dryRun,
-      bestEffort: bestEffort ?? undefined,
-      deps: input.deps,
       gateway,
-      mirror:
-        input.sessionKey && !dryRun
-          ? {
-              sessionKey: input.sessionKey,
-              agentId: input.agentId,
-            }
-          : undefined,
-    });
-
-    return {
-      kind: "send",
-      channel,
-      action,
-      to,
-      handledBy: "core",
-      payload: result,
-      sendResult: result,
+      toolContext: input.toolContext,
       dryRun,
-    };
-  }
-
-  if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "pollQuestion", {
-      required: true,
     });
-    const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
-    if (options.length < 2) {
-      throw new Error("pollOption requires at least two values");
-    }
-    const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-    const durationHours = readNumberParam(params, "pollDurationHours", {
-      integer: true,
-    });
-    const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
-    const decoration =
-      shouldApplyCrossContextMarker(action) && input.toolContext
-        ? await buildCrossContextDecoration({
-            cfg,
-            channel,
-            target: to,
-            toolContext: input.toolContext,
-            accountId: accountId ?? undefined,
-          })
-        : null;
-    if (decoration) {
-      const base = typeof params.message === "string" ? params.message : "";
-      applyCrossContextMessageDecoration({
-        params,
-        message: base,
-        decoration,
-        preferEmbeds: true,
-      });
-    }
-
-    if (!dryRun) {
-      const handled = await dispatchChannelMessageAction({
+    if (handled) {
+      return {
+        kind: "send",
         channel,
         action,
-        cfg,
-        params,
-        accountId: accountId ?? undefined,
-        gateway,
-        toolContext: input.toolContext,
+        to,
+        handledBy: "plugin",
+        payload: extractToolPayload(handled),
+        toolResult: handled,
         dryRun,
-      });
-      if (handled) {
-        return {
-          kind: "poll",
-          channel,
-          action,
-          to,
-          handledBy: "plugin",
-          payload: extractToolPayload(handled),
-          toolResult: handled,
-          dryRun,
-        };
-      }
+      };
     }
-
-    const result: MessagePollResult = await sendPoll({
-      cfg,
-      to,
-      question,
-      options,
-      maxSelections,
-      durationHours: durationHours ?? undefined,
-      channel,
-      dryRun,
-      gateway,
-    });
-
-    return {
-      kind: "poll",
-      channel,
-      action,
-      to,
-      handledBy: "core",
-      payload: result,
-      pollResult: result,
-      dryRun,
-    };
   }
 
+  const result: MessageSendResult = await sendMessage({
+    cfg,
+    to,
+    content: message,
+    mediaUrl: mediaUrl || undefined,
+    channel: channel || undefined,
+    accountId: accountId ?? undefined,
+    gifPlayback,
+    dryRun,
+    bestEffort: bestEffort ?? undefined,
+    deps: input.deps,
+    gateway,
+    mirror:
+      input.sessionKey && !dryRun
+        ? {
+            sessionKey: input.sessionKey,
+            agentId: input.agentId,
+          }
+        : undefined,
+  });
+
+  return {
+    kind: "send",
+    channel,
+    action,
+    to,
+    handledBy: "core",
+    payload: result,
+    sendResult: result,
+    dryRun,
+  };
+}
+
+async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
+  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const action: ChannelMessageActionName = "poll";
+  const to = readStringParam(params, "to", { required: true });
+  const question = readStringParam(params, "pollQuestion", {
+    required: true,
+  });
+  const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+  if (options.length < 2) {
+    throw new Error("pollOption requires at least two values");
+  }
+  const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
+  const durationHours = readNumberParam(params, "pollDurationHours", {
+    integer: true,
+  });
+  const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+  const decoration =
+    shouldApplyCrossContextMarker(action) && input.toolContext
+      ? await buildCrossContextDecoration({
+          cfg,
+          channel,
+          target: to,
+          toolContext: input.toolContext,
+          accountId: accountId ?? undefined,
+        })
+      : null;
+  if (decoration) {
+    const base = typeof params.message === "string" ? params.message : "";
+    applyCrossContextMessageDecoration({
+      params,
+      message: base,
+      decoration,
+      preferEmbeds: true,
+    });
+  }
+
+  if (!dryRun) {
+    const handled = await dispatchChannelMessageAction({
+      channel,
+      action,
+      cfg,
+      params,
+      accountId: accountId ?? undefined,
+      gateway,
+      toolContext: input.toolContext,
+      dryRun,
+    });
+    if (handled) {
+      return {
+        kind: "poll",
+        channel,
+        action,
+        to,
+        handledBy: "plugin",
+        payload: extractToolPayload(handled),
+        toolResult: handled,
+        dryRun,
+      };
+    }
+  }
+
+  const result: MessagePollResult = await sendPoll({
+    cfg,
+    to,
+    question,
+    options,
+    maxSelections,
+    durationHours: durationHours ?? undefined,
+    channel,
+    dryRun,
+    gateway,
+  });
+
+  return {
+    kind: "poll",
+    channel,
+    action,
+    to,
+    handledBy: "core",
+    payload: result,
+    pollResult: result,
+    dryRun,
+  };
+}
+
+async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
+  const { cfg, params, channel, accountId, dryRun, gateway, input } = ctx;
+  const action = input.action as Exclude<
+    ChannelMessageActionName,
+    "send" | "poll" | "broadcast"
+  >;
   if (dryRun) {
     return {
       kind: "action",
@@ -549,4 +546,73 @@ export async function runMessageAction(
     toolResult: handled,
     dryRun,
   };
+}
+
+export async function runMessageAction(
+  input: RunMessageActionParams,
+): Promise<MessageActionRunResult> {
+  const cfg = input.cfg;
+  const params = { ...input.params };
+  parseButtonsParam(params);
+
+  const action = input.action;
+  if (action === "broadcast") {
+    return handleBroadcastAction(input, params);
+  }
+
+  const channel = await resolveChannel(cfg, params);
+  const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  await resolveActionTarget({
+    cfg,
+    channel,
+    action,
+    args: params,
+    accountId,
+  });
+
+  enforceCrossContextPolicy({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+  });
+
+  const gateway = resolveGateway(input);
+
+  if (action === "send") {
+    return handleSendAction({
+      cfg,
+      params,
+      channel,
+      accountId,
+      dryRun,
+      gateway,
+      input,
+    });
+  }
+
+  if (action === "poll") {
+    return handlePollAction({
+      cfg,
+      params,
+      channel,
+      accountId,
+      dryRun,
+      gateway,
+      input,
+    });
+  }
+
+  return handlePluginAction({
+    cfg,
+    params,
+    channel,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+  });
 }

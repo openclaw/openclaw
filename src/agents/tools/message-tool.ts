@@ -23,96 +23,170 @@ import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 
-const MessageToolCommonSchema = {
-  channel: Type.Optional(Type.String()),
-  to: Type.Optional(channelTargetSchema()),
-  targets: Type.Optional(channelTargetsSchema()),
-  message: Type.Optional(Type.String()),
-  media: Type.Optional(Type.String()),
-  buttons: Type.Optional(
-    Type.Array(
+function buildRoutingSchema() {
+  return {
+    channel: Type.Optional(Type.String()),
+    to: Type.Optional(channelTargetSchema()),
+    targets: Type.Optional(channelTargetsSchema()),
+    accountId: Type.Optional(Type.String()),
+    dryRun: Type.Optional(Type.Boolean()),
+  };
+}
+
+function buildSendSchema(options: { includeButtons: boolean }) {
+  const props: Record<string, unknown> = {
+    message: Type.Optional(Type.String()),
+    media: Type.Optional(Type.String()),
+    replyTo: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.String()),
+    bestEffort: Type.Optional(Type.Boolean()),
+    gifPlayback: Type.Optional(Type.Boolean()),
+    buttons: Type.Optional(
       Type.Array(
-        Type.Object({
-          text: Type.String(),
-          callback_data: Type.String(),
-        }),
+        Type.Array(
+          Type.Object({
+            text: Type.String(),
+            callback_data: Type.String(),
+          }),
+        ),
+        {
+          description: "Telegram inline keyboard buttons (array of button rows)",
+        },
       ),
-      {
-        description: "Telegram inline keyboard buttons (array of button rows)",
-      },
     ),
-  ),
-  messageId: Type.Optional(Type.String()),
-  replyTo: Type.Optional(Type.String()),
-  threadId: Type.Optional(Type.String()),
-  accountId: Type.Optional(Type.String()),
-  dryRun: Type.Optional(Type.Boolean()),
-  bestEffort: Type.Optional(Type.Boolean()),
-  gifPlayback: Type.Optional(Type.Boolean()),
-  emoji: Type.Optional(Type.String()),
-  remove: Type.Optional(Type.Boolean()),
-  limit: Type.Optional(Type.Number()),
-  before: Type.Optional(Type.String()),
-  after: Type.Optional(Type.String()),
-  around: Type.Optional(Type.String()),
-  pollQuestion: Type.Optional(Type.String()),
-  pollOption: Type.Optional(Type.Array(Type.String())),
-  pollDurationHours: Type.Optional(Type.Number()),
-  pollMulti: Type.Optional(Type.Boolean()),
-  channelId: Type.Optional(channelTargetSchema()),
-  channelIds: Type.Optional(channelTargetsSchema()),
-  guildId: Type.Optional(Type.String()),
-  userId: Type.Optional(Type.String()),
-  authorId: Type.Optional(Type.String()),
-  authorIds: Type.Optional(Type.Array(Type.String())),
-  roleId: Type.Optional(Type.String()),
-  roleIds: Type.Optional(Type.Array(Type.String())),
-  emojiName: Type.Optional(Type.String()),
-  stickerId: Type.Optional(Type.Array(Type.String())),
-  stickerName: Type.Optional(Type.String()),
-  stickerDesc: Type.Optional(Type.String()),
-  stickerTags: Type.Optional(Type.String()),
-  threadName: Type.Optional(Type.String()),
-  autoArchiveMin: Type.Optional(Type.Number()),
-  query: Type.Optional(Type.String()),
-  eventName: Type.Optional(Type.String()),
-  eventType: Type.Optional(Type.String()),
-  startTime: Type.Optional(Type.String()),
-  endTime: Type.Optional(Type.String()),
-  desc: Type.Optional(Type.String()),
-  location: Type.Optional(Type.String()),
-  durationMin: Type.Optional(Type.Number()),
-  until: Type.Optional(Type.String()),
-  reason: Type.Optional(Type.String()),
-  deleteDays: Type.Optional(Type.Number()),
-  includeArchived: Type.Optional(Type.Boolean()),
-  participant: Type.Optional(Type.String()),
-  fromMe: Type.Optional(Type.Boolean()),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  name: Type.Optional(Type.String()),
-  type: Type.Optional(Type.Number()),
-  parentId: Type.Optional(Type.String()),
-  topic: Type.Optional(Type.String()),
-  position: Type.Optional(Type.Number()),
-  nsfw: Type.Optional(Type.Boolean()),
-  rateLimitPerUser: Type.Optional(Type.Number()),
-  categoryId: Type.Optional(Type.String()),
-  clearParent: Type.Optional(
-    Type.Boolean({
-      description: "Clear the parent/category when supported by the provider.",
-    }),
-  ),
-};
+  };
+  if (!options.includeButtons) delete props.buttons;
+  return props;
+}
+
+function buildReactionSchema() {
+  return {
+    messageId: Type.Optional(Type.String()),
+    emoji: Type.Optional(Type.String()),
+    remove: Type.Optional(Type.Boolean()),
+  };
+}
+
+function buildFetchSchema() {
+  return {
+    limit: Type.Optional(Type.Number()),
+    before: Type.Optional(Type.String()),
+    after: Type.Optional(Type.String()),
+    around: Type.Optional(Type.String()),
+    fromMe: Type.Optional(Type.Boolean()),
+    includeArchived: Type.Optional(Type.Boolean()),
+  };
+}
+
+function buildPollSchema() {
+  return {
+    pollQuestion: Type.Optional(Type.String()),
+    pollOption: Type.Optional(Type.Array(Type.String())),
+    pollDurationHours: Type.Optional(Type.Number()),
+    pollMulti: Type.Optional(Type.Boolean()),
+  };
+}
+
+function buildChannelTargetSchema() {
+  return {
+    channelId: Type.Optional(channelTargetSchema()),
+    channelIds: Type.Optional(channelTargetsSchema()),
+    guildId: Type.Optional(Type.String()),
+    userId: Type.Optional(Type.String()),
+    authorId: Type.Optional(Type.String()),
+    authorIds: Type.Optional(Type.Array(Type.String())),
+    roleId: Type.Optional(Type.String()),
+    roleIds: Type.Optional(Type.Array(Type.String())),
+    participant: Type.Optional(Type.String()),
+  };
+}
+
+function buildStickerSchema() {
+  return {
+    emojiName: Type.Optional(Type.String()),
+    stickerId: Type.Optional(Type.Array(Type.String())),
+    stickerName: Type.Optional(Type.String()),
+    stickerDesc: Type.Optional(Type.String()),
+    stickerTags: Type.Optional(Type.String()),
+  };
+}
+
+function buildThreadSchema() {
+  return {
+    threadName: Type.Optional(Type.String()),
+    autoArchiveMin: Type.Optional(Type.Number()),
+  };
+}
+
+function buildEventSchema() {
+  return {
+    query: Type.Optional(Type.String()),
+    eventName: Type.Optional(Type.String()),
+    eventType: Type.Optional(Type.String()),
+    startTime: Type.Optional(Type.String()),
+    endTime: Type.Optional(Type.String()),
+    desc: Type.Optional(Type.String()),
+    location: Type.Optional(Type.String()),
+    durationMin: Type.Optional(Type.Number()),
+    until: Type.Optional(Type.String()),
+  };
+}
+
+function buildModerationSchema() {
+  return {
+    reason: Type.Optional(Type.String()),
+    deleteDays: Type.Optional(Type.Number()),
+  };
+}
+
+function buildGatewaySchema() {
+  return {
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+  };
+}
+
+function buildChannelManagementSchema() {
+  return {
+    name: Type.Optional(Type.String()),
+    type: Type.Optional(Type.Number()),
+    parentId: Type.Optional(Type.String()),
+    topic: Type.Optional(Type.String()),
+    position: Type.Optional(Type.Number()),
+    nsfw: Type.Optional(Type.Boolean()),
+    rateLimitPerUser: Type.Optional(Type.Number()),
+    categoryId: Type.Optional(Type.String()),
+    clearParent: Type.Optional(
+      Type.Boolean({
+        description: "Clear the parent/category when supported by the provider.",
+      }),
+    ),
+  };
+}
+
+function buildMessageToolSchemaProps(options: { includeButtons: boolean }) {
+  return {
+    ...buildRoutingSchema(),
+    ...buildSendSchema(options),
+    ...buildReactionSchema(),
+    ...buildFetchSchema(),
+    ...buildPollSchema(),
+    ...buildChannelTargetSchema(),
+    ...buildStickerSchema(),
+    ...buildThreadSchema(),
+    ...buildEventSchema(),
+    ...buildModerationSchema(),
+    ...buildGatewaySchema(),
+    ...buildChannelManagementSchema(),
+  };
+}
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: { includeButtons: boolean },
 ) {
-  const props: Record<string, unknown> = { ...MessageToolCommonSchema };
-  if (!options.includeButtons) delete props.buttons;
-
+  const props = buildMessageToolSchemaProps(options);
   return Type.Object({
     action: stringEnum(actions),
     ...props,
