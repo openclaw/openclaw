@@ -21,6 +21,67 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
+function asScalar(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "bigint") return String(value);
+  return undefined;
+}
+
+function summarizeList(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map(asScalar).filter((entry): entry is string => Boolean(entry));
+  if (items.length === 0) return undefined;
+  const sample = items.slice(0, 3).join(", ");
+  const suffix = items.length > 3 ? ` (+${items.length - 3})` : "";
+  return `${sample}${suffix}`;
+}
+
+function looksLikeMemberTarget(value: string): boolean {
+  return /^user:/i.test(value) || value.startsWith("@") || /^<@!?/.test(value);
+}
+
+function describeMessageToolContext(params: Record<string, unknown>): string | undefined {
+  const action = asScalar(params.action);
+  const channel = asScalar(params.channel);
+  const accountId = asScalar(params.accountId);
+  const guildId = asScalar(params.guildId);
+  const channelId = asScalar(params.channelId);
+  const threadId = asScalar(params.threadId);
+  const messageId = asScalar(params.messageId);
+  const userId = asScalar(params.userId) ?? asScalar(params.authorId) ?? asScalar(params.participant);
+  const target =
+    asScalar(params.target) ??
+    asScalar(params.to) ??
+    summarizeList(params.targets) ??
+    summarizeList(params.target);
+
+  const member =
+    userId ?? (target && looksLikeMemberTarget(target) ? target : undefined) ?? undefined;
+  const pairs: string[] = [];
+  if (action) pairs.push(`action=${action}`);
+  if (channel) pairs.push(`channel=${channel}`);
+  if (accountId) pairs.push(`accountId=${accountId}`);
+  if (member) {
+    pairs.push(`member=${member}`);
+  } else if (target) {
+    pairs.push(`target=${target}`);
+  }
+  if (guildId) pairs.push(`guildId=${guildId}`);
+  if (channelId) pairs.push(`channelId=${channelId}`);
+  if (threadId) pairs.push(`threadId=${threadId}`);
+  if (messageId) pairs.push(`messageId=${messageId}`);
+  return pairs.length > 0 ? pairs.join(" ") : undefined;
+}
+
+function describeToolContext(toolName: string, params: Record<string, unknown>): string | undefined {
+  if (toolName === "message") return describeMessageToolContext(params);
+  return undefined;
+}
+
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
@@ -52,7 +113,9 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${tool.name} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${tool.name} failed: ${described.message}`);
+          const context = describeToolContext(tool.name, params);
+          const suffix = context ? ` (${context})` : "";
+          logError(`tools: ${tool.name} failed: ${described.message}${suffix}`);
           return jsonResult({
             status: "error",
             tool: tool.name,

@@ -67,6 +67,10 @@ export function setConsoleSubsystemFilter(filters?: string[] | null): void {
   loggingState.consoleSubsystemFilter = normalized.length > 0 ? normalized : null;
 }
 
+export function setConsoleTimestampPrefix(enabled: boolean): void {
+  loggingState.consoleTimestampPrefix = enabled;
+}
+
 export function shouldLogSubsystemToConsole(subsystem: string): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
@@ -91,6 +95,33 @@ function shouldSuppressConsoleMessage(message: string): boolean {
 function isEpipeError(err: unknown): boolean {
   const code = (err as { code?: string })?.code;
   return code === "EPIPE" || code === "EIO";
+}
+
+function formatConsoleTimestamp(style: ConsoleStyle): string {
+  const now = new Date().toISOString();
+  if (style === "pretty") return now.slice(11, 19);
+  return now;
+}
+
+function hasTimestampPrefix(value: string): boolean {
+  return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/.test(
+    value,
+  );
+}
+
+function isJsonPayload(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 /**
@@ -123,6 +154,15 @@ export function enableConsoleCapture(): void {
     (...args: unknown[]) => {
       const formatted = util.format(...args);
       if (shouldSuppressConsoleMessage(formatted)) return;
+      const trimmed = stripAnsi(formatted).trimStart();
+      const shouldPrefixTimestamp =
+        loggingState.consoleTimestampPrefix &&
+        trimmed.length > 0 &&
+        !hasTimestampPrefix(trimmed) &&
+        !isJsonPayload(trimmed);
+      const timestamp = shouldPrefixTimestamp
+        ? formatConsoleTimestamp(getConsoleSettings().style)
+        : "";
       try {
         // Map console levels to file logger
         if (level === "trace") {
@@ -144,14 +184,27 @@ export function enableConsoleCapture(): void {
       if (loggingState.forceConsoleToStderr) {
         // in RPC/JSON mode, keep stdout clean
         try {
-          process.stderr.write(`${formatted}\n`);
+          const line = timestamp ? `${timestamp} ${formatted}` : formatted;
+          process.stderr.write(`${line}\n`);
         } catch (err) {
           if (isEpipeError(err)) return;
           throw err;
         }
       } else {
         try {
-          orig.apply(console, args as []);
+          if (!timestamp) {
+            orig.apply(console, args as []);
+            return;
+          }
+          if (args.length === 0) {
+            orig.call(console, timestamp);
+            return;
+          }
+          if (typeof args[0] === "string") {
+            orig.call(console, `${timestamp} ${args[0]}`, ...args.slice(1));
+            return;
+          }
+          orig.call(console, timestamp, ...args);
         } catch (err) {
           if (isEpipeError(err)) return;
           throw err;
