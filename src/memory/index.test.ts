@@ -74,6 +74,16 @@ describe("memory index", () => {
     const results = await result.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
+    const status = result.manager.status();
+    expect(status.sourceCounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "memory",
+          files: status.files,
+          chunks: status.chunks,
+        }),
+      ]),
+    );
   });
 
   it("rejects reading non-memory paths", async () => {
