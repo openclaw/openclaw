@@ -10,9 +10,38 @@ struct ConfigSchemaForm: View {
     }
 
     private func renderNode(_ schema: ConfigSchemaNode, path: ConfigPath) -> AnyView {
-        let value = store.configValue(at: path)
+        let storedValue = store.configValue(at: path)
+        let value = storedValue ?? schema.explicitDefault
         let label = hintForPath(path, hints: store.configUiHints)?.label ?? schema.title
         let help = hintForPath(path, hints: store.configUiHints)?.help ?? schema.description
+        let variants = schema.anyOf.isEmpty ? schema.oneOf : schema.anyOf
+
+        if !variants.isEmpty {
+            let nonNull = variants.filter { !$0.isNullSchema }
+            if nonNull.count == 1, let only = nonNull.first {
+                return self.renderNode(only, path: path)
+            }
+            let literals = nonNull.compactMap { $0.literalValue }
+            if !literals.isEmpty, literals.count == nonNull.count {
+                return AnyView(
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let label { Text(label).font(.callout.weight(.semibold)) }
+                        if let help {
+                            Text(help)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Picker("", selection: self.enumBinding(path, options: literals, defaultValue: schema.explicitDefault)) {
+                            Text("Select…").tag(-1)
+                            ForEach(literals.indices, id: \ .self) { index in
+                                Text(String(describing: literals[index])).tag(index)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                )
+            }
+        }
 
         switch schema.schemaType {
         case "object":
@@ -48,7 +77,7 @@ struct ConfigSchemaForm: View {
             return AnyView(self.renderArray(schema, path: path, value: value, label: label, help: help))
         case "boolean":
             return AnyView(
-                Toggle(isOn: self.boolBinding(path)) {
+                Toggle(isOn: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)) {
                     if let label { Text(label) } else { Text("Enabled") }
                 }
                 .help(help ?? "")
@@ -78,7 +107,8 @@ struct ConfigSchemaForm: View {
     {
         let hint = hintForPath(path, hints: store.configUiHints)
         let placeholder = hint?.placeholder ?? ""
-        let sensitive = hint?.sensitive ?? false
+        let sensitive = hint?.sensitive ?? isSensitivePath(path)
+        let defaultValue = schema.explicitDefault as? String
         VStack(alignment: .leading, spacing: 6) {
             if let label { Text(label).font(.callout.weight(.semibold)) }
             if let help {
@@ -87,7 +117,7 @@ struct ConfigSchemaForm: View {
                     .foregroundStyle(.secondary)
             }
             if let options = schema.enumValues {
-                Picker("", selection: self.enumBinding(path, options: options)) {
+                Picker("", selection: self.enumBinding(path, options: options, defaultValue: schema.explicitDefault)) {
                     Text("Select…").tag(-1)
                     ForEach(options.indices, id: \ .self) { index in
                         Text(String(describing: options[index])).tag(index)
@@ -95,10 +125,10 @@ struct ConfigSchemaForm: View {
                 }
                 .pickerStyle(.menu)
             } else if sensitive {
-                SecureField(placeholder, text: self.stringBinding(path))
+                SecureField(placeholder, text: self.stringBinding(path, defaultValue: defaultValue))
                     .textFieldStyle(.roundedBorder)
             } else {
-                TextField(placeholder, text: self.stringBinding(path))
+                TextField(placeholder, text: self.stringBinding(path, defaultValue: defaultValue))
                     .textFieldStyle(.roundedBorder)
             }
         }
@@ -111,6 +141,8 @@ struct ConfigSchemaForm: View {
         label: String?,
         help: String?) -> some View
     {
+        let defaultValue = (schema.explicitDefault as? Double)
+            ?? (schema.explicitDefault as? Int).map(Double.init)
         VStack(alignment: .leading, spacing: 6) {
             if let label { Text(label).font(.callout.weight(.semibold)) }
             if let help {
@@ -118,7 +150,14 @@ struct ConfigSchemaForm: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            TextField("", text: self.numberBinding(path, isInteger: schema.schemaType == "integer"))
+            TextField(
+                "",
+                text: self.numberBinding(
+                    path,
+                    isInteger: schema.schemaType == "integer",
+                    defaultValue: defaultValue
+                )
+            )
                 .textFieldStyle(.roundedBorder)
         }
     }
@@ -223,10 +262,11 @@ struct ConfigSchemaForm: View {
         }
     }
 
-    private func stringBinding(_ path: ConfigPath) -> Binding<String> {
+    private func stringBinding(_ path: ConfigPath, defaultValue: String?) -> Binding<String> {
         Binding(
             get: {
-                store.configValue(at: path) as? String ?? ""
+                if let value = store.configValue(at: path) as? String { return value }
+                return defaultValue ?? ""
             },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -235,10 +275,11 @@ struct ConfigSchemaForm: View {
         )
     }
 
-    private func boolBinding(_ path: ConfigPath) -> Binding<Bool> {
+    private func boolBinding(_ path: ConfigPath, defaultValue: Bool?) -> Binding<Bool> {
         Binding(
             get: {
-                store.configValue(at: path) as? Bool ?? false
+                if let value = store.configValue(at: path) as? Bool { return value }
+                return defaultValue ?? false
             },
             set: { newValue in
                 store.updateConfigValue(path: path, value: newValue)
@@ -246,11 +287,16 @@ struct ConfigSchemaForm: View {
         )
     }
 
-    private func numberBinding(_ path: ConfigPath, isInteger: Bool) -> Binding<String> {
+    private func numberBinding(
+        _ path: ConfigPath,
+        isInteger: Bool,
+        defaultValue: Double?
+    ) -> Binding<String> {
         Binding(
             get: {
-                guard let value = store.configValue(at: path) else { return "" }
-                return String(describing: value)
+                if let value = store.configValue(at: path) { return String(describing: value) }
+                guard let defaultValue else { return "" }
+                return isInteger ? String(Int(defaultValue)) : String(defaultValue)
             },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -263,10 +309,15 @@ struct ConfigSchemaForm: View {
         )
     }
 
-    private func enumBinding(_ path: ConfigPath, options: [Any]) -> Binding<Int> {
+    private func enumBinding(
+        _ path: ConfigPath,
+        options: [Any],
+        defaultValue: Any?
+    ) -> Binding<Int> {
         Binding(
             get: {
-                guard let value = store.configValue(at: path) else { return -1 }
+                let value = store.configValue(at: path) ?? defaultValue
+                guard let value else { return -1 }
                 return options.firstIndex { option in
                     String(describing: option) == String(describing: value)
                 } ?? -1

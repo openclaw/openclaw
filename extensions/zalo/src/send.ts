@@ -37,7 +37,7 @@ function resolveSendContext(options: ZaloSendOptions): {
 
   const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
-  return { token: token || process.env.ZALO_BOT_TOKEN?.trim() || "", fetcher: resolveZaloProxyFetch(proxy) };
+  return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
 
 export async function sendMessageZalo(

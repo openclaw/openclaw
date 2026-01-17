@@ -42,6 +42,8 @@ struct ConfigSchemaNode {
     var title: String? { self.raw["title"] as? String }
     var description: String? { self.raw["description"] as? String }
     var enumValues: [Any]? { self.raw["enum"] as? [Any] }
+    var constValue: Any? { self.raw["const"] }
+    var explicitDefault: Any? { self.raw["default"] }
     var requiredKeys: Set<String> {
         Set((self.raw["required"] as? [String]) ?? [])
     }
@@ -58,9 +60,30 @@ struct ConfigSchemaNode {
         return self.typeList.first
     }
 
+    var isNullSchema: Bool {
+        let types = self.typeList
+        return types.count == 1 && types.first == "null"
+    }
+
     var properties: [String: ConfigSchemaNode] {
         guard let props = self.raw["properties"] as? [String: Any] else { return [:] }
         return props.compactMapValues { ConfigSchemaNode(raw: $0) }
+    }
+
+    var anyOf: [ConfigSchemaNode] {
+        guard let raw = self.raw["anyOf"] as? [Any] else { return [] }
+        return raw.compactMap { ConfigSchemaNode(raw: $0) }
+    }
+
+    var oneOf: [ConfigSchemaNode] {
+        guard let raw = self.raw["oneOf"] as? [Any] else { return [] }
+        return raw.compactMap { ConfigSchemaNode(raw: $0) }
+    }
+
+    var literalValue: Any? {
+        if let constValue { return constValue }
+        if let enumValues, enumValues.count == 1 { return enumValues[0] }
+        return nil
     }
 
     var items: ConfigSchemaNode? {
@@ -159,6 +182,15 @@ func hintForPath(_ path: ConfigPath, hints: [String: ConfigUiHint]) -> ConfigUiH
         if match { return hint }
     }
     return nil
+}
+
+func isSensitivePath(_ path: ConfigPath) -> Bool {
+    let key = pathKey(path).lowercased()
+    return key.contains("token")
+        || key.contains("password")
+        || key.contains("secret")
+        || key.contains("apikey")
+        || key.hasSuffix("key")
 }
 
 func pathKey(_ path: ConfigPath) -> String {
