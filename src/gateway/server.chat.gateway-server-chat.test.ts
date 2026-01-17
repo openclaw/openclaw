@@ -12,6 +12,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -106,22 +107,16 @@ describe("gateway server chat", () => {
       },
     };
 
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "discord:group:dev": {
-            sessionId: "sess-discord",
-            updatedAt: Date.now(),
-            chatType: "group",
-            channel: "discord",
-          },
+    await writeSessionStore({
+      entries: {
+        "discord:group:dev": {
+          sessionId: "sess-discord",
+          updatedAt: Date.now(),
+          chatType: "group",
+          channel: "discord",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -148,20 +143,14 @@ describe("gateway server chat", () => {
       },
     };
 
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "cron:job-1": {
-            sessionId: "sess-cron",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        "cron:job-1": {
+          sessionId: "sess-cron",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -236,20 +225,14 @@ describe("gateway server chat", () => {
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const lines: string[] = [];
     for (let i = 0; i < 300; i += 1) {
@@ -349,21 +332,15 @@ describe("gateway server chat", () => {
       "utf-8",
     );
 
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            sessionFile: forkedPath,
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: forkedPath,
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -397,20 +374,14 @@ describe("gateway server chat", () => {
       "utf-8",
     );
 
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -447,20 +418,14 @@ describe("gateway server chat", () => {
     ];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
     await fs.writeFile(
       path.join(dir, "sess-main.jsonl"),
       JSON.stringify({

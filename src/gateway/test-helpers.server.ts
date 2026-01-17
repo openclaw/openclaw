@@ -6,11 +6,12 @@ import path from "node:path";
 import { afterEach, beforeEach, expect } from "vitest";
 import { WebSocket } from "ws";
 
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
+import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -30,6 +31,32 @@ import {
 let previousHome: string | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
+
+export async function writeSessionStore(params: {
+  entries: Record<string, Partial<SessionEntry>>;
+  storePath?: string;
+  agentId?: string;
+  mainKey?: string;
+}): Promise<void> {
+  const storePath = params.storePath ?? testState.sessionStorePath;
+  if (!storePath) throw new Error("writeSessionStore requires testState.sessionStorePath");
+  const agentId = params.agentId ?? DEFAULT_AGENT_ID;
+  const store: Record<string, Partial<SessionEntry>> = {};
+  for (const [requestKey, entry] of Object.entries(params.entries)) {
+    const rawKey = requestKey.trim();
+    const storeKey =
+      rawKey === "global" || rawKey === "unknown"
+        ? rawKey
+        : toAgentStoreSessionKey({
+            agentId,
+            requestKey,
+            mainKey: params.mainKey,
+          });
+    store[storeKey] = entry;
+  }
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+}
 
 export function installGatewayTestHooks() {
   beforeEach(async () => {

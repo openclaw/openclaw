@@ -16,6 +16,7 @@ import {
   startGatewayServer,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 const _decodeWsData = (data: unknown): string => {
@@ -217,20 +218,14 @@ describe("gateway server node/bridge", () => {
   test("bridge RPC chat.history returns session messages", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     await fs.writeFile(
       path.join(dir, "sess-main.jsonl"),
@@ -274,20 +269,14 @@ describe("gateway server node/bridge", () => {
   test("bridge RPC sessions.list returns session rows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const port = await getFreePort();
     const server = await startGatewayServer(port);
@@ -331,20 +320,14 @@ describe("gateway server node/bridge", () => {
   test("bridge chat events are pushed to subscribed nodes", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const port = await getFreePort();
     const server = await startGatewayServer(port);
@@ -408,20 +391,14 @@ describe("gateway server node/bridge", () => {
   test("bridge chat.send forwards image attachments to agentCommand", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const port = await getFreePort();
     const server = await startGatewayServer(port);

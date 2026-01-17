@@ -11,6 +11,7 @@ import {
   sessionStoreSaveDelayMs,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -28,20 +29,14 @@ describe("gateway server chat", () => {
   test("chat.history caps payload bytes", { timeout: 15_000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -78,22 +73,16 @@ describe("gateway server chat", () => {
   test("chat.send does not overwrite last delivery route", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "+1555",
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -105,11 +94,12 @@ describe("gateway server chat", () => {
     });
     expect(res.ok).toBe(true);
 
-    const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as {
-      main?: { lastChannel?: string; lastTo?: string };
-    };
-    expect(stored.main?.lastChannel).toBe("whatsapp");
-    expect(stored.main?.lastTo).toBe("+1555");
+    const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+      string,
+      { lastChannel?: string; lastTo?: string } | undefined
+    >;
+    expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
+    expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
 
     ws.close();
     await server.close();
@@ -118,20 +108,14 @@ describe("gateway server chat", () => {
   test("chat.abort cancels an in-flight chat.send", { timeout: 15000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     let inFlight: Promise<unknown> | undefined;
@@ -210,20 +194,14 @@ describe("gateway server chat", () => {
   test("chat.abort cancels while saving the session store", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     sessionStoreSaveDelayMs.value = 120;
 
@@ -288,11 +266,11 @@ describe("gateway server chat", () => {
   test("chat.send treats /stop as an out-of-band abort", { timeout: 15000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify({ main: { sessionId: "sess-main", updatedAt: Date.now() } }, null, 2),
-      "utf-8",
-    );
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);

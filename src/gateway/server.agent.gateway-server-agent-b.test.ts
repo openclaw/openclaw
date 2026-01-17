@@ -18,6 +18,7 @@ import {
   startGatewayServer,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -80,22 +81,16 @@ describe("gateway server agent", () => {
     setActivePluginRegistry(registry);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-teams",
-            updatedAt: Date.now(),
-            lastChannel: "msteams",
-            lastTo: "conversation:teams-123",
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-teams",
+          updatedAt: Date.now(),
+          lastChannel: "msteams",
+          lastTo: "conversation:teams-123",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -133,22 +128,16 @@ describe("gateway server agent", () => {
     setActivePluginRegistry(registry);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-alias",
-            updatedAt: Date.now(),
-            lastChannel: "imessage",
-            lastTo: "chat_id:123",
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-alias",
+          updatedAt: Date.now(),
+          lastChannel: "imessage",
+          lastTo: "chat_id:123",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -206,22 +195,16 @@ describe("gateway server agent", () => {
     testState.allowFrom = ["+1555"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main-webchat",
-            updatedAt: Date.now(),
-            lastChannel: "webchat",
-            lastTo: "+1555",
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main-webchat",
+          updatedAt: Date.now(),
+          lastChannel: "webchat",
+          lastTo: "+1555",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -247,25 +230,19 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
-  test("agent uses webchat for internal runs when last provider is webchat", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
+    test("agent uses webchat for internal runs when last provider is webchat", async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
             sessionId: "sess-main-webchat-internal",
             updatedAt: Date.now(),
             lastChannel: "webchat",
             lastTo: "+1555",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -408,20 +385,14 @@ describe("gateway server agent", () => {
   test("agent events stream to webchat clients when run context is registered", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {

@@ -16,6 +16,25 @@ export type ParsedAgentSessionKey = {
   rest: string;
 };
 
+export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
+  const raw = (storeKey ?? "").trim();
+  if (!raw) return undefined;
+  return parseAgentSessionKey(raw)?.rest ?? raw;
+}
+
+export function toAgentStoreSessionKey(params: {
+  agentId: string;
+  requestKey: string | undefined | null;
+  mainKey?: string | undefined;
+}): string {
+  const raw = (params.requestKey ?? "").trim();
+  if (!raw || raw === DEFAULT_MAIN_KEY) {
+    return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
+  if (raw.startsWith("agent:")) return raw;
+  return `agent:${normalizeAgentId(params.agentId)}:${raw}`;
+}
+
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
