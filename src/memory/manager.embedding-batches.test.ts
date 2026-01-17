@@ -109,4 +109,44 @@ describe("memory embedding batches", () => {
 
     expect(embedBatch.mock.calls.length).toBe(1);
   });
+
+  it("reports sync progress totals", async () => {
+    const line = "c".repeat(120);
+    const content = Array.from({ length: 20 }, () => line).join("\n");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-05.md"), content);
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            chunking: { tokens: 200, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+    const updates: Array<{ completed: number; total: number; label?: string }> = [];
+    await manager.sync({
+      force: true,
+      progress: (update) => {
+        updates.push(update);
+      },
+    });
+
+    expect(updates.length).toBeGreaterThan(0);
+    const last = updates[updates.length - 1];
+    expect(last?.total).toBeGreaterThan(0);
+    expect(last?.completed).toBe(last?.total);
+  });
 });

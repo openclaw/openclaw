@@ -60,12 +60,24 @@ type SessionFileEntry = {
   content: string;
 };
 
+type MemorySyncProgressUpdate = {
+  completed: number;
+  total: number;
+  label?: string;
+};
+
+type MemorySyncProgressState = {
+  completed: number;
+  total: number;
+  report: (update: MemorySyncProgressUpdate) => void;
+};
+
 const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_APPROX_CHARS_PER_TOKEN = 2;
+const EMBEDDING_APPROX_CHARS_PER_TOKEN = 1;
 
 const log = createSubsystemLogger("memory");
 
@@ -258,7 +270,11 @@ export class MemoryIndexManager {
       }));
   }
 
-  async sync(params?: { reason?: string; force?: boolean }): Promise<void> {
+  async sync(params?: {
+    reason?: string;
+    force?: boolean;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }): Promise<void> {
     if (this.syncing) return this.syncing;
     this.syncing = this.runSync(params).finally(() => {
       this.syncing = null;
@@ -650,21 +666,46 @@ export class MemoryIndexManager {
     return this.sessionsDirty || needsFullReindex;
   }
 
-  private async syncMemoryFiles(params: { needsFullReindex: boolean }) {
+  private async syncMemoryFiles(params: {
+    needsFullReindex: boolean;
+    progress?: MemorySyncProgressState;
+  }) {
     const files = await listMemoryFiles(this.workspaceDir);
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
+    if (params.progress) {
+      params.progress.total += fileEntries.length;
+      params.progress.report({
+        completed: params.progress.completed,
+        total: params.progress.total,
+        label: "Indexing memory files…",
+      });
+    }
 
     for (const entry of fileEntries) {
       const record = this.db
         .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
         .get(entry.path, "memory") as { hash: string } | undefined;
       if (!params.needsFullReindex && record?.hash === entry.hash) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
         continue;
       }
       await this.indexFile(entry, { source: "memory" });
+      if (params.progress) {
+        params.progress.completed += 1;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
     }
 
     const staleRows = this.db
@@ -677,22 +718,65 @@ export class MemoryIndexManager {
     }
   }
 
-  private async syncSessionFiles(params: { needsFullReindex: boolean }) {
+  private async syncSessionFiles(params: {
+    needsFullReindex: boolean;
+    progress?: MemorySyncProgressState;
+  }) {
     const files = await this.listSessionFiles();
     const activePaths = new Set(files.map((file) => this.sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    if (params.progress) {
+      params.progress.total += files.length;
+      params.progress.report({
+        completed: params.progress.completed,
+        total: params.progress.total,
+        label: "Indexing session files…",
+      });
+    }
 
     for (const absPath of files) {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) continue;
+      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        continue;
+      }
       const entry = await this.buildSessionEntry(absPath);
-      if (!entry) continue;
+      if (!entry) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        continue;
+      }
       const record = this.db
         .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
         .get(entry.path, "sessions") as { hash: string } | undefined;
       if (!params.needsFullReindex && record?.hash === entry.hash) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
         continue;
       }
       await this.indexFile(entry, { source: "sessions", content: entry.content });
+      if (params.progress) {
+        params.progress.completed += 1;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
     }
 
     const staleRows = this.db
@@ -709,7 +793,14 @@ export class MemoryIndexManager {
     }
   }
 
-  private async runSync(params?: { reason?: string; force?: boolean }) {
+  private async runSync(params?: {
+    reason?: string;
+    force?: boolean;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+    const progress: MemorySyncProgressState | null = params?.progress
+      ? { completed: 0, total: 0, report: params.progress }
+      : null;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
@@ -729,12 +820,12 @@ export class MemoryIndexManager {
     const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
     if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex });
+      await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
       this.dirty = false;
     }
 
     if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex });
+      await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
       this.sessionsDirty = false;
       this.sessionsDirtyFiles.clear();
     } else if (needsFullReindex && this.sources.has("sessions")) {

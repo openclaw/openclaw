@@ -167,7 +167,9 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "status", "--index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith({ reason: "cli" });
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", progress: expect.any(Function) }),
+    );
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
   });
