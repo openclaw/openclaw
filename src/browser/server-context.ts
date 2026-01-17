@@ -1,7 +1,5 @@
 import fs from "node:fs";
 
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
-
 import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
   isChromeCdpReady,
@@ -24,38 +22,10 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
-
-type PwAiModule = typeof import("./pw-ai.js");
-
-let pwAiModule: Promise<PwAiModule | null> | null = null;
-
-function isModuleNotFoundError(err: unknown): boolean {
-  const code = extractErrorCode(err);
-  if (code === "ERR_MODULE_NOT_FOUND") return true;
-  const msg = formatErrorMessage(err);
-  return (
-    msg.includes("Cannot find module") ||
-    msg.includes("Cannot find package") ||
-    msg.includes("Failed to resolve import") ||
-    msg.includes("Failed to resolve entry for package") ||
-    msg.includes("Failed to load url")
-  );
-}
-
-async function getPwAiModule(): Promise<PwAiModule | null> {
-  if (pwAiModule) return pwAiModule;
-  pwAiModule = (async () => {
-    try {
-      return await import("./pw-ai.js");
-    } catch (err) {
-      if (isModuleNotFoundError(err)) return null;
-      throw err;
-    }
-  })();
-  return pwAiModule;
-}
 
 export type {
   BrowserRouteContext,
@@ -134,7 +104,7 @@ function createProfileContext(
   const listTabs = async (): Promise<BrowserTab[]> => {
     // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
     if (!profile.cdpIsLoopback) {
-      const mod = await getPwAiModule();
+      const mod = await getPwAiModule({ mode: "strict" });
       const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
       if (typeof listPagesViaPlaywright === "function") {
         const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
@@ -171,7 +141,7 @@ function createProfileContext(
     // For remote profiles, use Playwright's persistent connection to create tabs
     // This ensures the tab persists beyond a single request
     if (!profile.cdpIsLoopback) {
-      const mod = await getPwAiModule();
+      const mod = await getPwAiModule({ mode: "strict" });
       const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
       if (typeof createPageViaPlaywright === "function") {
         const page = await createPageViaPlaywright({ cdpUrl: profile.cdpUrl, url });
@@ -437,6 +407,22 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
+
+    if (!profile.cdpIsLoopback) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
+        ?.focusPageByTargetIdViaPlaywright;
+      if (typeof focusPageByTargetIdViaPlaywright === "function") {
+        await focusPageByTargetIdViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          targetId: resolved.targetId,
+        });
+        const profileState = getProfileState();
+        profileState.lastTargetId = resolved.targetId;
+        return;
+      }
+    }
+
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolved.targetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolved.targetId;
@@ -454,7 +440,7 @@ function createProfileContext(
 
     // For remote profiles, use Playwright's persistent connection to close tabs
     if (!profile.cdpIsLoopback) {
-      const mod = await getPwAiModule();
+      const mod = await getPwAiModule({ mode: "strict" });
       const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
         ?.closePageByTargetIdViaPlaywright;
       if (typeof closePageByTargetIdViaPlaywright === "function") {

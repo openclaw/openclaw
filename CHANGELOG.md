@@ -32,6 +32,7 @@
 - Sessions: repair orphaned user turns before embedded prompts.
 - Channels: treat replies to the bot as implicit mentions across supported channels.
 - Browser: remote profile tab operations prefer persistent Playwright and avoid silent HTTP fallbacks. (#1057) — thanks @mukhtharcm.
+- Browser: remote profile tab ops follow-up: shared Playwright loader, Playwright-based focus, and more coverage (incl. opt-in live Browserless test). (follow-up to #1057) — thanks @mukhtharcm.
 - WhatsApp: scope self-chat response prefix; inject pending-only group history and clear after any processed message.
 - Agents: drop unsigned Gemini tool calls and avoid JSON Schema `format` keyword collisions.
 - Auth: inherit/merge sub-agent auth profiles from the main agent.

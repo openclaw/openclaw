@@ -480,3 +480,31 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   }
   await page.close();
 }
+
+/**
+ * Focus a page/tab by targetId using the persistent Playwright connection.
+ * Used for remote profiles where HTTP-based /json/activate can be ephemeral.
+ */
+export async function focusPageByTargetIdViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId: string;
+}): Promise<void> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const page = await findPageByTargetId(browser, opts.targetId);
+  if (!page) {
+    throw new Error("tab not found");
+  }
+  try {
+    await page.bringToFront();
+  } catch (err) {
+    const session = await page.context().newCDPSession(page);
+    try {
+      await session.send("Page.bringToFront");
+      return;
+    } catch {
+      throw err;
+    } finally {
+      await session.detach().catch(() => {});
+    }
+  }
+}
