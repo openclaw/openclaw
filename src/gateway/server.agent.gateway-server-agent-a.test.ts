@@ -152,6 +152,95 @@ describe("gateway server agent", () => {
     testState.allowFrom = undefined;
   });
 
+  test("agent avoids lastAccountId when explicit to is provided", async () => {
+    testState.allowFrom = ["+1555"];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-explicit",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+            lastAccountId: "legacy",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      deliver: true,
+      to: "+1666",
+      idempotencyKey: "idem-agent-explicit",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectChannels(call, "whatsapp");
+    expect(call.to).toBe("+1666");
+    expect(call.accountId).toBeUndefined();
+
+    ws.close();
+    await server.close();
+    testState.allowFrom = undefined;
+  });
+
+  test("agent falls back to lastAccountId for implicit delivery", async () => {
+    testState.allowFrom = ["+1555"];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-implicit",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+            lastAccountId: "kev",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      deliver: true,
+      idempotencyKey: "idem-agent-implicit-account",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectChannels(call, "whatsapp");
+    expect(call.to).toBe("+1555");
+    expect(call.accountId).toBe("kev");
+
+    ws.close();
+    await server.close();
+    testState.allowFrom = undefined;
+  });
+
   test("agent forwards image attachments as images[]", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

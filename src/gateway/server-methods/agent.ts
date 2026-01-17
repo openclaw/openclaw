@@ -155,6 +155,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         skillsSnapshot: entry?.skillsSnapshot,
         lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
+        lastAccountId: entry?.lastAccountId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
@@ -201,8 +202,11 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lastChannel = sessionEntry?.lastChannel;
     const lastTo = typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
+    const explicitTo =
+      typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
     const resolvedAccountId =
-      normalizeAccountId(request.accountId) ?? normalizeAccountId(sessionEntry?.lastAccountId);
+      normalizeAccountId(request.accountId) ??
+      (explicitTo ? undefined : normalizeAccountId(sessionEntry?.lastAccountId));
 
     const wantsDelivery = request.deliver === true;
 
@@ -224,8 +228,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       return wantsDelivery ? DEFAULT_CHAT_CHANNEL : INTERNAL_MESSAGE_CHANNEL;
     })();
 
-    const explicitTo =
-      typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
     const deliveryTargetMode = explicitTo
       ? "explicit"
       : isDeliverableMessageChannel(resolvedChannel)
