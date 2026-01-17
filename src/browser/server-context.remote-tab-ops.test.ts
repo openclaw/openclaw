@@ -93,6 +93,94 @@ describe("browser server-context remote profile tab operations", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
+    vi.resetModules();
+    const responses = [
+      // ensureTabAvailable() calls listTabs twice
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+      // second ensureTabAvailable() calls listTabs twice, order flips
+      [
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+      ],
+      [
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+      ],
+    ];
+
+    const listPagesViaPlaywright = vi.fn(async () => {
+      const next = responses.shift();
+      if (!next) throw new Error("no more responses");
+      return next;
+    });
+
+    vi.doMock("./pw-ai.js", () => ({
+      listPagesViaPlaywright,
+      createPageViaPlaywright: vi.fn(async () => {
+        throw new Error("unexpected create");
+      }),
+      closePageByTargetIdViaPlaywright: vi.fn(async () => {
+        throw new Error("unexpected close");
+      }),
+    }));
+
+    const fetchMock = vi.fn(async () => {
+      throw new Error("unexpected fetch");
+    });
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const { createBrowserRouteContext } = await import("./server-context.js");
+    const state = makeState("remote");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const remote = ctx.forProfile("remote");
+
+    const first = await remote.ensureTabAvailable();
+    expect(first.targetId).toBe("A");
+    const second = await remote.ensureTabAvailable();
+    expect(second.targetId).toBe("A");
+  });
+
+  it("uses Playwright focus for remote profiles when available", async () => {
+    vi.resetModules();
+    const listPagesViaPlaywright = vi.fn(async () => [
+      { targetId: "T1", title: "Tab 1", url: "https://a.example", type: "page" },
+    ]);
+    const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
+
+    vi.doMock("./pw-ai.js", () => ({
+      listPagesViaPlaywright,
+      focusPageByTargetIdViaPlaywright,
+    }));
+
+    const fetchMock = vi.fn(async () => {
+      throw new Error("unexpected fetch");
+    });
+    // @ts-expect-error test override
+    global.fetch = fetchMock;
+
+    const { createBrowserRouteContext } = await import("./server-context.js");
+    const state = makeState("remote");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const remote = ctx.forProfile("remote");
+
+    await remote.focusTab("T1");
+    expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://browserless.example/chrome?token=abc",
+      targetId: "T1",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");
+  });
+
   it("does not swallow Playwright runtime errors for remote profiles", async () => {
     vi.resetModules();
     vi.doMock("./pw-ai.js", () => ({

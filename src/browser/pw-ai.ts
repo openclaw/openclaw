@@ -4,6 +4,7 @@ export {
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
   ensurePageState,
+  focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
   refLocator,
