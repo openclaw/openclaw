@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -25,6 +25,11 @@ vi.mock("../infra/outbound/targets.js", () => ({
 }));
 
 describe("deliverAgentCommandResult", () => {
+  beforeEach(() => {
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.resolveOutboundTarget.mockClear();
+  });
+
   it("prefers explicit accountId for outbound delivery", async () => {
     const cfg = {} as ClawdbotConfig;
     const deps = {} as CliDeps;
@@ -59,6 +64,41 @@ describe("deliverAgentCommandResult", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "kev" }),
+    );
+  });
+
+  it("falls back to session accountId for implicit delivery", async () => {
+    const cfg = {} as ClawdbotConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const sessionEntry = {
+      lastAccountId: "legacy",
+    } as SessionEntry;
+    const result = {
+      payloads: [{ text: "hi" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: true,
+        channel: "whatsapp",
+      },
+      sessionEntry,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "legacy" }),
     );
   });
 });
