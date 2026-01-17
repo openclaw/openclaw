@@ -49,7 +49,7 @@ export const KIMI_CODE_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
-  cacheWrite: 0
+  cacheWrite: 0,
 };
 
 const MINIMAX_MODEL_CATALOG = {
@@ -113,6 +113,6 @@ export function buildKimiCodeModelDefinition(): ModelDefinitionConfig {
     contextWindow: KIMI_CODE_CONTEXT_WINDOW,
     maxTokens: KIMI_CODE_MAX_TOKENS,
     headers: KIMI_CODE_HEADERS,
-    compat: KIMI_CODE_COMPAT
+    compat: KIMI_CODE_COMPAT,
   };
 }

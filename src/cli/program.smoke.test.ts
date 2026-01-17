@@ -189,7 +189,7 @@ describe("cli program (smoke)", () => {
         "--auth-choice",
         "kimi-code-api-key",
         "--kimi-code-api-key",
-        "sk-kimi-code-test"
+        "sk-kimi-code-test",
       ],
       { from: "user" },
     );
@@ -197,7 +197,7 @@ describe("cli program (smoke)", () => {
       expect.objectContaining({
         nonInteractive: true,
         authChoice: "kimi-code-api-key",
-        kimiCodeApiKey: "sk-kimi-code-test"
+        kimiCodeApiKey: "sk-kimi-code-test",
       }),
       runtime,
     );

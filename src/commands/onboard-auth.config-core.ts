@@ -200,7 +200,7 @@ export function applyKimiCodeProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig
   const models = { ...cfg.agents?.defaults?.models };
   models[KIMI_CODE_MODEL_REF] = {
     ...models[KIMI_CODE_MODEL_REF],
-    alias: models[KIMI_CODE_MODEL_REF]?.alias ?? "Kimi Code"
+    alias: models[KIMI_CODE_MODEL_REF]?.alias ?? "Kimi Code",
   };
 
   const providers = { ...cfg.models?.providers };
@@ -220,7 +220,7 @@ export function applyKimiCodeProviderConfig(cfg: ClawdbotConfig): ClawdbotConfig
     baseUrl: KIMI_CODE_BASE_URL,
     api: "openai-completions",
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
-    models: mergedModels.length > 0 ? mergedModels : [defaultModel]
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
   };
 
   return {
@@ -254,7 +254,7 @@ export function applyKimiCodeConfig(cfg: ClawdbotConfig): ClawdbotConfig {
                 fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
               }
             : undefined),
-          primary: KIMI_CODE_MODEL_REF
+          primary: KIMI_CODE_MODEL_REF,
         },
       },
     },

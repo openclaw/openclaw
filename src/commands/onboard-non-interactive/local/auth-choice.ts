@@ -240,14 +240,14 @@ export async function applyNonInteractiveAuthChoice(params: {
       flagValue: opts.kimiCodeApiKey,
       flagName: "--kimi-code-api-key",
       envVar: "KIMICODE_API_KEY",
-      runtime
+      runtime,
     });
     if (!resolved) return null;
     if (resolved.source !== "profile") await setKimiCodeApiKey(resolved.key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "kimi-code:default",
       provider: "kimi-code",
-      mode: "api_key"
+      mode: "api_key",
     });
     return applyKimiCodeConfig(nextConfig);
   }

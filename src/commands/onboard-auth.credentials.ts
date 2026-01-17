@@ -80,7 +80,7 @@ export async function setKimiCodeApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "kimi-code",
-      key
+      key,
     },
     agentDir: resolveAuthAgentDir(agentDir),
   });
