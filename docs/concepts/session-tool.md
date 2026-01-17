@@ -48,6 +48,7 @@ Row shape (JSON):
 - `thinkingLevel`, `verboseLevel`, `systemSent`, `abortedLastRun`
 - `sendPolicy` (session override if set)
 - `lastChannel`, `lastTo`
+- `deliveryContext` (normalized `{ channel, to, accountId }` when available)
 - `transcriptPath` (best-effort path derived from store dir + sessionId)
 - `messages?` (only when `messageLimit > 0`)
 
