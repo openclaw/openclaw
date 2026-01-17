@@ -365,6 +365,7 @@ Allowlist matching notes:
 Native command notes:
 - The registered commands mirror Clawdbot’s chat commands.
 - Native commands honor the same allowlists as DMs/guild messages (`channels.discord.dm.allowFrom`, `channels.discord.guilds`, per-channel rules).
+- Slash commands may still be visible in Discord UI to users who aren’t allowlisted; Clawdbot enforces allowlists on execution and replies “not authorized”.
 
 ## Tool actions
 The agent can call `discord` with actions like:
