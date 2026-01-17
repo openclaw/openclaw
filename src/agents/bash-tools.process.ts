@@ -110,7 +110,7 @@ export function createProcessTool(
           .sort((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            return `${s.sessionId.slice(0, 8)} ${pad(
+            return `${s.sessionId} ${pad(
               s.status,
               9,
             )} ${formatDuration(s.runtimeMs)} :: ${label}`;

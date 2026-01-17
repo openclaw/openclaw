@@ -1,5 +1,4 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
@@ -11,6 +10,7 @@ import {
   type SessionStdin,
   addSession,
   appendOutput,
+  createSessionSlug,
   markBackgrounded,
   markExited,
   tail,
@@ -189,7 +189,7 @@ export function createExecTool(
 
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const startedAt = Date.now();
-      const sessionId = randomUUID();
+      const sessionId = createSessionSlug();
       const warnings: string[] = [];
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";

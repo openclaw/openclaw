@@ -1,4 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -64,6 +65,14 @@ const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
 
 let sweeper: NodeJS.Timeout | null = null;
+
+function isSessionIdTaken(id: string) {
+  return runningSessions.has(id) || finishedSessions.has(id);
+}
+
+export function createSessionSlug(): string {
+  return createSessionSlugId(isSessionIdTaken);
+}
 
 export function addSession(session: ProcessSession) {
   runningSessions.set(session.id, session);
