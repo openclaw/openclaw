@@ -8,8 +8,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { resolveAgentDeliveryPlan } from "../../infra/outbound/agent-delivery.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../../infra/outbound/agent-delivery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -218,14 +220,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfg = cfgForAgent ?? loadConfig();
-      const fallback = resolveOutboundTarget({
-        channel: resolvedChannel,
+      const fallback = resolveAgentOutboundTarget({
         cfg,
-        accountId: resolvedAccountId,
-        mode: "implicit",
+        plan: deliveryPlan,
+        targetMode: "implicit",
+        validateExplicitTarget: false,
       });
-      if (fallback.ok) {
-        resolvedTo = fallback.to;
+      if (fallback.resolvedTarget?.ok) {
+        resolvedTo = fallback.resolvedTo;
       }
     }
 

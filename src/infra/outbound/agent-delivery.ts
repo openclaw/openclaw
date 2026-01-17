@@ -9,7 +9,9 @@ import {
   normalizeMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
-import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets.js";
+import { resolveOutboundTarget, resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets.js";
+import type { ClawdbotConfig } from "../../config/config.js";
+import type { OutboundTargetResolution } from "./targets.js";
 
 export type AgentDeliveryPlan = {
   baseDelivery: SessionDeliveryTarget;
@@ -84,5 +86,47 @@ export function resolveAgentDeliveryPlan(params: {
     resolvedTo,
     resolvedAccountId,
     deliveryTargetMode,
+  };
+}
+
+export function resolveAgentOutboundTarget(params: {
+  cfg: ClawdbotConfig;
+  plan: AgentDeliveryPlan;
+  targetMode?: ChannelOutboundTargetMode;
+  validateExplicitTarget?: boolean;
+}): {
+  resolvedTarget: OutboundTargetResolution | null;
+  resolvedTo?: string;
+  targetMode: ChannelOutboundTargetMode;
+} {
+  const targetMode =
+    params.targetMode ??
+    params.plan.deliveryTargetMode ??
+    (params.plan.resolvedTo ? "explicit" : "implicit");
+  if (!isDeliverableMessageChannel(params.plan.resolvedChannel)) {
+    return {
+      resolvedTarget: null,
+      resolvedTo: params.plan.resolvedTo,
+      targetMode,
+    };
+  }
+  if (params.validateExplicitTarget !== true && params.plan.resolvedTo) {
+    return {
+      resolvedTarget: null,
+      resolvedTo: params.plan.resolvedTo,
+      targetMode,
+    };
+  }
+  const resolvedTarget = resolveOutboundTarget({
+    channel: params.plan.resolvedChannel,
+    to: params.plan.resolvedTo,
+    cfg: params.cfg,
+    accountId: params.plan.resolvedAccountId,
+    mode: targetMode,
+  });
+  return {
+    resolvedTarget,
+    resolvedTo: resolvedTarget.ok ? resolvedTarget.to : params.plan.resolvedTo,
+    targetMode,
   };
 }

@@ -10,8 +10,10 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
-import { resolveAgentDeliveryPlan } from "../../infra/outbound/agent-delivery.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../../infra/outbound/agent-delivery.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -51,17 +53,21 @@ export async function deliverAgentCommandResult(params: {
   const targetMode =
     opts.deliveryTargetMode ?? deliveryPlan.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
   const resolvedAccountId = deliveryPlan.resolvedAccountId;
-  const resolvedTarget =
+  const resolved =
     deliver && isDeliveryChannelKnown && deliveryChannel
-      ? resolveOutboundTarget({
-          channel: deliveryChannel,
-          to: deliveryPlan.resolvedTo,
+      ? resolveAgentOutboundTarget({
           cfg,
-          accountId: resolvedAccountId,
-          mode: targetMode,
+          plan: deliveryPlan,
+          targetMode,
+          validateExplicitTarget: true,
         })
-      : null;
-  const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
+      : {
+          resolvedTarget: null,
+          resolvedTo: deliveryPlan.resolvedTo,
+          targetMode,
+        };
+  const resolvedTarget = resolved.resolvedTarget;
+  const deliveryTarget = resolved.resolvedTo;
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
