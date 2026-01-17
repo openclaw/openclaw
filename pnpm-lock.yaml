@@ -232,6 +232,12 @@ importers:
         specifier: 3.14.5
         version: 3.14.5(typescript@5.9.3)
 
+  extensions/copilot-proxy: {}
+
+  extensions/google-antigravity-auth: {}
+
+  extensions/google-gemini-cli-auth: {}
+
   extensions/matrix:
     dependencies:
       markdown-it:
