@@ -1,5 +1,3 @@
-import { formatTargetHint } from "./target-format.js";
-
 export function missingTargetMessage(provider: string, hint?: string): string {
   return `Delivering to ${provider} requires target${formatTargetHint(hint)}`;
 }
@@ -22,4 +20,9 @@ export function unknownTargetMessage(provider: string, raw: string, hint?: strin
 
 export function unknownTargetError(provider: string, raw: string, hint?: string): Error {
   return new Error(unknownTargetMessage(provider, raw, hint));
+}
+
+function formatTargetHint(hint?: string, withLabel = false): string {
+  if (!hint) return "";
+  return withLabel ? ` Hint: ${hint}` : ` ${hint}`;
 }
