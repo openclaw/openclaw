@@ -6,12 +6,8 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - macOS: strip prerelease/build suffixes when parsing gateway semver patches. (#1110) — thanks @zerone0x.
-- Models: add Kimi Code provider onboarding and docs. (#1085) — thanks @dan-dr.
+- macOS: keep CLI install pinned to the full build suffix. (#1111) — thanks @artuskg.
 
-### Fixes
-- Matrix: send voice/image-specific media payloads and keep legacy poll parsing. (#1088) — thanks @sibbl.
-- Telegram: allow media-only message tool sends to request voice notes via `asVoice`. (#1099) — thanks @mukhtharcm.
-- Discord: soften logs for expired interactions and stale component clicks.
 ## 2026.1.16-2
 
 ### Changes
