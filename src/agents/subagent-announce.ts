@@ -114,6 +114,15 @@ type AnnounceQueueState = {
 
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
+type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
+
+function resolveAnnounceOrigin(
+  entry?: DeliveryContextSource,
+  requesterOrigin?: DeliveryContext,
+): DeliveryContext | undefined {
+  return mergeDeliveryContext(deliveryContextFromSession(entry), requesterOrigin);
+}
+
 function getAnnounceQueue(
   key: string,
   settings: { mode: QueueMode; debounceMs?: number; cap?: number; dropPolicy?: QueueDropPolicy },
@@ -383,7 +392,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = mergeDeliveryContext(deliveryContextFromSession(entry), params.requesterOrigin);
+    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     enqueueAnnounce(
       canonicalKey,
       {
