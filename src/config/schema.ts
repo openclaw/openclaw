@@ -98,6 +98,7 @@ const GROUP_ORDER: Record<string, number> = {
 
 const FIELD_LABELS: Record<string, string> = {
   "update.channel": "Update Channel",
+  "update.checkOnStart": "Update Check on Start",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -277,6 +278,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 const FIELD_HELP: Record<string, string> = {
   "update.channel": 'Update channel for npm installs ("stable" or "beta").',
+  "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",

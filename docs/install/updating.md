@@ -64,6 +64,8 @@ clawdbot update --channel stable
 
 Use `--tag <dist-tag|version>` for a one-off install tag/version.
 
+Note: on npm installs, the gateway logs an update hint on startup (checks the current channel tag). Disable via `update.checkOnStart: false`.
+
 Then:
 
 ```bash
