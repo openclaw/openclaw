@@ -56,7 +56,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "qwen",
     label: "Qwen",
-    hint: "Portal OAuth",
+    hint: "OAuth",
     choices: ["qwen-portal"],
   },
   {

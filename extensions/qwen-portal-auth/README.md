@@ -21,4 +21,4 @@ clawdbot models auth login --provider qwen-portal --set-default
 ## Notes
 
 - Qwen OAuth uses a device-code login flow.
-- Tokens expire periodically; re-run login if requests fail.
+- Tokens auto-refresh; re-run login if refresh fails or access is revoked.

@@ -13,7 +13,7 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
-const resolvePluginProviders = vi.fn(() => []);
+const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../plugins/providers.js", () => ({
   resolvePluginProviders,
 }));
@@ -492,7 +492,7 @@ describe("applyAuthChoice", () => {
     });
   });
 
-  it("writes Qwen Portal credentials when selecting qwen-portal", async () => {
+  it("writes Qwen credentials when selecting qwen-portal", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
@@ -501,7 +501,7 @@ describe("applyAuthChoice", () => {
     resolvePluginProviders.mockReturnValue([
       {
         id: "qwen-portal",
-        label: "Qwen Portal OAuth",
+        label: "Qwen",
         auth: [
           {
             id: "device",

@@ -139,7 +139,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(options.some((opt) => opt.value === "chutes")).toBe(true);
   });
 
-  it("includes Qwen Portal auth choice", () => {
+  it("includes Qwen auth choice", () => {
     const store: AuthProfileStore = { version: 1, profiles: {} };
     const options = buildAuthChoiceOptions({
       store,
