@@ -37,6 +37,8 @@ export type DiscordChannelConfigResolved = {
   users?: Array<string | number>;
   systemPrompt?: string;
   autoThread?: boolean;
+  matchKey?: string;
+  matchSource?: "direct" | "parent";
 };
 
 export function normalizeDiscordAllowList(
@@ -145,33 +147,42 @@ type DiscordChannelLookup = {
   slug?: string;
 };
 type DiscordChannelScope = "channel" | "thread";
+type DiscordChannelMatch = {
+  entry: DiscordChannelEntry;
+  key: string;
+};
 
 function resolveDiscordChannelEntry(
   channels: NonNullable<DiscordGuildEntryResolved["channels"]>,
   params: DiscordChannelLookup & { allowNameMatch?: boolean },
-): DiscordChannelEntry | null {
+): DiscordChannelMatch | null {
   const allowNameMatch = params.allowNameMatch !== false;
   const keys = buildChannelKeyCandidates(
     params.id,
     allowNameMatch ? params.slug : undefined,
     allowNameMatch ? params.name : undefined,
   );
-  const { entry } = resolveChannelEntryMatch({ entries: channels, keys });
-  return entry ?? null;
+  const { entry, key } = resolveChannelEntryMatch({ entries: channels, keys });
+  if (!entry || !key) return null;
+  return { entry, key };
 }
 
 function resolveDiscordChannelConfigEntry(
-  entry: DiscordChannelEntry,
+  match: DiscordChannelMatch,
+  matchSource: "direct" | "parent",
 ): DiscordChannelConfigResolved {
-  return {
-    allowed: entry.allow !== false,
-    requireMention: entry.requireMention,
-    skills: entry.skills,
-    enabled: entry.enabled,
-    users: entry.users,
-    systemPrompt: entry.systemPrompt,
-    autoThread: entry.autoThread,
+  const resolved: DiscordChannelConfigResolved = {
+    allowed: match.entry.allow !== false,
+    requireMention: match.entry.requireMention,
+    skills: match.entry.skills,
+    enabled: match.entry.enabled,
+    users: match.entry.users,
+    systemPrompt: match.entry.systemPrompt,
+    autoThread: match.entry.autoThread,
   };
+  if (match.key) resolved.matchKey = match.key;
+  resolved.matchSource = matchSource;
+  return resolved;
 }
 
 export function resolveDiscordChannelConfig(params: {
@@ -189,7 +200,7 @@ export function resolveDiscordChannelConfig(params: {
     slug: channelSlug,
   });
   if (!entry) return { allowed: false };
-  return resolveDiscordChannelConfigEntry(entry);
+  return resolveDiscordChannelConfigEntry(entry, "direct");
 }
 
 export function resolveDiscordChannelConfigWithFallback(params: {
@@ -220,7 +231,7 @@ export function resolveDiscordChannelConfigWithFallback(params: {
     slug: channelSlug,
     allowNameMatch: scope !== "thread",
   });
-  if (entry) return resolveDiscordChannelConfigEntry(entry);
+  if (entry) return resolveDiscordChannelConfigEntry(entry, "direct");
   if (parentId || parentName || parentSlug) {
     const resolvedParentSlug = parentSlug ?? (parentName ? normalizeDiscordSlug(parentName) : "");
     const parentEntry = resolveDiscordChannelEntry(channels, {
@@ -228,7 +239,7 @@ export function resolveDiscordChannelConfigWithFallback(params: {
       name: parentName,
       slug: resolvedParentSlug,
     });
-    if (parentEntry) return resolveDiscordChannelConfigEntry(parentEntry);
+    if (parentEntry) return resolveDiscordChannelConfigEntry(parentEntry, "parent");
   }
   return { allowed: false };
 }
