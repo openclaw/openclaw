@@ -123,7 +123,15 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   if (endIndex === -1) return {};
   const block = normalized.slice(4, endIndex);
 
+  const lineParsed = parseLineFrontmatter(block);
   const yamlParsed = parseYamlFrontmatter(block);
-  if (yamlParsed !== null) return yamlParsed;
-  return parseLineFrontmatter(block);
+  if (yamlParsed === null) return lineParsed;
+
+  const merged: ParsedFrontmatter = { ...yamlParsed };
+  for (const [key, value] of Object.entries(lineParsed)) {
+    if (value.startsWith("{") || value.startsWith("[")) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
