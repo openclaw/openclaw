@@ -13,6 +13,7 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterChannel?: string;
+  requesterAccountId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -59,6 +60,7 @@ function resumeSubagentRun(runId: string) {
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
       requesterChannel: entry.requesterChannel,
+      requesterAccountId: entry.requesterAccountId,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,
@@ -199,6 +201,7 @@ function ensureListener() {
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
       requesterChannel: entry.requesterChannel,
+      requesterAccountId: entry.requesterAccountId,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,
@@ -248,6 +251,7 @@ export function registerSubagentRun(params: {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterChannel?: string;
+  requesterAccountId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -264,6 +268,7 @@ export function registerSubagentRun(params: {
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterChannel: params.requesterChannel,
+    requesterAccountId: params.requesterAccountId,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,
@@ -318,6 +323,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       childRunId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
       requesterChannel: entry.requesterChannel,
+      requesterAccountId: entry.requesterAccountId,
       requesterDisplayKey: entry.requesterDisplayKey,
       task: entry.task,
       timeoutMs: 30_000,

@@ -48,6 +48,7 @@ function normalizeModelSelection(value: unknown): string | undefined {
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -206,6 +207,7 @@ export function createSessionsSpawnTool(opts?: {
         childSessionKey,
         requesterSessionKey: requesterInternalKey,
         requesterChannel: opts?.agentChannel,
+        requesterAccountId: opts?.agentAccountId,
         requesterDisplayKey,
         task,
         cleanup,
