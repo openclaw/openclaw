@@ -23,6 +23,7 @@ import { sendMessage, sendPoll } from "./message.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
+  type CrossContextDecoration,
   enforceCrossContextPolicy,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
@@ -99,6 +100,12 @@ export type MessageActionRunResult =
       dryRun: boolean;
     };
 
+export function getToolResult(
+  result: MessageActionRunResult,
+): AgentToolResult<unknown> | undefined {
+  return "toolResult" in result ? result.toolResult : undefined;
+}
+
 function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   if (result.details !== undefined) return result.details;
   const textBlock = Array.isArray(result.content)
@@ -121,6 +128,28 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   return result.content ?? result;
 }
 
+function applyCrossContextMessageDecoration({
+  params,
+  message,
+  decoration,
+  preferEmbeds,
+}: {
+  params: Record<string, unknown>;
+  message: string;
+  decoration: CrossContextDecoration;
+  preferEmbeds: boolean;
+}): string {
+  const applied = applyCrossContextDecoration({
+    message,
+    decoration,
+    preferEmbeds,
+  });
+  params.message = applied.message;
+  if (applied.embeds?.length) {
+    params.embeds = applied.embeds;
+  }
+  return applied.message;
+}
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
   if (typeof raw === "boolean") return raw;
@@ -335,16 +364,12 @@ export async function runMessageAction(
           })
         : null;
     if (decoration) {
-      const applied = applyCrossContextDecoration({
+      message = applyCrossContextMessageDecoration({
+        params,
         message,
         decoration,
         preferEmbeds: true,
       });
-      message = applied.message;
-      params.message = applied.message;
-      if (applied.embeds?.length) {
-        params.embeds = applied.embeds;
-      }
     }
 
     const mediaUrl = readStringParam(params, "media", { trim: false });
@@ -434,15 +459,12 @@ export async function runMessageAction(
         : null;
     if (decoration) {
       const base = typeof params.message === "string" ? params.message : "";
-      const applied = applyCrossContextDecoration({
+      applyCrossContextMessageDecoration({
+        params,
         message: base,
         decoration,
         preferEmbeds: true,
       });
-      params.message = applied.message;
-      if (applied.embeds?.length) {
-        params.embeds = applied.embeds;
-      }
     }
 
     if (!dryRun) {

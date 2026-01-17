@@ -14,7 +14,7 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
@@ -227,7 +227,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      if ("toolResult" in result && result.toolResult) return result.toolResult;
+      const toolResult = getToolResult(result);
+      if (toolResult) return toolResult;
       return jsonResult(result.payload);
     },
   };

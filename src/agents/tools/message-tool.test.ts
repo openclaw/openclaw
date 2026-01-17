@@ -8,9 +8,15 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
-vi.mock("../../infra/outbound/message-action-runner.js", () => ({
-  runMessageAction: mocks.runMessageAction,
-}));
+vi.mock("../../infra/outbound/message-action-runner.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../infra/outbound/message-action-runner.js")
+  >("../../infra/outbound/message-action-runner.js");
+  return {
+    ...actual,
+    runMessageAction: mocks.runMessageAction,
+  };
+});
 
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
