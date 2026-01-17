@@ -179,6 +179,7 @@
     "tslog": "^4.10.2",
     "undici": "^7.18.2",
     "ws": "^8.19.0",
+    "yaml": "^2.8.2",
     "zod": "^4.3.5"
   },
   "optionalDependencies": {
