@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../../config/config.js";
 
-import { resolveOutboundTarget } from "./targets.js";
+import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
 
 describe("resolveOutboundTarget", () => {
   it("falls back to whatsapp allowFrom via config", () => {
@@ -91,5 +91,98 @@ describe("resolveOutboundTarget", () => {
     if (!res.ok) {
       expect(res.error.message).toContain("WebChat");
     }
+  });
+});
+
+describe("resolveSessionDeliveryTarget", () => {
+  it("derives implicit delivery from the last route", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-1",
+        updatedAt: 1,
+        lastChannel: " whatsapp ",
+        lastTo: " +1555 ",
+        lastAccountId: " acct-1 ",
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-1",
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: "acct-1",
+    });
+  });
+
+  it("prefers explicit targets without reusing lastTo", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-2",
+        updatedAt: 1,
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      },
+      requestedChannel: "telegram",
+    });
+
+    expect(resolved).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: undefined,
+    });
+  });
+
+  it("allows mismatched lastTo when configured", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-3",
+        updatedAt: 1,
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      },
+      requestedChannel: "telegram",
+      allowMismatchedLastTo: true,
+    });
+
+    expect(resolved).toEqual({
+      channel: "telegram",
+      to: "+1555",
+      accountId: undefined,
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: undefined,
+    });
+  });
+
+  it("falls back to a provided channel when requested is unsupported", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-4",
+        updatedAt: 1,
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+      },
+      requestedChannel: "webchat",
+      fallbackChannel: "slack",
+    });
+
+    expect(resolved).toEqual({
+      channel: "slack",
+      to: undefined,
+      accountId: undefined,
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: undefined,
+    });
   });
 });

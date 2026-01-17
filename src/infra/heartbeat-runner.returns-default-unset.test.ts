@@ -119,6 +119,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "none",
       reason: "target-none",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -132,6 +135,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "+1555",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -147,6 +153,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "whatsapp",
       to: "+555123",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -160,6 +169,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "none",
       reason: "no-target",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -177,6 +189,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       channel: "whatsapp",
       to: "+1555",
       reason: "allowFrom-fallback",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -192,6 +207,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -207,6 +225,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -217,6 +238,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "telegram",
       to: "123",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -234,6 +258,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     ).toEqual({
       channel: "whatsapp",
       to: "+1555",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 });

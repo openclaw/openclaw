@@ -8,7 +8,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -26,7 +26,6 @@ import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -337,15 +336,13 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
-  const lastChannel =
-    entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
-      ? normalizeChannelId(entry.lastChannel)
-      : undefined;
+  const lastChannel = delivery.lastChannel;
+  const lastAccountId = delivery.lastAccountId;
   const senderProvider = delivery.channel !== "none" ? delivery.channel : lastChannel;
   const senderAllowFrom = senderProvider
     ? (getChannelPlugin(senderProvider)?.config.resolveAllowFrom?.({
         cfg,
-        accountId: senderProvider === lastChannel ? entry?.lastAccountId : undefined,
+        accountId: senderProvider === lastChannel ? lastAccountId : undefined,
       }) ?? [])
     : [];
   const sender = resolveHeartbeatSender({
@@ -460,7 +457,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.channel === lastChannel ? entry?.lastAccountId : undefined;
+    const deliveryAccountId = delivery.accountId;
     const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
