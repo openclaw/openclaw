@@ -2,6 +2,7 @@ import util from "node:util";
 
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { isVerbose } from "../globals.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -118,10 +119,6 @@ function isJsonPayload(value: string): boolean {
   } catch {
     return false;
   }
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 /**
