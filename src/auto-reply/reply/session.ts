@@ -229,7 +229,7 @@ export async function initSessionState(params: {
     channel: baseEntry?.channel,
     groupId: baseEntry?.groupId,
     subject: baseEntry?.subject,
-    room: baseEntry?.room,
+    groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
     deliveryContext: deliveryFields.deliveryContext,
     // Track originating channel for subagent announce routing.
@@ -247,24 +247,24 @@ export async function initSessionState(params: {
       normalizedChannel &&
       getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
     );
-    const nextRoom =
+    const nextGroupChannel =
       explicitChannel ??
       ((groupResolution.chatType === "channel" || isChannelProvider) &&
       subject &&
       subject.startsWith("#")
         ? subject
         : undefined);
-    const nextSubject = nextRoom ? undefined : subject;
+    const nextSubject = nextGroupChannel ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
     sessionEntry.channel = channel;
     sessionEntry.groupId = groupResolution.id;
     if (nextSubject) sessionEntry.subject = nextSubject;
-    if (nextRoom) sessionEntry.room = nextRoom;
+    if (nextGroupChannel) sessionEntry.groupChannel = nextGroupChannel;
     if (space) sessionEntry.space = space;
     sessionEntry.displayName = buildGroupDisplayName({
       provider: sessionEntry.channel,
       subject: sessionEntry.subject,
-      room: sessionEntry.room,
+      groupChannel: sessionEntry.groupChannel,
       space: sessionEntry.space,
       id: groupResolution.id,
       key: sessionKey,

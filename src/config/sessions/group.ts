@@ -22,26 +22,26 @@ function shortenGroupId(value?: string) {
 export function buildGroupDisplayName(params: {
   provider?: string;
   subject?: string;
-  room?: string;
+  groupChannel?: string;
   space?: string;
   id?: string;
   key: string;
 }) {
   const providerKey = (params.provider?.trim().toLowerCase() || "group").trim();
-  const room = params.room?.trim();
+  const groupChannel = params.groupChannel?.trim();
   const space = params.space?.trim();
   const subject = params.subject?.trim();
   const detail =
-    (room && space
-      ? `${space}${room.startsWith("#") ? "" : "#"}${room}`
-      : room || subject || space || "") || "";
+    (groupChannel && space
+      ? `${space}${groupChannel.startsWith("#") ? "" : "#"}${groupChannel}`
+      : groupChannel || subject || space || "") || "";
   const fallbackId = params.id?.trim() || params.key;
   const rawLabel = detail || fallbackId;
   let token = normalizeGroupLabel(rawLabel);
   if (!token) {
     token = normalizeGroupLabel(shortenGroupId(rawLabel));
   }
-  if (!params.room && token.startsWith("#")) {
+  if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }
   if (token && !/^[@#]/.test(token) && !token.startsWith("g-") && !token.includes("#")) {

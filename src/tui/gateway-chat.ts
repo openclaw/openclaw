@@ -57,7 +57,7 @@ export type GatewaySessionList = {
     label?: string;
     displayName?: string;
     provider?: string;
-    room?: string;
+    groupChannel?: string;
     space?: string;
     subject?: string;
     chatType?: string;

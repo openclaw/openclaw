@@ -378,7 +378,7 @@ export function listSessionsFromStore(params: {
       const parsed = parseGroupKey(key);
       const channel = entry?.channel ?? parsed?.channel;
       const subject = entry?.subject;
-      const room = entry?.room;
+      const groupChannel = entry?.groupChannel;
       const space = entry?.space;
       const id = parsed?.id;
       const displayName =
@@ -387,7 +387,7 @@ export function listSessionsFromStore(params: {
           ? buildGroupDisplayName({
               provider: channel,
               subject,
-              room,
+              groupChannel,
               space,
               id,
               key,
@@ -401,7 +401,7 @@ export function listSessionsFromStore(params: {
         displayName,
         channel,
         subject,
-        room,
+        groupChannel,
         space,
         chatType: entry?.chatType,
         updatedAt,

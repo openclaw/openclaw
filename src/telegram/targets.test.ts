@@ -11,6 +11,10 @@ describe("stripTelegramInternalPrefixes", () => {
     expect(stripTelegramInternalPrefixes("telegram:group:-100123")).toBe("-100123");
   });
 
+  it("does not strip group prefix without telegram prefix", () => {
+    expect(stripTelegramInternalPrefixes("group:-100123")).toBe("group:-100123");
+  });
+
   it("is idempotent", () => {
     expect(stripTelegramInternalPrefixes("@mychannel")).toBe("@mychannel");
   });

@@ -61,7 +61,7 @@ function normalizeQuery(value: string): string {
 
 function stripTargetPrefixes(value: string): string {
   return value
-    .replace(/^(channel|group|user):/i, "")
+    .replace(/^(channel|user):/i, "")
     .replace(/^[@#]/, "")
     .trim();
 }
@@ -88,7 +88,7 @@ export function formatTargetDisplay(params: {
     params.kind ??
     (lowered.startsWith("user:")
       ? "user"
-      : lowered.startsWith("channel:") || lowered.startsWith("group:")
+      : lowered.startsWith("channel:")
         ? "group"
         : undefined);
 
@@ -103,8 +103,8 @@ export function formatTargetDisplay(params: {
   if (trimmedTarget.startsWith("#") || trimmedTarget.startsWith("@")) return trimmedTarget;
 
   const withoutPrefix = trimmedTarget.replace(/^telegram:/i, "");
-  if (/^(channel|group):/i.test(withoutPrefix)) {
-    return `#${withoutPrefix.replace(/^(channel|group):/i, "")}`;
+  if (/^channel:/i.test(withoutPrefix)) {
+    return `#${withoutPrefix.replace(/^channel:/i, "")}`;
   }
   if (/^user:/i.test(withoutPrefix)) {
     return `@${withoutPrefix.replace(/^user:/i, "")}`;
@@ -126,7 +126,7 @@ function detectTargetKind(raw: string, preferred?: TargetResolveKind): TargetRes
   const trimmed = raw.trim();
   if (!trimmed) return "group";
   if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) return "user";
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed) || /^group:/i.test(trimmed)) {
+  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
     return "group";
   }
   return "group";

@@ -209,7 +209,7 @@ export const handleSessionsBridgeMethods: BridgeMethodHandler = async (
           chatType: entry?.chatType,
           channel: entry?.channel,
           subject: entry?.subject,
-          room: entry?.room,
+          groupChannel: entry?.groupChannel,
           space: entry?.space,
           lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,

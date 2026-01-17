@@ -40,43 +40,43 @@ describe("history helpers", () => {
 
     appendHistoryEntry({
       historyMap,
-      historyKey: "room",
+      historyKey: "group",
       limit: 2,
       entry: { sender: "A", body: "one" },
     });
     appendHistoryEntry({
       historyMap,
-      historyKey: "room",
+      historyKey: "group",
       limit: 2,
       entry: { sender: "B", body: "two" },
     });
     appendHistoryEntry({
       historyMap,
-      historyKey: "room",
+      historyKey: "group",
       limit: 2,
       entry: { sender: "C", body: "three" },
     });
 
-    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["two", "three"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two", "three"]);
   });
 
   it("builds context from map and appends entry", () => {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("room", [
+    historyMap.set("group", [
       { sender: "A", body: "one" },
       { sender: "B", body: "two" },
     ]);
 
     const result = buildHistoryContextFromMap({
       historyMap,
-      historyKey: "room",
+      historyKey: "group",
       limit: 3,
       entry: { sender: "C", body: "three" },
       currentMessage: "current",
       formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
     expect(result).toContain(HISTORY_CONTEXT_MARKER);
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");
@@ -85,20 +85,20 @@ describe("history helpers", () => {
 
   it("builds context from pending map without appending", () => {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("room", [
+    historyMap.set("group", [
       { sender: "A", body: "one" },
       { sender: "B", body: "two" },
     ]);
 
     const result = buildPendingHistoryContextFromMap({
       historyMap,
-      historyKey: "room",
+      historyKey: "group",
       limit: 3,
       currentMessage: "current",
       formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
     });
 
-    expect(historyMap.get("room")?.map((entry) => entry.body)).toEqual(["one", "two"]);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
     expect(result).toContain(HISTORY_CONTEXT_MARKER);
     expect(result).toContain("A: one");
     expect(result).toContain("B: two");

@@ -67,7 +67,7 @@ export type SessionEntry = {
   channel?: string;
   groupId?: string;
   subject?: string;
-  room?: string;
+  groupChannel?: string;
   space?: string;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
