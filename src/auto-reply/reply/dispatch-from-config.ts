@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { getReplyFromConfig } from "../reply.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
@@ -14,7 +14,7 @@ export type DispatchFromConfigResult = {
 };
 
 export async function dispatchReplyFromConfig(params: {
-  ctx: MsgContext;
+  ctx: FinalizedMsgContext;
   cfg: ClawdbotConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;

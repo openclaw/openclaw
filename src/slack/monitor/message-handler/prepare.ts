@@ -1,6 +1,7 @@
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
+import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
@@ -466,10 +467,10 @@ export async function prepareSlackMessage(params: {
     MediaPath: media?.path,
     MediaType: media?.contentType,
     MediaUrl: media?.path,
-    CommandAuthorized: commandAuthorized,
-    OriginatingChannel: "slack" as const,
-    OriginatingTo: slackTo,
-  }) satisfies Record<string, unknown>;
+	    CommandAuthorized: commandAuthorized,
+	    OriginatingChannel: "slack" as const,
+	    OriginatingTo: slackTo,
+	  }) satisfies FinalizedMsgContext;
 
   const replyTarget = ctxPayload.To ?? undefined;
   if (!replyTarget) return null;

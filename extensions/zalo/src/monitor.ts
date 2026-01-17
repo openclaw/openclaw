@@ -2,8 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
-  hasInlineCommandTokens,
   isControlCommandMessage,
+  shouldComputeCommandAuthorized,
 } from "../../../src/auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
@@ -443,16 +443,15 @@ async function processMessageWithPipeline(params: {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
-  const shouldComputeCommandAuthorized =
-    isControlCommandMessage(rawBody, config) || hasInlineCommandTokens(rawBody);
+  const shouldComputeAuth = shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeCommandAuthorized)
+    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
       ? await deps.readChannelAllowFromStore("zalo").catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = isSenderAllowed(senderId, effectiveAllowFrom);
-  const commandAuthorized = shouldComputeCommandAuthorized
+  const commandAuthorized = shouldComputeAuth
     ? resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [{ configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands }],

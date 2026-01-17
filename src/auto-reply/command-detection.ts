@@ -58,3 +58,11 @@ export function hasInlineCommandTokens(text?: string): boolean {
   if (!body.trim()) return false;
   return /(?:^|\s)[/!][a-z]/i.test(body);
 }
+
+export function shouldComputeCommandAuthorized(
+  text?: string,
+  cfg?: ClawdbotConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);
+}

@@ -11,7 +11,7 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { logVerbose } from "../../globals.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
@@ -115,7 +115,7 @@ export function stopSubagentsForRequester(params: {
 }
 
 export async function tryFastAbortFromMessage(params: {
-  ctx: MsgContext;
+  ctx: FinalizedMsgContext;
   cfg: ClawdbotConfig;
 }): Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }> {
   const { ctx, cfg } = params;
@@ -132,7 +132,7 @@ export async function tryFastAbortFromMessage(params: {
   const abortRequested = normalized === "/stop" || isAbortTrigger(stripped);
   if (!abortRequested) return { handled: false, aborted: false };
 
-  const commandAuthorized = ctx.CommandAuthorized ?? false;
+  const commandAuthorized = ctx.CommandAuthorized;
   const auth = resolveCommandAuthorization({
     ctx,
     cfg,

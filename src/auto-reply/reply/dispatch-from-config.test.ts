@@ -4,6 +4,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
@@ -58,11 +59,12 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
-    const ctx: MsgContext = {
+    const ctx = buildTestCtx({
       Provider: "slack",
+      Surface: undefined,
       OriginatingChannel: "slack",
       OriginatingTo: "channel:C123",
-    };
+    });
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -83,13 +85,13 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
-    const ctx: MsgContext = {
+    const ctx = buildTestCtx({
       Provider: "slack",
       AccountId: "acc-1",
       MessageThreadId: 123,
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
-    };
+    });
 
     const replyResolver = async (
       _ctx: MsgContext,
@@ -116,10 +118,10 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
-    const ctx: MsgContext = {
+    const ctx = buildTestCtx({
       Provider: "telegram",
       Body: "/stop",
-    };
+    });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -138,10 +140,10 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
-    const ctx: MsgContext = {
+    const ctx = buildTestCtx({
       Provider: "telegram",
       Body: "/stop",
-    };
+    });
 
     await dispatchReplyFromConfig({
       ctx,
@@ -161,12 +163,12 @@ describe("dispatchReplyFromConfig", () => {
       aborted: false,
     });
     const cfg = {} as ClawdbotConfig;
-    const ctx: MsgContext = {
+    const ctx = buildTestCtx({
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
       MessageSid: "msg-1",
-    };
+    });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
 
     await dispatchReplyFromConfig({

@@ -16,10 +16,7 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
-import {
-  hasInlineCommandTokens,
-  isControlCommandMessage,
-} from "../../../auto-reply/command-detection.js";
+import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
@@ -232,9 +229,7 @@ export async function processMessage(params: {
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
-  const shouldComputeCommandAuthorized =
-    isControlCommandMessage(params.msg.body, params.cfg) || hasInlineCommandTokens(params.msg.body);
-  const commandAuthorized = shouldComputeCommandAuthorized
+  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;

@@ -1,6 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
@@ -19,7 +19,7 @@ function normalizeTextField(value: unknown): string | undefined {
 export function finalizeInboundContext<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
-): T & MsgContext {
+): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
 
   normalized.Body = normalizeInboundTextNewlines(
@@ -64,5 +64,8 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
     body: normalized.BodyForAgent,
   });
 
-  return normalized;
+  // Always set. Default-deny when upstream forgets to populate it.
+  normalized.CommandAuthorized = normalized.CommandAuthorized === true;
+
+  return normalized as T & FinalizedMsgContext;
 }

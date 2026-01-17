@@ -18,6 +18,7 @@ describe("finalizeInboundContext", () => {
     expect(out.RawBody).toBe("raw\nline");
     expect(out.BodyForAgent).toBe("a\nb\nc");
     expect(out.BodyForCommands).toBe("raw\nline");
+    expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
   });

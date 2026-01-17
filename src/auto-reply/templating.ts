@@ -103,6 +103,14 @@ export type MsgContext = {
   HookMessages?: string[];
 };
 
+export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
+  /**
+   * Always set by finalizeInboundContext().
+   * Default-deny: missing/undefined becomes false.
+   */
+  CommandAuthorized: boolean;
+};
+
 export type TemplateContext = MsgContext & {
   BodyStripped?: string;
   SessionId?: string;
