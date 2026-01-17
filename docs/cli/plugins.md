@@ -25,6 +25,9 @@ clawdbot plugins update <id>
 clawdbot plugins update --all
 ```
 
+Bundled plugins ship with Clawdbot but start disabled. Use `plugins enable` to
+activate them.
+
 ### Install
 
 ```bash

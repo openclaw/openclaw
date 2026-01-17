@@ -16,7 +16,6 @@ export type AuthChoice =
   | "moonshot-api-key"
   | "synthetic-api-key"
   | "codex-cli"
-  | "antigravity"
   | "apiKey"
   | "gemini-api-key"
   | "zai-api-key"

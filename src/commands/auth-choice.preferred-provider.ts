@@ -15,7 +15,6 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "moonshot-api-key": "moonshot",
   "gemini-api-key": "google",
   "zai-api-key": "zai",
-  antigravity: "google-antigravity",
   "synthetic-api-key": "synthetic",
   "github-copilot": "github-copilot",
   "minimax-cloud": "minimax",

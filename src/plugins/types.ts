@@ -175,7 +175,7 @@ export type ClawdbotPluginApi = {
   resolvePath: (input: string) => string;
 };
 
-export type PluginOrigin = "global" | "workspace" | "config";
+export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
 
 export type PluginDiagnostic = {
   level: "warn" | "error";

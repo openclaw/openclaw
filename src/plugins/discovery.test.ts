@@ -15,7 +15,9 @@ function makeTempDir() {
 
 async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   const prev = process.env.CLAWDBOT_STATE_DIR;
+  const prevBundled = process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR;
   process.env.CLAWDBOT_STATE_DIR = stateDir;
+  process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
   vi.resetModules();
   try {
     return await fn();
@@ -24,6 +26,11 @@ async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
       delete process.env.CLAWDBOT_STATE_DIR;
     } else {
       process.env.CLAWDBOT_STATE_DIR = prev;
+    }
+    if (prevBundled === undefined) {
+      delete process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = prevBundled;
     }
     vi.resetModules();
   }

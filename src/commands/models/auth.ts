@@ -23,7 +23,7 @@ import {
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
-import { isRemoteEnvironment } from "../antigravity-oauth.js";
+import { isRemoteEnvironment } from "../oauth-env.js";
 import { openUrl } from "../onboard-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { updateConfig } from "./shared.js";

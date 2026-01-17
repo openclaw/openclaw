@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** `clawdbot plugins install <path>` now copies into `~/.clawdbot/extensions` (use `--link` to keep path-based loading).
 
 ### Changes
+- Plugins: ship bundled plugins disabled by default, allow overrides by installed versions, and add bundled Antigravity + Gemini CLI OAuth + Copilot Proxy provider plugins. (#1066) — thanks @ItzR3NO.
 - Tools: improve `web_fetch` extraction using Readability (with fallback).
 - Tools: add Firecrawl fallback for `web_fetch` when configured.
 - Tools: send Chrome-like headers by default for `web_fetch` to improve extraction on bot-sensitive sites.

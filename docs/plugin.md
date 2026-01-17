@@ -41,6 +41,9 @@ See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 - [Matrix](/channels/matrix) — `@clawdbot/matrix`
 - [Zalo](/channels/zalo) — `@clawdbot/zalo`
 - [Microsoft Teams](/channels/msteams) — `@clawdbot/msteams`
+- Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
+- Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
+- Copilot Proxy (provider auth) — bundled as `copilot-proxy` (disabled by default)
 
 Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
@@ -58,16 +61,26 @@ Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 
 Clawdbot scans, in order:
 
-1) Global extensions
-- `~/.clawdbot/extensions/*.ts`
-- `~/.clawdbot/extensions/*/index.ts`
+1) Config paths
+- `plugins.load.paths` (file or directory)
 
 2) Workspace extensions
 - `<workspace>/.clawdbot/extensions/*.ts`
 - `<workspace>/.clawdbot/extensions/*/index.ts`
 
-3) Config paths
-- `plugins.load.paths` (file or directory)
+3) Global extensions
+- `~/.clawdbot/extensions/*.ts`
+- `~/.clawdbot/extensions/*/index.ts`
+
+4) Bundled extensions (shipped with Clawdbot, **disabled by default**)
+- `<clawdbot>/extensions/*`
+
+Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
+or `clawdbot plugins enable <id>`. Installed plugins are enabled by default,
+but can be disabled the same way.
+
+If multiple plugins resolve to the same id, the first match in the order above
+wins and lower-precedence copies are ignored.
 
 ### Package packs
 

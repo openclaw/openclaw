@@ -334,11 +334,9 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
-    authChoice === "openai-codex" ||
-    authChoice === "antigravity"
+    authChoice === "openai-codex"
   ) {
-    const label = authChoice === "antigravity" ? "Antigravity" : "OAuth";
-    runtime.error(`${label} requires interactive mode.`);
+    runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;
   }

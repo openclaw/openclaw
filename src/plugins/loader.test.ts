@@ -9,6 +9,7 @@ import { loadClawdbotPlugins } from "./loader.js";
 type TempPlugin = { dir: string; file: string; id: string };
 
 const tempDirs: string[] = [];
+const prevBundledDir = process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR;
 
 function makeTempDir() {
   const dir = path.join(os.tmpdir(), `clawdbot-plugin-${randomUUID()}`);
@@ -32,10 +33,49 @@ afterEach(() => {
       // ignore cleanup failures
     }
   }
+  if (prevBundledDir === undefined) {
+    delete process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = prevBundledDir;
+  }
 });
 
 describe("loadClawdbotPlugins", () => {
+  it("disables bundled plugins by default", () => {
+    const bundledDir = makeTempDir();
+    const bundledPath = path.join(bundledDir, "bundled.ts");
+    fs.writeFileSync(bundledPath, "export default function () {}", "utf-8");
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["bundled"],
+        },
+      },
+    });
+
+    const bundled = registry.plugins.find((entry) => entry.id === "bundled");
+    expect(bundled?.status).toBe("disabled");
+
+    const enabledRegistry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["bundled"],
+          entries: {
+            bundled: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const enabled = enabledRegistry.plugins.find((entry) => entry.id === "bundled");
+    expect(enabled?.status).toBe("loaded");
+  });
   it("loads plugins from config paths", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "allowed",
       body: `export default function (api) { api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true })); }`,
@@ -52,12 +92,13 @@ describe("loadClawdbotPlugins", () => {
       },
     });
 
-    expect(registry.plugins.length).toBe(1);
-    expect(registry.plugins[0]?.status).toBe("loaded");
+    const loaded = registry.plugins.find((entry) => entry.id === "allowed");
+    expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
   });
 
   it("denylist disables plugins even if allowed", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "blocked",
       body: `export default function () {}`,
@@ -75,10 +116,12 @@ describe("loadClawdbotPlugins", () => {
       },
     });
 
-    expect(registry.plugins[0]?.status).toBe("disabled");
+    const blocked = registry.plugins.find((entry) => entry.id === "blocked");
+    expect(blocked?.status).toBe("disabled");
   });
 
   it("fails fast on invalid plugin config", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "configurable",
       body: `export default {\n  id: "configurable",\n  configSchema: {\n    parse(value) {\n      if (!value || typeof value !== "object" || Array.isArray(value)) {\n        throw new Error("bad config");\n      }\n      return value;\n    }\n  },\n  register() {}\n};`,
@@ -99,11 +142,13 @@ describe("loadClawdbotPlugins", () => {
       },
     });
 
-    expect(registry.plugins[0]?.status).toBe("error");
+    const configurable = registry.plugins.find((entry) => entry.id === "configurable");
+    expect(configurable?.status).toBe("error");
     expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
   });
 
   it("registers channel plugins", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "channel-demo",
       body: `export default function (api) {
@@ -139,11 +184,12 @@ describe("loadClawdbotPlugins", () => {
       },
     });
 
-    expect(registry.channels.length).toBe(1);
-    expect(registry.channels[0]?.plugin.id).toBe("demo");
+    const channel = registry.channels.find((entry) => entry.plugin.id === "demo");
+    expect(channel).toBeDefined();
   });
 
   it("registers http handlers", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "http-demo",
       body: `export default function (api) {
@@ -162,8 +208,9 @@ describe("loadClawdbotPlugins", () => {
       },
     });
 
-    expect(registry.httpHandlers.length).toBe(1);
-    expect(registry.httpHandlers[0]?.pluginId).toBe("http-demo");
-    expect(registry.plugins[0]?.httpHandlers).toBe(1);
+    const handler = registry.httpHandlers.find((entry) => entry.pluginId === "http-demo");
+    expect(handler).toBeDefined();
+    const httpPlugin = registry.plugins.find((entry) => entry.id === "http-demo");
+    expect(httpPlugin?.httpHandlers).toBe(1);
   });
 });

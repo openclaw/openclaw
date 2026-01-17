@@ -61,8 +61,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "google",
     label: "Google",
-    hint: "Antigravity + Gemini API key",
-    choices: ["antigravity", "gemini-api-key"],
+    hint: "Gemini API key",
+    choices: ["gemini-api-key"],
   },
   {
     value: "openrouter",
@@ -181,10 +181,6 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
-  options.push({
-    value: "antigravity",
-    label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
-  });
   options.push({
     value: "github-copilot",
     label: "GitHub Copilot (GitHub device login)",

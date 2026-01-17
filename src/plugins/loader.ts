@@ -86,6 +86,7 @@ function buildCacheKey(params: {
 
 function resolveEnableState(
   id: string,
+  origin: PluginRecord["origin"],
   config: NormalizedPluginsConfig,
 ): { enabled: boolean; reason?: string } {
   if (!config.enabled) {
@@ -98,8 +99,14 @@ function resolveEnableState(
     return { enabled: false, reason: "not in allowlist" };
   }
   const entry = config.entries[id];
+  if (entry?.enabled === true) {
+    return { enabled: true };
+  }
   if (entry?.enabled === false) {
     return { enabled: false, reason: "disabled in config" };
+  }
+  if (origin === "bundled") {
+    return { enabled: false, reason: "bundled (disabled by default)" };
   }
   return { enabled: true };
 }
@@ -237,8 +244,29 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     interopDefault: true,
   });
 
+  const seenIds = new Map<string, PluginRecord["origin"]>();
+
   for (const candidate of discovery.candidates) {
-    const enableState = resolveEnableState(candidate.idHint, normalized);
+    const existingOrigin = seenIds.get(candidate.idHint);
+    if (existingOrigin) {
+      const record = createPluginRecord({
+        id: candidate.idHint,
+        name: candidate.packageName ?? candidate.idHint,
+        description: candidate.packageDescription,
+        version: candidate.packageVersion,
+        source: candidate.source,
+        origin: candidate.origin,
+        workspaceDir: candidate.workspaceDir,
+        enabled: false,
+        configSchema: false,
+      });
+      record.status = "disabled";
+      record.error = `overridden by ${existingOrigin} plugin`;
+      registry.plugins.push(record);
+      continue;
+    }
+
+    const enableState = resolveEnableState(candidate.idHint, candidate.origin, normalized);
     const entry = normalized.entries[candidate.idHint];
     const record = createPluginRecord({
       id: candidate.idHint,
@@ -256,6 +284,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "disabled";
       record.error = enableState.reason;
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
       continue;
     }
 
@@ -266,6 +295,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -324,6 +354,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -337,6 +368,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.status = "error";
       record.error = "plugin export missing register/activate";
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
@@ -362,10 +394,12 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       }
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
     } catch (err) {
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
+      seenIds.set(candidate.idHint, candidate.origin);
       registry.diagnostics.push({
         level: "error",
         pluginId: record.id,
