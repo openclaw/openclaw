@@ -21,7 +21,8 @@ Clawdbot can optionally **summarize inbound media** (image/audio/video) before t
 4) If a model fails or the media is too large, **fall back to the next entry**.
 5) On success:
    - `Body` becomes `[Image]`, `[Audio]`, or `[Video]` block.
-   - Audio sets `{{Transcript}}` and `CommandBody`/`RawBody` for command parsing.
+   - Audio sets `{{Transcript}}`; command parsing uses caption text when present,
+     otherwise the transcript.
    - Captions are preserved as `User text:` inside the block.
 
 If understanding fails or is disabled, **the reply flow continues** with the original body + attachments.
@@ -98,6 +99,8 @@ Rules:
 - If media exceeds `maxBytes`, that model is skipped and the **next model is tried**.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
+- If `<capability>.enabled: true` but no models are configured, Clawdbot tries the
+  **active reply model** when its provider supports the capability.
 
 ## Capabilities (optional)
 If you set `capabilities`, the entry only runs for those media types. For shared

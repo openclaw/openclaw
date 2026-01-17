@@ -81,6 +81,7 @@ export async function getReplyFromConfig(
     ctx,
     cfg,
     agentDir,
+    activeModel: { provider, model },
   });
 
   const commandAuthorized = ctx.CommandAuthorized ?? true;

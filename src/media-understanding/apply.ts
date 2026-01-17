@@ -29,7 +29,7 @@ import {
 import { describeImageWithModel } from "./providers/image.js";
 import {
   resolveCapabilityConfig,
-  resolveCapabilityEnabled,
+  inferProviderCapabilities,
   resolveConcurrency,
   resolveMaxBytes,
   resolveMaxChars,
@@ -40,6 +40,8 @@ import {
 } from "./resolve.js";
 import type {
   MediaUnderstandingCapability,
+  MediaUnderstandingDecision,
+  MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
@@ -48,6 +50,7 @@ import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
+  decisions: MediaUnderstandingDecision[];
   appliedImage: boolean;
   appliedAudio: boolean;
   appliedVideo: boolean;
@@ -55,10 +58,68 @@ export type ApplyMediaUnderstandingResult = {
 
 const CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["image", "audio", "video"];
 
+type ActiveMediaModel = {
+  provider: string;
+  model?: string;
+};
+
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
   if (!maxChars || trimmed.length <= maxChars) return trimmed;
   return trimmed.slice(0, maxChars).trim();
+}
+
+function resolveEntriesWithActiveFallback(params: {
+  cfg: ClawdbotConfig;
+  capability: MediaUnderstandingCapability;
+  config?: MediaUnderstandingConfig;
+  activeModel?: ActiveMediaModel;
+}): MediaUnderstandingModelConfig[] {
+  const entries = resolveModelEntries({
+    cfg: params.cfg,
+    capability: params.capability,
+    config: params.config,
+  });
+  if (entries.length > 0) return entries;
+  if (params.config?.enabled !== true) return entries;
+  const activeProvider = params.activeModel?.provider?.trim();
+  if (!activeProvider) return entries;
+  const capabilities = inferProviderCapabilities(activeProvider);
+  if (!capabilities || !capabilities.includes(params.capability)) return entries;
+  return [
+    {
+      type: "provider",
+      provider: activeProvider,
+      model: params.activeModel?.model,
+    },
+  ];
+}
+
+function buildModelDecision(params: {
+  entry: MediaUnderstandingModelConfig;
+  entryType: "provider" | "cli";
+  outcome: MediaUnderstandingModelDecision["outcome"];
+  reason?: string;
+}): MediaUnderstandingModelDecision {
+  if (params.entryType === "cli") {
+    const command = params.entry.command?.trim();
+    return {
+      type: "cli",
+      provider: command ?? "cli",
+      model: params.entry.model ?? command,
+      outcome: params.outcome,
+      reason: params.reason,
+    };
+  }
+  const providerIdRaw = params.entry.provider?.trim();
+  const providerId = providerIdRaw ? normalizeMediaProviderId(providerIdRaw) : undefined;
+  return {
+    type: "provider",
+    provider: providerId ?? providerIdRaw,
+    model: params.entry.model,
+    outcome: params.outcome,
+    reason: params.reason,
+  };
 }
 
 async function runProviderEntry(params: {
@@ -301,8 +362,9 @@ async function runAttachmentEntries(params: {
   cache: MediaAttachmentCache;
   entries: MediaUnderstandingModelConfig[];
   config?: MediaUnderstandingConfig;
-}): Promise<MediaUnderstandingOutput | null> {
+}): Promise<{ output: MediaUnderstandingOutput | null; attempts: MediaUnderstandingModelDecision[] }> {
   const { entries, capability } = params;
+  const attempts: MediaUnderstandingModelDecision[] = [];
   for (const entry of entries) {
     try {
       const entryType = entry.type ?? (entry.command ? "cli" : "provider");
@@ -328,21 +390,46 @@ async function runAttachmentEntries(params: {
               providerRegistry: params.providerRegistry,
               config: params.config,
             });
-      if (result) return result;
+      if (result) {
+        const decision = buildModelDecision({ entry, entryType, outcome: "success" });
+        if (result.provider) decision.provider = result.provider;
+        if (result.model) decision.model = result.model;
+        attempts.push(decision);
+        return { output: result, attempts };
+      }
+      attempts.push(
+        buildModelDecision({ entry, entryType, outcome: "skipped", reason: "empty output" }),
+      );
     } catch (err) {
       if (isMediaUnderstandingSkipError(err)) {
+        attempts.push(
+          buildModelDecision({
+            entry,
+            entryType: entry.type ?? (entry.command ? "cli" : "provider"),
+            outcome: "skipped",
+            reason: `${err.reason}: ${err.message}`,
+          }),
+        );
         if (shouldLogVerbose()) {
           logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
         }
         continue;
       }
+      attempts.push(
+        buildModelDecision({
+          entry,
+          entryType: entry.type ?? (entry.command ? "cli" : "provider"),
+          outcome: "failed",
+          reason: String(err),
+        }),
+      );
       if (shouldLogVerbose()) {
         logVerbose(`${capability} understanding failed: ${String(err)}`);
       }
     }
   }
 
-  return null;
+  return { output: null, attempts };
 }
 
 async function runCapability(params: {
@@ -350,33 +437,74 @@ async function runCapability(params: {
   cfg: ClawdbotConfig;
   ctx: MsgContext;
   attachments: MediaAttachmentCache;
-  attachmentIds: number[];
+  media: ReturnType<typeof normalizeAttachments>;
   agentDir?: string;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
   config?: MediaUnderstandingConfig;
-}): Promise<MediaUnderstandingOutput[]> {
+  activeModel?: ActiveMediaModel;
+}): Promise<{ outputs: MediaUnderstandingOutput[]; decision: MediaUnderstandingDecision }> {
   const { capability, cfg, ctx } = params;
   const config = params.config ?? resolveCapabilityConfig(cfg, capability);
-  if (!resolveCapabilityEnabled({ cfg, config })) return [];
+  if (config?.enabled === false) {
+    return {
+      outputs: [],
+      decision: { capability, outcome: "disabled", attachments: [] },
+    };
+  }
 
-  const entries = resolveModelEntries({ cfg, capability, config });
-  if (entries.length === 0) return [];
+  const attachmentPolicy = config?.attachments;
+  const selected = selectAttachments({
+    capability,
+    attachments: params.media,
+    policy: attachmentPolicy,
+  });
+  if (selected.length === 0) {
+    return {
+      outputs: [],
+      decision: { capability, outcome: "no-attachment", attachments: [] },
+    };
+  }
 
   const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
   if (scopeDecision === "deny") {
     if (shouldLogVerbose()) {
       logVerbose(`${capability} understanding disabled by scope policy.`);
     }
-    return [];
+    return {
+      outputs: [],
+      decision: {
+        capability,
+        outcome: "scope-deny",
+        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+      },
+    };
+  }
+
+  const entries = resolveEntriesWithActiveFallback({
+    cfg,
+    capability,
+    config,
+    activeModel: params.activeModel,
+  });
+  if (entries.length === 0) {
+    return {
+      outputs: [],
+      decision: {
+        capability,
+        outcome: "skipped",
+        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
+      },
+    };
   }
 
   const outputs: MediaUnderstandingOutput[] = [];
-  for (const attachmentIndex of params.attachmentIds) {
-    const output = await runAttachmentEntries({
+  const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
+  for (const attachment of selected) {
+    const { output, attempts } = await runAttachmentEntries({
       capability,
       cfg,
       ctx,
-      attachmentIndex,
+      attachmentIndex: attachment.index,
       agentDir: params.agentDir,
       providerRegistry: params.providerRegistry,
       cache: params.attachments,
@@ -384,8 +512,20 @@ async function runCapability(params: {
       config,
     });
     if (output) outputs.push(output);
+    attachmentDecisions.push({
+      attachmentIndex: attachment.index,
+      attempts,
+      chosen: attempts.find((attempt) => attempt.outcome === "success"),
+    });
   }
-  return outputs;
+  return {
+    outputs,
+    decision: {
+      capability,
+      outcome: outputs.length > 0 ? "success" : "skipped",
+      attachments: attachmentDecisions,
+    },
+  };
 }
 
 export async function applyMediaUnderstanding(params: {
@@ -393,6 +533,7 @@ export async function applyMediaUnderstanding(params: {
   cfg: ClawdbotConfig;
   agentDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
+  activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
@@ -408,33 +549,40 @@ export async function applyMediaUnderstanding(params: {
   try {
     const tasks = CAPABILITY_ORDER.map((capability) => async () => {
       const config = resolveCapabilityConfig(cfg, capability);
-      const attachmentPolicy = config?.attachments;
-      const selected = selectAttachments({
-        capability,
-        attachments,
-        policy: attachmentPolicy,
-      });
-      if (selected.length === 0) return [] as MediaUnderstandingOutput[];
       return await runCapability({
         capability,
         cfg,
         ctx,
         attachments: cache,
-        attachmentIds: selected.map((item) => item.index),
+        media: attachments,
         agentDir: params.agentDir,
         providerRegistry,
         config,
+        activeModel: params.activeModel,
       });
     });
 
     const results = await runWithConcurrency(tasks, resolveConcurrency(cfg));
     const outputs: MediaUnderstandingOutput[] = [];
+    const decisions: MediaUnderstandingDecision[] = [];
     for (const [index] of CAPABILITY_ORDER.entries()) {
-      const entries = results[index] ?? [];
-      if (!Array.isArray(entries)) continue;
-      for (const entry of entries) {
-        outputs.push(entry);
+      const entry = results[index];
+      if (!entry) continue;
+      if (Array.isArray(entry.outputs)) {
+        for (const output of entry.outputs) {
+          outputs.push(output);
+        }
       }
+      if (entry.decision) {
+        decisions.push(entry.decision);
+      }
+    }
+
+    if (decisions.length > 0) {
+      ctx.MediaUnderstandingDecisions = [
+        ...(ctx.MediaUnderstandingDecisions ?? []),
+        ...decisions,
+      ];
     }
 
     if (outputs.length > 0) {
@@ -443,8 +591,13 @@ export async function applyMediaUnderstanding(params: {
       if (audioOutputs.length > 0) {
         const transcript = formatAudioTranscripts(audioOutputs);
         ctx.Transcript = transcript;
-        ctx.CommandBody = transcript;
-        ctx.RawBody = transcript;
+        if (originalUserText) {
+          ctx.CommandBody = originalUserText;
+          ctx.RawBody = originalUserText;
+        } else {
+          ctx.CommandBody = transcript;
+          ctx.RawBody = transcript;
+        }
       } else if (originalUserText) {
         ctx.CommandBody = originalUserText;
         ctx.RawBody = originalUserText;
@@ -455,6 +608,7 @@ export async function applyMediaUnderstanding(params: {
 
     return {
       outputs,
+      decisions,
       appliedImage: outputs.some((output) => output.kind === "image.description"),
       appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
       appliedVideo: outputs.some((output) => output.kind === "video.description"),

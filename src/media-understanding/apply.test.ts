@@ -85,6 +85,50 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("transcribed text");
   });
 
+  it("keeps caption for command parsing when audio has user text", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const audioPath = path.join(dir, "note.ogg");
+    await fs.writeFile(audioPath, "hello");
+
+    const ctx: MsgContext = {
+      Body: "<media:audio> /capture status",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: ClawdbotConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            maxBytes: 1024 * 1024,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio: async () => ({ text: "transcribed text" }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("transcribed text");
+    expect(ctx.Body).toBe(
+      "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
+    );
+    expect(ctx.CommandBody).toBe("/capture status");
+    expect(ctx.RawBody).toBe("/capture status");
+    expect(ctx.BodyForCommands).toBe("/capture status");
+  });
+
   it("handles URL-only attachments for audio transcription", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const ctx: MsgContext = {
@@ -299,6 +343,43 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedImage).toBe(true);
     expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
+  });
+
+  it("uses active model when enabled and models are missing", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-"));
+    const audioPath = path.join(dir, "fallback.ogg");
+    await fs.writeFile(audioPath, "hello");
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: ClawdbotConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      activeModel: { provider: "groq", model: "whisper-large-v3" },
+      providers: {
+        groq: {
+          id: "groq",
+          transcribeAudio: async () => ({ text: "fallback transcript" }),
+        },
+      },
+    });
+
+    expect(result.appliedAudio).toBe(true);
+    expect(ctx.Transcript).toBe("fallback transcript");
   });
 
   it("handles multiple audio attachments when attachment mode is all", async () => {

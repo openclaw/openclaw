@@ -77,13 +77,10 @@ export function resolveScopeDecision(params: {
   });
 }
 
-function inferCapabilities(
-  entry: MediaUnderstandingModelConfig,
+export function inferProviderCapabilities(
+  providerId?: string,
 ): MediaUnderstandingCapability[] | undefined {
-  if ((entry.type ?? (entry.command ? "cli" : "provider")) === "cli") {
-    return ["image", "audio", "video"];
-  }
-  const provider = normalizeMediaProviderId(entry.provider ?? "");
+  const provider = normalizeMediaProviderId(providerId ?? "");
   if (!provider) return undefined;
   if (provider === "openai" || provider === "anthropic" || provider === "minimax") {
     return ["image"];
@@ -95,6 +92,15 @@ function inferCapabilities(
     return ["audio"];
   }
   return undefined;
+}
+
+function inferCapabilities(
+  entry: MediaUnderstandingModelConfig,
+): MediaUnderstandingCapability[] | undefined {
+  if ((entry.type ?? (entry.command ? "cli" : "provider")) === "cli") {
+    return undefined;
+  }
+  return inferProviderCapabilities(entry.provider);
 }
 
 export function resolveModelEntries(params: {
