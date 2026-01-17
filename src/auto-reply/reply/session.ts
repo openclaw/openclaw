@@ -26,6 +26,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { formatInboundBodyWithSenderMeta } from "./inbound-sender-meta.js";
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -305,7 +306,10 @@ export async function initSessionState(params: {
     ...ctx,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: bodyStripped ?? ctx.Body ?? ctx.CommandBody ?? ctx.RawBody,
+    BodyStripped: formatInboundBodyWithSenderMeta({
+      ctx,
+      body: bodyStripped ?? ctx.Body ?? ctx.CommandBody ?? ctx.RawBody ?? "",
+    }),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };

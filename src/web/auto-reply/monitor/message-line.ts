@@ -22,12 +22,8 @@ export function buildInboundLine(params: {
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
-  const senderLabel =
-    msg.chatType === "group" ? `${msg.senderName ?? msg.senderE164 ?? "Someone"}: ` : "";
   const replyContext = formatReplyContext(msg);
-  const baseLine = `${prefixStr}${senderLabel}${msg.body}${
-    replyContext ? `\n\n${replyContext}` : ""
-  }`;
+  const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
 
   // Wrap with standardized envelope for the agent.
   return formatAgentEnvelope({

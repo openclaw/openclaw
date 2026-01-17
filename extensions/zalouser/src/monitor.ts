@@ -170,13 +170,13 @@ async function processMessage(
     },
   });
 
-  const rawBody = content.trim();
-  const fromLabel = isGroup
-    ? `group:${chatId} from ${senderName || senderId}`
-    : senderName || `user:${senderId}`;
-  const body = deps.formatAgentEnvelope({
-    channel: "Zalo Personal",
-    from: fromLabel,
+	  const rawBody = content.trim();
+	  const fromLabel = isGroup
+	    ? `group:${chatId}`
+	    : senderName || `user:${senderId}`;
+	  const body = deps.formatAgentEnvelope({
+	    channel: "Zalo Personal",
+	    from: fromLabel,
     timestamp: timestamp ? timestamp * 1000 : undefined,
     body: rawBody,
   });

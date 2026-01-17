@@ -22,8 +22,6 @@ export async function dispatchReplyFromConfig(params: {
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
 
-  maybeAppendSenderMeta(ctx);
-
   if (shouldSkipDuplicateInbound(ctx)) {
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
@@ -161,41 +159,4 @@ export async function dispatchReplyFromConfig(params: {
   const counts = dispatcher.getQueuedCounts();
   counts.final += routedFinalCount;
   return { queuedFinal, counts };
-}
-
-function maybeAppendSenderMeta(ctx: MsgContext): void {
-  if (!ctx.Body?.trim()) return;
-  if (ctx.ChatType !== "group") return;
-  if (!shouldInjectSenderMeta(ctx)) return;
-  if (hasSenderMetaLine(ctx.Body)) return;
-
-  const senderLabel = formatSenderLabel(ctx);
-  if (!senderLabel) return;
-
-  const lineBreak = resolveBodyLineBreak(ctx.Body);
-  ctx.Body = `${ctx.Body}${lineBreak}[from: ${senderLabel}]`;
-}
-
-function shouldInjectSenderMeta(ctx: MsgContext): boolean {
-  const origin = (ctx.OriginatingChannel ?? ctx.Provider ?? "").toLowerCase();
-  return origin === "imessage" || origin === "signal";
-}
-
-function resolveBodyLineBreak(body: string): string {
-  if (body.includes("\n")) return "\n";
-  if (body.includes("\\n")) return "\\n";
-  return "\n";
-}
-
-function hasSenderMetaLine(body: string): boolean {
-  return /(^|\n|\\n)\[from:/i.test(body);
-}
-
-function formatSenderLabel(ctx: MsgContext): string | null {
-  const senderName = ctx.SenderName?.trim();
-  const senderId = ctx.SenderId?.trim();
-  if (senderName && senderId && senderName !== senderId) {
-    return `${senderName} (${senderId})`;
-  }
-  return senderName ?? senderId ?? null;
 }

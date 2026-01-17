@@ -183,7 +183,9 @@ describe("web auto-reply", () => {
     expect(payload.Body).not.toContain("Chat messages since your last reply");
     expect(payload.Body).not.toContain("Alice (+111): first");
     expect(payload.Body).not.toContain("[message_id: g-always-1]");
-    expect(payload.Body).toContain("Bob: second");
+    expect(payload.Body).toContain("second");
+    expect(payload.SenderName).toBe("Bob");
+    expect(payload.SenderE164).toBe("+222");
     expect(reply).toHaveBeenCalledTimes(1);
 
     await cleanup();

@@ -328,20 +328,21 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
       const messageId = event.getId() ?? "";
       const threadRootId = resolveMatrixThreadRootId({ event, content });
-      const threadTarget = resolveMatrixThreadTarget({
-        threadReplies,
-        messageId,
-        threadRootId,
-        isThreadRoot: event.isThreadRoot,
-      });
+	      const threadTarget = resolveMatrixThreadTarget({
+	        threadReplies,
+	        messageId,
+	        threadRootId,
+	        isThreadRoot: event.isThreadRoot,
+	      });
 
-      const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
-      const body = formatAgentEnvelope({
-        channel: "Matrix",
-        from: senderName,
-        timestamp: event.getTs() ?? undefined,
-        body: textWithId,
-      });
+	      const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
+	      const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
+	      const body = formatAgentEnvelope({
+	        channel: "Matrix",
+	        from: envelopeFrom,
+	        timestamp: event.getTs() ?? undefined,
+	        body: textWithId,
+	      });
 
       const route = resolveAgentRoute({
         cfg,

@@ -330,10 +330,11 @@ export async function prepareSlackMessage(params: {
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
 
+  const envelopeFrom = isDirectMessage ? senderName : roomLabel;
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
   const body = formatAgentEnvelope({
     channel: "Slack",
-    from: senderName,
+    from: envelopeFrom,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     body: textWithId,
   });

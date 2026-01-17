@@ -9,7 +9,7 @@ import {
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
-import { buildHistoryContext } from "../../../auto-reply/reply/history.js";
+import { buildHistoryContextFromEntries, type HistoryEntry } from "../../../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
@@ -77,30 +77,27 @@ export async function processMessage(params: {
   if (params.msg.chatType === "group") {
     const history = params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? [];
     if (history.length > 0) {
-      const lineBreak = "\\n";
-      const historyText = history
-        .map((m) => {
-          const bodyWithId = m.id ? `${m.body}\n[message_id: ${m.id}]` : m.body;
+      const historyEntries: HistoryEntry[] = history.map((m) => ({
+        sender: m.sender,
+        body: m.body,
+        timestamp: m.timestamp,
+        messageId: m.id,
+      }));
+      combinedBody = buildHistoryContextFromEntries({
+        entries: historyEntries,
+        currentMessage: combinedBody,
+        excludeLast: false,
+        formatEntry: (entry) => {
+          const bodyWithId = entry.messageId ? `${entry.body}\n[message_id: ${entry.messageId}]` : entry.body;
           return formatAgentEnvelope({
             channel: "WhatsApp",
             from: conversationId,
-            timestamp: m.timestamp,
-            body: `${m.sender}: ${bodyWithId}`,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${bodyWithId}`,
           });
-        })
-        .join(lineBreak);
-      combinedBody = buildHistoryContext({
-        historyText,
-        currentMessage: combinedBody,
-        lineBreak,
+        },
       });
     }
-    // Always surface who sent the triggering message so the agent can address them.
-    const senderLabel =
-      params.msg.senderName && params.msg.senderE164
-        ? `${params.msg.senderName} (${params.msg.senderE164})`
-        : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
-    combinedBody = `${combinedBody}\\n[from: ${senderLabel}]`;
     shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 

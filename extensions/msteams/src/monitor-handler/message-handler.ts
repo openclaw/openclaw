@@ -352,15 +352,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         channelData: activity.channelData,
       },
       log,
-    });
+	    });
 
-    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-    const body = formatAgentEnvelope({
-      channel: "Teams",
-      from: senderName,
-      timestamp,
-      body: rawBody,
-    });
+	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
+	    const body = formatAgentEnvelope({
+	      channel: "Teams",
+	      from: envelopeFrom,
+	      timestamp,
+	      body: rawBody,
+	    });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;

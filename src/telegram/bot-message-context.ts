@@ -15,7 +15,6 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveMentionGating } from "../channels/mention-gating.js";
 import {
-  buildGroupFromLabel,
   buildGroupLabel,
   buildSenderLabel,
   buildSenderName,
@@ -324,15 +323,15 @@ export const buildTelegramMessageContext = async ({
         replyTarget.id ? ` id:${replyTarget.id}` : ""
       }]\n${replyTarget.body}\n[/Replying]`
     : "";
-  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
-  const body = formatAgentEnvelope({
-    channel: "Telegram",
-    from: isGroup
-      ? buildGroupFromLabel(msg, chatId, senderId, resolvedThreadId)
-      : buildSenderLabel(msg, senderId || chatId),
-    timestamp: msg.date ? msg.date * 1000 : undefined,
-    body: `${bodyText}${replySuffix}`,
-  });
+	  const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
+	  const body = formatAgentEnvelope({
+	    channel: "Telegram",
+	    from: isGroup
+	      ? (groupLabel ?? `group:${chatId}`)
+	      : buildSenderLabel(msg, senderId || chatId),
+	    timestamp: msg.date ? msg.date * 1000 : undefined,
+	    body: `${bodyText}${replySuffix}`,
+	  });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
     combinedBody = buildPendingHistoryContextFromMap({

@@ -495,13 +495,13 @@ async function processMessageWithPipeline(params: {
     },
   });
 
-  const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
-  const fromLabel = isGroup
-    ? `group:${chatId} from ${senderName || senderId}`
-    : senderName || `user:${senderId}`;
-  const body = deps.formatAgentEnvelope({
-    channel: "Zalo",
-    from: fromLabel,
+	  const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
+	  const fromLabel = isGroup
+	    ? `group:${chatId}`
+	    : senderName || `user:${senderId}`;
+	  const body = deps.formatAgentEnvelope({
+	    channel: "Zalo",
+	    from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
     body: rawBody,
   });

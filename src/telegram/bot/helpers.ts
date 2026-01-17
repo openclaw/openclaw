@@ -98,17 +98,6 @@ export function buildGroupLabel(
   return `group:${chatId}${topicSuffix}`;
 }
 
-export function buildGroupFromLabel(
-  msg: TelegramMessage,
-  chatId: number | string,
-  senderId?: number | string,
-  messageThreadId?: number,
-) {
-  const groupLabel = buildGroupLabel(msg, chatId, messageThreadId);
-  const senderLabel = buildSenderLabel(msg, senderId);
-  return `${groupLabel} from ${senderLabel}`;
-}
-
 export function hasBotMention(msg: TelegramMessage, botUsername: string) {
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
   if (text.includes(`@${botUsername}`)) return true;

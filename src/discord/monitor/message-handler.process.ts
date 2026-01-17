@@ -149,11 +149,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         }),
     });
   }
-  if (!isDirectMessage) {
-    const name = formatDiscordUserTag(author);
-    const id = author.id;
-    combinedBody = `${combinedBody}\n[from: ${name} user id:${id}]`;
-  }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   if (replyContext) {
     combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
