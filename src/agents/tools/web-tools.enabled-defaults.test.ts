@@ -122,6 +122,7 @@ describe("web_search perplexity baseUrl defaults", () => {
   });
 
   it("defaults to OpenRouter when OPENROUTER_API_KEY is set", async () => {
+    vi.stubEnv("PERPLEXITY_API_KEY", "");
     vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
     const mockFetch = vi.fn(() =>
       Promise.resolve({
