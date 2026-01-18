@@ -1,8 +1,8 @@
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { normalizeDiscordMessagingTarget } from "../../channels/plugins/normalize-target.js";
 import type { ChannelCapabilities, ChannelPlugin } from "../../channels/plugins/types.js";
 import { fetchChannelPermissionsDiscord } from "../../discord/send.js";
+import { parseDiscordTarget } from "../../discord/targets.js";
 import { danger } from "../../globals.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -88,24 +88,24 @@ function formatSupport(capabilities?: ChannelCapabilities) {
 
 function summarizeDiscordTarget(raw?: string): DiscordTargetSummary | undefined {
   if (!raw) return undefined;
-  const normalized = normalizeDiscordMessagingTarget(raw);
-  if (!normalized) return { raw };
-  if (normalized.startsWith("channel:")) {
+  const target = parseDiscordTarget(raw, { defaultKind: "channel" });
+  if (!target) return { raw };
+  if (target.kind === "channel") {
     return {
       raw,
-      normalized,
+      normalized: target.normalized,
       kind: "channel",
-      channelId: normalized.slice("channel:".length),
+      channelId: target.id,
     };
   }
-  if (normalized.startsWith("user:")) {
+  if (target.kind === "user") {
     return {
       raw,
-      normalized,
+      normalized: target.normalized,
       kind: "user",
     };
   }
-  return { raw, normalized };
+  return { raw, normalized: target.normalized };
 }
 
 function formatDiscordIntents(intents?: {
