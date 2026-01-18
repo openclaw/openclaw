@@ -6,16 +6,16 @@ import Testing
     private func makeTempDir() throws -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     private func makeExec(at path: URL) throws {
-        try FileManager.default.createDirectory(
+        try FileManager().createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        FileManager().createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
 
     @Test func fnmNodeBinsPreferNewestInstalledVersion() throws {
@@ -37,7 +37,7 @@ import Testing
         let home = try self.makeTempDir()
         let missingNodeBin = home
             .appendingPathComponent(".local/share/fnm/node-versions/v99.0.0/installation/bin")
-        try FileManager.default.createDirectory(at: missingNodeBin, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: missingNodeBin, withIntermediateDirectories: true)
 
         let bins = CommandResolver._testNodeManagerBinPaths(home: home)
         #expect(!bins.contains(missingNodeBin.path))

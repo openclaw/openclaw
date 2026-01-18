@@ -24,7 +24,7 @@ actor PortGuardian {
     private var records: [Record] = []
     private let logger = Logger(subsystem: "com.clawdbot", category: "portguard")
     private nonisolated static let appSupportDir: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("Clawdbot", isDirectory: true)
     }()
 
@@ -71,7 +71,7 @@ actor PortGuardian {
     }
 
     func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) async {
-        try? FileManager.default.createDirectory(at: Self.appSupportDir, withIntermediateDirectories: true)
+        try? FileManager().createDirectory(at: Self.appSupportDir, withIntermediateDirectories: true)
         self.records.removeAll { $0.pid == pid }
         self.records.append(
             Record(

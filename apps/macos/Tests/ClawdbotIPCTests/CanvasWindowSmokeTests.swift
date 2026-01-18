@@ -8,10 +8,10 @@ import Testing
 @MainActor
 struct CanvasWindowSmokeTests {
     @Test func panelControllerShowsAndHides() async throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-canvas-test-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: root) }
 
         let anchor = { NSRect(x: 200, y: 400, width: 40, height: 40) }
         let controller = try CanvasWindowController(
@@ -31,10 +31,10 @@ struct CanvasWindowSmokeTests {
     }
 
     @Test func windowControllerShowsAndCloses() async throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-canvas-test-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: root) }
 
         let controller = try CanvasWindowController(
             sessionKey: "main",

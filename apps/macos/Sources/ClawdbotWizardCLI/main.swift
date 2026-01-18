@@ -187,7 +187,7 @@ private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> 
 }
 
 private func loadGatewayConfig() -> GatewayConfig {
-    let url = FileManager.default.homeDirectoryForCurrentUser
+    let url = FileManager().homeDirectoryForCurrentUser
         .appendingPathComponent(".clawdbot")
         .appendingPathComponent("clawdbot.json")
     guard let data = try? Data(contentsOf: url) else { return GatewayConfig() }

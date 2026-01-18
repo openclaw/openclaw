@@ -44,7 +44,7 @@ enum SoundEffectCatalog {
     ]
 
     private static let searchRoots: [URL] = [
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Sounds"),
+        FileManager().homeDirectoryForCurrentUser.appendingPathComponent("Library/Sounds"),
         URL(fileURLWithPath: "/Library/Sounds"),
         URL(fileURLWithPath: "/System/Applications/Mail.app/Contents/Resources"), // Mail “swoosh”
         URL(fileURLWithPath: "/System/Library/Sounds"),
@@ -53,7 +53,7 @@ enum SoundEffectCatalog {
     private static let discoveredSoundMap: [String: URL] = {
         var map: [String: URL] = [:]
         for root in Self.searchRoots {
-            guard let contents = try? FileManager.default.contentsOfDirectory(
+            guard let contents = try? FileManager().contentsOfDirectory(
                 at: root,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles])

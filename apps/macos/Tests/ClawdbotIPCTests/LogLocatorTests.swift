@@ -5,7 +5,7 @@ import Testing
 
 @Suite struct LogLocatorTests {
     @Test func launchdGatewayLogPathEnsuresTmpDirExists() throws {
-        let fm = FileManager.default
+        let fm = FileManager()
         let baseDir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let logDir = baseDir.appendingPathComponent("clawdbot-tests-\(UUID().uuidString)")
 

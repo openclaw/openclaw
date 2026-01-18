@@ -6,10 +6,10 @@ import Testing
     private func makeTempExecutable(contents: String) throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         let path = dir.appendingPathComponent("node")
         try contents.write(to: path, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
         return path
     }
 

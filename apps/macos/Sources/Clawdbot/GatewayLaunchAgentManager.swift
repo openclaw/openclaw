@@ -5,7 +5,7 @@ enum GatewayLaunchAgentManager {
     private static let disableLaunchAgentMarker = ".clawdbot/disable-launchagent"
 
     private static var plistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
     }
 
@@ -67,9 +67,9 @@ enum GatewayLaunchAgentManager {
 
 extension GatewayLaunchAgentManager {
     private static func isLaunchAgentWriteDisabled() -> Bool {
-        let marker = FileManager.default.homeDirectoryForCurrentUser
+        let marker = FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(self.disableLaunchAgentMarker)
-        return FileManager.default.fileExists(atPath: marker.path)
+        return FileManager().fileExists(atPath: marker.path)
     }
 
     private static func readDaemonLoaded() async -> Bool? {

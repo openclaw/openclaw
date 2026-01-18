@@ -37,7 +37,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func startMonitoring() {
-        assert(Thread.isMainThread)
+        // assert(Thread.isMainThread) - Removed for Swift 6
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
         // Listen-only global monitor; we rely on Input Monitoring permission to receive events.
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -55,7 +55,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func stopMonitoring() {
-        assert(Thread.isMainThread)
+        // assert(Thread.isMainThread) - Removed for Swift 6
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
             self.globalMonitor = nil
@@ -75,15 +75,11 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func withMainThread(_ block: @escaping @Sendable () -> Void) {
-        if Thread.isMainThread {
-            block()
-        } else {
-            DispatchQueue.main.async(execute: block)
-        }
+        DispatchQueue.main.async(execute: block)
     }
 
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        assert(Thread.isMainThread)
+        // assert(Thread.isMainThread)  - Removed for Swift 6
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)
