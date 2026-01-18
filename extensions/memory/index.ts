@@ -10,31 +10,26 @@ import { Type } from "@sinclair/typebox";
 import * as lancedb from "@lancedb/lancedb";
 import OpenAI from "openai";
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
+import { stringEnum } from "clawdbot/plugin-sdk";
+
+import {
+  MEMORY_CATEGORIES,
+  type MemoryCategory,
+  memoryConfigSchema,
+  vectorDimsForModel,
+} from "./config.js";
 
 // ============================================================================
 // Types
 // ============================================================================
-
-type MemoryConfig = {
-  embedding: {
-    provider: "openai";
-    model?: string;
-    apiKey: string;
-  };
-  dbPath?: string;
-  autoCapture?: boolean;
-  autoRecall?: boolean;
-};
 
 type MemoryEntry = {
   id: string;
   text: string;
   vector: number[];
   importance: number;
-  category: "preference" | "fact" | "decision" | "entity" | "other";
+  category: MemoryCategory;
   createdAt: number;
 };
 
@@ -44,90 +39,20 @@ type MemorySearchResult = {
 };
 
 // ============================================================================
-// Config Schema
-// ============================================================================
-
-const memoryConfigSchema = {
-  parse(value: unknown): MemoryConfig {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("memory config required");
-    }
-    const cfg = value as Record<string, unknown>;
-
-    // Embedding config is required
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding.apiKey !== "string") {
-      throw new Error("embedding.apiKey is required");
-    }
-
-    return {
-      embedding: {
-        provider: "openai",
-        model:
-          typeof embedding.model === "string"
-            ? embedding.model
-            : "text-embedding-3-small",
-        apiKey: resolveEnvVars(embedding.apiKey),
-      },
-      dbPath:
-        typeof cfg.dbPath === "string"
-          ? cfg.dbPath
-          : join(homedir(), ".clawdbot", "memory", "lancedb"),
-      autoCapture: cfg.autoCapture !== false,
-      autoRecall: cfg.autoRecall !== false,
-    };
-  },
-  uiHints: {
-    "embedding.apiKey": {
-      label: "OpenAI API Key",
-      sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
-    },
-    "embedding.model": {
-      label: "Embedding Model",
-      placeholder: "text-embedding-3-small",
-      help: "OpenAI embedding model to use",
-    },
-    dbPath: {
-      label: "Database Path",
-      placeholder: "~/.clawdbot/memory/lancedb",
-      advanced: true,
-    },
-    autoCapture: {
-      label: "Auto-Capture",
-      help: "Automatically capture important information from conversations",
-    },
-    autoRecall: {
-      label: "Auto-Recall",
-      help: "Automatically inject relevant memories into context",
-    },
-  },
-};
-
-function resolveEnvVars(value: string): string {
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
-    if (!envValue) {
-      throw new Error(`Environment variable ${envVar} is not set`);
-    }
-    return envValue;
-  });
-}
-
-// ============================================================================
 // LanceDB Provider
 // ============================================================================
 
 const TABLE_NAME = "memories";
-const VECTOR_DIM = 1536; // OpenAI text-embedding-3-small
 
 class MemoryDB {
   private db: lancedb.Connection | null = null;
   private table: lancedb.Table | null = null;
   private initPromise: Promise<void> | null = null;
 
-  constructor(private readonly dbPath: string) {}
+  constructor(
+    private readonly dbPath: string,
+    private readonly vectorDim: number,
+  ) {}
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) return;
@@ -148,7 +73,7 @@ class MemoryDB {
         {
           id: "__schema__",
           text: "",
-          vector: new Array(VECTOR_DIM).fill(0),
+          vector: new Array(this.vectorDim).fill(0),
           importance: 0,
           category: "other",
           createdAt: 0,
@@ -274,9 +199,7 @@ function shouldCapture(text: string): boolean {
   return MEMORY_TRIGGERS.some((r) => r.test(text));
 }
 
-function detectCategory(
-  text: string,
-): "preference" | "fact" | "decision" | "entity" | "other" {
+function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
   if (/prefer|radši|like|love|hate|want/i.test(lower)) return "preference";
   if (/rozhodli|decided|will use|budeme/i.test(lower)) return "decision";
@@ -299,10 +222,12 @@ const memoryPlugin = {
 
   register(api: ClawdbotPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
-    const db = new MemoryDB(cfg.dbPath!);
+    const resolvedDbPath = api.resolvePath(cfg.dbPath!);
+    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const db = new MemoryDB(resolvedDbPath, vectorDim);
     const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
 
-    api.logger.info(`memory: plugin registered (db: ${cfg.dbPath}, lazy init)`);
+    api.logger.info(`memory: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
     // ========================================================================
     // Tools
@@ -369,15 +294,7 @@ const memoryPlugin = {
           importance: Type.Optional(
             Type.Number({ description: "Importance 0-1 (default: 0.7)" }),
           ),
-          category: Type.Optional(
-            Type.Union([
-              Type.Literal("preference"),
-              Type.Literal("fact"),
-              Type.Literal("decision"),
-              Type.Literal("entity"),
-              Type.Literal("other"),
-            ]),
-          ),
+          category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         }),
         async execute(_toolCallId, params) {
           const {
@@ -658,7 +575,7 @@ const memoryPlugin = {
       id: "memory",
       start: () => {
         api.logger.info(
-          `memory: initialized (db: ${cfg.dbPath}, model: ${cfg.embedding.model})`,
+          `memory: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
         );
       },
       stop: () => {
