@@ -1,5 +1,5 @@
 /**
- * Clawdbot Memory Plugin
+ * Clawdbot Memory (LanceDB) Plugin
  *
  * Long-term memory with vector search for AI conversations.
  * Uses LanceDB for storage and OpenAI for embeddings.
@@ -214,9 +214,9 @@ function detectCategory(text: string): MemoryCategory {
 // ============================================================================
 
 const memoryPlugin = {
-  id: "memory",
-  name: "Memory (Vector)",
-  description: "Long-term memory with vector search and seamless auto-recall/capture",
+  id: "memory-lancedb",
+  name: "Memory (LanceDB)",
+  description: "LanceDB-backed long-term memory with auto-recall/capture",
   kind: "memory" as const,
   configSchema: memoryConfigSchema,
 
@@ -227,7 +227,9 @@ const memoryPlugin = {
     const db = new MemoryDB(resolvedDbPath, vectorDim);
     const embeddings = new Embeddings(cfg.embedding.apiKey, cfg.embedding.model!);
 
-    api.logger.info(`memory: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    api.logger.info(
+      `memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`,
+    );
 
     // ========================================================================
     // Tools
@@ -417,7 +419,7 @@ const memoryPlugin = {
       ({ program }) => {
         const memory = program
           .command("ltm")
-          .description("Long-term memory plugin commands");
+          .description("LanceDB memory plugin commands");
 
         memory
           .command("list")
@@ -477,14 +479,14 @@ const memoryPlugin = {
             .join("\n");
 
           api.logger.info?.(
-            `memory: injecting ${results.length} memories into context`,
+            `memory-lancedb: injecting ${results.length} memories into context`,
           );
 
           return {
             prependContext: `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
           };
         } catch (err) {
-          api.logger.warn(`memory: recall failed: ${String(err)}`);
+          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
         }
       });
     }
@@ -559,10 +561,10 @@ const memoryPlugin = {
           }
 
           if (stored > 0) {
-            api.logger.info(`memory: auto-captured ${stored} memories`);
+            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
           }
         } catch (err) {
-          api.logger.warn(`memory: capture failed: ${String(err)}`);
+          api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
       });
     }
@@ -572,14 +574,14 @@ const memoryPlugin = {
     // ========================================================================
 
     api.registerService({
-      id: "memory",
+      id: "memory-lancedb",
       start: () => {
         api.logger.info(
-          `memory: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
+          `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
         );
       },
       stop: () => {
-        api.logger.info("memory: stopped");
+        api.logger.info("memory-lancedb: stopped");
       },
     });
   },
