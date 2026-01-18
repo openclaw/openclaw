@@ -1,6 +1,5 @@
-import type { ChannelAccountSnapshot } from "../../../src/channels/plugins/types.js";
-import type { ChannelDock, ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import { buildChannelConfigSchema } from "../../../src/channels/plugins/config-schema.js";
+import type { ChannelAccountSnapshot, ChannelDock, ChannelPlugin } from "clawdbot/plugin-sdk";
+import { buildChannelConfigSchema } from "clawdbot/plugin-sdk";
 
 import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount, type ResolvedZaloAccount } from "./accounts.js";
 import { zaloMessageActions } from "./actions.js";

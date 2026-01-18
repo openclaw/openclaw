@@ -1,6 +1,9 @@
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
-import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+  WizardPrompter,
+} from "clawdbot/plugin-sdk";
+import { promptChannelAccessConfig } from "clawdbot/plugin-sdk";
 
 import {
   listZalouserAccountIds,

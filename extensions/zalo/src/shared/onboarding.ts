@@ -1,4 +1,4 @@
-import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import type { WizardPrompter } from "clawdbot/plugin-sdk";
 
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-ids.js";
 

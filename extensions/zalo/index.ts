@@ -1,4 +1,4 @@
-import type { ClawdbotPluginApi } from "../../src/plugins/types.js";
+import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
 
 import { zaloDock, zaloPlugin } from "./src/channel.js";
 import { handleZaloWebhookRequest } from "./src/monitor.js";

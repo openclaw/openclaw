@@ -25,6 +25,15 @@ export type PluginRuntime = {
         };
       }) => Promise<void>;
       createReplyDispatcherWithTyping: (...args: unknown[]) => unknown;
+      resolveEffectiveMessagesConfig: (
+        cfg: ClawdbotConfig,
+        agentId: string,
+        opts?: { hasAllowFrom?: boolean; fallbackMessagePrefix?: string },
+      ) => { messagePrefix: string; responsePrefix?: string };
+      resolveHumanDelayConfig: (
+        cfg: ClawdbotConfig,
+        agentId: string,
+      ) => { mode?: string; minMs?: number; maxMs?: number } | undefined;
     };
     routing: {
       resolveAgentRoute: (params: {

@@ -2,12 +2,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
+  finalizeInboundContext,
   isControlCommandMessage,
+  recordSessionMetaFromInbound,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveStorePath,
   shouldComputeCommandAuthorized,
-} from "../../../src/auto-reply/command-detection.js";
-import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../../src/config/sessions.js";
+} from "clawdbot/plugin-sdk";
 import {
   ZaloApiError,
   deleteWebhook,

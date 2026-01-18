@@ -1,29 +1,27 @@
-import { hasControlCommand } from "../../../../src/auto-reply/command-detection.js";
-import { formatAgentEnvelope } from "../../../../src/auto-reply/envelope.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../../../src/auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../../../src/auto-reply/reply/dispatch-from-config.js";
-import { finalizeInboundContext } from "../../../../src/auto-reply/reply/inbound-context.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
+  createInboundDebouncer,
+  danger,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntry,
-  type HistoryEntry,
-} from "../../../../src/auto-reply/reply/history.js";
-import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
-import { formatAllowlistMatchMeta } from "../../../../src/channels/plugins/allowlist-match.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../../../src/config/sessions.js";
-import {
   readChannelAllowFromStore,
+  recordSessionMetaFromInbound,
+  recordPendingHistoryEntry,
+  resolveAgentRoute,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveInboundDebounceMs,
+  resolveMentionGating,
+  resolveStorePath,
+  dispatchReplyFromConfig,
+  finalizeInboundContext,
+  formatAgentEnvelope,
+  formatAllowlistMatchMeta,
+  hasControlCommand,
+  logVerbose,
+  shouldLogVerbose,
   upsertChannelPairingRequest,
-} from "../../../../src/pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+  type HistoryEntry,
+} from "clawdbot/plugin-sdk";
 
 import {
   buildMSTeamsAttachmentPlaceholder,

@@ -6,6 +6,7 @@ import { createInboundDebouncer, resolveInboundDebounceMs } from "../../auto-rep
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveChannelGroupPolicy, resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -46,6 +47,8 @@ export function createPluginRuntime(): PluginRuntime {
       reply: {
         dispatchReplyWithBufferedBlockDispatcher,
         createReplyDispatcherWithTyping,
+        resolveEffectiveMessagesConfig,
+        resolveHumanDelayConfig,
       },
       routing: {
         resolveAgentRoute,
