@@ -100,13 +100,19 @@ async function listGuildChannels(
   )) as RESTGetAPIGuildChannelsResult;
   return raw
     .filter((channel) => Boolean(channel.id) && "name" in channel)
-    .map((channel) => ({
-      id: channel.id,
-      name: "name" in channel ? channel.name ?? "" : "",
-      guildId,
-      type: channel.type,
-      archived: "thread_metadata" in channel ? channel.thread_metadata?.archived : undefined,
-    }))
+    .map((channel) => {
+      const archived =
+        "thread_metadata" in channel
+          ? (channel as { thread_metadata?: { archived?: boolean } }).thread_metadata?.archived
+          : undefined;
+      return {
+        id: channel.id,
+        name: "name" in channel ? channel.name ?? "" : "",
+        guildId,
+        type: channel.type,
+        archived,
+      };
+    })
     .filter((channel) => Boolean(channel.name));
 }
 
@@ -231,19 +237,20 @@ export async function resolveDiscordChannelAllowlist(params: {
           : parsed.guild
             ? resolveGuildByName(guilds, parsed.guild)
             : undefined;
-      if (!guild || !parsed.channel) {
+      const channelQuery = parsed.channel?.trim();
+      if (!guild || !channelQuery) {
         results.push({
           input,
           resolved: false,
           guildId: parsed.guildId,
           guildName: parsed.guild,
-          channelName: parsed.channel,
+          channelName: channelQuery ?? parsed.channel,
         });
         continue;
       }
       const channels = await getChannels(guild.id);
       const matches = channels.filter(
-        (channel) => normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(parsed.channel),
+        (channel) => normalizeDiscordSlug(channel.name) === normalizeDiscordSlug(channelQuery),
       );
       const match = preferActiveMatch(matches);
       if (match) {

@@ -156,7 +156,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             token,
             entries: entries.map((entry) => entry.input),
           });
-          const nextGuilds = { ...(guildEntries ?? {}) };
+          const nextGuilds = { ...guildEntries };
           const mapping: string[] = [];
           const unresolved: string[] = [];
           for (const entry of resolved) {
@@ -173,10 +173,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
                 : `${entry.input}→${entry.guildId}`,
             );
             const existing = nextGuilds[entry.guildId] ?? {};
-            const mergedChannels = {
-              ...(sourceGuild.channels ?? {}),
-              ...(existing.channels ?? {}),
-            };
+            const mergedChannels = { ...sourceGuild.channels, ...existing.channels };
             const mergedGuild = { ...sourceGuild, ...existing, channels: mergedChannels };
             nextGuilds[entry.guildId] = mergedGuild;
             if (source.channelKey && entry.channelId) {
@@ -188,7 +185,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
                     ...mergedChannels,
                     [entry.channelId]: {
                       ...sourceChannel,
-                      ...(mergedChannels?.[entry.channelId] ?? {}),
+                      ...mergedChannels?.[entry.channelId],
                     },
                   },
                 };
@@ -266,7 +263,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             .filter((entry) => !entry.resolved)
             .map((entry) => entry.input);
 
-          const nextGuilds = { ...(guildEntries ?? {}) };
+          const nextGuilds = { ...guildEntries };
           for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
             if (!guildConfig || typeof guildConfig !== "object") continue;
             const nextGuild = { ...guildConfig } as Record<string, unknown>;

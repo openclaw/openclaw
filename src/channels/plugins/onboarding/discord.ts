@@ -1,12 +1,16 @@
 import type { ClawdbotConfig } from "../../../config/config.js";
 import type { DmPolicy } from "../../../config/types.js";
+import type { DiscordGuildEntry } from "../../../config/types.discord.js";
 import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
 } from "../../../discord/accounts.js";
 import { normalizeDiscordSlug } from "../../../discord/monitor/allow-list.js";
-import { resolveDiscordChannelAllowlist } from "../../../discord/resolve-channels.js";
+import {
+  resolveDiscordChannelAllowlist,
+  type DiscordChannelResolution,
+} from "../../../discord/resolve-channels.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
@@ -99,14 +103,12 @@ function setDiscordGuildChannelAllowlist(
     accountId === DEFAULT_ACCOUNT_ID
       ? (cfg.channels?.discord?.guilds ?? {})
       : (cfg.channels?.discord?.accounts?.[accountId]?.guilds ?? {});
-  const guilds: Record<string, { channels?: Record<string, { allow: boolean }> }> = {
-    ...baseGuilds,
-  };
+  const guilds: Record<string, DiscordGuildEntry> = { ...baseGuilds };
   for (const entry of entries) {
     const guildKey = entry.guildKey || "*";
     const existing = guilds[guildKey] ?? {};
     if (entry.channelKey) {
-      const channels = { ...(existing.channels ?? {}) };
+      const channels = { ...existing.channels };
       channels[entry.channelKey] = { allow: true };
       guilds[guildKey] = { ...existing, channels };
     } else {
@@ -298,7 +300,10 @@ export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
           cfg: next,
           accountId: discordAccountId,
         });
-        let resolved = accessConfig.entries.map((input) => ({ input, resolved: false }));
+        let resolved: DiscordChannelResolution[] = accessConfig.entries.map((input) => ({
+          input,
+          resolved: false,
+        }));
         if (accountWithTokens.token && accessConfig.entries.length > 0) {
           try {
             resolved = await resolveDiscordChannelAllowlist({

@@ -127,10 +127,11 @@ export async function resolveDiscordUserAllowlist(params: {
       continue;
     }
 
+    const guildName = parsed.guildName?.trim();
     const guildList = parsed.guildId
       ? guilds.filter((g) => g.id === parsed.guildId)
-      : parsed.guildName
-        ? guilds.filter((g) => g.slug === normalizeDiscordSlug(parsed.guildName))
+      : guildName
+        ? guilds.filter((g) => g.slug === normalizeDiscordSlug(guildName))
         : guilds;
 
     let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;
