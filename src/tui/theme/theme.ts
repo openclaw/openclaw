@@ -5,6 +5,7 @@ import type {
   SettingsListTheme,
 } from "@mariozechner/pi-tui";
 import chalk from "chalk";
+import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 
 const palette = {
   text: "#E8E3D5",
@@ -91,4 +92,15 @@ export const settingsListTheme: SettingsListTheme = {
 export const editorTheme: EditorTheme = {
   borderColor: (text) => fg(palette.border)(text),
   selectList: selectListTheme,
+};
+
+export const searchableSelectListTheme: SearchableSelectListTheme = {
+  selectedPrefix: (text) => fg(palette.accent)(text),
+  selectedText: (text) => chalk.bold(fg(palette.accent)(text)),
+  description: (text) => fg(palette.dim)(text),
+  scrollInfo: (text) => fg(palette.dim)(text),
+  noMatch: (text) => fg(palette.dim)(text),
+  searchPrompt: (text) => fg(palette.accentSoft)(text),
+  searchInput: (text) => fg(palette.text)(text),
+  matchHighlight: (text) => chalk.bold(fg(palette.accent)(text)),
 };

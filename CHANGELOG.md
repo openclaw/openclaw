@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
 - Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels.
+- TUI: add searchable model picker for quicker model selection. (#1198) — thanks @vignesh07.
 - Docs: clarify allowlist input types and onboarding behavior for messaging channels.
 
 ### Fixes
