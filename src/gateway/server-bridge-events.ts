@@ -192,7 +192,9 @@ export const handleBridgeEvent = async (
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
       const exitCode =
-        typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode) ? obj.exitCode : undefined;
+        typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
+          ? obj.exitCode
+          : undefined;
       const timedOut = obj.timedOut === true;
       const success = obj.success === true;
       const output = typeof obj.output === "string" ? obj.output.trim() : "";
