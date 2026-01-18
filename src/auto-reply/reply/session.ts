@@ -6,11 +6,14 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
+  evaluateSessionFreshness,
+  isThreadSessionKey,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
@@ -105,7 +108,6 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
-  const idleMinutes = Math.max(sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES, 1);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
@@ -170,8 +172,18 @@ export async function initSessionState(params: {
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
-  const idleMs = idleMinutes * 60_000;
-  const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
+  const now = Date.now();
+  const isThread =
+    ctx.MessageThreadId != null ||
+    Boolean(ctx.ThreadLabel?.trim()) ||
+    Boolean(ctx.ThreadStarterBody?.trim()) ||
+    Boolean(ctx.ParentSessionKey?.trim()) ||
+    isThreadSessionKey(sessionKey);
+  const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
+  const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
+  const freshEntry = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+    : false;
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
