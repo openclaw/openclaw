@@ -36,6 +36,14 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
+export type ExecApprovalsSnapshot = {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  file: ExecApprovalsFile;
+  hash: string;
+};
+
 export type ExecApprovalsResolved = {
   path: string;
   socketPath: string;
@@ -52,6 +60,13 @@ const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.clawdbot/exec-approvals.sock";
 const DEFAULT_FILE = "~/.clawdbot/exec-approvals.json";
+
+function hashExecApprovalsRaw(raw: string | null): string {
+  return crypto
+    .createHash("sha256")
+    .update(raw ?? "")
+    .digest("hex");
+}
 
 function expandHome(value: string): string {
   if (!value) return value;
@@ -73,7 +88,7 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
   const token = file.socket?.token?.trim();
   const normalized: ExecApprovalsFile = {
@@ -95,6 +110,38 @@ function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
 
 function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");
+}
+
+export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
+  const filePath = resolveExecApprovalsPath();
+  if (!fs.existsSync(filePath)) {
+    const file = normalizeExecApprovals({ version: 1, agents: {} });
+    return {
+      path: filePath,
+      exists: false,
+      raw: null,
+      file,
+      hash: hashExecApprovalsRaw(null),
+    };
+  }
+  const raw = fs.readFileSync(filePath, "utf8");
+  let parsed: ExecApprovalsFile | null = null;
+  try {
+    parsed = JSON.parse(raw) as ExecApprovalsFile;
+  } catch {
+    parsed = null;
+  }
+  const file =
+    parsed?.version === 1
+      ? normalizeExecApprovals(parsed)
+      : normalizeExecApprovals({ version: 1, agents: {} });
+  return {
+    path: filePath,
+    exists: true,
+    raw,
+    file,
+    hash: hashExecApprovalsRaw(raw),
+  };
 }
 
 export function loadExecApprovals(): ExecApprovalsFile {

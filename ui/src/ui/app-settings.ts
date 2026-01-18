@@ -4,6 +4,7 @@ import { loadChannels } from "./controllers/channels";
 import { loadDebug } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
 import { loadNodes } from "./controllers/nodes";
+import { loadExecApprovals } from "./controllers/exec-approvals";
 import { loadPresence } from "./controllers/presence";
 import { loadSessions } from "./controllers/sessions";
 import { loadSkills } from "./controllers/skills";
@@ -133,6 +134,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as ClawdbotApp);
     await loadConfig(host as unknown as ClawdbotApp);
+    await loadExecApprovals(host as unknown as ClawdbotApp);
   }
   if (host.tab === "chat") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);

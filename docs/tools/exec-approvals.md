@@ -100,6 +100,16 @@ When **Auto-allow skill CLIs** is enabled, executables referenced by known skill
 are treated as allowlisted on nodes (macOS node or headless node host). This uses the Bridge RPC to ask the
 gateway for the skill bin list. Disable this if you want strict manual allowlists.
 
+## Control UI editing
+
+Use the **Control UI → Nodes → Exec approvals** card to edit defaults, per‑agent
+overrides, and allowlists. Pick a scope (Defaults or an agent), tweak the policy,
+add/remove allowlist patterns, then **Save**. The UI shows **last used** metadata
+per pattern so you can keep the list tidy.
+
+Note: the Control UI edits the approvals file on the **Gateway host**. For a
+headless node host, edit its local `~/.clawdbot/exec-approvals.json` directly.
+
 ## Approval flow
 
 When a prompt is required, the companion app displays a confirmation dialog with:

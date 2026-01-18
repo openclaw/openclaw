@@ -36,6 +36,7 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
+- Exec approvals: edit allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
 - Config: view/edit `~/.clawdbot/clawdbot.json` (`config.get`, `config.set`)
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits

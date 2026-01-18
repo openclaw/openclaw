@@ -61,6 +61,12 @@ import {
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config";
+import {
+  loadExecApprovals,
+  removeExecApprovalsFormValue,
+  saveExecApprovals,
+  updateExecApprovalsFormValue,
+} from "./controllers/exec-approvals";
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
@@ -298,8 +304,15 @@ export function renderApp(state: AppViewState) {
               configSaving: state.configSaving,
               configDirty: state.configFormDirty,
               configFormMode: state.configFormMode,
+              execApprovalsLoading: state.execApprovalsLoading,
+              execApprovalsSaving: state.execApprovalsSaving,
+              execApprovalsDirty: state.execApprovalsDirty,
+              execApprovalsSnapshot: state.execApprovalsSnapshot,
+              execApprovalsForm: state.execApprovalsForm,
+              execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
               onRefresh: () => loadNodes(state),
               onLoadConfig: () => loadConfig(state),
+              onLoadExecApprovals: () => loadExecApprovals(state),
               onBindDefault: (nodeId) => {
                 if (nodeId) {
                   updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
@@ -316,6 +329,14 @@ export function renderApp(state: AppViewState) {
                 }
               },
               onSaveBindings: () => saveConfig(state),
+              onExecApprovalsSelectAgent: (agentId) => {
+                state.execApprovalsSelectedAgent = agentId;
+              },
+              onExecApprovalsPatch: (path, value) =>
+                updateExecApprovalsFormValue(state, path, value),
+              onExecApprovalsRemove: (path) =>
+                removeExecApprovalsFormValue(state, path),
+              onSaveExecApprovals: () => saveExecApprovals(state),
             })
           : nothing}
 

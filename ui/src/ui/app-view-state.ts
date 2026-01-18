@@ -20,6 +20,10 @@ import type {
 import type { ChatQueueItem, CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import type { SkillMessage } from "./controllers/skills";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "./controllers/exec-approvals";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -44,6 +48,12 @@ export type AppViewState = {
   chatQueue: ChatQueueItem[];
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
+  execApprovalsLoading: boolean;
+  execApprovalsSaving: boolean;
+  execApprovalsDirty: boolean;
+  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
+  execApprovalsForm: ExecApprovalsFile | null;
+  execApprovalsSelectedAgent: string | null;
   configLoading: boolean;
   configRaw: string;
   configValid: boolean | null;
@@ -160,4 +170,3 @@ export type AppViewState = {
   handleLogsAutoFollowToggle: (next: boolean) => void;
   handleCallDebugMethod: (method: string, params: string) => Promise<void>;
 };
-
