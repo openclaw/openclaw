@@ -1,4 +1,5 @@
 node_modules
+**/node_modules/
 .env
 docker-compose.extra.yml
 dist

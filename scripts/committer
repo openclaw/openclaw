@@ -49,6 +49,16 @@ for file in "${files[@]}"; do
   fi
 done
 
+# Prevent staging node_modules even if a path is forced.
+for file in "${files[@]}"; do
+  case "$file" in
+    *node_modules* | */node_modules | */node_modules/* | node_modules)
+      printf 'Error: node_modules paths are not allowed: %s\n' "$file" >&2
+      exit 1
+      ;;
+  esac
+done
+
 last_commit_error=''
 
 run_git_commit() {
