@@ -10,6 +10,8 @@ Docs: https://docs.clawd.bot
 - Swabble: use the tagged Commander Swift package release.
 - CLI: add `clawdbot acp client` interactive ACP harness for debugging.
 - Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
+- Plugins: auto-enable bundled channel/provider plugins when configuration is present.
+- Config: stamp last-touched metadata on write and warn if the config is newer than the running build.
 - Memory: add native Gemini embeddings provider for memory search. (#1151)
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
 - Slack: add HTTP webhook mode via Bolt HTTP receiver for Events API deployments. (#1143) — thanks @jdrhyne.
