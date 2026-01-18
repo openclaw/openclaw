@@ -13,6 +13,7 @@ import {
   resolvePluginInstallDir,
 } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
+import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
@@ -76,6 +77,31 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function applySlotSelectionForPlugin(
+  config: ClawdbotConfig,
+  pluginId: string,
+): { config: ClawdbotConfig; warnings: string[] } {
+  const report = buildPluginStatusReport({ config });
+  const plugin = report.plugins.find((entry) => entry.id === pluginId);
+  if (!plugin) {
+    return { config, warnings: [] };
+  }
+  const result = applyExclusiveSlotSelection({
+    config,
+    selectedId: plugin.id,
+    selectedKind: plugin.kind,
+    registry: report,
+  });
+  return { config: result.config, warnings: result.warnings };
+}
+
+function logSlotWarnings(warnings: string[]) {
+  if (warnings.length === 0) return;
+  for (const warning of warnings) {
+    defaultRuntime.log(chalk.yellow(warning));
   }
 }
 
@@ -197,7 +223,7 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const cfg = loadConfig();
-      const next = {
+      let next: ClawdbotConfig = {
         ...cfg,
         plugins: {
           ...cfg.plugins,
@@ -210,7 +236,10 @@ export function registerPluginsCli(program: Command) {
           },
         },
       };
+      const slotResult = applySlotSelectionForPlugin(next, id);
+      next = slotResult.config;
       await writeConfigFile(next);
+      logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
     });
 
@@ -280,7 +309,10 @@ export function registerPluginsCli(program: Command) {
             installPath: resolved,
             version: probe.version,
           });
+          const slotResult = applySlotSelectionForPlugin(next, probe.pluginId);
+          next = slotResult.config;
           await writeConfigFile(next);
+          logSlotWarnings(slotResult.warnings);
           defaultRuntime.log(`Linked plugin path: ${resolved}`);
           defaultRuntime.log(`Restart the gateway to load plugins.`);
           return;
@@ -319,7 +351,10 @@ export function registerPluginsCli(program: Command) {
           installPath: result.targetDir,
           version: result.version,
         });
+        const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+        next = slotResult.config;
         await writeConfigFile(next);
+        logSlotWarnings(slotResult.warnings);
         defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
         defaultRuntime.log(`Restart the gateway to load plugins.`);
         return;
@@ -379,7 +414,10 @@ export function registerPluginsCli(program: Command) {
         installPath: result.targetDir,
         version: result.version,
       });
+      const slotResult = applySlotSelectionForPlugin(next, result.pluginId);
+      next = slotResult.config;
       await writeConfigFile(next);
+      logSlotWarnings(slotResult.warnings);
       defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
     });
