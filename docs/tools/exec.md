@@ -41,6 +41,13 @@ Notes:
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
 
+Per-agent node binding (use the agent list index in config):
+
+```bash
+clawdbot config get agents.list
+clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+```
+
 ## Session overrides (`/exec`)
 
 Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
