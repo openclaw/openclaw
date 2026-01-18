@@ -207,6 +207,17 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.zalo.allowFrom",
   getCurrent: (cfg) => (cfg.channels?.zalo?.dmPolicy ?? "pairing") as "pairing",
   setPolicy: (cfg, policy) => setZaloDmPolicy(cfg as ClawdbotConfig, policy),
+  promptAllowFrom: async ({ cfg, prompter, accountId }) => {
+    const id =
+      accountId && normalizeAccountId(accountId)
+        ? normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID
+        : resolveDefaultZaloAccountId(cfg as ClawdbotConfig);
+    return promptZaloAllowFrom({
+      cfg: cfg as ClawdbotConfig,
+      prompter,
+      accountId: id,
+    });
+  },
 };
 
 export const zaloOnboardingAdapter: ChannelOnboardingAdapter = {
