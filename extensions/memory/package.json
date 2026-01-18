@@ -4,11 +4,13 @@
   "type": "module",
   "description": "Clawdbot long-term memory plugin with vector search and seamless auto-recall/capture",
   "dependencies": {
-    "@sinclair/typebox": "0.34.47",
     "@lancedb/lancedb": "^0.15.0",
-    "openai": "^4.77.0"
+    "@sinclair/typebox": "0.34.47",
+    "openai": "^4.104.0"
   },
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

@@ -18,6 +18,11 @@ Docs: https://docs.clawd.bot
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
 - Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
 
+## 2026.1.18-5
+
+### Changes
+- Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
+
 ## 2026.1.18-3
 
 ### Changes
