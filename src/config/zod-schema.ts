@@ -8,6 +8,12 @@ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.sess
 
 export const ClawdbotSchema = z
   .object({
+    meta: z
+      .object({
+        lastTouchedVersion: z.string().optional(),
+        lastTouchedAt: z.string().optional(),
+      })
+      .optional(),
     env: z
       .object({
         shellEnv: z

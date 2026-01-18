@@ -19,15 +19,18 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { VERSION } from "../version.js";
 import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { ClawdbotConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 import { ClawdbotSchema } from "./zod-schema.js";
+import { compareClawdbotVersions } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -146,6 +149,30 @@ function formatLegacyMigrationLog(changes: string[]): string {
   return `Auto-migrated config:\n${changes.map((entry) => `- ${entry}`).join("\n")}`;
 }
 
+function stampConfigVersion(cfg: ClawdbotConfig): ClawdbotConfig {
+  const now = new Date().toISOString();
+  return {
+    ...cfg,
+    meta: {
+      ...cfg.meta,
+      lastTouchedVersion: VERSION,
+      lastTouchedAt: now,
+    },
+  };
+}
+
+function warnIfConfigFromFuture(cfg: ClawdbotConfig, logger: Pick<typeof console, "warn">): void {
+  const touched = cfg.meta?.lastTouchedVersion;
+  if (!touched) return;
+  const cmp = compareClawdbotVersions(VERSION, touched);
+  if (cmp === null) return;
+  if (cmp < 0) {
+    logger.warn(
+      `Config was last written by a newer Clawdbot (${touched}); current version is ${VERSION}.`,
+    );
+  }
+}
+
 function applyConfigEnv(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): void {
   const envConfig = cfg.env;
   if (!envConfig) return;
@@ -205,7 +232,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const writeConfigFileSync = (cfg: ClawdbotConfig) => {
     const dir = path.dirname(configPath);
     deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(cfg), null, 2).trimEnd().concat("\n");
+    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
+      .trimEnd()
+      .concat("\n");
 
     const tmp = path.join(
       dir,
@@ -277,7 +306,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const substituted = resolveConfigEnvVars(resolved, deps.env);
 
       const migrated = applyLegacyMigrations(substituted);
-      const resolvedConfig = migrated.next ?? substituted;
+      let resolvedConfig = migrated.next ?? substituted;
+      const autoEnable = applyPluginAutoEnable({
+        config: coerceConfig(resolvedConfig),
+        env: deps.env,
+      });
+      resolvedConfig = autoEnable.config;
+      const migrationChanges = [...migrated.changes, ...autoEnable.changes];
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) return {};
       const validated = ClawdbotSchema.safeParse(resolvedConfig);
@@ -288,8 +323,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
         return {};
       }
-      if (migrated.next && migrated.changes.length > 0) {
-        deps.logger.warn(formatLegacyMigrationLog(migrated.changes));
+      warnIfConfigFromFuture(validated.data as ClawdbotConfig, deps.logger);
+      if (migrationChanges.length > 0) {
+        deps.logger.warn(formatLegacyMigrationLog(migrationChanges));
         try {
           writeConfigFileSync(resolvedConfig as ClawdbotConfig);
         } catch (err) {
@@ -426,7 +462,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       const migrated = applyLegacyMigrations(substituted);
-      const resolvedConfigRaw = migrated.next ?? substituted;
+      let resolvedConfigRaw = migrated.next ?? substituted;
+      const autoEnable = applyPluginAutoEnable({
+        config: coerceConfig(resolvedConfigRaw),
+        env: deps.env,
+      });
+      resolvedConfigRaw = autoEnable.config;
+      const migrationChanges = [...migrated.changes, ...autoEnable.changes];
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
       const validated = validateConfigObject(resolvedConfigRaw);
@@ -444,8 +486,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      if (migrated.next && migrated.changes.length > 0) {
-        deps.logger.warn(formatLegacyMigrationLog(migrated.changes));
+      warnIfConfigFromFuture(validated.config, deps.logger);
+      if (migrationChanges.length > 0) {
+        deps.logger.warn(formatLegacyMigrationLog(migrationChanges));
         await writeConfigFile(validated.config).catch((err) => {
           deps.logger.warn(`Failed to write migrated config at ${configPath}: ${String(err)}`);
         });
@@ -486,7 +529,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function writeConfigFile(cfg: ClawdbotConfig) {
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(cfg), null, 2).trimEnd().concat("\n");
+    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
+      .trimEnd()
+      .concat("\n");
 
     const tmp = path.join(
       dir,

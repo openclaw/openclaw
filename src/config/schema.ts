@@ -97,6 +97,8 @@ const GROUP_ORDER: Record<string, number> = {
 };
 
 const FIELD_LABELS: Record<string, string> = {
+  "meta.lastTouchedVersion": "Config Last Touched Version",
+  "meta.lastTouchedAt": "Config Last Touched At",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",
   "gateway.remote.url": "Remote Gateway URL",
@@ -296,6 +298,8 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HELP: Record<string, string> = {
+  "meta.lastTouchedVersion": "Auto-set when Clawdbot writes the config.",
+  "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
   "update.channel": 'Update channel for npm installs ("stable" or "beta").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",

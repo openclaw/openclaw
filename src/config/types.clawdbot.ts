@@ -24,6 +24,12 @@ import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
 
 export type ClawdbotConfig = {
+  meta?: {
+    /** Last clawdbot version that wrote this config. */
+    lastTouchedVersion?: string;
+    /** ISO timestamp when this config was last written. */
+    lastTouchedAt?: string;
+  };
   auth?: AuthConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */

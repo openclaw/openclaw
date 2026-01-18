@@ -1,0 +1,328 @@
+import type { ClawdbotConfig } from "./config.js";
+import { hasAnyWhatsAppAuth } from "../web/accounts.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+
+type PluginEnableChange = {
+  pluginId: string;
+  reason: string;
+};
+
+export type PluginAutoEnableResult = {
+  config: ClawdbotConfig;
+  changes: string[];
+};
+
+const CHANNEL_PLUGIN_IDS = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "msteams",
+  "matrix",
+  "zalo",
+  "zalouser",
+  "bluebubbles",
+] as const;
+
+const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
+  { pluginId: "google-antigravity-auth", providerId: "google-antigravity" },
+  { pluginId: "google-gemini-cli-auth", providerId: "google-gemini-cli" },
+  { pluginId: "qwen-portal-auth", providerId: "qwen-portal" },
+  { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function recordHasKeys(value: unknown): boolean {
+  return isRecord(value) && Object.keys(value).length > 0;
+}
+
+function accountsHaveKeys(
+  value: unknown,
+  keys: string[],
+): boolean {
+  if (!isRecord(value)) return false;
+  for (const account of Object.values(value)) {
+    if (!isRecord(account)) continue;
+    for (const key of keys) {
+      if (hasNonEmptyString(account[key])) return true;
+    }
+  }
+  return false;
+}
+
+function resolveChannelConfig(cfg: ClawdbotConfig, channelId: string): Record<string, unknown> | null {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const entry = channels?.[channelId];
+  return isRecord(entry) ? entry : null;
+}
+
+function isTelegramConfigured(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasNonEmptyString(env.TELEGRAM_BOT_TOKEN)) return true;
+  const entry = resolveChannelConfig(cfg, "telegram");
+  if (!entry) return false;
+  if (hasNonEmptyString(entry.botToken) || hasNonEmptyString(entry.tokenFile)) return true;
+  if (accountsHaveKeys(entry.accounts, ["botToken", "tokenFile"])) return true;
+  return recordHasKeys(entry);
+}
+
+function isDiscordConfigured(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasNonEmptyString(env.DISCORD_BOT_TOKEN)) return true;
+  const entry = resolveChannelConfig(cfg, "discord");
+  if (!entry) return false;
+  if (hasNonEmptyString(entry.token)) return true;
+  if (accountsHaveKeys(entry.accounts, ["token"])) return true;
+  return recordHasKeys(entry);
+}
+
+function isSlackConfigured(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): boolean {
+  if (
+    hasNonEmptyString(env.SLACK_BOT_TOKEN) ||
+    hasNonEmptyString(env.SLACK_APP_TOKEN) ||
+    hasNonEmptyString(env.SLACK_USER_TOKEN)
+  ) {
+    return true;
+  }
+  const entry = resolveChannelConfig(cfg, "slack");
+  if (!entry) return false;
+  if (
+    hasNonEmptyString(entry.botToken) ||
+    hasNonEmptyString(entry.appToken) ||
+    hasNonEmptyString(entry.userToken)
+  ) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["botToken", "appToken", "userToken"])) return true;
+  return recordHasKeys(entry);
+}
+
+function isSignalConfigured(cfg: ClawdbotConfig): boolean {
+  const entry = resolveChannelConfig(cfg, "signal");
+  if (!entry) return false;
+  if (
+    hasNonEmptyString(entry.account) ||
+    hasNonEmptyString(entry.httpUrl) ||
+    hasNonEmptyString(entry.httpHost) ||
+    typeof entry.httpPort === "number" ||
+    hasNonEmptyString(entry.cliPath)
+  ) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["account", "httpUrl", "httpHost", "cliPath"])) return true;
+  return recordHasKeys(entry);
+}
+
+function isIMessageConfigured(cfg: ClawdbotConfig): boolean {
+  const entry = resolveChannelConfig(cfg, "imessage");
+  if (!entry) return false;
+  if (hasNonEmptyString(entry.cliPath)) return true;
+  return recordHasKeys(entry);
+}
+
+function isWhatsAppConfigured(cfg: ClawdbotConfig): boolean {
+  if (hasAnyWhatsAppAuth(cfg)) return true;
+  const entry = resolveChannelConfig(cfg, "whatsapp");
+  if (!entry) return false;
+  return recordHasKeys(entry);
+}
+
+function isGenericChannelConfigured(cfg: ClawdbotConfig, channelId: string): boolean {
+  const entry = resolveChannelConfig(cfg, channelId);
+  return recordHasKeys(entry);
+}
+
+export function isChannelConfigured(
+  cfg: ClawdbotConfig,
+  channelId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  switch (channelId) {
+    case "whatsapp":
+      return isWhatsAppConfigured(cfg);
+    case "telegram":
+      return isTelegramConfigured(cfg, env);
+    case "discord":
+      return isDiscordConfigured(cfg, env);
+    case "slack":
+      return isSlackConfigured(cfg, env);
+    case "signal":
+      return isSignalConfigured(cfg);
+    case "imessage":
+      return isIMessageConfigured(cfg);
+    default:
+      return isGenericChannelConfigured(cfg, channelId);
+  }
+}
+
+function collectModelRefs(cfg: ClawdbotConfig): string[] {
+  const refs: string[] = [];
+  const pushModelRef = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) refs.push(value.trim());
+  };
+  const collectFromAgent = (agent: Record<string, unknown> | null | undefined) => {
+    if (!agent) return;
+    const model = agent.model;
+    if (typeof model === "string") {
+      pushModelRef(model);
+    } else if (isRecord(model)) {
+      pushModelRef(model.primary);
+      const fallbacks = model.fallbacks;
+      if (Array.isArray(fallbacks)) {
+        for (const entry of fallbacks) pushModelRef(entry);
+      }
+    }
+    const models = agent.models;
+    if (isRecord(models)) {
+      for (const key of Object.keys(models)) {
+        pushModelRef(key);
+      }
+    }
+  };
+
+  const defaults = cfg.agents?.defaults as Record<string, unknown> | undefined;
+  collectFromAgent(defaults);
+
+  const list = cfg.agents?.list;
+  if (Array.isArray(list)) {
+    for (const entry of list) {
+      if (isRecord(entry)) collectFromAgent(entry);
+    }
+  }
+  return refs;
+}
+
+function extractProviderFromModelRef(value: string): string | null {
+  const trimmed = value.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) return null;
+  return normalizeProviderId(trimmed.slice(0, slash));
+}
+
+function isProviderConfigured(cfg: ClawdbotConfig, providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+
+  const profiles = cfg.auth?.profiles;
+  if (profiles && typeof profiles === "object") {
+    for (const profile of Object.values(profiles)) {
+      if (!isRecord(profile)) continue;
+      const provider = normalizeProviderId(String(profile.provider ?? ""));
+      if (provider === normalized) return true;
+    }
+  }
+
+  const providerConfig = cfg.models?.providers;
+  if (providerConfig && typeof providerConfig === "object") {
+    for (const key of Object.keys(providerConfig)) {
+      if (normalizeProviderId(key) === normalized) return true;
+    }
+  }
+
+  const modelRefs = collectModelRefs(cfg);
+  for (const ref of modelRefs) {
+    const provider = extractProviderFromModelRef(ref);
+    if (provider && provider === normalized) return true;
+  }
+
+  return false;
+}
+
+function resolveConfiguredPlugins(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): PluginEnableChange[] {
+  const changes: PluginEnableChange[] = [];
+  for (const channelId of CHANNEL_PLUGIN_IDS) {
+    if (isChannelConfigured(cfg, channelId, env)) {
+      changes.push({
+        pluginId: channelId,
+        reason: `${channelId} configured`,
+      });
+    }
+  }
+  for (const mapping of PROVIDER_PLUGIN_IDS) {
+    if (isProviderConfigured(cfg, mapping.providerId)) {
+      changes.push({
+        pluginId: mapping.pluginId,
+        reason: `${mapping.providerId} auth configured`,
+      });
+    }
+  }
+  return changes;
+}
+
+function isPluginExplicitlyDisabled(cfg: ClawdbotConfig, pluginId: string): boolean {
+  const entry = cfg.plugins?.entries?.[pluginId];
+  return entry?.enabled === false;
+}
+
+function isPluginDenied(cfg: ClawdbotConfig, pluginId: string): boolean {
+  const deny = cfg.plugins?.deny;
+  return Array.isArray(deny) && deny.includes(pluginId);
+}
+
+function ensureAllowlisted(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfig {
+  const allow = cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.includes(pluginId)) return cfg;
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      allow: [...allow, pluginId],
+    },
+  };
+}
+
+function enablePluginEntry(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfig {
+  const entries = {
+    ...cfg.plugins?.entries,
+    [pluginId]: {
+      ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
+      enabled: true,
+    },
+  };
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries,
+      ...(cfg.plugins?.enabled === false ? { enabled: true } : {}),
+    },
+  };
+}
+
+export function applyPluginAutoEnable(params: {
+  config: ClawdbotConfig;
+  env?: NodeJS.ProcessEnv;
+}): PluginAutoEnableResult {
+  const env = params.env ?? process.env;
+  const configured = resolveConfiguredPlugins(params.config, env);
+  if (configured.length === 0) {
+    return { config: params.config, changes: [] };
+  }
+
+  let next = params.config;
+  const changes: string[] = [];
+
+  if (next.plugins?.enabled === false) {
+    return { config: next, changes };
+  }
+
+  for (const entry of configured) {
+    if (isPluginDenied(next, entry.pluginId)) continue;
+    if (isPluginExplicitlyDisabled(next, entry.pluginId)) continue;
+    const allow = next.plugins?.allow;
+    const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
+    const alreadyEnabled = next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+    if (alreadyEnabled && !allowMissing) continue;
+    next = enablePluginEntry(next, entry.pluginId);
+    next = ensureAllowlisted(next, entry.pluginId);
+    changes.push(`Enabled plugin "${entry.pluginId}" (${entry.reason}).`);
+  }
+
+  return { config: next, changes };
+}
