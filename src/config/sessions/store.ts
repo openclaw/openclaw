@@ -406,7 +406,10 @@ export async function updateLastRoute(params: {
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
     };
-    const next = mergeSessionEntry(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch);
+    const next = mergeSessionEntry(
+      existing,
+      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
+    );
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
     return next;

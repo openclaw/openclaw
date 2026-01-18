@@ -107,9 +107,16 @@ export {
 } from "../channels/plugins/channel-config.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export { formatAllowlistMatchMeta } from "../channels/plugins/allowlist-match.js";
-export { readChannelAllowFromStore, upsertChannelPairingRequest } from "../pairing/pairing-store.js";
+export {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../pairing/pairing-store.js";
 export { resolveAgentRoute } from "../routing/resolve-route.js";
-export { recordSessionMetaFromInbound, resolveStorePath, updateLastRoute } from "../config/sessions.js";
+export {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../config/sessions.js";
 export { resolveStateDir } from "../config/paths.js";
 export { loadConfig } from "../config/config.js";
 export { danger } from "../globals.js";
@@ -130,7 +137,10 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
-export { applyAccountNameToChannelSection, migrateBaseNameToDefaultAccount } from "../channels/plugins/setup-helpers.js";
+export {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../channels/plugins/setup-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 

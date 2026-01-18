@@ -52,9 +52,7 @@ export function resolvePluginTools(params: {
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
-  const existingNormalized = new Set(
-    Array.from(existing, (tool) => normalizeToolName(tool)),
-  );
+  const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
 

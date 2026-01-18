@@ -2,20 +2,29 @@ import { createRequire } from "node:module";
 
 import { chunkMarkdownText, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
-import { createInboundDebouncer, resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
+import {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../../auto-reply/inbound-debounce.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { resolveChannelGroupPolicy, resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "../../config/group-policy.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger } from "../../logging.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import { readChannelAllowFromStore, upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
+import {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 
 import type { PluginRuntime } from "./types.js";

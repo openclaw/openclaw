@@ -262,20 +262,11 @@ export function createClawdbotCodingTools(options?: {
     toolMeta: (tool) => getPluginToolMeta(tool),
   });
   const profilePolicyExpanded = expandPolicyWithPluginGroups(profilePolicy, pluginGroups);
-  const providerProfileExpanded = expandPolicyWithPluginGroups(
-    providerProfilePolicy,
-    pluginGroups,
-  );
+  const providerProfileExpanded = expandPolicyWithPluginGroups(providerProfilePolicy, pluginGroups);
   const globalPolicyExpanded = expandPolicyWithPluginGroups(globalPolicy, pluginGroups);
-  const globalProviderExpanded = expandPolicyWithPluginGroups(
-    globalProviderPolicy,
-    pluginGroups,
-  );
+  const globalProviderExpanded = expandPolicyWithPluginGroups(globalProviderPolicy, pluginGroups);
   const agentPolicyExpanded = expandPolicyWithPluginGroups(agentPolicy, pluginGroups);
-  const agentProviderExpanded = expandPolicyWithPluginGroups(
-    agentProviderPolicy,
-    pluginGroups,
-  );
+  const agentProviderExpanded = expandPolicyWithPluginGroups(agentProviderPolicy, pluginGroups);
   const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
   const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
 

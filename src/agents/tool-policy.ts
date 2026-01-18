@@ -109,9 +109,7 @@ export function expandToolGroups(list?: string[]) {
   return Array.from(new Set(expanded));
 }
 
-export function collectExplicitAllowlist(
-  policies: Array<ToolPolicyLike | undefined>,
-): string[] {
+export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
     if (!policy?.allow) continue;
@@ -124,9 +122,9 @@ export function collectExplicitAllowlist(
   return entries;
 }
 
-export function buildPluginToolGroups(params: {
-  tools: Array<{ name: string }>;
-  toolMeta: (tool: { name: string }) => { pluginId: string } | undefined;
+export function buildPluginToolGroups<T extends { name: string }>(params: {
+  tools: T[];
+  toolMeta: (tool: T) => { pluginId: string } | undefined;
 }): PluginToolGroups {
   const all: string[] = [];
   const byPlugin = new Map<string, string[]>();
