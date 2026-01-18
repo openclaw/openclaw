@@ -266,7 +266,9 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+    );
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -291,7 +293,9 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
+    );
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("Memory manager close failed: close boom"),
