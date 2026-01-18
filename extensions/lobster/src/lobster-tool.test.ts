@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ClawdbotPluginApi } from "../../../src/plugins/types.js";
+import type { ClawdbotPluginApi, ClawdbotPluginToolContext } from "../../../src/plugins/types.js";
 import { createLobsterTool } from "./lobster-tool.js";
 
 async function writeFakeLobster(params: {
@@ -36,6 +36,20 @@ function fakeApi(): ClawdbotPluginApi {
     registerService() {},
     registerProvider() {},
     resolvePath: (p) => p,
+  };
+}
+
+function fakeCtx(overrides: Partial<ClawdbotPluginToolContext> = {}): ClawdbotPluginToolContext {
+  return {
+    config: {} as any,
+    workspaceDir: "/tmp",
+    agentDir: "/tmp",
+    agentId: "main",
+    sessionKey: "main",
+    messageChannel: undefined,
+    agentAccountId: undefined,
+    sandboxed: false,
+    ...overrides,
   };
 }
 
@@ -83,5 +97,16 @@ describe("lobster plugin tool", () => {
         lobsterPath: binPath,
       }),
     ).rejects.toThrow(/invalid JSON/);
+  });
+
+  it("can be gated off in sandboxed contexts", async () => {
+    const api = fakeApi();
+    const factoryTool = (ctx: ClawdbotPluginToolContext) => {
+      if (ctx.sandboxed) return null;
+      return createLobsterTool(api);
+    };
+
+    expect(factoryTool(fakeCtx({ sandboxed: true }))).toBeNull();
+    expect(factoryTool(fakeCtx({ sandboxed: false }))?.name).toBe("lobster");
   });
 });
