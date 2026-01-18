@@ -108,8 +108,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
         normalizeEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
         `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,

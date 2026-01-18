@@ -5,10 +5,13 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionScope } from "../../config/sessions.js";
 import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import { warn } from "../../globals.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 import { resolveSlackAccount } from "../accounts.js";
+import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
+import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
@@ -25,10 +28,56 @@ function parseApiAppIdFromAppToken(raw?: string) {
   return match?.[1]?.toUpperCase();
 }
 
+function mergeAllowlist(params: {
+  existing?: Array<string | number>;
+  additions: string[];
+}): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const push = (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  };
+  for (const entry of params.existing ?? []) {
+    push(String(entry));
+  }
+  for (const entry of params.additions) {
+    push(entry);
+  }
+  return merged;
+}
+
+function summarizeMapping(
+  label: string,
+  mapping: string[],
+  unresolved: string[],
+  runtime: RuntimeEnv,
+) {
+  const lines: string[] = [];
+  if (mapping.length > 0) {
+    const sample = mapping.slice(0, 6);
+    const suffix = mapping.length > sample.length ? ` (+${mapping.length - sample.length})` : "";
+    lines.push(`${label} resolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (unresolved.length > 0) {
+    const sample = unresolved.slice(0, 6);
+    const suffix =
+      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
+    lines.push(`${label} unresolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (lines.length > 0) {
+    runtime.log?.(lines.join("\n"));
+  }
+}
+
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
 
-  const account = resolveSlackAccount({
+  let account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
   });
@@ -65,11 +114,128 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = (dmConfig?.policy ?? "pairing") as DmPolicy;
-  const allowFrom = dmConfig?.allowFrom;
+  let allowFrom = dmConfig?.allowFrom;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
-  const channelsConfig = slackCfg.channels;
-  const groupPolicy = (slackCfg.groupPolicy ?? "open") as GroupPolicy;
+  let channelsConfig = slackCfg.channels;
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = (slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open") as GroupPolicy;
+  if (
+    slackCfg.groupPolicy === undefined &&
+    slackCfg.channels === undefined &&
+    defaultGroupPolicy === undefined &&
+    groupPolicy === "open"
+  ) {
+    runtime.log?.(
+      warn(
+        'slack: groupPolicy defaults to "open" when channels.slack is missing; set channels.slack.groupPolicy (or channels.defaults.groupPolicy) or add channels.slack.channels to restrict access.',
+      ),
+    );
+  }
+
+  const resolveToken = slackCfg.userToken?.trim() || botToken;
+  if (resolveToken) {
+    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+      try {
+        const entries = Object.keys(channelsConfig);
+        const resolved = await resolveSlackChannelAllowlist({
+          token: resolveToken,
+          entries,
+        });
+        const resolvedMap: string[] = [];
+        const unresolved: string[] = [];
+        const nextChannels = { ...channelsConfig };
+        for (const entry of resolved) {
+          if (entry.resolved && entry.id) {
+            resolvedMap.push(`${entry.input}→${entry.id}`);
+            if (!nextChannels[entry.id] && channelsConfig[entry.input]) {
+              nextChannels[entry.id] = channelsConfig[entry.input];
+            }
+          } else {
+            unresolved.push(entry.input);
+          }
+        }
+        channelsConfig = nextChannels;
+        summarizeMapping("slack channels", resolvedMap, unresolved, runtime);
+      } catch (err) {
+        runtime.log?.(`slack channel resolve failed; using config entries. ${String(err)}`);
+      }
+    }
+
+    const allowEntries =
+      allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
+    if (allowEntries.length > 0) {
+      try {
+        const resolvedUsers = await resolveSlackUserAllowlist({
+          token: resolveToken,
+          entries: allowEntries.map((entry) => String(entry)),
+        });
+        const resolvedMap: string[] = [];
+        const unresolved: string[] = [];
+        const additions: string[] = [];
+        for (const entry of resolvedUsers) {
+          if (entry.resolved && entry.id) {
+            resolvedMap.push(`${entry.input}→${entry.id}`);
+            additions.push(entry.id);
+          } else {
+            unresolved.push(entry.input);
+          }
+        }
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+        summarizeMapping("slack users", resolvedMap, unresolved, runtime);
+      } catch (err) {
+        runtime.log?.(`slack user resolve failed; using config entries. ${String(err)}`);
+      }
+    }
+
+    if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+      const userEntries = new Set<string>();
+      for (const channel of Object.values(channelsConfig)) {
+        if (!channel || typeof channel !== "object") continue;
+        const users = (channel as { users?: Array<string | number> }).users;
+        if (!Array.isArray(users)) continue;
+        for (const entry of users) {
+          const trimmed = String(entry).trim();
+          if (trimmed && trimmed !== "*") userEntries.add(trimmed);
+        }
+      }
+      if (userEntries.size > 0) {
+        try {
+          const resolvedUsers = await resolveSlackUserAllowlist({
+            token: resolveToken,
+            entries: Array.from(userEntries),
+          });
+          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
+          const mapping = resolvedUsers
+            .filter((entry) => entry.resolved && entry.id)
+            .map((entry) => `${entry.input}→${entry.id}`);
+          const unresolved = resolvedUsers
+            .filter((entry) => !entry.resolved)
+            .map((entry) => entry.input);
+          const nextChannels = { ...channelsConfig };
+          for (const [channelId, channelConfig] of Object.entries(channelsConfig)) {
+            if (!channelConfig || typeof channelConfig !== "object") continue;
+            const users = (channelConfig as { users?: Array<string | number> }).users;
+            if (!Array.isArray(users) || users.length === 0) continue;
+            const additions: string[] = [];
+            for (const entry of users) {
+              const trimmed = String(entry).trim();
+              const resolved = resolvedMap.get(trimmed);
+              if (resolved?.resolved && resolved.id) additions.push(resolved.id);
+            }
+            nextChannels[channelId] = {
+              ...channelConfig,
+              users: mergeAllowlist({ existing: users, additions }),
+            };
+          }
+          channelsConfig = nextChannels;
+          summarizeMapping("slack channel users", mapping, unresolved, runtime);
+        } catch (err) {
+          runtime.log?.(`slack channel user resolve failed; using config entries. ${String(err)}`);
+        }
+      }
+    }
+  }
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];

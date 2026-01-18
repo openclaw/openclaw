@@ -25,6 +25,10 @@ import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "./directory-live.js";
 
 const meta = {
   id: "matrix",
@@ -147,8 +151,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       approveHint: formatPairingApproveHint("matrix"),
       normalizeEntry: (raw) => raw.replace(/^matrix:/i, "").trim().toLowerCase(),
     }),
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
         "- Matrix rooms: groupPolicy=\"open\" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy=\"allowlist\" + channels.matrix.rooms to restrict rooms.",
@@ -233,6 +238,87 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         .slice(0, limit && limit > 0 ? limit : undefined)
         .map((id) => ({ kind: "group", id }) as const);
       return ids;
+    },
+    listPeersLive: async ({ cfg, query, limit }) =>
+      listMatrixDirectoryPeersLive({ cfg, query, limit }),
+    listGroupsLive: async ({ cfg, query, limit }) =>
+      listMatrixDirectoryGroupsLive({ cfg, query, limit }),
+  },
+  resolver: {
+    resolveTargets: async ({ cfg, inputs, kind, runtime }) => {
+      const results = [];
+      for (const input of inputs) {
+        const trimmed = input.trim();
+        if (!trimmed) {
+          results.push({ input, resolved: false, note: "empty input" });
+          continue;
+        }
+        if (kind === "user") {
+          if (trimmed.startsWith("@") && trimmed.includes(":")) {
+            results.push({ input, resolved: true, id: trimmed });
+            continue;
+          }
+          try {
+            const matches = await listMatrixDirectoryPeersLive({
+              cfg,
+              query: trimmed,
+              limit: 5,
+            });
+            const best = matches[0];
+            results.push({
+              input,
+              resolved: Boolean(best?.id),
+              id: best?.id,
+              name: best?.name,
+              note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+            });
+          } catch (err) {
+            runtime.error?.(`matrix resolve failed: ${String(err)}`);
+            results.push({ input, resolved: false, note: "lookup failed" });
+          }
+          continue;
+        }
+        if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
+          try {
+            const matches = await listMatrixDirectoryGroupsLive({
+              cfg,
+              query: trimmed,
+              limit: 5,
+            });
+            const best = matches[0];
+            results.push({
+              input,
+              resolved: Boolean(best?.id),
+              id: best?.id,
+              name: best?.name,
+              note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+            });
+          } catch (err) {
+            runtime.error?.(`matrix resolve failed: ${String(err)}`);
+            results.push({ input, resolved: false, note: "lookup failed" });
+          }
+          continue;
+        }
+        try {
+          const matches = await listMatrixDirectoryGroupsLive({
+            cfg,
+            query: trimmed,
+            limit: 5,
+          });
+          const best = matches[0];
+          results.push({
+            input,
+            resolved: Boolean(best?.id),
+            id: best?.id,
+            name: best?.name,
+            note: matches.length > 1 ? "multiple matches; chose first" : undefined,
+          });
+        } catch (err) {
+          runtime.error?.(`matrix resolve failed: ${String(err)}`);
+          results.push({ input, resolved: false, note: "lookup failed" });
+        }
+      }
+      return results;
     },
   },
   actions: matrixMessageActions,

@@ -1,5 +1,6 @@
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../../../src/channels/plugins/onboarding-types.js";
 import type { WizardPrompter } from "../../../src/wizard/prompts.js";
+import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboarding/channel-access.js";
 
 import {
   listZalouserAccountIds,
@@ -8,8 +9,8 @@ import {
   normalizeAccountId,
   checkZcaAuthenticated,
 } from "./accounts.js";
-import { runZcaInteractive, checkZcaInstalled } from "./zca.js";
-import { DEFAULT_ACCOUNT_ID, type CoreConfig } from "./types.js";
+import { runZca, runZcaInteractive, checkZcaInstalled, parseJsonOutput } from "./zca.js";
+import { DEFAULT_ACCOUNT_ID, type CoreConfig, type ZcaGroup } from "./types.js";
 
 const channel = "zalouser" as const;
 
@@ -111,6 +112,115 @@ async function promptZalouserAllowFrom(params: {
       },
     },
   } as CoreConfig;
+}
+
+function setZalouserGroupPolicy(
+  cfg: CoreConfig,
+  accountId: string,
+  groupPolicy: "open" | "allowlist" | "disabled",
+): CoreConfig {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          groupPolicy,
+        },
+      },
+    } as CoreConfig;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      zalouser: {
+        ...cfg.channels?.zalouser,
+        enabled: true,
+        accounts: {
+          ...(cfg.channels?.zalouser?.accounts ?? {}),
+          [accountId]: {
+            ...(cfg.channels?.zalouser?.accounts?.[accountId] ?? {}),
+            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            groupPolicy,
+          },
+        },
+      },
+    },
+  } as CoreConfig;
+}
+
+function setZalouserGroupAllowlist(
+  cfg: CoreConfig,
+  accountId: string,
+  groupKeys: string[],
+): CoreConfig {
+  const groups = Object.fromEntries(groupKeys.map((key) => [key, { allow: true }]));
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        zalouser: {
+          ...cfg.channels?.zalouser,
+          enabled: true,
+          groups,
+        },
+      },
+    } as CoreConfig;
+  }
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      zalouser: {
+        ...cfg.channels?.zalouser,
+        enabled: true,
+        accounts: {
+          ...(cfg.channels?.zalouser?.accounts ?? {}),
+          [accountId]: {
+            ...(cfg.channels?.zalouser?.accounts?.[accountId] ?? {}),
+            enabled: cfg.channels?.zalouser?.accounts?.[accountId]?.enabled ?? true,
+            groups,
+          },
+        },
+      },
+    },
+  } as CoreConfig;
+}
+
+async function resolveZalouserGroups(params: {
+  cfg: CoreConfig;
+  accountId: string;
+  entries: string[];
+}): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
+  const account = resolveZalouserAccountSync({ cfg: params.cfg, accountId: params.accountId });
+  const result = await runZca(["group", "list", "-j"], { profile: account.profile, timeout: 15000 });
+  if (!result.ok) throw new Error(result.stderr || "Failed to list groups");
+  const groups = (parseJsonOutput<ZcaGroup[]>(result.stdout) ?? []).filter(
+    (group) => Boolean(group.groupId),
+  );
+  const byName = new Map<string, ZcaGroup[]>();
+  for (const group of groups) {
+    const name = group.name?.trim().toLowerCase();
+    if (!name) continue;
+    const list = byName.get(name) ?? [];
+    list.push(group);
+    byName.set(name, list);
+  }
+
+  return params.entries.map((input) => {
+    const trimmed = input.trim();
+    if (!trimmed) return { input, resolved: false };
+    if (/^\d+$/.test(trimmed)) return { input, resolved: true, id: trimmed };
+    const matches = byName.get(trimmed.toLowerCase()) ?? [];
+    const match = matches[0];
+    return match?.groupId
+      ? { input, resolved: true, id: String(match.groupId) }
+      : { input, resolved: false };
+  });
 }
 
 async function promptAccountId(params: {
@@ -305,6 +415,61 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
         prompter,
         accountId,
       });
+    }
+
+    const accessConfig = await promptChannelAccessConfig({
+      prompter,
+      label: "Zalo groups",
+      currentPolicy: account.config.groupPolicy ?? "open",
+      currentEntries: Object.keys(account.config.groups ?? {}),
+      placeholder: "Family, Work, 123456789",
+      updatePrompt: Boolean(account.config.groups),
+    });
+    if (accessConfig) {
+      if (accessConfig.policy !== "allowlist") {
+        next = setZalouserGroupPolicy(next, accountId, accessConfig.policy);
+      } else {
+        let keys = accessConfig.entries;
+        if (accessConfig.entries.length > 0) {
+          try {
+            const resolved = await resolveZalouserGroups({
+              cfg: next,
+              accountId,
+              entries: accessConfig.entries,
+            });
+            const resolvedIds = resolved
+              .filter((entry) => entry.resolved && entry.id)
+              .map((entry) => entry.id as string);
+            const unresolved = resolved
+              .filter((entry) => !entry.resolved)
+              .map((entry) => entry.input);
+            keys = [
+              ...resolvedIds,
+              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
+            ];
+            if (resolvedIds.length > 0 || unresolved.length > 0) {
+              await prompter.note(
+                [
+                  resolvedIds.length > 0 ? `Resolved: ${resolvedIds.join(", ")}` : undefined,
+                  unresolved.length > 0
+                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                "Zalo groups",
+              );
+            }
+          } catch (err) {
+            await prompter.note(
+              `Group lookup failed; keeping entries as typed. ${String(err)}`,
+              "Zalo groups",
+            );
+          }
+        }
+        next = setZalouserGroupPolicy(next, accountId, "allowlist");
+        next = setZalouserGroupAllowlist(next, accountId, keys);
+      }
     }
 
     return { cfg: next, accountId };

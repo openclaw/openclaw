@@ -176,7 +176,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
-    const groupPolicy = !isDirectMessage && msteamsCfg ? (msteamsCfg.groupPolicy ?? "allowlist") : "disabled";
+    const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+    const groupPolicy =
+      !isDirectMessage && msteamsCfg
+        ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
+        : "disabled";
     const groupAllowFrom =
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupAllowFrom ??
@@ -186,6 +190,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       !isDirectMessage && msteamsCfg
         ? [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom]
         : [];
+    const teamId = activity.channelData?.team?.id;
+    const teamName = activity.channelData?.team?.name;
+    const channelName = activity.channelData?.channel?.name;
+    const channelGate = resolveMSTeamsRouteConfig({
+      cfg: msteamsCfg,
+      teamId,
+      teamName,
+      conversationId,
+      channelName,
+    });
 
     if (!isDirectMessage && msteamsCfg) {
       if (groupPolicy === "disabled") {
@@ -196,24 +210,32 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
 
       if (groupPolicy === "allowlist") {
-        if (effectiveGroupAllowFrom.length === 0) {
-          log.debug("dropping group message (groupPolicy: allowlist, no groupAllowFrom)", {
+        if (channelGate.allowlistConfigured && !channelGate.allowed) {
+          log.debug("dropping group message (not in team/channel allowlist)", {
             conversationId,
           });
           return;
         }
-        const allowed = isMSTeamsGroupAllowed({
-          groupPolicy,
-          allowFrom: effectiveGroupAllowFrom,
-          senderId,
-          senderName,
-        });
-        if (!allowed) {
-          log.debug("dropping group message (not in groupAllowFrom)", {
-            sender: senderId,
-            label: senderName,
+        if (effectiveGroupAllowFrom.length === 0 && !channelGate.allowlistConfigured) {
+          log.debug("dropping group message (groupPolicy: allowlist, no allowlist)", {
+            conversationId,
           });
           return;
+        }
+        if (effectiveGroupAllowFrom.length > 0) {
+          const allowed = isMSTeamsGroupAllowed({
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            senderId,
+            senderName,
+          });
+          if (!allowed) {
+            log.debug("dropping group message (not in groupAllowFrom)", {
+              sender: senderId,
+              label: senderName,
+            });
+            return;
+          }
         }
       }
     }
@@ -244,7 +266,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Build conversation reference for proactive replies.
     const agent = activity.recipient;
-    const teamId = activity.channelData?.team?.id;
     const conversationRef: StoredConversationReference = {
       activityId: activity.id,
       user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
@@ -326,11 +347,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     const channelId = conversationId;
-    const { teamConfig, channelConfig } = resolveMSTeamsRouteConfig({
-      cfg: msteamsCfg,
-      teamId,
-      conversationId: channelId,
-    });
+    const { teamConfig, channelConfig } = channelGate;
     const { requireMention, replyStyle } = resolveMSTeamsReplyPolicy({
       isDirectMessage,
       globalConfig: msteamsCfg,

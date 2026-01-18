@@ -6,6 +6,7 @@ import {
   channelsListCommand,
   channelsLogsCommand,
   channelsRemoveCommand,
+  channelsResolveCommand,
   channelsStatusCommand,
 } from "../commands/channels.js";
 import { danger } from "../globals.js";
@@ -99,6 +100,32 @@ export function registerChannelsCli(program: Command) {
     .action(async (opts) => {
       try {
         await channelsCapabilitiesCommand(opts, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  channels
+    .command("resolve")
+    .description("Resolve channel/user names to IDs")
+    .argument("<entries...>", "Entries to resolve (names or ids)")
+    .option("--channel <name>", `Channel (${channelNames})`)
+    .option("--account <id>", "Account id (accountId)")
+    .option("--kind <kind>", "Target kind (auto|user|group)", "auto")
+    .option("--json", "Output JSON", false)
+    .action(async (entries, opts) => {
+      try {
+        await channelsResolveCommand(
+          {
+            channel: opts.channel as string | undefined,
+            account: opts.account as string | undefined,
+            kind: opts.kind as "auto" | "user" | "group",
+            json: Boolean(opts.json),
+            entries: Array.isArray(entries) ? entries : [String(entries)],
+          },
+          defaultRuntime,
+        );
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

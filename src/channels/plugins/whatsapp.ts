@@ -149,8 +149,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         normalizeEntry: (raw) => normalizeE164(raw),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const groupAllowlistConfigured =
         Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;

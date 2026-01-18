@@ -8,5 +8,7 @@ export type { ChannelsLogsOptions } from "./channels/logs.js";
 export { channelsLogsCommand } from "./channels/logs.js";
 export type { ChannelsRemoveOptions } from "./channels/remove.js";
 export { channelsRemoveCommand } from "./channels/remove.js";
+export type { ChannelsResolveOptions } from "./channels/resolve.js";
+export { channelsResolveCommand } from "./channels/resolve.js";
 export type { ChannelsStatusOptions } from "./channels/status.js";
 export { channelsStatusCommand, formatGatewayChannelsStatusLines } from "./channels/status.js";

@@ -8,8 +8,16 @@ import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
 import { probeMSTeams } from "./probe.js";
+import {
+  resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsUserAllowlist,
+} from "./resolve-allowlist.js";
 import { sendMessageMSTeams } from "./send.js";
 import { resolveMSTeamsCredentials } from "./token.js";
+import {
+  listMSTeamsDirectoryGroupsLive,
+  listMSTeamsDirectoryPeersLive,
+} from "./directory-live.js";
 
 type ResolvedMSTeamsAccount = {
   accountId: string;
@@ -112,7 +120,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   security: {
     collectWarnings: ({ cfg }) => {
-      const groupPolicy = cfg.channels?.msteams?.groupPolicy ?? "allowlist";
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = cfg.channels?.msteams?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
         `- MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.`,
@@ -188,6 +197,137 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
         .filter((id) => (q ? id.toLowerCase().includes(q) : true))
         .slice(0, limit && limit > 0 ? limit : undefined)
         .map((id) => ({ kind: "group", id }) as const);
+    },
+    listPeersLive: async ({ cfg, query, limit }) =>
+      listMSTeamsDirectoryPeersLive({ cfg, query, limit }),
+    listGroupsLive: async ({ cfg, query, limit }) =>
+      listMSTeamsDirectoryGroupsLive({ cfg, query, limit }),
+  },
+  resolver: {
+    resolveTargets: async ({ cfg, inputs, kind, runtime }) => {
+      const results = inputs.map((input) => ({
+        input,
+        resolved: false,
+        id: undefined as string | undefined,
+        name: undefined as string | undefined,
+        note: undefined as string | undefined,
+      }));
+
+      const stripPrefix = (value: string) =>
+        value
+          .replace(/^(msteams|teams):/i, "")
+          .replace(/^(user|conversation):/i, "")
+          .trim();
+
+      if (kind === "user") {
+        const pending: Array<{ input: string; query: string; index: number }> = [];
+        results.forEach((entry, index) => {
+          const trimmed = entry.input.trim();
+          if (!trimmed) {
+            entry.note = "empty input";
+            return;
+          }
+          const cleaned = stripPrefix(trimmed);
+          if (/^[0-9a-fA-F-]{16,}$/.test(cleaned) || cleaned.includes("@")) {
+            entry.resolved = true;
+            entry.id = cleaned;
+            return;
+          }
+          pending.push({ input: entry.input, query: cleaned, index });
+        });
+
+        if (pending.length > 0) {
+          try {
+            const resolved = await resolveMSTeamsUserAllowlist({
+              cfg,
+              entries: pending.map((entry) => entry.query),
+            });
+            resolved.forEach((entry, idx) => {
+              const target = results[pending[idx]?.index ?? -1];
+              if (!target) return;
+              target.resolved = entry.resolved;
+              target.id = entry.id;
+              target.name = entry.name;
+              target.note = entry.note;
+            });
+          } catch (err) {
+            runtime.error?.(`msteams resolve failed: ${String(err)}`);
+            pending.forEach(({ index }) => {
+              const entry = results[index];
+              if (entry) entry.note = "lookup failed";
+            });
+          }
+        }
+
+        return results;
+      }
+
+      const pending: Array<{ input: string; query: string; index: number }> = [];
+      results.forEach((entry, index) => {
+        const trimmed = entry.input.trim();
+        if (!trimmed) {
+          entry.note = "empty input";
+          return;
+        }
+        if (/^conversation:/i.test(trimmed)) {
+          const id = trimmed.replace(/^conversation:/i, "").trim();
+          if (id) {
+            entry.resolved = true;
+            entry.id = id;
+            entry.note = "conversation id";
+          } else {
+            entry.note = "empty conversation id";
+          }
+          return;
+        }
+        pending.push({
+          input: entry.input,
+          query: trimmed
+            .replace(/^(msteams|teams):/i, "")
+            .replace(/^team:/i, "")
+            .trim(),
+          index,
+        });
+      });
+
+      if (pending.length > 0) {
+        try {
+          const resolved = await resolveMSTeamsChannelAllowlist({
+            cfg,
+            entries: pending.map((entry) => entry.query),
+          });
+          resolved.forEach((entry, idx) => {
+            const target = results[pending[idx]?.index ?? -1];
+            if (!target) return;
+            if (!entry.resolved || !entry.teamId) {
+              target.resolved = false;
+              target.note = entry.note;
+              return;
+            }
+            target.resolved = true;
+            if (entry.channelId) {
+              target.id = `${entry.teamId}/${entry.channelId}`;
+              target.name =
+                entry.channelName && entry.teamName
+                  ? `${entry.teamName}/${entry.channelName}`
+                  : entry.channelName ?? entry.teamName;
+            } else {
+              target.id = entry.teamId;
+              target.name = entry.teamName;
+              target.note = "team id";
+            }
+            if (entry.note) target.note = entry.note;
+          });
+        } catch (err) {
+          runtime.error?.(`msteams resolve failed: ${String(err)}`);
+          pending.forEach(({ index }) => {
+            const entry = results[index];
+            if (entry) entry.note = "lookup failed";
+          });
+        }
+      }
+
+      return results;
     },
   },
   actions: {

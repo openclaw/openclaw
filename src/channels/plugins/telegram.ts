@@ -141,8 +141,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;

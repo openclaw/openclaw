@@ -678,10 +678,11 @@ Notes:
 - `"open"`: groups bypass allowlists; mention-gating still applies.
 - `"disabled"`: block all group/room messages.
 - `"allowlist"`: only allow groups/rooms that match the configured allowlist.
+- `channels.defaults.groupPolicy` sets the default when a provider’s `groupPolicy` is unset.
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams use `groupAllowFrom` (fallback: explicit `allowFrom`).
 - Discord/Slack use channel allowlists (`channels.discord.guilds.*.channels`, `channels.slack.channels`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
-- Default is `groupPolicy: "allowlist"`; if no allowlist is configured, group messages are blocked.
+- Default is `groupPolicy: "allowlist"` (unless overridden by `channels.defaults.groupPolicy`); if no allowlist is configured, group messages are blocked.
 
 ### Multi-agent routing (`agents.list` + `bindings`)
 
