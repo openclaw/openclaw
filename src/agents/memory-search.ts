@@ -9,7 +9,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
-  provider: "openai" | "local";
+  provider: "openai" | "gemini" | "local";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -66,7 +66,8 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
-const DEFAULT_MODEL = "text-embedding-3-small";
+const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
+const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 const DEFAULT_CHUNK_TOKENS = 400;
 const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
@@ -111,7 +112,7 @@ function mergeConfig(
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
   const hasRemote = Boolean(defaults?.remote || overrides?.remote);
-  const includeRemote = hasRemote || provider === "openai";
+  const includeRemote = hasRemote || provider === "openai" || provider === "gemini";
   const batch = {
     enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
     wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
@@ -133,7 +134,10 @@ function mergeConfig(
       }
     : undefined;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "openai";
-  const model = overrides?.model ?? defaults?.model ?? DEFAULT_MODEL;
+  const model =
+    overrides?.model ??
+    defaults?.model ??
+    (provider === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENAI_MODEL);
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,

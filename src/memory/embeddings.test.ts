@@ -107,6 +107,39 @@ describe("embedding provider remote overrides", () => {
     const headers = (fetchMock.mock.calls[0]?.[1]?.headers as Record<string, string>) ?? {};
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
+
+  it("uses gemini embedContent endpoint with x-goog-api-key", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ embedding: { values: [1, 2, 3] } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
+      apiKey: "gemini-key",
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: {
+        baseUrl: "https://gemini.example/v1beta",
+      },
+      model: "gemini-embedding-001",
+      fallback: "openai",
+    });
+
+    await result.provider.embedQuery("hello");
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://gemini.example/v1beta/models/gemini-embedding-001:embedContent");
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers["x-goog-api-key"]).toBe("gemini-key");
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
 });
 
 describe("embedding provider local fallback", () => {

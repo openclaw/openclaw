@@ -16,6 +16,7 @@ import {
   createEmbeddingProvider,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
+  type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
 } from "./embeddings.js";
 import {
@@ -104,9 +105,10 @@ export class MemoryIndexManager {
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private readonly provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "local";
+  private readonly requestedProvider: "openai" | "gemini" | "local";
   private readonly fallbackReason?: string;
   private readonly openAi?: OpenAiEmbeddingClient;
+  private readonly gemini?: GeminiEmbeddingClient;
   private readonly batch: {
     enabled: boolean;
     wait: boolean;
@@ -114,7 +116,7 @@ export class MemoryIndexManager {
     pollIntervalMs: number;
     timeoutMs: number;
   };
-  private readonly db: DatabaseSync;
+  private db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
   private readonly providerKey: string;
   private readonly cache: { enabled: boolean; maxEntries?: number };
@@ -142,6 +144,7 @@ export class MemoryIndexManager {
   private sessionsDirtyFiles = new Set<string>();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private readonly allowAtomicReindex: boolean;
 
   static async get(params: {
     cfg: ClawdbotConfig;
@@ -182,6 +185,7 @@ export class MemoryIndexManager {
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerResult: EmbeddingProviderResult;
+    options?: { allowAtomicReindex?: boolean; enableBackgroundSync?: boolean };
   }) {
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
@@ -192,6 +196,8 @@ export class MemoryIndexManager {
     this.requestedProvider = params.providerResult.requestedProvider;
     this.fallbackReason = params.providerResult.fallbackReason;
     this.openAi = params.providerResult.openAi;
+    this.gemini = params.providerResult.gemini;
+    this.allowAtomicReindex = params.options?.allowAtomicReindex ?? true;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = computeEmbeddingProviderKey({
@@ -199,6 +205,13 @@ export class MemoryIndexManager {
       providerModel: this.provider.model,
       openAi: this.openAi
         ? { baseUrl: this.openAi.baseUrl, model: this.openAi.model, headers: this.openAi.headers }
+        : undefined,
+      gemini: this.gemini
+        ? {
+            baseUrl: this.gemini.baseUrl,
+            model: this.gemini.model,
+            headers: this.gemini.headers,
+          }
         : undefined,
     });
     this.cache = {
@@ -216,9 +229,12 @@ export class MemoryIndexManager {
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
-    this.ensureWatcher();
-    this.ensureSessionListener();
-    this.ensureIntervalSync();
+    const enableBackgroundSync = params.options?.enableBackgroundSync ?? true;
+    if (enableBackgroundSync) {
+      this.ensureWatcher();
+      this.ensureSessionListener();
+      this.ensureIntervalSync();
+    }
     this.dirty = this.sources.has("memory");
     if (this.sources.has("sessions")) {
       this.sessionsDirty = true;
@@ -782,7 +798,7 @@ export class MemoryIndexManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
+    const progressCallback = params?.progress;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
@@ -794,6 +810,12 @@ export class MemoryIndexManager {
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
+    if (needsFullReindex && this.allowAtomicReindex) {
+      await this.runAtomicReindex({ reason: params?.reason, progress: progressCallback });
+      return;
+    }
+
+    const progress = progressCallback ? this.createSyncProgress(progressCallback) : undefined;
     if (needsFullReindex) {
       this.resetIndex();
     }
@@ -831,6 +853,126 @@ export class MemoryIndexManager {
     if (shouldSyncMemory || shouldSyncSessions || needsFullReindex) {
       this.pruneEmbeddingCacheIfNeeded();
     }
+  }
+
+  private createScratchManager(tempPath: string): MemoryIndexManager {
+    const scratchSettings: ResolvedMemorySearchConfig = {
+      ...this.settings,
+      store: {
+        ...this.settings.store,
+        path: tempPath,
+      },
+      sync: {
+        ...this.settings.sync,
+        watch: false,
+        intervalMinutes: 0,
+      },
+    };
+
+    return new MemoryIndexManager({
+      cacheKey: `${this.cacheKey}:scratch:${Date.now()}`,
+      cfg: this.cfg,
+      agentId: this.agentId,
+      workspaceDir: this.workspaceDir,
+      settings: scratchSettings,
+      providerResult: {
+        provider: this.provider,
+        requestedProvider: this.requestedProvider,
+        fallbackReason: this.fallbackReason,
+        openAi: this.openAi,
+        gemini: this.gemini,
+      },
+      options: {
+        allowAtomicReindex: false,
+        enableBackgroundSync: false,
+      },
+    });
+  }
+
+  private buildTempIndexPath(): string {
+    const basePath = resolveUserPath(this.settings.store.path);
+    const dir = path.dirname(basePath);
+    ensureDir(dir);
+    const stamp = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+    return path.join(dir, `${path.basename(basePath)}.tmp-${stamp}`);
+  }
+
+  private reopenDatabase() {
+    this.db = this.openDatabase();
+    this.fts.available = false;
+    this.fts.loadError = undefined;
+    this.ensureSchema();
+    this.vector.available = null;
+    this.vector.loadError = undefined;
+    this.vectorReady = null;
+    this.vector.dims = undefined;
+    const meta = this.readMeta();
+    if (meta?.vectorDims) {
+      this.vector.dims = meta.vectorDims;
+    }
+  }
+
+  private async swapIndexFile(tempPath: string): Promise<void> {
+    const dbPath = resolveUserPath(this.settings.store.path);
+    const backupPath = `${dbPath}.bak-${Date.now()}`;
+    let hasBackup = false;
+    let shouldReopen = false;
+
+    this.db.close();
+
+    try {
+      try {
+        await fs.rename(dbPath, backupPath);
+        hasBackup = true;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") throw err;
+      }
+      await fs.rename(tempPath, dbPath);
+      shouldReopen = true;
+      if (hasBackup) {
+        await fs.rm(backupPath, { force: true });
+      }
+    } catch (err) {
+      if (hasBackup) {
+        try {
+          await fs.rename(backupPath, dbPath);
+          shouldReopen = true;
+        } catch {}
+      }
+      if (!shouldReopen) {
+        try {
+          await fs.access(dbPath);
+          shouldReopen = true;
+        } catch {}
+      }
+      throw err;
+    } finally {
+      await fs.rm(tempPath, { force: true });
+      if (shouldReopen) {
+        this.reopenDatabase();
+      }
+    }
+  }
+
+  private async runAtomicReindex(params: {
+    reason?: string;
+    progress?: (update: MemorySyncProgressUpdate) => void;
+  }) {
+    const tempPath = this.buildTempIndexPath();
+    const scratch = this.createScratchManager(tempPath);
+    try {
+      await scratch.sync({ reason: params.reason, force: true, progress: params.progress });
+    } catch (err) {
+      await fs.rm(tempPath, { force: true });
+      throw err;
+    } finally {
+      await scratch.close().catch(() => undefined);
+    }
+    await this.swapIndexFile(tempPath);
+    this.dirty = false;
+    this.sessionsDirty = false;
+    this.sessionsDirtyFiles.clear();
   }
 
   private resetIndex() {

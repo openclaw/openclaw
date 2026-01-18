@@ -101,6 +101,26 @@ describe("memory search config", () => {
     expect(resolved?.remote).toBeUndefined();
   });
 
+  it("includes remote defaults for gemini without overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "gemini",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.remote?.batch).toEqual({
+      enabled: true,
+      wait: true,
+      concurrency: 2,
+      pollIntervalMs: 2000,
+      timeoutMinutes: 60,
+    });
+  });
+
   it("merges remote defaults with agent overrides", () => {
     const cfg = {
       agents: {

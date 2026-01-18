@@ -218,7 +218,7 @@ export const MemorySearchSchema = z
         sessionMemory: z.boolean().optional(),
       })
       .optional(),
-    provider: z.union([z.literal("openai"), z.literal("local")]).optional(),
+    provider: z.union([z.literal("openai"), z.literal("gemini"), z.literal("local")]).optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),

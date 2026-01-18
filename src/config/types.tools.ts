@@ -170,7 +170,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "local";
+  provider?: "openai" | "gemini" | "local";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
