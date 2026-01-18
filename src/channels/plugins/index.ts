@@ -86,8 +86,10 @@ export {
 } from "./directory-config.js";
 export {
   buildChannelKeyCandidates,
+  normalizeChannelSlug,
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
   type ChannelEntryMatch,
   type ChannelMatchSource,
 } from "./channel-config.js";
