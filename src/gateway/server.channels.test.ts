@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -12,8 +12,7 @@ installGatewayTestHooks();
 
 describe("gateway server channels", () => {
   test("channels.status returns snapshot without probe", async () => {
-    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
-    delete process.env.TELEGRAM_BOT_TOKEN;
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
@@ -43,11 +42,6 @@ describe("gateway server channels", () => {
 
     ws.close();
     await server.close();
-    if (prevToken === undefined) {
-      delete process.env.TELEGRAM_BOT_TOKEN;
-    } else {
-      process.env.TELEGRAM_BOT_TOKEN = prevToken;
-    }
   });
 
   test("channels.logout reports no session when missing", async () => {
@@ -66,8 +60,7 @@ describe("gateway server channels", () => {
   });
 
   test("channels.logout clears telegram bot token from config", async () => {
-    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
-    delete process.env.TELEGRAM_BOT_TOKEN;
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
     const { readConfigFileSnapshot, writeConfigFile } = await loadConfigHelpers();
     await writeConfigFile({
       channels: {
@@ -98,10 +91,5 @@ describe("gateway server channels", () => {
 
     ws.close();
     await server.close();
-    if (prevToken === undefined) {
-      delete process.env.TELEGRAM_BOT_TOKEN;
-    } else {
-      process.env.TELEGRAM_BOT_TOKEN = prevToken;
-    }
   });
 });
