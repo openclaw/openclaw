@@ -1660,6 +1660,40 @@ public struct ExecApprovalsSetParams: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsNodeGetParams: Codable, Sendable {
+    public let nodeid: String
+
+    public init(
+        nodeid: String
+    ) {
+        self.nodeid = nodeid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+    }
+}
+
+public struct ExecApprovalsNodeSetParams: Codable, Sendable {
+    public let nodeid: String
+    public let file: [String: AnyCodable]
+    public let basehash: String?
+
+    public init(
+        nodeid: String,
+        file: [String: AnyCodable],
+        basehash: String?
+    ) {
+        self.nodeid = nodeid
+        self.file = file
+        self.basehash = basehash
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case file
+        case basehash = "baseHash"
+    }
+}
+
 public struct ExecApprovalsSnapshot: Codable, Sendable {
     public let path: String
     public let exists: Bool

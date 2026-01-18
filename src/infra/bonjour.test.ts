@@ -23,8 +23,10 @@ vi.mock("../logger.js", () => {
   };
 });
 
-vi.mock("../logging.js", () => {
+vi.mock("../logging.js", async () => {
+  const actual = await vi.importActual<typeof import("../logging.js")>("../logging.js");
   return {
+    ...actual,
     getLogger: () => ({ info: (...args: unknown[]) => getLoggerInfo(...args) }),
   };
 });
