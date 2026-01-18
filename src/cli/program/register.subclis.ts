@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { loadConfig } from "../../config/config.js";
 import { registerPluginCliCommands } from "../../plugins/cli.js";
+import { registerAcpCli } from "../acp-cli.js";
 import { registerChannelsCli } from "../channels-cli.js";
 import { registerCronCli } from "../cron-cli.js";
 import { registerDaemonCli } from "../daemon-cli.js";
@@ -23,6 +24,7 @@ import { registerTuiCli } from "../tui-cli.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 export function registerSubCliCommands(program: Command) {
+  registerAcpCli(program);
   registerDaemonCli(program);
   registerGatewayCli(program);
   registerLogsCli(program);

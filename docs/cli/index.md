@@ -23,6 +23,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`message`](/cli/message)
 - [`agent`](/cli/agent)
 - [`agents`](/cli/agents)
+- [`acp`](/cli/acp)
 - [`status`](/cli/status)
 - [`health`](/cli/health)
 - [`sessions`](/cli/sessions)
@@ -126,6 +127,7 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     add
     delete
+  acp
   status
   health
   sessions
@@ -500,6 +502,11 @@ Delete an agent and prune its workspace + state.
 Options:
 - `--force`
 - `--json`
+
+### `acp`
+Run the ACP bridge that connects IDEs to the Gateway.
+
+See [`acp`](/cli/acp) for full options and examples.
 
 ### `status`
 Show linked session health and recent recipients.

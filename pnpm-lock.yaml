@@ -13,6 +13,9 @@ importers:
 
   .:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 0.13.0
+        version: 0.13.0(zod@4.3.5)
       '@buape/carbon':
         specifier: 0.0.0-beta-20260110172854
         version: 0.0.0-beta-20260110172854(hono@4.11.4)
@@ -356,6 +359,11 @@ importers:
         version: 4.0.17(@types/node@25.0.7)(@vitest/browser-playwright@4.0.17)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:
+
+  '@agentclientprotocol/sdk@0.13.0':
+    resolution: {integrity: sha512-Z6/Fp4cXLbYdMXr5AK752JM5qG2VKb6ShM0Ql6FimBSckMmLyK54OA20UhPYoH4C37FSFwUTARuwQOwQUToYrw==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@anthropic-ai/sdk@0.71.2':
     resolution: {integrity: sha512-TGNDEUuEstk/DKu0/TflXAEt+p+p/WhTlFzEnoosvbaDU2LTjm42igSdlL0VijrKpWejtOKxX0b8A7uc+XiSAQ==}
@@ -4580,6 +4588,10 @@ packages:
     resolution: {integrity: sha512-k7Nwx6vuWx1IJ9Bjuf4Zt1PEllcwe7cls3VNzm4CQ1/hgtFUK2bRNG3rvnpPUhFjmqJKAKtjV576KnUkHocg/g==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@0.13.0(zod@4.3.5)':
+    dependencies:
+      zod: 4.3.5
 
   '@anthropic-ai/sdk@0.71.2(zod@4.3.5)':
     dependencies:

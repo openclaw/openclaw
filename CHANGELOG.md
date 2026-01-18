@@ -23,6 +23,7 @@ Docs: https://docs.clawd.bot
 - Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) — thanks @austinm911.
 - Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
 - Docs: add node host CLI + update exec approvals/bridge protocol docs. https://docs.clawd.bot/cli/node
+- ACP: add experimental ACP support for IDE integrations (`clawdbot acp`). Thanks @visionik.
 
 ### Fixes
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
