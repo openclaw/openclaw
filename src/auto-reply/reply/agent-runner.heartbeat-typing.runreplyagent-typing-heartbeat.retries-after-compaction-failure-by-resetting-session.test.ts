@@ -44,10 +44,6 @@ vi.mock("./queue.js", async () => {
 
 import { runReplyAgent } from "./agent-runner.js";
 
-beforeEach(() => {
-  runEmbeddedPiAgentMock.mockReset();
-});
-
 function createMinimalRun(params?: {
   opts?: GetReplyOptions;
   resolvedVerboseLevel?: "off" | "on";
@@ -125,6 +121,10 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent typing (heartbeat)", () => {
+  beforeEach(() => {
+    runEmbeddedPiAgentMock.mockReset();
+  });
+
   it("retries after compaction failure by resetting the session", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-compaction-reset-"));
@@ -141,11 +141,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
       await fs.writeFile(transcriptPath, "ok", "utf-8");
 
-      runEmbeddedPiAgentMock.mockRejectedValueOnce(
-        new Error(
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
           'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-        ),
-      );
+        );
+      });
 
       const { run } = createMinimalRun({
         sessionEntry,
@@ -160,6 +160,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload).toMatchObject({
         text: expect.stringContaining("Context limit exceeded during compaction"),
       });
+      expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -172,6 +173,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
     }
   });
+
   it("retries after context overflow payload by resetting the session", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-overflow-reset-"));
@@ -188,7 +190,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
       await fs.writeFile(transcriptPath, "ok", "utf-8");
 
-      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
         payloads: [{ text: "Context overflow: prompt too large", isError: true }],
         meta: {
           durationMs: 1,
@@ -198,7 +200,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
               'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
           },
         },
-      });
+      }));
 
       const { run } = createMinimalRun({
         sessionEntry,
@@ -211,8 +213,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const payload = Array.isArray(res) ? res[0] : res;
       expect(payload).toMatchObject({
-        text: expect.stringContaining("Context limit exceeded."),
+        text: expect.stringContaining("Context limit exceeded"),
       });
+      expect(payload.text?.toLowerCase()).toContain("reset");
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -225,6 +228,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
     }
   });
+
   it("resets the session after role ordering payloads", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "clawdbot-session-role-ordering-"));
