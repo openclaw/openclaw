@@ -49,6 +49,69 @@ function readAccessToken(value: unknown): string | null {
   return null;
 }
 
+function stripProviderPrefix(raw: string): string {
+  return raw.replace(/^(msteams|teams):/i, "");
+}
+
+export function normalizeMSTeamsMessagingTarget(raw: string): string | undefined {
+  let trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  trimmed = stripProviderPrefix(trimmed).trim();
+  if (/^conversation:/i.test(trimmed)) {
+    const id = trimmed.slice("conversation:".length).trim();
+    return id ? `conversation:${id}` : undefined;
+  }
+  if (/^user:/i.test(trimmed)) {
+    const id = trimmed.slice("user:".length).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  return trimmed || undefined;
+}
+
+export function normalizeMSTeamsUserInput(raw: string): string {
+  return stripProviderPrefix(raw).replace(/^(user|conversation):/i, "").trim();
+}
+
+export function parseMSTeamsConversationId(raw: string): string | null {
+  const trimmed = stripProviderPrefix(raw).trim();
+  if (!/^conversation:/i.test(trimmed)) return null;
+  const id = trimmed.slice("conversation:".length).trim();
+  return id;
+}
+
+function normalizeMSTeamsTeamKey(raw: string): string | undefined {
+  const trimmed = stripProviderPrefix(raw).replace(/^team:/i, "").trim();
+  return trimmed || undefined;
+}
+
+function normalizeMSTeamsChannelKey(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^#/, "").trim() ?? "";
+  return trimmed || undefined;
+}
+
+export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; channel?: string } {
+  const trimmed = stripProviderPrefix(raw).trim();
+  if (!trimmed) return {};
+  const parts = trimmed.split("/");
+  const team = normalizeMSTeamsTeamKey(parts[0] ?? "");
+  const channel = parts.length > 1 ? normalizeMSTeamsChannelKey(parts.slice(1).join("/")) : undefined;
+  return {
+    ...(team ? { team } : {}),
+    ...(channel ? { channel } : {}),
+  };
+}
+
+export function parseMSTeamsTeamEntry(
+  raw: string,
+): { teamKey: string; channelKey?: string } | null {
+  const { team, channel } = parseMSTeamsTeamChannelInput(raw);
+  if (!team) return null;
+  return {
+    teamKey: team,
+    ...(channel ? { channelKey: channel } : {}),
+  };
+}
+
 function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
 }
@@ -86,15 +149,6 @@ async function resolveGraphToken(cfg: unknown): Promise<string> {
   return accessToken;
 }
 
-function parseTeamChannelInput(raw: string): { team?: string; channel?: string } {
-  const trimmed = raw.trim();
-  if (!trimmed) return {};
-  const parts = trimmed.split("/");
-  const team = parts[0]?.trim();
-  const channel = parts.length > 1 ? parts.slice(1).join("/").trim() : undefined;
-  return { team: team || undefined, channel: channel || undefined };
-}
-
 async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
@@ -117,7 +171,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
   const results: MSTeamsChannelResolution[] = [];
 
   for (const input of params.entries) {
-    const { team, channel } = parseTeamChannelInput(input);
+    const { team, channel } = parseMSTeamsTeamChannelInput(input);
     if (!team) {
       results.push({ input, resolved: false });
       continue;
@@ -180,7 +234,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
   const results: MSTeamsUserResolution[] = [];
 
   for (const input of params.entries) {
-    const query = normalizeQuery(input);
+    const query = normalizeQuery(normalizeMSTeamsUserInput(input));
     if (!query) {
       results.push({ input, resolved: false });
       continue;

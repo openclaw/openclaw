@@ -25,6 +25,7 @@ import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
 import {
   listMatrixDirectoryGroupsLive,
   listMatrixDirectoryPeersLive,
@@ -245,81 +246,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       listMatrixDirectoryGroupsLive({ cfg, query, limit }),
   },
   resolver: {
-    resolveTargets: async ({ cfg, inputs, kind, runtime }) => {
-      const results = [];
-      for (const input of inputs) {
-        const trimmed = input.trim();
-        if (!trimmed) {
-          results.push({ input, resolved: false, note: "empty input" });
-          continue;
-        }
-        if (kind === "user") {
-          if (trimmed.startsWith("@") && trimmed.includes(":")) {
-            results.push({ input, resolved: true, id: trimmed });
-            continue;
-          }
-          try {
-            const matches = await listMatrixDirectoryPeersLive({
-              cfg,
-              query: trimmed,
-              limit: 5,
-            });
-            const best = matches[0];
-            results.push({
-              input,
-              resolved: Boolean(best?.id),
-              id: best?.id,
-              name: best?.name,
-              note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-            });
-          } catch (err) {
-            runtime.error?.(`matrix resolve failed: ${String(err)}`);
-            results.push({ input, resolved: false, note: "lookup failed" });
-          }
-          continue;
-        }
-        if (trimmed.startsWith("!") || trimmed.startsWith("#")) {
-          try {
-            const matches = await listMatrixDirectoryGroupsLive({
-              cfg,
-              query: trimmed,
-              limit: 5,
-            });
-            const best = matches[0];
-            results.push({
-              input,
-              resolved: Boolean(best?.id),
-              id: best?.id,
-              name: best?.name,
-              note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-            });
-          } catch (err) {
-            runtime.error?.(`matrix resolve failed: ${String(err)}`);
-            results.push({ input, resolved: false, note: "lookup failed" });
-          }
-          continue;
-        }
-        try {
-          const matches = await listMatrixDirectoryGroupsLive({
-            cfg,
-            query: trimmed,
-            limit: 5,
-          });
-          const best = matches[0];
-          results.push({
-            input,
-            resolved: Boolean(best?.id),
-            id: best?.id,
-            name: best?.name,
-            note: matches.length > 1 ? "multiple matches; chose first" : undefined,
-          });
-        } catch (err) {
-          runtime.error?.(`matrix resolve failed: ${String(err)}`);
-          results.push({ input, resolved: false, note: "lookup failed" });
-        }
-      }
-      return results;
-    },
+    resolveTargets: async ({ cfg, inputs, kind, runtime }) =>
+      resolveMatrixTargets({ cfg, inputs, kind, runtime }),
   },
   actions: matrixMessageActions,
   setup: {

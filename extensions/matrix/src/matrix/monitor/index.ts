@@ -46,6 +46,7 @@ import {
   resolveMatrixAllowListMatches,
   normalizeAllowListLower,
 } from "./allowlist.js";
+import { mergeAllowlist, summarizeMapping } from "../../../../../src/channels/allowlists/resolve-utils.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { downloadMatrixMedia } from "./media.js";
@@ -53,56 +54,7 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
-import {
-  listMatrixDirectoryGroupsLive,
-  listMatrixDirectoryPeersLive,
-} from "../../directory-live.js";
-
-function mergeAllowlist(params: {
-  existing?: Array<string | number>;
-  additions: string[];
-}): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  const push = (value: string) => {
-    const normalized = value.trim();
-    if (!normalized) return;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    merged.push(normalized);
-  };
-  for (const entry of params.existing ?? []) {
-    push(String(entry));
-  }
-  for (const entry of params.additions) {
-    push(entry);
-  }
-  return merged;
-}
-
-function summarizeMapping(
-  label: string,
-  mapping: string[],
-  unresolved: string[],
-  runtime: RuntimeEnv,
-) {
-  const lines: string[] = [];
-  if (mapping.length > 0) {
-    const sample = mapping.slice(0, 6);
-    const suffix = mapping.length > sample.length ? ` (+${mapping.length - sample.length})` : "";
-    lines.push(`${label} resolved: ${sample.join(", ")}${suffix}`);
-  }
-  if (unresolved.length > 0) {
-    const sample = unresolved.slice(0, 6);
-    const suffix =
-      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
-    lines.push(`${label} unresolved: ${sample.join(", ")}${suffix}`);
-  }
-  if (lines.length > 0) {
-    runtime.log?.(lines.join("\n"));
-  }
-}
+import { resolveMatrixTargets } from "../../resolve-targets.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -146,27 +98,28 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       const mapping: string[] = [];
       const unresolved: string[] = [];
       const additions: string[] = [];
+      const pending: string[] = [];
       for (const entry of entries) {
         if (isMatrixUserId(entry)) {
           additions.push(entry);
           continue;
         }
-        try {
-          const matches = await listMatrixDirectoryPeersLive({
-            cfg,
-            query: entry,
-            limit: 5,
-          });
-          const best = matches[0];
-          if (best?.id) {
-            additions.push(best.id);
-            mapping.push(`${entry}→${best.id}`);
+        pending.push(entry);
+      }
+      if (pending.length > 0) {
+        const resolved = await resolveMatrixTargets({
+          cfg,
+          inputs: pending,
+          kind: "user",
+          runtime,
+        });
+        for (const entry of resolved) {
+          if (entry.resolved && entry.id) {
+            additions.push(entry.id);
+            mapping.push(`${entry.input}→${entry.id}`);
           } else {
-            unresolved.push(entry);
+            unresolved.push(entry.input);
           }
-        } catch (err) {
-          runtime.log?.(`matrix user resolve failed; using config entries. ${String(err)}`);
-          unresolved.push(entry);
         }
       }
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -179,6 +132,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     const mapping: string[] = [];
     const unresolved: string[] = [];
     const nextRooms = { ...roomsConfig };
+    const pending: Array<{ input: string; query: string }> = [];
     for (const entry of entries) {
       const trimmed = entry.trim();
       if (!trimmed) continue;
@@ -190,28 +144,27 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         mapping.push(`${entry}→${cleaned}`);
         continue;
       }
-      try {
-        const matches = await listMatrixDirectoryGroupsLive({
-          cfg,
-          query: trimmed,
-          limit: 10,
-        });
-        const exact = matches.find(
-          (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
-        );
-        const best = exact ?? matches[0];
-        if (best?.id) {
-          if (!nextRooms[best.id]) {
-            nextRooms[best.id] = roomsConfig[entry];
+      pending.push({ input: entry, query: trimmed });
+    }
+    if (pending.length > 0) {
+      const resolved = await resolveMatrixTargets({
+        cfg,
+        inputs: pending.map((entry) => entry.query),
+        kind: "group",
+        runtime,
+      });
+      resolved.forEach((entry, index) => {
+        const source = pending[index];
+        if (!source) return;
+        if (entry.resolved && entry.id) {
+          if (!nextRooms[entry.id]) {
+            nextRooms[entry.id] = roomsConfig[source.input];
           }
-          mapping.push(`${entry}→${best.id}`);
+          mapping.push(`${source.input}→${entry.id}`);
         } else {
-          unresolved.push(entry);
+          unresolved.push(source.input);
         }
-      } catch (err) {
-        runtime.log?.(`matrix room resolve failed; using config entries. ${String(err)}`);
-        unresolved.push(entry);
-      }
+      });
     }
     roomsConfig = nextRooms;
     summarizeMapping("matrix rooms", mapping, unresolved, runtime);
