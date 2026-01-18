@@ -74,6 +74,22 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
+function resolveExecConfig(cfg: ClawdbotConfig | undefined, agentId?: string | null) {
+  const globalExec = cfg?.tools?.exec;
+  const agentExec = cfg?.agents?.list?.find((entry) => entry.id === agentId)?.tools?.exec;
+  return {
+    host: agentExec?.host ?? globalExec?.host,
+    security: agentExec?.security ?? globalExec?.security,
+    ask: agentExec?.ask ?? globalExec?.ask,
+    node: agentExec?.node ?? globalExec?.node,
+    backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
+    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
+    cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
+    notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
+    applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+  };
+}
+
 export const __testing = {
   cleanToolSchemaForGemini,
   normalizeToolParams,
@@ -146,6 +162,7 @@ export function createClawdbotCodingTools(options?: {
     sandbox?.tools,
     subagentPolicy,
   ]);
+  const execConfig = resolveExecConfig(options?.config, agentId);
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = options?.workspaceDir ?? process.cwd();
@@ -184,11 +201,20 @@ export function createClawdbotCodingTools(options?: {
   });
   const execTool = createExecTool({
     ...options?.exec,
+    host: options?.exec?.host ?? execConfig.host,
+    security: options?.exec?.security ?? execConfig.security,
+    ask: options?.exec?.ask ?? execConfig.ask,
+    node: options?.exec?.node ?? execConfig.node,
+    agentId,
     cwd: options?.workspaceDir,
     allowBackground,
     scopeKey,
     sessionKey: options?.sessionKey,
     messageProvider: options?.messageProvider,
+    backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
+    timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
+    cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
+    notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

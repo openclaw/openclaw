@@ -3,14 +3,14 @@ import Observation
 import SwiftUI
 
 struct SystemRunSettingsView: View {
-    @State private var model = SystemRunSettingsModel()
-    @State private var tab: SystemRunSettingsTab = .policy
+    @State private var model = ExecApprovalsSettingsModel()
+    @State private var tab: ExecApprovalsSettingsTab = .policy
     @State private var newPattern: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-                Text("Node Run Commands")
+                Text("Exec approvals")
                     .font(.body)
                 Spacer(minLength: 0)
                 if self.model.agentIds.count > 1 {
@@ -28,12 +28,12 @@ struct SystemRunSettingsView: View {
             }
 
             Picker("", selection: self.$tab) {
-                ForEach(SystemRunSettingsTab.allCases) { tab in
+                ForEach(ExecApprovalsSettingsTab.allCases) { tab in
                     Text(tab.title).tag(tab)
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 280)
+            .frame(width: 320)
 
             if self.tab == .policy {
                 self.policyView
@@ -48,19 +48,41 @@ struct SystemRunSettingsView: View {
     }
 
     private var policyView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Picker("", selection: Binding(
-                get: { self.model.policy },
-                set: { self.model.setPolicy($0) }))
+                get: { self.model.security },
+                set: { self.model.setSecurity($0) }))
             {
-                ForEach(SystemRunPolicy.allCases) { policy in
-                    Text(policy.title).tag(policy)
+                ForEach(ExecSecurity.allCases) { security in
+                    Text(security.title).tag(security)
                 }
             }
             .labelsHidden()
             .pickerStyle(.menu)
 
-            Text("Controls remote command execution on this Mac when it is paired as a node. \"Always Ask\" prompts on each command; \"Always Allow\" runs without prompts; \"Never\" disables system.run.")
+            Picker("", selection: Binding(
+                get: { self.model.ask },
+                set: { self.model.setAsk($0) }))
+            {
+                ForEach(ExecAsk.allCases) { ask in
+                    Text(ask.title).tag(ask)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+
+            Picker("", selection: Binding(
+                get: { self.model.askFallback },
+                set: { self.model.setAskFallback($0) }))
+            {
+                ForEach(ExecSecurity.allCases) { mode in
+                    Text("Fallback: \(mode.title)").tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+
+            Text("Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -80,7 +102,7 @@ struct SystemRunSettingsView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("Add allowlist pattern (supports globs)", text: self.$newPattern)
+                TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
                     .textFieldStyle(.roundedBorder)
                 Button("Add") {
                     let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,12 +120,12 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(self.model.entries.enumerated()), id: \.element.id) { index, _ in
-                        SystemRunAllowlistRow(
+                    ForEach(Array(self.model.entries.enumerated()), id: \.offset) { index, _ in
+                        ExecAllowlistRow(
                             entry: Binding(
                                 get: { self.model.entries[index] },
-                                set: { self.model.updateEntry($0) }),
-                            onRemove: { self.model.removeEntry($0.id) })
+                                set: { self.model.updateEntry($0, at: index) }),
+                            onRemove: { self.model.removeEntry(at: index) })
                     }
                 }
             }
@@ -111,7 +133,7 @@ struct SystemRunSettingsView: View {
     }
 }
 
-private enum SystemRunSettingsTab: String, CaseIterable, Identifiable {
+private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
     case policy
     case allowlist
 
@@ -119,15 +141,15 @@ private enum SystemRunSettingsTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .policy: "Policy"
+        case .policy: "Access"
         case .allowlist: "Allowlist"
         }
     }
 }
 
-struct SystemRunAllowlistRow: View {
-    @Binding var entry: SystemRunAllowlistEntry
-    let onRemove: (SystemRunAllowlistEntry) -> Void
+struct ExecAllowlistRow: View {
+    @Binding var entry: ExecAllowlistEntry
+    let onRemove: () -> Void
     @State private var draftPattern: String = ""
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -139,20 +161,11 @@ struct SystemRunAllowlistRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Toggle("", isOn: self.$entry.enabled)
-                    .labelsHidden()
-
                 TextField("Pattern", text: self.patternBinding)
                     .textFieldStyle(.roundedBorder)
 
-                if self.entry.matchKind == .argv {
-                    Text("Legacy")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Button(role: .destructive) {
-                    self.onRemove(self.entry)
+                    self.onRemove()
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -160,7 +173,8 @@ struct SystemRunAllowlistRow: View {
             }
 
             if let lastUsedAt = self.entry.lastUsedAt {
-                Text("Last used \(Self.relativeFormatter.localizedString(for: lastUsedAt, relativeTo: Date()))")
+                let date = Date(timeIntervalSince1970: lastUsedAt / 1000.0)
+                Text("Last used \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let lastUsedCommand = self.entry.lastUsedCommand, !lastUsedCommand.isEmpty {
@@ -180,22 +194,21 @@ struct SystemRunAllowlistRow: View {
             set: { newValue in
                 self.draftPattern = newValue
                 self.entry.pattern = newValue
-                if self.entry.matchKind == .argv {
-                    self.entry.matchKind = .glob
-                }
             })
     }
 }
 
 @MainActor
 @Observable
-final class SystemRunSettingsModel {
+final class ExecApprovalsSettingsModel {
     var agentIds: [String] = []
     var selectedAgentId: String = "main"
     var defaultAgentId: String = "main"
-    var policy: SystemRunPolicy = .ask
+    var security: ExecSecurity = .deny
+    var ask: ExecAsk = .onMiss
+    var askFallback: ExecSecurity = .deny
     var autoAllowSkills = false
-    var entries: [SystemRunAllowlistEntry] = []
+    var entries: [ExecAllowlistEntry] = []
     var skillBins: [String] = []
 
     func refresh() async {
@@ -241,43 +254,63 @@ final class SystemRunSettingsModel {
     }
 
     func loadSettings(for agentId: String) {
-        self.policy = SystemRunPolicy.load(agentId: agentId)
-        self.autoAllowSkills = MacNodeConfigFile.systemRunAutoAllowSkills(agentId: agentId) ?? false
-        self.entries = SystemRunAllowlistStore.load(agentId: agentId)
+        let resolved = ExecApprovalsStore.resolve(agentId: agentId)
+        self.security = resolved.agent.security
+        self.ask = resolved.agent.ask
+        self.askFallback = resolved.agent.askFallback
+        self.autoAllowSkills = resolved.agent.autoAllowSkills
+        self.entries = resolved.allowlist
             .sorted { $0.pattern.localizedCaseInsensitiveCompare($1.pattern) == .orderedAscending }
     }
 
-    func setPolicy(_ policy: SystemRunPolicy) {
-        self.policy = policy
-        MacNodeConfigFile.setSystemRunPolicy(policy, agentId: self.selectedAgentId)
-        if self.selectedAgentId == self.defaultAgentId || self.agentIds.count <= 1 {
-            AppStateStore.shared.systemRunPolicy = policy
+    func setSecurity(_ security: ExecSecurity) {
+        self.security = security
+        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+            entry.security = security
+        }
+        self.syncQuickMode()
+    }
+
+    func setAsk(_ ask: ExecAsk) {
+        self.ask = ask
+        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+            entry.ask = ask
+        }
+        self.syncQuickMode()
+    }
+
+    func setAskFallback(_ mode: ExecSecurity) {
+        self.askFallback = mode
+        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+            entry.askFallback = mode
         }
     }
 
     func setAutoAllowSkills(_ enabled: Bool) {
         self.autoAllowSkills = enabled
-        MacNodeConfigFile.setSystemRunAutoAllowSkills(enabled, agentId: self.selectedAgentId)
+        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+            entry.autoAllowSkills = enabled
+        }
         Task { await self.refreshSkillBins(force: enabled) }
     }
 
     func addEntry(_ pattern: String) {
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let entry = SystemRunAllowlistEntry(pattern: trimmed, enabled: true, matchKind: .glob, source: .manual)
-        self.entries.append(entry)
-        SystemRunAllowlistStore.save(self.entries, agentId: self.selectedAgentId)
+        self.entries.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: nil))
+        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
-    func updateEntry(_ entry: SystemRunAllowlistEntry) {
-        guard let index = self.entries.firstIndex(where: { $0.id == entry.id }) else { return }
+    func updateEntry(_ entry: ExecAllowlistEntry, at index: Int) {
+        guard self.entries.indices.contains(index) else { return }
         self.entries[index] = entry
-        SystemRunAllowlistStore.save(self.entries, agentId: self.selectedAgentId)
+        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
-    func removeEntry(_ id: String) {
-        self.entries.removeAll { $0.id == id }
-        SystemRunAllowlistStore.save(self.entries, agentId: self.selectedAgentId)
+    func removeEntry(at index: Int) {
+        guard self.entries.indices.contains(index) else { return }
+        self.entries.remove(at: index)
+        ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
     func refreshSkillBins(force: Bool = false) async {
@@ -287,5 +320,11 @@ final class SystemRunSettingsModel {
         }
         let bins = await SkillBinsCache.shared.currentBins(force: force)
         self.skillBins = bins.sorted()
+    }
+
+    private func syncQuickMode() {
+        if self.selectedAgentId == self.defaultAgentId || self.agentIds.count <= 1 {
+            AppStateStore.shared.execApprovalMode = ExecApprovalQuickMode.from(security: self.security, ask: self.ask)
+        }
     }
 }

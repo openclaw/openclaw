@@ -92,6 +92,7 @@ export function createNodesTool(options?: {
   agentSessionKey?: string;
   config?: ClawdbotConfig;
 }): AnyAgentTool {
+  const sessionKey = options?.agentSessionKey?.trim() || undefined;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -430,6 +431,7 @@ export function createNodesTool(options?: {
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
               agentId,
+              sessionKey,
             },
             timeoutMs: invokeTimeoutMs,
             idempotencyKey: crypto.randomUUID(),

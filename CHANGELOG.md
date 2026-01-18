@@ -2,6 +2,17 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-3
+
+### Changes
+- Exec: add host/security/ask routing for gateway + node exec.
+- macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.
+- macOS: add approvals socket UI server + node exec lifecycle events.
+- Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
+
+### Fixes
+- Tools: return a companion-app-required message when node exec is requested with no paired node.
+
 ## 2026.1.18-2
 
 ### Changes
