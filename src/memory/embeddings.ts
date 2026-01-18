@@ -1,7 +1,20 @@
+import fsSync from "node:fs";
+
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveUserPath } from "../utils.js";
+import {
+  createGeminiEmbeddingProvider,
+  type GeminiEmbeddingClient,
+} from "./embeddings-gemini.js";
+import {
+  createOpenAiEmbeddingProvider,
+  type OpenAiEmbeddingClient,
+} from "./embeddings-openai.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
+
+export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 
 export type EmbeddingProvider = {
   id: string;
@@ -12,230 +25,49 @@ export type EmbeddingProvider = {
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
-  requestedProvider: "openai" | "gemini" | "local";
-  fallbackFrom?: "local";
+  requestedProvider: "openai" | "local" | "gemini" | "auto";
+  fallbackFrom?: "openai" | "local" | "gemini";
   fallbackReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
 };
 
-export type OpenAiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  model: string;
-};
-
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  model: string;
-};
-
 export type EmbeddingProviderOptions = {
   config: ClawdbotConfig;
   agentDir?: string;
-  provider: "openai" | "gemini" | "local";
+  provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: "openai" | "none";
+  fallback: "openai" | "gemini" | "local" | "none";
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
   };
 };
 
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
-const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
 
-function normalizeOpenAiModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) return "text-embedding-3-small";
-  if (trimmed.startsWith("openai/")) return trimmed.slice("openai/".length);
-  return trimmed;
-}
-
-function normalizeGeminiModel(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) return DEFAULT_GEMINI_MODEL;
-  if (trimmed.startsWith("models/")) return trimmed.slice("models/".length);
-  if (trimmed.startsWith("google/")) return trimmed.slice("google/".length);
-  return trimmed;
-}
-
-async function createOpenAiEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: OpenAiEmbeddingClient }> {
-  const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
-
-  const embed = async (input: string[]): Promise<number[][]> => {
-    if (input.length === 0) return [];
-    const res = await fetch(url, {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify({ model: client.model, input }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`openai embeddings failed: ${res.status} ${text}`);
-    }
-    const payload = (await res.json()) as {
-      data?: Array<{ embedding?: number[] }>;
-    };
-    const data = payload.data ?? [];
-    return data.map((entry) => entry.embedding ?? []);
-  };
-
-  return {
-    provider: {
-      id: "openai",
-      model: client.model,
-      embedQuery: async (text) => {
-        const [vec] = await embed([text]);
-        return vec ?? [];
-      },
-      embedBatch: embed,
-    },
-    client,
-  };
-}
-
-function extractGeminiEmbeddingValues(entry: unknown): number[] {
-  if (!entry || typeof entry !== "object") return [];
-  const record = entry as { values?: unknown; embedding?: { values?: unknown } };
-  const values = record.values ?? record.embedding?.values;
-  if (!Array.isArray(values)) return [];
-  return values.filter((value): value is number => typeof value === "number");
-}
-
-function parseGeminiEmbeddings(payload: unknown): number[][] {
-  if (!payload || typeof payload !== "object") return [];
-  const data = payload as { embedding?: unknown; embeddings?: unknown[] };
-  if (Array.isArray(data.embeddings)) {
-    return data.embeddings.map((entry) => extractGeminiEmbeddingValues(entry));
+function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
+  const modelPath = options.local?.modelPath?.trim();
+  if (!modelPath) return false;
+  if (/^(hf:|https?:)/i.test(modelPath)) return false;
+  const resolved = resolveUserPath(modelPath);
+  try {
+    return fsSync.statSync(resolved).isFile();
+  } catch {
+    return false;
   }
-  if (data.embedding) {
-    return [extractGeminiEmbeddingValues(data.embedding)];
-  }
-  return [];
 }
 
-async function createGeminiEmbeddingProvider(
-  options: EmbeddingProviderOptions,
-): Promise<{ provider: EmbeddingProvider; client: GeminiEmbeddingClient }> {
-  const client = await resolveGeminiEmbeddingClient(options);
-  const baseUrl = client.baseUrl.replace(/\/$/, "");
-  const model = `models/${client.model}`;
-
-  const embedContent = async (input: string): Promise<number[]> => {
-    const res = await fetch(`${baseUrl}/${model}:embedContent`, {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify({
-        model,
-        content: { parts: [{ text: input }] },
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
-    }
-    const payload = await res.json();
-    const embeddings = parseGeminiEmbeddings(payload);
-    return embeddings[0] ?? [];
-  };
-
-  const embedBatch = async (input: string[]): Promise<number[][]> => {
-    if (input.length === 0) return [];
-    const res = await fetch(`${baseUrl}/${model}:batchEmbedContents`, {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify({
-        requests: input.map((text) => ({
-          model,
-          content: { parts: [{ text }] },
-        })),
-      }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`gemini embeddings failed: ${res.status} ${text}`);
-    }
-    const payload = await res.json();
-    const embeddings = parseGeminiEmbeddings(payload);
-    return embeddings;
-  };
-
-  return {
-    provider: {
-      id: "gemini",
-      model: client.model,
-      embedQuery: embedContent,
-      embedBatch,
-    },
-    client,
-  };
+function isMissingApiKeyError(err: unknown): boolean {
+  const message = formatError(err);
+  return message.includes("No API key found for provider");
 }
 
-async function resolveOpenAiEmbeddingClient(
-  options: EmbeddingProviderOptions,
-): Promise<OpenAiEmbeddingClient> {
-  const remote = options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
-  const remoteBaseUrl = remote?.baseUrl?.trim();
-
-  const { apiKey } = remoteApiKey
-    ? { apiKey: remoteApiKey }
-    : await resolveApiKeyForProvider({
-        provider: "openai",
-        cfg: options.config,
-        agentDir: options.agentDir,
-      });
-
-  const providerConfig = options.config.models?.providers?.openai;
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${apiKey}`,
-    ...headerOverrides,
-  };
-  const model = normalizeOpenAiModel(options.model);
-  return { baseUrl, headers, model };
-}
-
-async function resolveGeminiEmbeddingClient(
-  options: EmbeddingProviderOptions,
-): Promise<GeminiEmbeddingClient> {
-  const remote = options.remote;
-  const remoteApiKey = remote?.apiKey?.trim();
-  const remoteBaseUrl = remote?.baseUrl?.trim();
-
-  const { apiKey } = remoteApiKey
-    ? { apiKey: remoteApiKey }
-    : await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: options.config,
-        agentDir: options.agentDir,
-      });
-
-  const providerConfig = options.config.models?.providers?.google;
-  const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_GEMINI_BASE_URL;
-  const headerOverrides = Object.assign({}, providerConfig?.headers, remote?.headers);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "x-goog-api-key": apiKey,
-    ...headerOverrides,
-  };
-  const model = normalizeGeminiModel(options.model);
-  return { baseUrl, headers, model };
-}
 
 async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
@@ -289,35 +121,80 @@ export async function createEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
   const requestedProvider = options.provider;
-  if (options.provider === "gemini") {
-    const { provider, client } = await createGeminiEmbeddingProvider(options);
-    return { provider, requestedProvider, gemini: client };
-  }
-  if (options.provider === "local") {
-    try {
+  const fallback = options.fallback;
+
+  const createProvider = async (id: "openai" | "local" | "gemini") => {
+    if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
-      return { provider, requestedProvider };
-    } catch (err) {
-      const reason = formatLocalSetupError(err);
-      if (options.fallback === "openai") {
-        try {
-          const { provider, client } = await createOpenAiEmbeddingProvider(options);
-          return {
-            provider,
-            requestedProvider,
-            fallbackFrom: "local",
-            fallbackReason: reason,
-            openAi: client,
-          };
-        } catch (fallbackErr) {
-          throw new Error(`${reason}\n\nFallback to OpenAI failed: ${formatError(fallbackErr)}`);
-        }
-      }
-      throw new Error(reason);
+      return { provider };
     }
+    if (id === "gemini") {
+      const { provider, client } = await createGeminiEmbeddingProvider(options);
+      return { provider, gemini: client };
+    }
+    const { provider, client } = await createOpenAiEmbeddingProvider(options);
+    return { provider, openAi: client };
+  };
+
+  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini") =>
+    provider === "local" ? formatLocalSetupError(err) : formatError(err);
+
+  if (requestedProvider === "auto") {
+    const missingKeyErrors: string[] = [];
+    let localError: string | null = null;
+
+    if (canAutoSelectLocal(options)) {
+      try {
+        const local = await createProvider("local");
+        return { ...local, requestedProvider };
+      } catch (err) {
+        localError = formatLocalSetupError(err);
+      }
+    }
+
+    for (const provider of ["openai", "gemini"] as const) {
+      try {
+        const result = await createProvider(provider);
+        return { ...result, requestedProvider };
+      } catch (err) {
+        const message = formatPrimaryError(err, provider);
+        if (isMissingApiKeyError(err)) {
+          missingKeyErrors.push(message);
+          continue;
+        }
+        throw new Error(message);
+      }
+    }
+
+    const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
+    if (details.length > 0) {
+      throw new Error(details.join("\n\n"));
+    }
+    throw new Error("No embeddings provider available.");
   }
-  const { provider, client } = await createOpenAiEmbeddingProvider(options);
-  return { provider, requestedProvider, openAi: client };
+
+  try {
+    const primary = await createProvider(requestedProvider);
+    return { ...primary, requestedProvider };
+  } catch (primaryErr) {
+    const reason = formatPrimaryError(primaryErr, requestedProvider);
+    if (fallback && fallback !== "none" && fallback !== requestedProvider) {
+      try {
+        const fallbackResult = await createProvider(fallback);
+        return {
+          ...fallbackResult,
+          requestedProvider,
+          fallbackFrom: requestedProvider,
+          fallbackReason: reason,
+        };
+      } catch (fallbackErr) {
+        throw new Error(
+          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
+        );
+      }
+    }
+    throw new Error(reason);
+  }
 }
 
 function formatError(err: unknown): string {

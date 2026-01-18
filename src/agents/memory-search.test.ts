@@ -22,6 +22,21 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
+  it("defaults provider to auto when unspecified", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.fallback).toBe("none");
+  });
+
   it("merges defaults and overrides", () => {
     const cfg = {
       agents: {
@@ -126,6 +141,7 @@ describe("memory search config", () => {
       agents: {
         defaults: {
           memorySearch: {
+            provider: "openai",
             remote: {
               baseUrl: "https://default.example/v1",
               apiKey: "default-key",
@@ -166,6 +182,7 @@ describe("memory search config", () => {
       agents: {
         defaults: {
           memorySearch: {
+            provider: "openai",
             sources: ["memory", "sessions"],
           },
         },
@@ -189,6 +206,7 @@ describe("memory search config", () => {
       agents: {
         defaults: {
           memorySearch: {
+            provider: "openai",
             sources: ["memory", "sessions"],
             experimental: { sessionMemory: true },
           },

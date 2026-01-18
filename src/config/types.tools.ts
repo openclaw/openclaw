@@ -121,16 +121,30 @@ export type ToolPolicyConfig = {
 };
 
 export type ExecToolConfig = {
+  /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";
+  /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
+  /** Exec ask mode (default: on-miss). */
   ask?: "off" | "on-miss" | "always";
+  /** Default node binding for exec.host=node (node id/name). */
   node?: string;
+  /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
+  /** Default timeout (seconds) before auto-killing exec commands. */
   timeoutSec?: number;
+  /** How long to keep finished sessions in memory (ms). */
   cleanupMs?: number;
+  /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit?: boolean;
+  /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
+    /** Enable apply_patch for OpenAI models (default: false). */
     enabled?: boolean;
+    /**
+     * Optional allowlist of model ids that can use apply_patch.
+     * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+     */
     allowModels?: string[];
   };
 };
@@ -176,7 +190,7 @@ export type MemorySearchConfig = {
     apiKey?: string;
     headers?: Record<string, string>;
     batch?: {
-      /** Enable OpenAI Batch API for embedding indexing (default: true). */
+      /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
       /** Wait for batch completion (default: true). */
       wait?: boolean;
@@ -188,8 +202,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when local embeddings fail. */
-  fallback?: "openai" | "none";
+  /** Fallback behavior when embeddings fail. */
+  fallback?: "openai" | "gemini" | "local" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */

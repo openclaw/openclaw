@@ -3,13 +3,13 @@ import path from "node:path";
 
 import type { ClawdbotConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveUserPath } from "../utils.js";
+import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
-  provider: "openai" | "gemini" | "local";
+  provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -25,7 +25,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "none";
+  fallback: "openai" | "gemini" | "local" | "none";
   model: string;
   local: {
     modelPath?: string;
@@ -110,34 +110,40 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "openai";
-  const hasRemote = Boolean(defaults?.remote || overrides?.remote);
-  const includeRemote = hasRemote || provider === "openai" || provider === "gemini";
+  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
+  const defaultRemote = defaults?.remote;
+  const overrideRemote = overrides?.remote;
+  const hasRemote = Boolean(defaultRemote || overrideRemote);
+  const includeRemote =
+    hasRemote || provider === "openai" || provider === "gemini" || provider === "auto";
   const batch = {
-    enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
-    wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
+    enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? true,
+    wait: overrideRemote?.batch?.wait ?? defaultRemote?.batch?.wait ?? true,
     concurrency: Math.max(
       1,
-      overrides?.remote?.batch?.concurrency ?? defaults?.remote?.batch?.concurrency ?? 2,
+      overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
     ),
     pollIntervalMs:
-      overrides?.remote?.batch?.pollIntervalMs ?? defaults?.remote?.batch?.pollIntervalMs ?? 2000,
+      overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
     timeoutMinutes:
-      overrides?.remote?.batch?.timeoutMinutes ?? defaults?.remote?.batch?.timeoutMinutes ?? 60,
+      overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
   };
   const remote = includeRemote
     ? {
-        baseUrl: overrides?.remote?.baseUrl ?? defaults?.remote?.baseUrl,
-        apiKey: overrides?.remote?.apiKey ?? defaults?.remote?.apiKey,
-        headers: overrides?.remote?.headers ?? defaults?.remote?.headers,
+        baseUrl: overrideRemote?.baseUrl ?? defaultRemote?.baseUrl,
+        apiKey: overrideRemote?.apiKey ?? defaultRemote?.apiKey,
+        headers: overrideRemote?.headers ?? defaultRemote?.headers,
         batch,
       }
     : undefined;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "openai";
-  const model =
-    overrides?.model ??
-    defaults?.model ??
-    (provider === "gemini" ? DEFAULT_GEMINI_MODEL : DEFAULT_OPENAI_MODEL);
+  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const modelDefault =
+    provider === "gemini"
+      ? DEFAULT_GEMINI_MODEL
+      : provider === "openai"
+        ? DEFAULT_OPENAI_MODEL
+        : undefined;
+  const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
@@ -194,14 +200,14 @@ function mergeConfig(
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
 
-  const overlap = Math.max(0, Math.min(chunking.overlap, chunking.tokens - 1));
-  const minScore = Math.max(0, Math.min(1, query.minScore));
-  const vectorWeight = Math.max(0, Math.min(1, hybrid.vectorWeight));
-  const textWeight = Math.max(0, Math.min(1, hybrid.textWeight));
+  const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
+  const minScore = clampNumber(query.minScore, 0, 1);
+  const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
+  const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
   const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
   const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
-  const candidateMultiplier = Math.max(1, Math.min(20, Math.floor(hybrid.candidateMultiplier)));
+  const candidateMultiplier = clampInt(hybrid.candidateMultiplier, 1, 20);
   return {
     enabled,
     sources,
