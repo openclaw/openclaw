@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import type { PluginRuntime } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "./types.js";
 
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
-import { createPluginRuntime } from "../../../src/plugins/runtime/index.js";
 
 describe("matrix directory", () => {
   beforeEach(() => {
-    setMatrixRuntime(createPluginRuntime());
+    setMatrixRuntime({} as PluginRuntime);
   });
 
   it("lists peers and groups from config", async () => {
