@@ -71,7 +71,8 @@ export function resolveSession(opts: {
   const resetType = resolveSessionResetType({ sessionKey });
   const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
   const fresh = sessionEntry
-    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy }).fresh
+    ? evaluateSessionFreshness({ updatedAt: sessionEntry.updatedAt, now, policy: resetPolicy })
+        .fresh
     : false;
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
