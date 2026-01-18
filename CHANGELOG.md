@@ -26,6 +26,7 @@ Docs: https://docs.clawd.bot
 ||||||| parent of 903e9be49 (feat: surface node core/ui versions in macOS)
 
 ### Fixes
+- Tools: clamp bash foreground duration using shared helpers.
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
 - macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151)

@@ -8,6 +8,14 @@ export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
 }
 
+export function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+export function clampInt(value: number, min: number, max: number): number {
+  return clampNumber(Math.floor(value), min, max);
+}
+
 export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {

@@ -5,6 +5,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -31,14 +32,10 @@ type ActiveBashJob =
 
 let activeJob: ActiveBashJob | null = null;
 
-function clampNumber(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
-}
-
 function resolveForegroundMs(cfg: ClawdbotConfig): number {
   const raw = cfg.commands?.bashForegroundMs;
   if (typeof raw !== "number" || Number.isNaN(raw)) return DEFAULT_FOREGROUND_MS;
-  return clampNumber(Math.floor(raw), 0, MAX_FOREGROUND_MS);
+  return clampInt(raw, 0, MAX_FOREGROUND_MS);
 }
 
 function formatSessionSnippet(sessionId: string) {
