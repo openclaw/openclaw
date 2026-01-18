@@ -18,6 +18,23 @@ async function yieldToEventLoop() {
   await fs.stat(process.cwd()).catch(() => {});
 }
 
+async function rmTempDir(dir: string) {
+  for (let i = 0; i < 100; i += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code;
+      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM" || code === "EACCES") {
+        await yieldToEventLoop();
+        continue;
+      }
+      throw err;
+    }
+  }
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 describe("gateway server cron", () => {
   test("supports cron.add and cron.list", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
@@ -50,7 +67,7 @@ describe("gateway server cron", () => {
 
     ws.close();
     await server.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
     testState.cronStorePath = undefined;
   });
 
@@ -86,7 +103,7 @@ describe("gateway server cron", () => {
 
     ws.close();
     await server.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
     testState.cronStorePath = undefined;
     testState.sessionConfig = undefined;
   });
@@ -118,7 +135,7 @@ describe("gateway server cron", () => {
 
     ws.close();
     await server.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
     testState.cronStorePath = undefined;
   });
 
@@ -161,7 +178,7 @@ describe("gateway server cron", () => {
 
     ws.close();
     await server.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
     testState.cronStorePath = undefined;
   });
 
@@ -199,7 +216,7 @@ describe("gateway server cron", () => {
 
     ws.close();
     await server.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    await rmTempDir(dir);
     testState.cronStorePath = undefined;
   });
 
@@ -432,7 +449,7 @@ describe("gateway server cron", () => {
     } finally {
       testState.cronEnabled = false;
       testState.cronStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await rmTempDir(dir);
     }
   }, 45_000);
 });
