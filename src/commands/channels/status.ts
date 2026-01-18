@@ -51,6 +51,18 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
       }
+      const botUsername = (() => {
+        const bot = account.bot as { username?: string | null } | undefined;
+        const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
+        const raw = bot?.username ?? probeBot?.username ?? "";
+        if (typeof raw !== "string") return "";
+        const trimmed = raw.trim();
+        if (!trimmed) return "";
+        return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
+      })();
+      if (botUsername) {
+        bits.push(`bot:${botUsername}`);
+      }
       if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
         bits.push(`dm:${account.dmPolicy}`);
       }

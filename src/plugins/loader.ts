@@ -12,6 +12,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import { defaultSlotIdForKey } from "./slots.js";
 import type {
   ClawdbotPluginConfigSchema,
   ClawdbotPluginDefinition,
@@ -92,7 +93,7 @@ const normalizePluginsConfig = (config?: ClawdbotConfig["plugins"]): NormalizedP
     deny: normalizeList(config?.deny),
     loadPaths: normalizeList(config?.load?.paths),
     slots: {
-      memory: memorySlot ?? "memory-core",
+      memory: memorySlot ?? defaultSlotIdForKey("memory"),
     },
     entries: normalizePluginEntries(config?.entries),
   };

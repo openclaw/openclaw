@@ -109,11 +109,7 @@ function buildMessagingSection(params: {
   ];
 }
 
-function buildDocsSection(params: {
-  docsPath?: string;
-  isMinimal: boolean;
-  readToolName: string;
-}) {
+function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
   if (!docsPath || params.isMinimal) return [];
   return [

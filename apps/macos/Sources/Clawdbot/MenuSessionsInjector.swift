@@ -14,6 +14,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private weak var statusItem: NSStatusItem?
     private var loadTask: Task<Void, Never>?
     private var nodesLoadTask: Task<Void, Never>?
+    private var previewTasks: [Task<Void, Never>] = []
     private var isMenuOpen = false
     private var lastKnownMenuWidth: CGFloat?
     private var menuOpenWidth: CGFloat?
@@ -87,6 +88,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.menuOpenWidth = nil
         self.loadTask?.cancel()
         self.nodesLoadTask?.cancel()
+        self.cancelPreviewTasks()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -107,6 +109,7 @@ extension MenuSessionsInjector {
     private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
 
     private func inject(into menu: NSMenu) {
+        self.cancelPreviewTasks()
         // Remove any previous injected items.
         for item in menu.items where item.tag == self.tag {
             menu.removeItem(item)
@@ -454,13 +457,44 @@ extension MenuSessionsInjector {
         item.tag = self.tag
         item.isEnabled = false
         let view = AnyView(SessionMenuPreviewView(
-            sessionKey: sessionKey,
             width: width,
-            maxItems: 10,
             maxLines: maxLines,
-            title: title))
-        item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
+            title: title,
+            items: [],
+            status: .loading))
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame.size.width = max(1, width)
+        let size = hosting.fittingSize
+        hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
+        item.view = hosting
+
+        let task = Task { [weak hosting] in
+            let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let hosting else { return }
+                let nextView = AnyView(SessionMenuPreviewView(
+                    width: width,
+                    maxLines: maxLines,
+                    title: title,
+                    items: snapshot.items,
+                    status: snapshot.status))
+                hosting.rootView = nextView
+                hosting.invalidateIntrinsicContentSize()
+                hosting.frame.size.width = max(1, width)
+                let size = hosting.fittingSize
+                hosting.frame.size.height = size.height
+            }
+        }
+        self.previewTasks.append(task)
         return item
+    }
+
+    private func cancelPreviewTasks() {
+        for task in self.previewTasks {
+            task.cancel()
+        }
+        self.previewTasks.removeAll()
     }
 
     private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = 2) -> NSMenuItem {

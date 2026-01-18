@@ -40,7 +40,7 @@ async function withLaunchctlStub(
         '  fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf8");',
         "}",
         'if (args[0] === "list") {',
-        "  const output = process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT || \"\";",
+        '  const output = process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT || "";',
         "  process.stdout.write(output);",
         "}",
         "process.exit(0);",
@@ -107,13 +107,10 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    await withLaunchctlStub(
-      { listOutput: "123 0 com.clawdbot.gateway\n" },
-      async ({ env }) => {
-        const listed = await isLaunchAgentListed({ env });
-        expect(listed).toBe(true);
-      },
-    );
+    await withLaunchctlStub({ listOutput: "123 0 com.clawdbot.gateway\n" }, async ({ env }) => {
+      const listed = await isLaunchAgentListed({ env });
+      expect(listed).toBe(true);
+    });
   });
 
   it("returns false when the label is missing", async () => {

@@ -1,7 +1,12 @@
 import { createServer } from "node:net";
 import { describe, expect, test } from "vitest";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import {
   connectOk,
   getFreePort,
@@ -15,6 +20,49 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
+
+const whatsappOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ deps, to, text }) => {
+    if (!deps?.sendWhatsApp) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, {})) };
+  },
+  sendMedia: async ({ deps, to, text, mediaUrl }) => {
+    if (!deps?.sendWhatsApp) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { mediaUrl })) };
+  },
+};
+
+const whatsappPlugin = createOutboundTestPlugin({
+  id: "whatsapp",
+  outbound: whatsappOutbound,
+  label: "WhatsApp",
+});
+
+const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  channels,
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  cliRegistrars: [],
+  services: [],
+  diagnostics: [],
+});
+
+const whatsappRegistry = createRegistry([
+  {
+    pluginId: "whatsapp",
+    source: "test",
+    plugin: whatsappPlugin,
+  },
+]);
+const emptyRegistry = createRegistry([]);
 
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
@@ -47,31 +95,38 @@ describe("gateway server misc", () => {
   });
 
   test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
+    try {
+      const { server, ws } = await startServerWithClient();
+      await connectOk(ws);
+      setActivePluginRegistry(whatsappRegistry);
+      expect(getChannelPlugin("whatsapp")).toBeDefined();
 
-    const idem = "same-key";
-    const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
-    const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
-    const sendReq = (id: string) =>
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "send",
-          params: { to: "+15550000000", message: "hi", idempotencyKey: idem },
-        }),
-      );
-    sendReq("a1");
-    sendReq("a2");
+      const idem = "same-key";
+      const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
+      const res2P = onceMessage(ws, (o) => o.type === "res" && o.id === "a2");
+      const sendReq = (id: string) =>
+        ws.send(
+          JSON.stringify({
+            type: "req",
+            id,
+            method: "send",
+            params: { to: "+15550000000", message: "hi", idempotencyKey: idem },
+          }),
+        );
+      sendReq("a1");
+      sendReq("a2");
 
-    const res1 = await res1P;
-    const res2 = await res2P;
-    expect(res1.ok).toBe(true);
-    expect(res2.ok).toBe(true);
-    expect(res1.payload).toEqual(res2.payload);
-    ws.close();
-    await server.close();
+      const res1 = await res1P;
+      const res2 = await res2P;
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
+      expect(res1.payload).toEqual(res2.payload);
+      ws.close();
+      await server.close();
+    } finally {
+      setActivePluginRegistry(prevRegistry);
+    }
   });
 
   test("refuses to start when port already bound", async () => {

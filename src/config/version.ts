@@ -20,7 +20,10 @@ export function parseClawdbotVersion(raw: string | null | undefined): ClawdbotVe
   };
 }
 
-export function compareClawdbotVersions(a: string | null | undefined, b: string | null | undefined): number | null {
+export function compareClawdbotVersions(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number | null {
   const parsedA = parseClawdbotVersion(a);
   const parsedB = parseClawdbotVersion(b);
   if (!parsedA || !parsedB) return null;

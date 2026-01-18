@@ -417,6 +417,22 @@ describe("channels command", () => {
     expect(lines.join("\n")).toMatch(/Telegram Bot API privacy mode/i);
   });
 
+  it("includes Telegram bot username from probe data", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      channelAccounts: {
+        telegram: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            probe: { ok: true, bot: { username: "clawdbot_bot" } },
+          },
+        ],
+      },
+    });
+    expect(lines.join("\n")).toMatch(/bot:@clawdbot_bot/);
+  });
+
   it("surfaces Telegram group membership audit issues in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {

@@ -63,7 +63,11 @@ describe("memory vector dedupe", () => {
     if (!result.manager) throw new Error("manager missing");
     manager = result.manager;
 
-    const db = (manager as unknown as { db: { exec: (sql: string) => void; prepare: (sql: string) => unknown } }).db;
+    const db = (
+      manager as unknown as {
+        db: { exec: (sql: string) => void; prepare: (sql: string) => unknown };
+      }
+    ).db;
     db.exec("CREATE TABLE IF NOT EXISTS chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
 
     const sqlSeen: string[] = [];
@@ -75,16 +79,20 @@ describe("memory vector dedupe", () => {
       return originalPrepare(sql);
     };
 
-    (manager as unknown as { ensureVectorReady: (dims?: number) => Promise<boolean> }).ensureVectorReady =
-      async () => true;
+    (
+      manager as unknown as { ensureVectorReady: (dims?: number) => Promise<boolean> }
+    ).ensureVectorReady = async () => true;
 
     const entry = await buildFileEntry(path.join(workspaceDir, "MEMORY.md"), workspaceDir);
-    await (manager as unknown as { indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void> }).indexFile(
-      entry,
-      { source: "memory" },
-    );
+    await (
+      manager as unknown as {
+        indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;
+      }
+    ).indexFile(entry, { source: "memory" });
 
-    const deleteIndex = sqlSeen.findIndex((sql) => sql.includes("DELETE FROM chunks_vec WHERE id = ?"));
+    const deleteIndex = sqlSeen.findIndex((sql) =>
+      sql.includes("DELETE FROM chunks_vec WHERE id = ?"),
+    );
     const insertIndex = sqlSeen.findIndex((sql) => sql.includes("INSERT INTO chunks_vec"));
     expect(deleteIndex).toBeGreaterThan(-1);
     expect(insertIndex).toBeGreaterThan(-1);

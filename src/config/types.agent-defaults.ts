@@ -105,6 +105,18 @@ export type AgentDefaultsConfig = {
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
   timeFormat?: "auto" | "12" | "24";
+  /**
+   * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
+   */
+  envelopeTimezone?: string;
+  /**
+   * Include absolute timestamps in message envelopes ("on" | "off", default: "on").
+   */
+  envelopeTimestamp?: "on" | "off";
+  /**
+   * Include elapsed time in message envelopes ("on" | "off", default: "on").
+   */
+  envelopeElapsed?: "on" | "off";
   /** Optional display-only context window override (used for % in status UIs). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */

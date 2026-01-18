@@ -90,7 +90,7 @@ describe("exec approvals command resolution", () => {
     const script = path.join(cwd, "bin", "tool");
     fs.mkdirSync(path.dirname(script), { recursive: true });
     fs.writeFileSync(script, "");
-    const res = resolveCommandResolution("\"./bin/tool\" --version", cwd, undefined);
+    const res = resolveCommandResolution('"./bin/tool" --version', cwd, undefined);
     expect(res?.resolvedPath).toBe(script);
   });
 });

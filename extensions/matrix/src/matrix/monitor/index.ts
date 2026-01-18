@@ -466,25 +466,34 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 	        isThreadRoot: event.isThreadRoot,
 	      });
 
+	      const route = core.channel.routing.resolveAgentRoute({
+	        cfg,
+	        channel: "matrix",
+	        peer: {
+	          kind: isDirectMessage ? "dm" : "channel",
+	          id: isDirectMessage ? senderId : roomId,
+	        },
+	      });
 	      const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
 	      const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
+	      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+	        agentId: route.agentId,
+	      });
+	      const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+	      const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+	        storePath,
+	        sessionKey: route.sessionKey,
+	      });
 	      const body = core.channel.reply.formatAgentEnvelope({
 	        channel: "Matrix",
 	        from: envelopeFrom,
 	        timestamp: event.getTs() ?? undefined,
+	        previousTimestamp,
+	        envelope: envelopeOptions,
 	        body: textWithId,
 	      });
 
-      const route = core.channel.routing.resolveAgentRoute({
-        cfg,
-        channel: "matrix",
-        peer: {
-          kind: isDirectMessage ? "dm" : "channel",
-          id: isDirectMessage ? senderId : roomId,
-        },
-      });
-
-      const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
+	      const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
 	        Body: body,
 	        RawBody: bodyText,
@@ -517,13 +526,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 	        OriginatingTo: `room:${roomId}`,
 	      });
 
-      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-        agentId: route.agentId,
-      });
-      void core.channel.session.recordSessionMetaFromInbound({
-        storePath,
-        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-        ctx: ctxPayload,
+	      void core.channel.session.recordSessionMetaFromInbound({
+	        storePath,
+	        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+	        ctx: ctxPayload,
       }).catch((err) => {
         logger.warn(
           { error: String(err), storePath, sessionKey: ctxPayload.SessionKey ?? route.sessionKey },

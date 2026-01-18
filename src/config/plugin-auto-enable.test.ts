@@ -8,6 +8,7 @@ describe("applyPluginAutoEnable", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { allow: ["telegram"] },
       },
+      env: {},
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(true);
@@ -21,6 +22,7 @@ describe("applyPluginAutoEnable", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { entries: { slack: { enabled: false } } },
       },
+      env: {},
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
@@ -39,6 +41,7 @@ describe("applyPluginAutoEnable", () => {
           },
         },
       },
+      env: {},
     });
 
     expect(result.config.plugins?.entries?.["google-antigravity-auth"]?.enabled).toBe(true);
@@ -50,6 +53,7 @@ describe("applyPluginAutoEnable", () => {
         channels: { slack: { botToken: "x" } },
         plugins: { enabled: false },
       },
+      env: {},
     });
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();

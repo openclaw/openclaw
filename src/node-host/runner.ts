@@ -576,7 +576,8 @@ async function handleInvoke(
   const skillAllow =
     autoAllowSkills && resolution?.executableName ? bins.has(resolution.executableName) : false;
 
-  const useMacAppExec = process.platform === "darwin" && (execHostEnforced || !execHostFallbackAllowed);
+  const useMacAppExec =
+    process.platform === "darwin" && (execHostEnforced || !execHostFallbackAllowed);
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
       command: argv,

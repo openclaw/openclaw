@@ -24,6 +24,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",
   loadSessionStore: () => testStore,
+  readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
   updateLastRoute: vi.fn().mockResolvedValue(undefined),
 }));

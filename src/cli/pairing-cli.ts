@@ -11,10 +11,8 @@ import {
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 
-const CHANNELS: PairingChannel[] = listPairingChannels();
-
 /** Parse channel, allowing extension channels not in core registry. */
-function parseChannel(raw: unknown): PairingChannel {
+function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
   const value = (
     typeof raw === "string"
       ? raw
@@ -28,7 +26,7 @@ function parseChannel(raw: unknown): PairingChannel {
 
   const normalized = normalizeChannelId(value);
   if (normalized) {
-    if (!CHANNELS.includes(normalized as PairingChannel)) {
+    if (!channels.includes(normalized as PairingChannel)) {
       throw new Error(`Channel ${normalized} does not support pairing`);
     }
     return normalized as PairingChannel;
@@ -45,6 +43,7 @@ async function notifyApproved(channel: PairingChannel, id: string) {
 }
 
 export function registerPairingCli(program: Command) {
+  const channels = listPairingChannels();
   const pairing = program
     .command("pairing")
     .description("Secure DM pairing (approve inbound requests)")
@@ -57,17 +56,17 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("list")
     .description("List pending pairing requests")
-    .option("--channel <channel>", `Channel (${CHANNELS.join(", ")})`)
-    .argument("[channel]", `Channel (${CHANNELS.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .argument("[channel]", `Channel (${channels.join(", ")})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
       const channelRaw = opts.channel ?? channelArg;
       if (!channelRaw) {
         throw new Error(
-          `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${CHANNELS.join(", ")})`,
+          `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${channels.join(", ")})`,
         );
       }
-      const channel = parseChannel(channelRaw);
+      const channel = parseChannel(channelRaw, channels);
       const requests = await listChannelPairingRequests(channel);
       if (opts.json) {
         console.log(JSON.stringify({ channel, requests }, null, 2));
@@ -87,7 +86,7 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("approve")
     .description("Approve a pairing code and allow that sender")
-    .option("--channel <channel>", `Channel (${CHANNELS.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
@@ -104,7 +103,7 @@ export function registerPairingCli(program: Command) {
           `Too many arguments. Use: clawdbot pairing approve --channel <channel> <code>`,
         );
       }
-      const channel = parseChannel(channelRaw);
+      const channel = parseChannel(channelRaw, channels);
       const approved = await approveChannelPairingCode({
         channel,
         code: String(resolvedCode),

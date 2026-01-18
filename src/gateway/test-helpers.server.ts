@@ -99,6 +99,7 @@ export function installGatewayTestHooks() {
     testState.agentConfig = undefined;
     testState.agentsConfig = undefined;
     testState.bindingsConfig = undefined;
+    testState.channelsConfig = undefined;
     testState.allowFrom = undefined;
     testIsNixMode.value = false;
     cronIsolatedRun.mockClear();

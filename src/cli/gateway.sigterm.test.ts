@@ -87,12 +87,14 @@ describe("gateway SIGTERM", () => {
     const out: string[] = [];
     const err: string[] = [];
 
+    const bunBin = process.env.BUN_INSTALL
+      ? path.join(process.env.BUN_INSTALL, "bin", "bun")
+      : "bun";
+
     child = spawn(
-      process.execPath,
+      bunBin,
       [
-        "--import",
-        "tsx",
-        "src/index.ts",
+        "src/entry.ts",
         "gateway",
         "--port",
         String(port),

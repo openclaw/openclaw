@@ -176,9 +176,7 @@ export async function isLaunchAgentListed(args: {
   const label = resolveLaunchAgentLabel({ env: args.env });
   const res = await execLaunchctl(["list"]);
   if (res.code !== 0) return false;
-  return res.stdout
-    .split(/\r?\n/)
-    .some((line) => line.trim().split(/\s+/).at(-1) === label);
+  return res.stdout.split(/\r?\n/).some((line) => line.trim().split(/\s+/).at(-1) === label);
 }
 
 export async function launchAgentPlistExists(

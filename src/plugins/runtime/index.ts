@@ -11,7 +11,11 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
@@ -33,12 +37,16 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
+  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
 import { auditDiscordChannelPermissions } from "../../discord/audit.js";
-import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "../../discord/directory-live.js";
+import {
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
+} from "../../discord/directory-live.js";
 import { monitorDiscordProvider } from "../../discord/monitor.js";
 import { probeDiscord } from "../../discord/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
@@ -68,7 +76,10 @@ import { monitorSignalProvider } from "../../signal/index.js";
 import { probeSignal } from "../../signal/probe.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { monitorSlackProvider } from "../../slack/index.js";
-import { listSlackDirectoryGroupsLive, listSlackDirectoryPeersLive } from "../../slack/directory-live.js";
+import {
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+} from "../../slack/directory-live.js";
 import { probeSlack } from "../../slack/probe.js";
 import { resolveSlackChannelAllowlist } from "../../slack/resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
@@ -137,12 +148,12 @@ export function createPluginRuntime(): PluginRuntime {
       registerMemoryCli,
     },
     channel: {
-    text: {
-      chunkMarkdownText,
-      chunkText,
-      resolveTextChunkLimit,
-      hasControlCommand,
-    },
+      text: {
+        chunkMarkdownText,
+        chunkText,
+        resolveTextChunkLimit,
+        hasControlCommand,
+      },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher,
         createReplyDispatcherWithTyping,
@@ -151,6 +162,8 @@ export function createPluginRuntime(): PluginRuntime {
         dispatchReplyFromConfig,
         finalizeInboundContext,
         formatAgentEnvelope,
+        formatInboundEnvelope,
+        resolveEnvelopeFormatOptions,
       },
       routing: {
         resolveAgentRoute,
@@ -166,6 +179,7 @@ export function createPluginRuntime(): PluginRuntime {
       },
       session: {
         resolveStorePath,
+        readSessionUpdatedAt,
         recordSessionMetaFromInbound,
         updateLastRoute,
       },
@@ -181,12 +195,12 @@ export function createPluginRuntime(): PluginRuntime {
         createInboundDebouncer,
         resolveInboundDebounceMs,
       },
-    commands: {
-      resolveCommandAuthorizedFromAuthorizers,
-      isControlCommandMessage,
-      shouldComputeCommandAuthorized,
-      shouldHandleTextCommands,
-    },
+      commands: {
+        resolveCommandAuthorizedFromAuthorizers,
+        isControlCommandMessage,
+        shouldComputeCommandAuthorized,
+        shouldHandleTextCommands,
+      },
       discord: {
         messageActions: discordMessageActions,
         auditChannelPermissions: auditDiscordChannelPermissions,

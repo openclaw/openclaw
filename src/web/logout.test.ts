@@ -23,23 +23,23 @@ describe("web logout", () => {
 
   it("deletes cached credentials when present", { timeout: 60_000 }, async () => {
     await withTempHome(async (home) => {
-      vi.resetModules();
-      const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
+      const { logoutWeb } = await import("./session.js");
+      const { resolveDefaultWebAuthDir } = await import("./auth-store.js");
+      const authDir = resolveDefaultWebAuthDir();
 
-      expect(isPathWithinBase(home, WA_WEB_AUTH_DIR)).toBe(true);
+      expect(isPathWithinBase(home, authDir)).toBe(true);
 
-      fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
-      fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
+      fs.mkdirSync(authDir, { recursive: true });
+      fs.writeFileSync(path.join(authDir, "creds.json"), "{}");
       const result = await logoutWeb({ runtime: runtime as never });
 
       expect(result).toBe(true);
-      expect(fs.existsSync(WA_WEB_AUTH_DIR)).toBe(false);
+      expect(fs.existsSync(authDir)).toBe(false);
     });
   });
 
   it("no-ops when nothing to delete", { timeout: 60_000 }, async () => {
     await withTempHome(async () => {
-      vi.resetModules();
       const { logoutWeb } = await import("./session.js");
       const result = await logoutWeb({ runtime: runtime as never });
       expect(result).toBe(false);
@@ -49,7 +49,6 @@ describe("web logout", () => {
 
   it("keeps shared oauth.json when using legacy auth dir", async () => {
     await withTempHome(async () => {
-      vi.resetModules();
       const { logoutWeb } = await import("./session.js");
 
       const { resolveOAuthDir } = await import("../config/paths.js");

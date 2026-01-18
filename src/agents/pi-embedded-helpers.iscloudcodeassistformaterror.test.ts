@@ -25,7 +25,7 @@ describe("isCloudCodeAssistFormatError", () => {
     expect(isCloudCodeAssistFormatError("rate limit exceeded")).toBe(false);
     expect(
       isCloudCodeAssistFormatError(
-        "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels\"}}",
+        '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
       ),
     ).toBe(false);
   });

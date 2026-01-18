@@ -1,3 +1,4 @@
+import { retryAsync } from "../infra/retry.js";
 import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { hashText } from "./internal.js";
 
@@ -92,23 +93,42 @@ async function submitOpenAiBatch(params: {
     throw new Error("openai batch file upload failed: missing file id");
   }
 
-  const batchRes = await fetch(`${baseUrl}/batches`, {
-    method: "POST",
-    headers: getOpenAiHeaders(params.openAi, { json: true }),
-    body: JSON.stringify({
-      input_file_id: filePayload.id,
-      endpoint: OPENAI_BATCH_ENDPOINT,
-      completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
-      metadata: {
-        source: "clawdbot-memory",
-        agent: params.agentId,
+  const batchRes = await retryAsync(
+    async () => {
+      const res = await fetch(`${baseUrl}/batches`, {
+        method: "POST",
+        headers: getOpenAiHeaders(params.openAi, { json: true }),
+        body: JSON.stringify({
+          input_file_id: filePayload.id,
+          endpoint: OPENAI_BATCH_ENDPOINT,
+          completion_window: OPENAI_BATCH_COMPLETION_WINDOW,
+          metadata: {
+            source: "clawdbot-memory",
+            agent: params.agentId,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(`openai batch create failed: ${res.status} ${text}`) as Error & {
+          status?: number;
+        };
+        err.status = res.status;
+        throw err;
+      }
+      return res;
+    },
+    {
+      attempts: 3,
+      minDelayMs: 300,
+      maxDelayMs: 2000,
+      jitter: 0.2,
+      shouldRetry: (err) => {
+        const status = (err as { status?: number }).status;
+        return status === 429 || (typeof status === "number" && status >= 500);
       },
-    }),
-  });
-  if (!batchRes.ok) {
-    const text = await batchRes.text();
-    throw new Error(`openai batch create failed: ${batchRes.status} ${text}`);
-  }
+    },
+  );
   return (await batchRes.json()) as OpenAiBatchStatus;
 }
 

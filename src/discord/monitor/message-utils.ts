@@ -44,6 +44,10 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
 
+export function __resetDiscordChannelInfoCacheForTest() {
+  DISCORD_CHANNEL_INFO_CACHE.clear();
+}
+
 export async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,

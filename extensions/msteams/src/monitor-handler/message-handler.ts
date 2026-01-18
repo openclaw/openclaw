@@ -406,10 +406,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
 	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
 	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
+	    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+	      agentId: route.agentId,
+	    });
+	    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+	    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+	      storePath,
+	      sessionKey: route.sessionKey,
+	    });
 	    const body = core.channel.reply.formatAgentEnvelope({
 	      channel: "Teams",
 	      from: envelopeFrom,
 	      timestamp,
+	      previousTimestamp,
+	      envelope: envelopeOptions,
 	      body: rawBody,
 	    });
     let combinedBody = body;
@@ -421,15 +431,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
-        formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
-            channel: "Teams",
-            from: conversationType,
-            timestamp: entry.timestamp,
-            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-          }),
-      });
-    }
+	        formatEntry: (entry) =>
+	          core.channel.reply.formatAgentEnvelope({
+	            channel: "Teams",
+	            from: conversationType,
+	            timestamp: entry.timestamp,
+	            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+	            envelope: envelopeOptions,
+	          }),
+	      });
+	    }
 
 	    const ctxPayload = core.channel.reply.finalizeInboundContext({
 	      Body: combinedBody,
@@ -455,11 +466,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 	      ...mediaPayload,
 	    });
 
-    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-      agentId: route.agentId,
-    });
-    void core.channel.session.recordSessionMetaFromInbound({
-      storePath,
+	    void core.channel.session.recordSessionMetaFromInbound({
+	      storePath,
       sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
       ctx: ctxPayload,
     }).catch((err) => {

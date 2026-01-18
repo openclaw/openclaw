@@ -91,7 +91,6 @@ let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAg
 
 beforeAll(async () => {
   vi.useRealTimers();
-  vi.resetModules();
   mockPiAi();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
 }, 20_000);
