@@ -265,7 +265,13 @@ importers:
         specifier: 40.0.0
         version: 40.0.0
 
-  extensions/memory:
+  extensions/memory-core:
+    dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/memory-lancedb:
     dependencies:
       '@lancedb/lancedb':
         specifier: ^0.15.0
@@ -276,12 +282,6 @@ importers:
       openai:
         specifier: ^4.104.0
         version: 4.104.0(ws@8.19.0)(zod@3.25.76)
-
-  extensions/memory-core:
-    dependencies:
-      clawdbot:
-        specifier: workspace:*
-        version: link:../..
 
   extensions/msteams:
     dependencies:
@@ -6625,7 +6625,7 @@ snapshots:
 
   '@types/node-fetch@2.6.13':
     dependencies:
-      '@types/node': 18.19.130
+      '@types/node': 25.0.9
       form-data: 4.0.5
 
   '@types/node@10.17.60': {}
