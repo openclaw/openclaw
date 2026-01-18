@@ -120,7 +120,7 @@ function mergeConfig(
       overrides?.remote?.batch?.concurrency ?? defaults?.remote?.batch?.concurrency ?? 2,
     ),
     pollIntervalMs:
-      overrides?.remote?.batch?.pollIntervalMs ?? defaults?.remote?.batch?.pollIntervalMs ?? 5000,
+      overrides?.remote?.batch?.pollIntervalMs ?? defaults?.remote?.batch?.pollIntervalMs ?? 500,
     timeoutMinutes:
       overrides?.remote?.batch?.timeoutMinutes ?? defaults?.remote?.batch?.timeoutMinutes ?? 60,
   };

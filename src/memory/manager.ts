@@ -252,7 +252,7 @@ export class MemoryIndexManager {
       enabled: Boolean(batch?.enabled && this.openAi && this.provider.id === "openai"),
       wait: batch?.wait ?? true,
       concurrency: Math.max(1, batch?.concurrency ?? 2),
-      pollIntervalMs: batch?.pollIntervalMs ?? 5000,
+      pollIntervalMs: batch?.pollIntervalMs ?? 500,
       timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
     };
   }
