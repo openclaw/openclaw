@@ -66,6 +66,7 @@ describe("memory manager atomic reindex", () => {
             provider: "openai",
             model: "mock-embed",
             store: { path: indexPath },
+            cache: { enabled: false },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
         },
