@@ -30,7 +30,7 @@ describe("gateway server channels", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
     const result = await startServerWithClient();
     servers.push(result);
-    const { server, ws } = result;
+    const { ws } = result;
     await connectOk(ws);
 
     const res = await rpcReq<{
@@ -61,7 +61,7 @@ describe("gateway server channels", () => {
   test("channels.logout reports no session when missing", async () => {
     const result = await startServerWithClient();
     servers.push(result);
-    const { server, ws } = result;
+    const { ws } = result;
     await connectOk(ws);
 
     const res = await rpcReq<{ cleared?: boolean; channel?: string }>(ws, "channels.logout", {
@@ -86,7 +86,7 @@ describe("gateway server channels", () => {
 
     const result = await startServerWithClient();
     servers.push(result);
-    const { server, ws } = result;
+    const { ws } = result;
     await connectOk(ws);
 
     const res = await rpcReq<{

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   connectOk,
@@ -31,7 +31,7 @@ describe("gateway config.apply", () => {
   it("writes config, stores sentinel, and schedules restart", async () => {
     const result = await startServerWithClient();
     servers.push(result);
-    const { server, ws } = result;
+    const { ws } = result;
     await connectOk(ws);
 
     const id = "req-1";
@@ -63,7 +63,7 @@ describe("gateway config.apply", () => {
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as { payload?: { kind?: string } };
       expect(parsed.payload?.kind).toBe("config-apply");
-    } catch (err) {
+    } catch {
       // File may not exist if signal delivery is mocked, verify response was ok instead
       expect(res.ok).toBe(true);
     }
@@ -72,7 +72,7 @@ describe("gateway config.apply", () => {
   it("rejects invalid raw config", async () => {
     const result = await startServerWithClient();
     servers.push(result);
-    const { server, ws } = result;
+    const { ws } = result;
     await connectOk(ws);
 
     const id = "req-2";
