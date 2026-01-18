@@ -26,6 +26,7 @@ Docs: https://docs.clawd.bot
 - Nodes: add headless node host (`clawdbot node start`) for `system.run`/`system.which`.
 - Nodes: add node daemon service install/status/start/stop/restart.
 - Hooks: run `BOOT.md` on gateway startup with the boot-md hook. (#1164) — thanks @ngutman.
+- Onboarding: list all eligible hooks with one-line descriptions in the enable step.
 - Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
 - Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
 - Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) — thanks @austinm911.

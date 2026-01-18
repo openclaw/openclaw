@@ -23,10 +23,10 @@ export async function setupInternalHooks(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
-  // Filter for eligible and recommended hooks (session-memory is recommended)
-  const recommendedHooks = report.hooks.filter((h) => h.eligible && h.name === "session-memory");
+  // Show every eligible hook so users can opt in during onboarding.
+  const eligibleHooks = report.hooks.filter((h) => h.eligible);
 
-  if (recommendedHooks.length === 0) {
+  if (eligibleHooks.length === 0) {
     await prompter.note(
       "No eligible hooks found. You can configure hooks later in your config.",
       "No Hooks Available",
@@ -38,7 +38,7 @@ export async function setupInternalHooks(
     message: "Enable hooks?",
     options: [
       { value: "__skip__", label: "Skip for now" },
-      ...recommendedHooks.map((hook) => ({
+      ...eligibleHooks.map((hook) => ({
         value: hook.name,
         label: `${hook.emoji ?? "🔗"} ${hook.name}`,
         hint: hook.description,
