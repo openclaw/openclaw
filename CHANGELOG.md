@@ -84,6 +84,7 @@ Docs: https://docs.clawd.bot
 - macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
 - Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
+- Skills: improve remote bin probe logging with node labels + connectivity hints.
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
 - Tools: return a companion-app-required message when node exec is requested with no paired node.
 - Streaming: emit assistant deltas for OpenAI-compatible SSE chunks. (#1147) — thanks @alauppe.

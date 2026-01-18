@@ -14,11 +14,52 @@ type RemoteNodeRecord = {
   deviceFamily?: string;
   commands?: string[];
   bins: Set<string>;
+  remoteIp?: string;
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteBridge: NodeBridgeServer | null = null;
+
+function describeNode(nodeId: string): string {
+  const record = remoteNodes.get(nodeId);
+  const name = record?.displayName?.trim();
+  const base = name && name !== nodeId ? `${name} (${nodeId})` : nodeId;
+  const ip = record?.remoteIp?.trim();
+  return ip ? `${base} @ ${ip}` : base;
+}
+
+function extractErrorMessage(err: unknown): string | undefined {
+  if (!err) return undefined;
+  if (typeof err === "string") return err;
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && "message" in err && typeof err.message === "string") {
+    return err.message;
+  }
+  return String(err);
+}
+
+function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
+  const message = extractErrorMessage(err);
+  const label = describeNode(nodeId);
+  if (message?.includes("UNAVAILABLE: node not connected")) {
+    log.info(
+      `remote bin probe skipped: node not connected (${label}); check nodes list/status for ${label}`,
+    );
+    return;
+  }
+  if (message?.includes("UNAVAILABLE: invoke timeout")) {
+    log.warn(`remote bin probe timed out (${label}); check node connectivity for ${label}`);
+    return;
+  }
+  if (message?.includes("bridge connection closed")) {
+    log.warn(
+      `remote bin probe aborted: bridge connection closed (${label}); check nodes list/status for ${label}`,
+    );
+    return;
+  }
+  log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
+}
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
   const platformNorm = String(platform ?? "")
@@ -47,6 +88,7 @@ function upsertNode(record: {
   platform?: string;
   deviceFamily?: string;
   commands?: string[];
+  remoteIp?: string;
   bins?: string[];
 }) {
   const existing = remoteNodes.get(record.nodeId);
@@ -57,6 +99,7 @@ function upsertNode(record: {
     platform: record.platform ?? existing?.platform,
     deviceFamily: record.deviceFamily ?? existing?.deviceFamily,
     commands: record.commands ?? existing?.commands,
+    remoteIp: record.remoteIp ?? existing?.remoteIp,
     bins,
   });
 }
@@ -76,6 +119,7 @@ export async function primeRemoteSkillsCache() {
         platform: node.platform,
         deviceFamily: node.deviceFamily,
         commands: node.commands,
+        remoteIp: node.remoteIp,
         bins: node.bins,
       });
       if (isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands)) {
@@ -96,6 +140,7 @@ export function recordRemoteNodeInfo(node: {
   platform?: string;
   deviceFamily?: string;
   commands?: string[];
+  remoteIp?: string;
 }) {
   upsertNode(node);
 }
@@ -203,7 +248,7 @@ export async function refreshRemoteNodeBins(params: {
           },
     );
     if (!res.ok) {
-      log.warn(`remote bin probe failed (${params.nodeId}): ${res.error?.message ?? "unknown"}`);
+      logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
       return;
     }
     const bins = parseBinProbePayload(res.payloadJSON);
@@ -211,7 +256,7 @@ export async function refreshRemoteNodeBins(params: {
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
-    log.warn(`remote bin probe error (${params.nodeId}): ${String(err)}`);
+    logRemoteBinProbeFailure(params.nodeId, err);
   }
 }
 

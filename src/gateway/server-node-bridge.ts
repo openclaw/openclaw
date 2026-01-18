@@ -148,6 +148,7 @@ export async function startGatewayNodeBridge(params: {
             platform: node.platform,
             deviceFamily: node.deviceFamily,
             commands: node.commands,
+            remoteIp: node.remoteIp,
           });
           bumpSkillsSnapshotVersion({ reason: "remote-node" });
           await refreshRemoteNodeBins({
