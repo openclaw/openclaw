@@ -79,3 +79,61 @@ export function capArrayByJsonBytes<T>(
   const next = start > 0 ? items.slice(start) : items;
   return { items: next, bytes };
 }
+
+const MAX_LINES_TO_SCAN = 10;
+
+type TranscriptMessage = {
+  role?: string;
+  content?: string | Array<{ type: string; text?: string }>;
+};
+
+function extractTextFromContent(content: TranscriptMessage["content"]): string | null {
+  if (typeof content === "string") return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  for (const part of content) {
+    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+      return part.text.trim();
+    }
+  }
+  return null;
+}
+
+export function readFirstUserMessageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): string | null {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) return null;
+
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(8192);
+    const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+    if (bytesRead === 0) return null;
+    const chunk = buf.toString("utf-8", 0, bytesRead);
+    const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const msg = parsed?.message as TranscriptMessage | undefined;
+        if (msg?.role === "user") {
+          const text = extractTextFromContent(msg.content);
+          if (text) return text;
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+  } catch {
+    // file read error
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+  return null;
+}

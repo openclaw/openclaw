@@ -8,6 +8,7 @@ export const SessionsListParamsSchema = Type.Object(
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    includeDerivedTitles: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
