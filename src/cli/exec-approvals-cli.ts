@@ -185,7 +185,9 @@ export function registerExecApprovalsCli(program: Command) {
       }
       allowlistEntries.push({ pattern: trimmed, lastUsedAt: Date.now() });
       agent.allowlist = allowlistEntries;
-      file.agents = { ...(file.agents ?? {}), [agentKey]: agent };
+      file.agents = file.agents
+        ? { ...file.agents, [agentKey]: agent }
+        : { [agentKey]: agent };
       const next = await saveSnapshot(opts, nodeId, file, snapshot.hash);
       const payload = opts.json ? JSON.stringify(next) : JSON.stringify(next, null, 2);
       defaultRuntime.log(payload);
@@ -229,11 +231,13 @@ export function registerExecApprovalsCli(program: Command) {
         agent.allowlist = nextEntries;
       }
       if (isEmptyAgent(agent)) {
-        const agents = { ...(file.agents ?? {}) };
+        const agents = file.agents ? { ...file.agents } : {};
         delete agents[agentKey];
         file.agents = Object.keys(agents).length > 0 ? agents : undefined;
       } else {
-        file.agents = { ...(file.agents ?? {}), [agentKey]: agent };
+        file.agents = file.agents
+          ? { ...file.agents, [agentKey]: agent }
+          : { [agentKey]: agent };
       }
       const next = await saveSnapshot(opts, nodeId, file, snapshot.hash);
       const payload = opts.json ? JSON.stringify(next) : JSON.stringify(next, null, 2);
