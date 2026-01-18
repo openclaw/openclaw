@@ -17,6 +17,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { applyBootstrapHookOverrides } from "../../bootstrap-hooks.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
   buildBootstrapContextFiles,
@@ -124,8 +125,15 @@ export async function runEmbeddedAttempt(
       await loadWorkspaceBootstrapFiles(effectiveWorkspace),
       params.sessionKey ?? params.sessionId,
     );
+    const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
+      files: bootstrapFiles,
+      workspaceDir: effectiveWorkspace,
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
+    const contextFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
       maxChars: resolveBootstrapMaxChars(params.config),
       warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
     });
@@ -251,7 +259,7 @@ export async function runEmbeddedAttempt(
         return { mode: runtime.mode, sandboxed: runtime.sandboxed };
       })(),
       systemPrompt: appendPrompt,
-      bootstrapFiles,
+      bootstrapFiles: hookAdjustedBootstrapFiles,
       injectedFiles: contextFiles,
       skillsPrompt,
       tools,

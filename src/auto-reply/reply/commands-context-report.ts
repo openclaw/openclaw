@@ -9,6 +9,7 @@ import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
+import { applyBootstrapHookOverrides } from "../../agents/bootstrap-hooks.js";
 import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
@@ -59,7 +60,14 @@ async function resolveContextReport(
     await loadWorkspaceBootstrapFiles(workspaceDir),
     params.sessionKey,
   );
-  const injectedFiles = buildBootstrapContextFiles(bootstrapFiles, {
+  const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
+    files: bootstrapFiles,
+    workspaceDir,
+    config: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionEntry?.sessionId,
+  });
+  const injectedFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
     maxChars: bootstrapMaxChars,
   });
   const skillsSnapshot = (() => {
@@ -143,7 +151,7 @@ async function resolveContextReport(
     bootstrapMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
+    bootstrapFiles: hookAdjustedBootstrapFiles,
     injectedFiles,
     skillsPrompt,
     tools,
