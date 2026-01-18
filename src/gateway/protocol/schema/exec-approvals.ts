@@ -70,3 +70,19 @@ export const ExecApprovalsSetParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ExecApprovalsNodeGetParamsSchema = Type.Object(
+  {
+    nodeId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalsNodeSetParamsSchema = Type.Object(
+  {
+    nodeId: NonEmptyString,
+    file: ExecApprovalsFileSchema,
+    baseHash: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);

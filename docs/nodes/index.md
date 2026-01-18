@@ -149,8 +149,8 @@ Notes:
 
 ## System commands (node host / mac node)
 
-The macOS node exposes `system.run` and `system.notify`. The headless node host
-exposes `system.run` and `system.which`.
+The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`.
+The headless node host exposes `system.run`, `system.which`, and `system.execApprovals.get/set`.
 
 Examples:
 

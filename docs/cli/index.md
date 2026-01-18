@@ -29,11 +29,13 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`sessions`](/cli/sessions)
 - [`gateway`](/cli/gateway)
 - [`daemon`](/cli/daemon)
+- [`service`](/cli/service)
 - [`logs`](/cli/logs)
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
 - [`nodes`](/cli/nodes)
 - [`node`](/cli/node)
+- [`approvals`](/cli/approvals)
 - [`sandbox`](/cli/sandbox)
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
@@ -143,6 +145,21 @@ clawdbot [--dev] [--profile <name>] <command>
     start
     stop
     restart
+  service
+    gateway
+      status
+      install
+      uninstall
+      start
+      stop
+      restart
+    node
+      status
+      install
+      uninstall
+      start
+      stop
+      restart
   logs
   models
     list
@@ -180,6 +197,10 @@ clawdbot [--dev] [--profile <name>] <command>
       start
       stop
       restart
+  approvals
+    get
+    set
+    allowlist add|remove
   browser
     status
     start
@@ -519,6 +540,9 @@ Options:
 - `--timeout <ms>`
 - `--verbose`
 - `--debug` (alias for `--verbose`)
+
+Notes:
+- Overview includes Gateway + Node service status when available.
 
 ### Usage tracking
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.

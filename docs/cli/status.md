@@ -19,4 +19,5 @@ clawdbot status --usage
 Notes:
 - `--deep` runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal).
 - Output includes per-agent session stores when multiple agents are configured.
+- Overview includes Gateway + Node service install/runtime status when available.
 - Update info surfaces in the Overview; if an update is available, status prints a hint to run `clawdbot update` (see [Updating](/install/updating)).

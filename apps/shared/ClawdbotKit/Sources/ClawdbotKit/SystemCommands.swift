@@ -4,6 +4,8 @@ public enum ClawdbotSystemCommand: String, Codable, Sendable {
     case run = "system.run"
     case which = "system.which"
     case notify = "system.notify"
+    case execApprovalsGet = "system.execApprovals.get"
+    case execApprovalsSet = "system.execApprovals.set"
 }
 
 public enum ClawdbotNotificationPriority: String, Codable, Sendable {

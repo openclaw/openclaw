@@ -310,9 +310,17 @@ export function renderApp(state: AppViewState) {
               execApprovalsSnapshot: state.execApprovalsSnapshot,
               execApprovalsForm: state.execApprovalsForm,
               execApprovalsSelectedAgent: state.execApprovalsSelectedAgent,
+              execApprovalsTarget: state.execApprovalsTarget,
+              execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
               onRefresh: () => loadNodes(state),
               onLoadConfig: () => loadConfig(state),
-              onLoadExecApprovals: () => loadExecApprovals(state),
+              onLoadExecApprovals: () => {
+                const target =
+                  state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                    ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                    : { kind: "gateway" as const };
+                return loadExecApprovals(state, target);
+              },
               onBindDefault: (nodeId) => {
                 if (nodeId) {
                   updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
@@ -329,6 +337,14 @@ export function renderApp(state: AppViewState) {
                 }
               },
               onSaveBindings: () => saveConfig(state),
+              onExecApprovalsTargetChange: (kind, nodeId) => {
+                state.execApprovalsTarget = kind;
+                state.execApprovalsTargetNodeId = nodeId;
+                state.execApprovalsSnapshot = null;
+                state.execApprovalsForm = null;
+                state.execApprovalsDirty = false;
+                state.execApprovalsSelectedAgent = null;
+              },
               onExecApprovalsSelectAgent: (agentId) => {
                 state.execApprovalsSelectedAgent = agentId;
               },
@@ -336,7 +352,13 @@ export function renderApp(state: AppViewState) {
                 updateExecApprovalsFormValue(state, path, value),
               onExecApprovalsRemove: (path) =>
                 removeExecApprovalsFormValue(state, path),
-              onSaveExecApprovals: () => saveExecApprovals(state),
+              onSaveExecApprovals: () => {
+                const target =
+                  state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
+                    ? { kind: "node" as const, nodeId: state.execApprovalsTargetNodeId }
+                    : { kind: "gateway" as const };
+                return saveExecApprovals(state, target);
+              },
             })
           : nothing}
 

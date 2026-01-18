@@ -58,6 +58,10 @@ import {
   CronUpdateParamsSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
+  type ExecApprovalsNodeGetParams,
+  ExecApprovalsNodeGetParamsSchema,
+  type ExecApprovalsNodeSetParams,
+  ExecApprovalsNodeSetParamsSchema,
   type ExecApprovalsSetParams,
   ExecApprovalsSetParamsSchema,
   type ExecApprovalsSnapshot,
@@ -240,6 +244,12 @@ export const validateExecApprovalsGetParams = ajv.compile<ExecApprovalsGetParams
 );
 export const validateExecApprovalsSetParams = ajv.compile<ExecApprovalsSetParams>(
   ExecApprovalsSetParamsSchema,
+);
+export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
+  ExecApprovalsNodeGetParamsSchema,
+);
+export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeSetParams>(
+  ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);

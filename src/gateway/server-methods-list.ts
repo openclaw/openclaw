@@ -14,6 +14,8 @@ const BASE_METHODS = [
   "config.schema",
   "exec.approvals.get",
   "exec.approvals.set",
+  "exec.approvals.node.get",
+  "exec.approvals.node.set",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",

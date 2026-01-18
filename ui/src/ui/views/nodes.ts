@@ -21,12 +21,15 @@ export type NodesProps = {
   execApprovalsSnapshot: ExecApprovalsSnapshot | null;
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
+  execApprovalsTarget: "gateway" | "node";
+  execApprovalsTargetNodeId: string | null;
   onRefresh: () => void;
   onLoadConfig: () => void;
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;
   onBindAgent: (agentIndex: number, nodeId: string | null) => void;
   onSaveBindings: () => void;
+  onExecApprovalsTargetChange: (kind: "gateway" | "node", nodeId: string | null) => void;
   onExecApprovalsSelectAgent: (agentId: string) => void;
   onExecApprovalsPatch: (path: Array<string | number>, value: unknown) => void;
   onExecApprovalsRemove: (path: Array<string | number>) => void;
@@ -103,6 +106,11 @@ type ExecApprovalsAgentOption = {
   isDefault?: boolean;
 };
 
+type ExecApprovalsTargetNode = {
+  id: string;
+  label: string;
+};
+
 type ExecApprovalsState = {
   ready: boolean;
   disabled: boolean;
@@ -115,7 +123,11 @@ type ExecApprovalsState = {
   selectedAgent: Record<string, unknown> | null;
   agents: ExecApprovalsAgentOption[];
   allowlist: ExecApprovalsAllowlistEntry[];
+  target: "gateway" | "node";
+  targetNodeId: string | null;
+  targetNodes: ExecApprovalsTargetNode[];
   onSelectScope: (agentId: string) => void;
+  onSelectTarget: (kind: "gateway" | "node", nodeId: string | null) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
   onRemove: (path: Array<string | number>) => void;
   onLoad: () => void;
@@ -237,6 +249,15 @@ function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
   const ready = Boolean(form);
   const defaults = resolveExecApprovalsDefaults(form);
   const agents = resolveExecApprovalsAgents(props.configForm, form);
+  const targetNodes = resolveExecApprovalsNodes(props.nodes);
+  const target = props.execApprovalsTarget;
+  let targetNodeId =
+    target === "node" && props.execApprovalsTargetNodeId
+      ? props.execApprovalsTargetNodeId
+      : null;
+  if (target === "node" && targetNodeId && !targetNodes.some((node) => node.id === targetNodeId)) {
+    targetNodeId = null;
+  }
   const selectedScope = resolveExecApprovalsScope(props.execApprovalsSelectedAgent, agents);
   const selectedAgent =
     selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
@@ -259,7 +280,11 @@ function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState {
     selectedAgent,
     agents,
     allowlist,
+    target,
+    targetNodeId,
+    targetNodes,
     onSelectScope: props.onExecApprovalsSelectAgent,
+    onSelectTarget: props.onExecApprovalsTargetChange,
     onPatch: props.onExecApprovalsPatch,
     onRemove: props.onExecApprovalsRemove,
     onLoad: props.onLoadExecApprovals,
@@ -350,6 +375,7 @@ function renderBindings(state: BindingState) {
 
 function renderExecApprovals(state: ExecApprovalsState) {
   const ready = state.ready;
+  const targetReady = state.target !== "node" || Boolean(state.targetNodeId);
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between; align-items: center;">
@@ -361,17 +387,19 @@ function renderExecApprovals(state: ExecApprovalsState) {
         </div>
         <button
           class="btn"
-          ?disabled=${state.disabled || !state.dirty}
+          ?disabled=${state.disabled || !state.dirty || !targetReady}
           @click=${state.onSave}
         >
           ${state.saving ? "Saving…" : "Save"}
         </button>
       </div>
 
+      ${renderExecApprovalsTarget(state)}
+
       ${!ready
         ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
             <div class="muted">Load exec approvals to edit allowlists.</div>
-            <button class="btn" ?disabled=${state.loading} @click=${state.onLoad}>
+            <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
               ${state.loading ? "Loading…" : "Load approvals"}
             </button>
           </div>`
@@ -383,6 +411,73 @@ function renderExecApprovals(state: ExecApprovalsState) {
               : renderExecApprovalsAllowlist(state)}
           `}
     </section>
+  `;
+}
+
+function renderExecApprovalsTarget(state: ExecApprovalsState) {
+  const hasNodes = state.targetNodes.length > 0;
+  const nodeValue = state.targetNodeId ?? "";
+  return html`
+    <div class="list" style="margin-top: 12px;">
+      <div class="list-item">
+        <div class="list-main">
+          <div class="list-title">Target</div>
+          <div class="list-sub">
+            Gateway edits local approvals; node edits the selected node.
+          </div>
+        </div>
+        <div class="list-meta">
+          <label class="field">
+            <span>Host</span>
+            <select
+              ?disabled=${state.disabled}
+              @change=${(event: Event) => {
+                const target = event.target as HTMLSelectElement;
+                const value = target.value;
+                if (value === "node") {
+                  const first = state.targetNodes[0]?.id ?? null;
+                  state.onSelectTarget("node", nodeValue || first);
+                } else {
+                  state.onSelectTarget("gateway", null);
+                }
+              }}
+            >
+              <option value="gateway" ?selected=${state.target === "gateway"}>Gateway</option>
+              <option value="node" ?selected=${state.target === "node"}>Node</option>
+            </select>
+          </label>
+          ${state.target === "node"
+            ? html`
+                <label class="field">
+                  <span>Node</span>
+                  <select
+                    ?disabled=${state.disabled || !hasNodes}
+                    @change=${(event: Event) => {
+                      const target = event.target as HTMLSelectElement;
+                      const value = target.value.trim();
+                      state.onSelectTarget("node", value ? value : null);
+                    }}
+                  >
+                    <option value="" ?selected=${nodeValue === ""}>Select node</option>
+                    ${state.targetNodes.map(
+                      (node) =>
+                        html`<option
+                          value=${node.id}
+                          ?selected=${nodeValue === node.id}
+                        >
+                          ${node.label}
+                        </option>`,
+                    )}
+                  </select>
+                </label>
+              `
+            : nothing}
+        </div>
+      </div>
+      ${state.target === "node" && !hasNodes
+        ? html`<div class="muted">No nodes advertise exec approvals yet.</div>`
+        : nothing}
+    </div>
   `;
 }
 
@@ -734,6 +829,26 @@ function resolveExecNodes(nodes: Array<Record<string, unknown>>): BindingNode[] 
   for (const node of nodes) {
     const commands = Array.isArray(node.commands) ? node.commands : [];
     const supports = commands.some((cmd) => String(cmd) === "system.run");
+    if (!supports) continue;
+    const nodeId = typeof node.nodeId === "string" ? node.nodeId.trim() : "";
+    if (!nodeId) continue;
+    const displayName =
+      typeof node.displayName === "string" && node.displayName.trim()
+        ? node.displayName.trim()
+        : nodeId;
+    list.push({ id: nodeId, label: displayName === nodeId ? nodeId : `${displayName} · ${nodeId}` });
+  }
+  list.sort((a, b) => a.label.localeCompare(b.label));
+  return list;
+}
+
+function resolveExecApprovalsNodes(nodes: Array<Record<string, unknown>>): ExecApprovalsTargetNode[] {
+  const list: ExecApprovalsTargetNode[] = [];
+  for (const node of nodes) {
+    const commands = Array.isArray(node.commands) ? node.commands : [];
+    const supports = commands.some(
+      (cmd) => String(cmd) === "system.execApprovals.get" || String(cmd) === "system.execApprovals.set",
+    );
     if (!supports) continue;
     const nodeId = typeof node.nodeId === "string" ? node.nodeId.trim() : "";
     if (!nodeId) continue;

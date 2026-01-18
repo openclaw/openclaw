@@ -55,6 +55,14 @@ export function registerNodeCli(program: Command) {
     .command("daemon")
     .description("Manage the headless node daemon service (launchd/systemd/schtasks)");
 
+  node
+    .command("status")
+    .description("Show node service status")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runNodeDaemonStatus(opts);
+    });
+
   daemon
     .command("status")
     .description("Show node daemon status")

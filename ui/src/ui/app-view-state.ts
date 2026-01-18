@@ -54,6 +54,8 @@ export type AppViewState = {
   execApprovalsSnapshot: ExecApprovalsSnapshot | null;
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
+  execApprovalsTarget: "gateway" | "node";
+  execApprovalsTargetNodeId: string | null;
   configLoading: boolean;
   configRaw: string;
   configValid: boolean | null;

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OSLog
 import Security
@@ -121,6 +122,13 @@ struct ExecApprovalsFile: Codable {
     var agents: [String: ExecApprovalsAgent]?
 }
 
+struct ExecApprovalsSnapshot: Codable {
+    var path: String
+    var exists: Bool
+    var hash: String
+    var file: ExecApprovalsFile
+}
+
 struct ExecApprovalsResolved {
     let url: URL
     let socketPath: String
@@ -151,6 +159,58 @@ enum ExecApprovalsStore {
 
     static func socketPath() -> String {
         ClawdbotPaths.stateDirURL.appendingPathComponent("exec-approvals.sock").path
+    }
+
+    static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
+        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return ExecApprovalsFile(
+            version: 1,
+            socket: ExecApprovalsSocketConfig(
+                path: socketPath.isEmpty ? nil : socketPath,
+                token: token.isEmpty ? nil : token),
+            defaults: file.defaults,
+            agents: file.agents)
+    }
+
+    static func readSnapshot() -> ExecApprovalsSnapshot {
+        let url = self.fileURL()
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return ExecApprovalsSnapshot(
+                path: url.path,
+                exists: false,
+                hash: self.hashRaw(nil),
+                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+        }
+        let raw = try? String(contentsOf: url, encoding: .utf8)
+        let data = raw.flatMap { $0.data(using: .utf8) }
+        let decoded: ExecApprovalsFile = {
+            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data), file.version == 1 {
+                return file
+            }
+            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        }()
+        return ExecApprovalsSnapshot(
+            path: url.path,
+            exists: true,
+            hash: self.hashRaw(raw),
+            file: decoded)
+    }
+
+    static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
+        let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if socketPath.isEmpty {
+            return ExecApprovalsFile(
+                version: file.version,
+                socket: nil,
+                defaults: file.defaults,
+                agents: file.agents)
+        }
+        return ExecApprovalsFile(
+            version: file.version,
+            socket: ExecApprovalsSocketConfig(path: socketPath, token: nil),
+            defaults: file.defaults,
+            agents: file.agents)
     }
 
     static func loadFile() -> ExecApprovalsFile {
@@ -370,6 +430,12 @@ enum ExecApprovalsStore {
                 .replacingOccurrences(of: "=", with: "")
         }
         return UUID().uuidString
+    }
+
+    private static func hashRaw(_ raw: String?) -> String {
+        let data = Data((raw ?? "").utf8)
+        let digest = SHA256.hash(data: data)
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func expandPath(_ raw: String) -> String {

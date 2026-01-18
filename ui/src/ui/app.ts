@@ -114,6 +114,8 @@ export class ClawdbotApp extends LitElement {
   @state() execApprovalsSnapshot: ExecApprovalsSnapshot | null = null;
   @state() execApprovalsForm: ExecApprovalsFile | null = null;
   @state() execApprovalsSelectedAgent: string | null = null;
+  @state() execApprovalsTarget: "gateway" | "node" = "gateway";
+  @state() execApprovalsTargetNodeId: string | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";

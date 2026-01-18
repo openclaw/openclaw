@@ -33,6 +33,10 @@ export type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
+export type ExecApprovalsTarget =
+  | { kind: "gateway" }
+  | { kind: "node"; nodeId: string };
+
 export type ExecApprovalsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -45,16 +49,45 @@ export type ExecApprovalsState = {
   lastError: string | null;
 };
 
-export async function loadExecApprovals(state: ExecApprovalsState) {
+function resolveExecApprovalsRpc(target?: ExecApprovalsTarget | null): {
+  method: string;
+  params: Record<string, unknown>;
+} | null {
+  if (!target || target.kind === "gateway") {
+    return { method: "exec.approvals.get", params: {} };
+  }
+  const nodeId = target.nodeId.trim();
+  if (!nodeId) return null;
+  return { method: "exec.approvals.node.get", params: { nodeId } };
+}
+
+function resolveExecApprovalsSaveRpc(
+  target: ExecApprovalsTarget | null | undefined,
+  params: { file: ExecApprovalsFile; baseHash: string },
+): { method: string; params: Record<string, unknown> } | null {
+  if (!target || target.kind === "gateway") {
+    return { method: "exec.approvals.set", params };
+  }
+  const nodeId = target.nodeId.trim();
+  if (!nodeId) return null;
+  return { method: "exec.approvals.node.set", params: { ...params, nodeId } };
+}
+
+export async function loadExecApprovals(
+  state: ExecApprovalsState,
+  target?: ExecApprovalsTarget | null,
+) {
   if (!state.client || !state.connected) return;
   if (state.execApprovalsLoading) return;
   state.execApprovalsLoading = true;
   state.lastError = null;
   try {
-    const res = (await state.client.request(
-      "exec.approvals.get",
-      {},
-    )) as ExecApprovalsSnapshot;
+    const rpc = resolveExecApprovalsRpc(target);
+    if (!rpc) {
+      state.lastError = "Select a node before loading exec approvals.";
+      return;
+    }
+    const res = (await state.client.request(rpc.method, rpc.params)) as ExecApprovalsSnapshot;
     applyExecApprovalsSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);
@@ -73,7 +106,10 @@ export function applyExecApprovalsSnapshot(
   }
 }
 
-export async function saveExecApprovals(state: ExecApprovalsState) {
+export async function saveExecApprovals(
+  state: ExecApprovalsState,
+  target?: ExecApprovalsTarget | null,
+) {
   if (!state.client || !state.connected) return;
   state.execApprovalsSaving = true;
   state.lastError = null;
@@ -87,9 +123,14 @@ export async function saveExecApprovals(state: ExecApprovalsState) {
       state.execApprovalsForm ??
       state.execApprovalsSnapshot?.file ??
       {};
-    await state.client.request("exec.approvals.set", { file, baseHash });
+    const rpc = resolveExecApprovalsSaveRpc(target, { file, baseHash });
+    if (!rpc) {
+      state.lastError = "Select a node before saving exec approvals.";
+      return;
+    }
+    await state.client.request(rpc.method, rpc.params);
     state.execApprovalsDirty = false;
-    await loadExecApprovals(state);
+    await loadExecApprovals(state, target);
   } catch (err) {
     state.lastError = String(err);
   } finally {

@@ -2,6 +2,15 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-5
+
+### Changes
+- Exec approvals: add `clawdbot approvals` CLI for viewing and updating gateway/node allowlists.
+- CLI: add `clawdbot service` gateway/node management and a `clawdbot node status` alias.
+- Status: show gateway + node service summaries in `clawdbot status` and `status --all`.
+- Control UI: add gateway/node target selector for exec approvals.
+- Docs: add approvals/service references and refresh node/control UI docs.
+
 ## 2026.1.18-4
 
 ### Changes

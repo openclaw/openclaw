@@ -49,6 +49,8 @@ import {
 } from "./cron.js";
 import {
   ExecApprovalsGetParamsSchema,
+  ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
 } from "./exec-approvals.js";
@@ -177,6 +179,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   LogsTailResult: LogsTailResultSchema,
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
+  ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ChatHistoryParams: ChatHistoryParamsSchema,
   ChatSendParams: ChatSendParamsSchema,

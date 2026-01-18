@@ -64,6 +64,10 @@ actor MacNodeRuntime {
                 return try await self.handleSystemWhich(req)
             case ClawdbotSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
+            case ClawdbotSystemCommand.execApprovalsGet.rawValue:
+                return try await self.handleSystemExecApprovalsGet(req)
+            case ClawdbotSystemCommand.execApprovalsSet.rawValue:
+                return try await self.handleSystemExecApprovalsSet(req)
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
@@ -673,6 +677,72 @@ actor MacNodeRuntime {
             let paths: [String: String]
         }
         let payload = try Self.encodePayload(WhichPayload(bins: matches, paths: paths))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemExecApprovalsGet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        _ = ExecApprovalsStore.ensureFile()
+        let snapshot = ExecApprovalsStore.readSnapshot()
+        let redacted = ExecApprovalsSnapshot(
+            path: snapshot.path,
+            exists: snapshot.exists,
+            hash: snapshot.hash,
+            file: ExecApprovalsStore.redactForSnapshot(snapshot.file))
+        let payload = try Self.encodePayload(redacted)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemExecApprovalsSet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        struct SetParams: Decodable {
+            var file: ExecApprovalsFile
+            var baseHash: String?
+        }
+
+        let params = try Self.decodeParams(SetParams.self, from: req.paramsJSON)
+        let current = ExecApprovalsStore.ensureFile()
+        let snapshot = ExecApprovalsStore.readSnapshot()
+        if snapshot.exists {
+            if snapshot.hash.isEmpty {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: exec approvals base hash unavailable; reload and retry")
+            }
+            let baseHash = params.baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if baseHash.isEmpty {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: exec approvals base hash required; reload and retry")
+            }
+            if baseHash != snapshot.hash {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: exec approvals changed; reload and retry")
+            }
+        }
+
+        var normalized = ExecApprovalsStore.normalizeIncoming(params.file)
+        let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPath = (socketPath?.isEmpty == false)
+            ? socketPath!
+            : current.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ??
+                ExecApprovalsStore.socketPath()
+        let resolvedToken = (token?.isEmpty == false)
+            ? token!
+            : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
+
+        ExecApprovalsStore.saveFile(normalized)
+        let nextSnapshot = ExecApprovalsStore.readSnapshot()
+        let redacted = ExecApprovalsSnapshot(
+            path: nextSnapshot.path,
+            exists: nextSnapshot.exists,
+            hash: nextSnapshot.hash,
+            file: ExecApprovalsStore.redactForSnapshot(nextSnapshot.file))
+        let payload = try Self.encodePayload(redacted)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 

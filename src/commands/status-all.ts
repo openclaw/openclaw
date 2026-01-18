@@ -2,7 +2,9 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import type { GatewayService } from "../daemon/service.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { resolveNodeService } from "../daemon/node-service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -130,10 +132,9 @@ export async function statusAllCommand(
     const gatewaySelf = pickGatewaySelfPresence(gatewayProbe?.presence ?? null);
     progress.tick();
 
-    progress.setLabel("Checking daemon…");
-    const daemon = await (async () => {
+    progress.setLabel("Checking services…");
+    const readServiceSummary = async (service: GatewayService) => {
       try {
-        const service = resolveGatewayService();
         const [loaded, runtimeInfo, command] = await Promise.all([
           service.isLoaded({ env: process.env }).catch(() => false),
           service.readRuntime(process.env).catch(() => undefined),
@@ -150,7 +151,9 @@ export async function statusAllCommand(
       } catch {
         return null;
       }
-    })();
+    };
+    const daemon = await readServiceSummary(resolveGatewayService());
+    const nodeService = await readServiceSummary(resolveNodeService());
     progress.tick();
 
     progress.setLabel("Scanning agents…");
@@ -340,13 +343,22 @@ export async function statusAllCommand(
         : { Item: "Gateway self", Value: "unknown" },
       daemon
         ? {
-            Item: "Daemon",
+            Item: "Gateway service",
             Value:
               daemon.installed === false
                 ? `${daemon.label} not installed`
                 : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
-        : { Item: "Daemon", Value: "unknown" },
+        : { Item: "Gateway service", Value: "unknown" },
+      nodeService
+        ? {
+            Item: "Node service",
+            Value:
+              nodeService.installed === false
+                ? `${nodeService.label} not installed`
+                : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
+          }
+        : { Item: "Node service", Value: "unknown" },
       {
         Item: "Agents",
         Value: `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${aliveAgents} active · ${agentStatus.totalSessions} sessions`,

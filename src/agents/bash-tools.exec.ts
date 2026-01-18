@@ -50,15 +50,15 @@ import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
-  30_000,
+  200_000,
   1_000,
-  150_000,
+  200_000,
 );
 const DEFAULT_PENDING_MAX_OUTPUT = clampNumber(
   readEnvInt("CLAWDBOT_BASH_PENDING_MAX_OUTPUT_CHARS"),
-  30_000,
+  200_000,
   1_000,
-  150_000,
+  200_000,
 );
 const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";

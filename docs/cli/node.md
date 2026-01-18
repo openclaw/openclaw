@@ -43,6 +43,8 @@ Install a headless node host as a user service.
 
 ```bash
 clawdbot node daemon install --host <gateway-host> --port 18790
+# or
+clawdbot service node install --host <gateway-host> --port 18790
 ```
 
 Options:
@@ -58,6 +60,8 @@ Options:
 Manage the service:
 
 ```bash
+clawdbot node status
+clawdbot service node status
 clawdbot node daemon status
 clawdbot node daemon start
 clawdbot node daemon stop
@@ -83,3 +87,4 @@ The node host stores its node id + token in `~/.clawdbot/node.json`.
 
 - `~/.clawdbot/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
+- `clawdbot approvals --node <id|name|ip>` (edit from the Gateway)

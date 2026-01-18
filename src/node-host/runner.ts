@@ -8,10 +8,16 @@ import type { BridgeInvokeRequestFrame } from "../infra/bridge/server/types.js";
 import {
   addAllowlistEntry,
   matchAllowlist,
+  normalizeExecApprovals,
   recordAllowlistUse,
   requestExecApprovalViaSocket,
   resolveCommandResolution,
   resolveExecApprovals,
+  ensureExecApprovals,
+  readExecApprovalsSnapshot,
+  resolveExecApprovalsSocketPath,
+  saveExecApprovals,
+  type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
@@ -41,6 +47,18 @@ type SystemRunParams = {
 
 type SystemWhichParams = {
   bins: string[];
+};
+
+type SystemExecApprovalsSetParams = {
+  file: ExecApprovalsFile;
+  baseHash?: string | null;
+};
+
+type ExecApprovalsSnapshot = {
+  path: string;
+  exists: boolean;
+  hash: string;
+  file: ExecApprovalsFile;
 };
 
 type RunResult = {
@@ -141,6 +159,31 @@ function formatCommand(argv: string[]): string {
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
   if (raw.length <= maxChars) return { text: raw, truncated: false };
   return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+}
+
+function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+  const socketPath = file.socket?.path?.trim();
+  return {
+    ...file,
+    socket: socketPath ? { path: socketPath } : undefined,
+  };
+}
+
+function requireExecApprovalsBaseHash(
+  params: SystemExecApprovalsSetParams,
+  snapshot: ExecApprovalsSnapshot,
+) {
+  if (!snapshot.exists) return;
+  if (!snapshot.hash) {
+    throw new Error("INVALID_REQUEST: exec approvals base hash unavailable; reload and retry");
+  }
+  const baseHash = typeof params.baseHash === "string" ? params.baseHash.trim() : "";
+  if (!baseHash) {
+    throw new Error("INVALID_REQUEST: exec approvals base hash required; reload and retry");
+  }
+  if (baseHash !== snapshot.hash) {
+    throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
+  }
 }
 
 async function runCommand(
@@ -306,7 +349,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     deviceFamily: os.platform(),
     modelIdentifier: os.hostname(),
     caps: ["system"],
-    commands: ["system.run", "system.which"],
+    commands: [
+      "system.run",
+      "system.which",
+      "system.execApprovals.get",
+      "system.execApprovals.set",
+    ],
     onPairToken: async (token) => {
       config.token = token;
       await saveNodeHostConfig(config);
@@ -355,6 +403,80 @@ async function handleInvoke(
   skillBins: SkillBinsCache,
 ) {
   const command = String(frame.command ?? "");
+  if (command === "system.execApprovals.get") {
+    try {
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      const payload: ExecApprovalsSnapshot = {
+        path: snapshot.path,
+        exists: snapshot.exists,
+        hash: snapshot.hash,
+        file: redactExecApprovals(snapshot.file),
+      };
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: true,
+        payloadJSON: JSON.stringify(payload),
+      });
+    } catch (err) {
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: String(err) },
+      });
+    }
+    return;
+  }
+
+  if (command === "system.execApprovals.set") {
+    try {
+      const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
+      if (!params.file || typeof params.file !== "object") {
+        throw new Error("INVALID_REQUEST: exec approvals file required");
+      }
+      ensureExecApprovals();
+      const snapshot = readExecApprovalsSnapshot();
+      requireExecApprovalsBaseHash(params, snapshot);
+      const normalized = normalizeExecApprovals(params.file);
+      const currentSocketPath = snapshot.file.socket?.path?.trim();
+      const currentToken = snapshot.file.socket?.token?.trim();
+      const socketPath =
+        normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
+      const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
+      const next: ExecApprovalsFile = {
+        ...normalized,
+        socket: {
+          path: socketPath,
+          token,
+        },
+      };
+      saveExecApprovals(next);
+      const nextSnapshot = readExecApprovalsSnapshot();
+      const payload: ExecApprovalsSnapshot = {
+        path: nextSnapshot.path,
+        exists: nextSnapshot.exists,
+        hash: nextSnapshot.hash,
+        file: redactExecApprovals(nextSnapshot.file),
+      };
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: true,
+        payloadJSON: JSON.stringify(payload),
+      });
+    } catch (err) {
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: String(err) },
+      });
+    }
+    return;
+  }
+
   if (command === "system.which") {
     try {
       const params = decodeParams<SystemWhichParams>(frame.paramsJSON);

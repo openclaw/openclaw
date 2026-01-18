@@ -12,8 +12,11 @@ import {
   errorShape,
   formatValidationErrors,
   validateExecApprovalsGetParams,
+  validateExecApprovalsNodeGetParams,
+  validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "../protocol/index.js";
+import { respondUnavailableOnThrow, safeParseJson } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
@@ -151,5 +154,95 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+  },
+  "exec.approvals.node.get": async ({ params, respond, context }) => {
+    if (!validateExecApprovalsNodeGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid exec.approvals.node.get params: ${formatValidationErrors(validateExecApprovalsNodeGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const bridge = context.bridge;
+    if (!bridge) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "bridge not running"));
+      return;
+    }
+    const { nodeId } = params as { nodeId: string };
+    const id = nodeId.trim();
+    if (!id) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const res = await bridge.invoke({
+        nodeId: id,
+        command: "system.execApprovals.get",
+        paramsJSON: "{}",
+      });
+      if (!res.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
+            details: { nodeError: res.error ?? null },
+          }),
+        );
+        return;
+      }
+      const payload = safeParseJson(res.payloadJSON ?? null);
+      respond(true, payload, undefined);
+    });
+  },
+  "exec.approvals.node.set": async ({ params, respond, context }) => {
+    if (!validateExecApprovalsNodeSetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid exec.approvals.node.set params: ${formatValidationErrors(validateExecApprovalsNodeSetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const bridge = context.bridge;
+    if (!bridge) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "bridge not running"));
+      return;
+    }
+    const { nodeId, file, baseHash } = params as {
+      nodeId: string;
+      file: ExecApprovalsFile;
+      baseHash?: string;
+    };
+    const id = nodeId.trim();
+    if (!id) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      const res = await bridge.invoke({
+        nodeId: id,
+        command: "system.execApprovals.set",
+        paramsJSON: JSON.stringify({ file, baseHash }),
+      });
+      if (!res.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, res.error?.message ?? "node invoke failed", {
+            details: { nodeError: res.error ?? null },
+          }),
+        );
+        return;
+      }
+      const payload = safeParseJson(res.payloadJSON ?? null);
+      respond(true, payload, undefined);
+    });
   },
 };

@@ -107,8 +107,12 @@ overrides, and allowlists. Pick a scope (Defaults or an agent), tweak the policy
 add/remove allowlist patterns, then **Save**. The UI shows **last used** metadata
 per pattern so you can keep the list tidy.
 
-Note: the Control UI edits the approvals file on the **Gateway host**. For a
-headless node host, edit its local `~/.clawdbot/exec-approvals.json` directly.
+The target selector chooses **Gateway** (local approvals) or a **Node**. Nodes
+must advertise `system.execApprovals.get/set` (macOS app or headless node host).
+If a node does not advertise exec approvals yet, edit its local
+`~/.clawdbot/exec-approvals.json` directly.
+
+CLI: `clawdbot approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
 
 ## Approval flow
 

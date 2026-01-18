@@ -158,6 +158,8 @@ final class MacNodeModeCoordinator {
             ClawdbotSystemCommand.notify.rawValue,
             ClawdbotSystemCommand.which.rawValue,
             ClawdbotSystemCommand.run.rawValue,
+            ClawdbotSystemCommand.execApprovalsGet.rawValue,
+            ClawdbotSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let capsSet = Set(caps)
