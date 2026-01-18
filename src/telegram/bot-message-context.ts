@@ -42,7 +42,7 @@ import {
 import {
   firstDefined,
   isSenderAllowed,
-  normalizeAllowFrom,
+  normalizeAllowFromWithStore,
   resolveSenderAllowMatch,
 } from "./bot-access.js";
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
@@ -138,12 +138,12 @@ export const buildTelegramMessageContext = async ({
     },
   });
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFrom([...(allowFrom ?? []), ...storeAllowFrom]);
+  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeAllowFrom([
-    ...(groupAllowOverride ?? groupAllowFrom ?? []),
-    ...storeAllowFrom,
-  ]);
+  const effectiveGroupAllow = normalizeAllowFromWithStore({
+    allowFrom: groupAllowOverride ?? groupAllowFrom,
+    storeAllowFrom,
+  });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
   if (isGroup && groupConfig?.enabled === false) {

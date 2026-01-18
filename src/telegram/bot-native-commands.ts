@@ -34,7 +34,7 @@ import {
   buildTelegramGroupPeerId,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
 
 type TelegramNativeCommandContext = Context & { match?: string };
@@ -132,10 +132,10 @@ export const registerTelegramNativeCommands = ({
           const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
           const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
           const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-          const effectiveGroupAllow = normalizeAllowFrom([
-            ...(groupAllowOverride ?? groupAllowFrom ?? []),
-            ...storeAllowFrom,
-          ]);
+          const effectiveGroupAllow = normalizeAllowFromWithStore({
+            allowFrom: groupAllowOverride ?? groupAllowFrom,
+            storeAllowFrom,
+          });
           const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
           if (isGroup && groupConfig?.enabled === false) {
@@ -194,12 +194,12 @@ export const registerTelegramNativeCommands = ({
             }
           }
 
-          const allowFromList = Array.isArray(allowFrom)
-            ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
-            : [];
           const senderId = msg.from?.id ? String(msg.from.id) : "";
           const senderUsername = msg.from?.username ?? "";
-          const dmAllow = normalizeAllowFrom(allowFromList);
+          const dmAllow = normalizeAllowFromWithStore({
+            allowFrom: allowFrom,
+            storeAllowFrom,
+          });
           const senderAllowed = isSenderAllowed({
             allow: dmAllow,
             senderId,

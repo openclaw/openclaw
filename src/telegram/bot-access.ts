@@ -24,6 +24,17 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
   };
 };
 
+export const normalizeAllowFromWithStore = (params: {
+  allowFrom?: Array<string | number>;
+  storeAllowFrom?: string[];
+}): NormalizedAllowFrom => {
+  const combined = [
+    ...(params.allowFrom ?? []),
+    ...(params.storeAllowFrom ?? []),
+  ].map((value) => String(value).trim()).filter(Boolean);
+  return normalizeAllowFrom(combined);
+};
+
 export const firstDefined = <T>(...values: Array<T | undefined>) => {
   for (const value of values) {
     if (typeof value !== "undefined") return value;
