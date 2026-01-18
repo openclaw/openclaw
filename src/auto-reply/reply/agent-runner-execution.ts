@@ -397,7 +397,12 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
       ) {
         didResetAfterCompactionFailure = true;
-        continue;
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.",
+          },
+        };
       }
       if (embeddedError?.kind === "role_ordering") {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
@@ -427,7 +432,12 @@ export async function runAgentTurnWithFallback(params: {
         (await params.resetSessionAfterCompactionFailure(message))
       ) {
         didResetAfterCompactionFailure = true;
-        continue;
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.",
+          },
+        };
       }
       if (isRoleOrderingError) {
         const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
