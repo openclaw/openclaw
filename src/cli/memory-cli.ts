@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { withProgress, withProgressTotals } from "./progress.js";
+import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -21,34 +22,6 @@ function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) return trimmed;
   return resolveDefaultAgentId(cfg);
-}
-
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-async function closeManager(manager: MemoryManager): Promise<void> {
-  try {
-    await manager.close();
-  } catch (err) {
-    defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`);
-  }
-}
-
-async function withMemoryManager(
-  params: { cfg: ReturnType<typeof loadConfig>; agentId: string },
-  run: (manager: MemoryManager) => Promise<void>,
-): Promise<void> {
-  const { manager, error } = await getMemorySearchManager(params);
-  if (!manager) {
-    defaultRuntime.log(error ?? "Memory search disabled.");
-    return;
-  }
-  try {
-    await run(manager);
-  } finally {
-    await closeManager(manager);
-  }
 }
 
 export function registerMemoryCli(program: Command) {
@@ -71,135 +44,144 @@ export function registerMemoryCli(program: Command) {
     .action(async (opts: MemoryCommandOptions) => {
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
-      await withMemoryManager({ cfg, agentId }, async (manager) => {
-        const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe: Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>> | undefined;
-        let indexError: string | undefined;
-        if (deep) {
-          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
-            progress.setLabel("Probing vector…");
+      await withManager<MemoryManager>({
+        getManager: () => getMemorySearchManager({ cfg, agentId }),
+        onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+        onCloseError: (err) =>
+          defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+        close: (manager) => manager.close(),
+        run: async (manager) => {
+          const deep = Boolean(opts.deep || opts.index);
+          let embeddingProbe:
+            | Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>>
+            | undefined;
+          let indexError: string | undefined;
+          if (deep) {
+            await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
+              progress.setLabel("Probing vector…");
+              await manager.probeVectorAvailability();
+              progress.tick();
+              progress.setLabel("Probing embeddings…");
+              embeddingProbe = await manager.probeEmbeddingAvailability();
+              progress.tick();
+            });
+            if (opts.index) {
+              await withProgressTotals(
+                { label: "Indexing memory…", total: 0 },
+                async (update, progress) => {
+                  try {
+                    await manager.sync({
+                      reason: "cli",
+                      progress: (syncUpdate) => {
+                        update({
+                          completed: syncUpdate.completed,
+                          total: syncUpdate.total,
+                          label: syncUpdate.label,
+                        });
+                        if (syncUpdate.label) progress.setLabel(syncUpdate.label);
+                      },
+                    });
+                  } catch (err) {
+                    indexError = formatErrorMessage(err);
+                    defaultRuntime.error(`Memory index failed: ${indexError}`);
+                    process.exitCode = 1;
+                  }
+                },
+              );
+            }
+          } else {
             await manager.probeVectorAvailability();
-            progress.tick();
-            progress.setLabel("Probing embeddings…");
-            embeddingProbe = await manager.probeEmbeddingAvailability();
-            progress.tick();
-          });
-          if (opts.index) {
-            await withProgressTotals(
-              { label: "Indexing memory…", total: 0 },
-              async (update, progress) => {
-                try {
-                  await manager.sync({
-                    reason: "cli",
-                    progress: (syncUpdate) => {
-                      update({
-                        completed: syncUpdate.completed,
-                        total: syncUpdate.total,
-                        label: syncUpdate.label,
-                      });
-                      if (syncUpdate.label) progress.setLabel(syncUpdate.label);
-                    },
-                  });
-                } catch (err) {
-                  indexError = formatErrorMessage(err);
-                  defaultRuntime.error(`Memory index failed: ${indexError}`);
-                  process.exitCode = 1;
-                }
-              },
+          }
+          const status = manager.status();
+          if (opts.json) {
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  ...status,
+                  embeddings: embeddingProbe
+                    ? { ok: embeddingProbe.ok, error: embeddingProbe.error }
+                    : undefined,
+                  indexError,
+                },
+                null,
+                2,
+              ),
             );
+            return;
           }
-        } else {
-          await manager.probeVectorAvailability();
-        }
-        const status = manager.status();
-        if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                ...status,
-                embeddings: embeddingProbe
-                  ? { ok: embeddingProbe.ok, error: embeddingProbe.error }
-                  : undefined,
-                indexError,
-              },
-              null,
-              2,
-            ),
-          );
-          return;
-        }
-        if (opts.index) {
-          const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
-          defaultRuntime.log(line);
-        }
-        const rich = isRich();
-        const heading = (text: string) => colorize(rich, theme.heading, text);
-        const muted = (text: string) => colorize(rich, theme.muted, text);
-        const info = (text: string) => colorize(rich, theme.info, text);
-        const success = (text: string) => colorize(rich, theme.success, text);
-        const warn = (text: string) => colorize(rich, theme.warn, text);
-        const accent = (text: string) => colorize(rich, theme.accent, text);
-        const label = (text: string) => muted(`${text}:`);
-        const lines = [
-          `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
-          `${label("Provider")} ${info(status.provider)} ${muted(
-            `(requested: ${status.requestedProvider})`,
-          )}`,
-          `${label("Model")} ${info(status.model)}`,
-          status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
-          `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
-          `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
-          `${label("Store")} ${info(status.dbPath)}`,
-          `${label("Workspace")} ${info(status.workspaceDir)}`,
-        ].filter(Boolean) as string[];
-        if (embeddingProbe) {
-          const state = embeddingProbe.ok ? "ready" : "unavailable";
-          const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
-          lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
-          if (embeddingProbe.error) {
-            lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
+          if (opts.index) {
+            const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+            defaultRuntime.log(line);
           }
-        }
-        if (status.sourceCounts?.length) {
-          lines.push(label("By source"));
-          for (const entry of status.sourceCounts) {
-            const counts = `${entry.files} files · ${entry.chunks} chunks`;
-            lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+          const rich = isRich();
+          const heading = (text: string) => colorize(rich, theme.heading, text);
+          const muted = (text: string) => colorize(rich, theme.muted, text);
+          const info = (text: string) => colorize(rich, theme.info, text);
+          const success = (text: string) => colorize(rich, theme.success, text);
+          const warn = (text: string) => colorize(rich, theme.warn, text);
+          const accent = (text: string) => colorize(rich, theme.accent, text);
+          const label = (text: string) => muted(`${text}:`);
+          const lines = [
+            `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
+            `${label("Provider")} ${info(status.provider)} ${muted(
+              `(requested: ${status.requestedProvider})`,
+            )}`,
+            `${label("Model")} ${info(status.model)}`,
+            status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
+            `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
+            `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
+            `${label("Store")} ${info(status.dbPath)}`,
+            `${label("Workspace")} ${info(status.workspaceDir)}`,
+          ].filter(Boolean) as string[];
+          if (embeddingProbe) {
+            const state = embeddingProbe.ok ? "ready" : "unavailable";
+            const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
+            lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
+            if (embeddingProbe.error) {
+              lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
+            }
           }
-        }
-        if (status.fallback) {
-          lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
-        }
-        if (status.vector) {
-          const vectorState = status.vector.enabled
-            ? status.vector.available
-              ? "ready"
-              : "unavailable"
-            : "disabled";
-          const vectorColor =
-            vectorState === "ready"
-              ? theme.success
-              : vectorState === "unavailable"
-                ? theme.warn
-                : theme.muted;
-          lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
-          if (status.vector.dims) {
-            lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
+          if (status.sourceCounts?.length) {
+            lines.push(label("By source"));
+            for (const entry of status.sourceCounts) {
+              const counts = `${entry.files} files · ${entry.chunks} chunks`;
+              lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+            }
           }
-          if (status.vector.extensionPath) {
-            lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
+          if (status.fallback) {
+            lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
           }
-          if (status.vector.loadError) {
-            lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+          if (status.vector) {
+            const vectorState = status.vector.enabled
+              ? status.vector.available
+                ? "ready"
+                : "unavailable"
+              : "disabled";
+            const vectorColor =
+              vectorState === "ready"
+                ? theme.success
+                : vectorState === "unavailable"
+                  ? theme.warn
+                  : theme.muted;
+            lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+            if (status.vector.dims) {
+              lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
+            }
+            if (status.vector.extensionPath) {
+              lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
+            }
+            if (status.vector.loadError) {
+              lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+            }
           }
-        }
-        if (status.fallback?.reason) {
-          lines.push(muted(status.fallback.reason));
-        }
-        if (indexError) {
-          lines.push(`${label("Index error")} ${warn(indexError)}`);
-        }
-        defaultRuntime.log(lines.join("\n"));
+          if (status.fallback?.reason) {
+            lines.push(muted(status.fallback.reason));
+          }
+          if (indexError) {
+            lines.push(`${label("Index error")} ${warn(indexError)}`);
+          }
+          defaultRuntime.log(lines.join("\n"));
+        },
       });
     });
 
@@ -211,15 +193,22 @@ export function registerMemoryCli(program: Command) {
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
-      await withMemoryManager({ cfg, agentId }, async (manager) => {
-        try {
-          await manager.sync({ reason: "cli", force: opts.force });
-          defaultRuntime.log("Memory index updated.");
-        } catch (err) {
-          const message = formatErrorMessage(err);
-          defaultRuntime.error(`Memory index failed: ${message}`);
-          process.exitCode = 1;
-        }
+      await withManager<MemoryManager>({
+        getManager: () => getMemorySearchManager({ cfg, agentId }),
+        onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+        onCloseError: (err) =>
+          defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+        close: (manager) => manager.close(),
+        run: async (manager) => {
+          try {
+            await manager.sync({ reason: "cli", force: opts.force });
+            defaultRuntime.log("Memory index updated.");
+          } catch (err) {
+            const message = formatErrorMessage(err);
+            defaultRuntime.error(`Memory index failed: ${message}`);
+            process.exitCode = 1;
+          }
+        },
       });
     });
 
@@ -241,41 +230,48 @@ export function registerMemoryCli(program: Command) {
       ) => {
         const cfg = loadConfig();
         const agentId = resolveAgent(cfg, opts.agent);
-        await withMemoryManager({ cfg, agentId }, async (manager) => {
-          let results: Awaited<ReturnType<typeof manager.search>>;
-          try {
-            results = await manager.search(query, {
-              maxResults: opts.maxResults,
-              minScore: opts.minScore,
-            });
-          } catch (err) {
-            const message = formatErrorMessage(err);
-            defaultRuntime.error(`Memory search failed: ${message}`);
-            process.exitCode = 1;
-            return;
-          }
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify({ results }, null, 2));
-            return;
-          }
-          if (results.length === 0) {
-            defaultRuntime.log("No matches.");
-            return;
-          }
-          const rich = isRich();
-          const lines: string[] = [];
-          for (const result of results) {
-            lines.push(
-              `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
-                rich,
-                theme.accent,
-                `${result.path}:${result.startLine}-${result.endLine}`,
-              )}`,
-            );
-            lines.push(colorize(rich, theme.muted, result.snippet));
-            lines.push("");
-          }
-          defaultRuntime.log(lines.join("\n").trim());
+        await withManager<MemoryManager>({
+          getManager: () => getMemorySearchManager({ cfg, agentId }),
+          onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+          onCloseError: (err) =>
+            defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+          close: (manager) => manager.close(),
+          run: async (manager) => {
+            let results: Awaited<ReturnType<typeof manager.search>>;
+            try {
+              results = await manager.search(query, {
+                maxResults: opts.maxResults,
+                minScore: opts.minScore,
+              });
+            } catch (err) {
+              const message = formatErrorMessage(err);
+              defaultRuntime.error(`Memory search failed: ${message}`);
+              process.exitCode = 1;
+              return;
+            }
+            if (opts.json) {
+              defaultRuntime.log(JSON.stringify({ results }, null, 2));
+              return;
+            }
+            if (results.length === 0) {
+              defaultRuntime.log("No matches.");
+              return;
+            }
+            const rich = isRich();
+            const lines: string[] = [];
+            for (const result of results) {
+              lines.push(
+                `${colorize(rich, theme.success, result.score.toFixed(3))} ${colorize(
+                  rich,
+                  theme.accent,
+                  `${result.path}:${result.startLine}-${result.endLine}`,
+                )}`,
+              );
+              lines.push(colorize(rich, theme.muted, result.snippet));
+              lines.push("");
+            }
+            defaultRuntime.log(lines.join("\n").trim());
+          },
         });
       },
     );

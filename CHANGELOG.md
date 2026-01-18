@@ -47,6 +47,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - CLI: stamp build commit into dist metadata so banners show the commit in npm installs.
+- CLI: close memory manager after memory commands to avoid hanging processes. (#1127) — thanks @NicholasSpisak.
 
 ## 2026.1.16-1
 
