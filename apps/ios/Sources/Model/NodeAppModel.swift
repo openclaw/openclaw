@@ -837,7 +837,7 @@ final class NodeAppModel {
             fps: params.fps,
             includeAudio: params.includeAudio,
             outPath: nil)
-        defer { try? FileManager.default.removeItem(atPath: path) }
+        defer { try? FileManager().removeItem(atPath: path) }
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         struct Payload: Codable {
             var format: String

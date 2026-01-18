@@ -160,14 +160,14 @@ actor CameraController {
         defer { session.stopRunning() }
         await Self.warmUpCaptureSession()
 
-        let movURL = FileManager.default.temporaryDirectory
+        let movURL = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mov")
-        let mp4URL = FileManager.default.temporaryDirectory
+        let mp4URL = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mp4")
 
         defer {
-            try? FileManager.default.removeItem(at: movURL)
-            try? FileManager.default.removeItem(at: mp4URL)
+            try? FileManager().removeItem(at: movURL)
+            try? FileManager().removeItem(at: mp4URL)
         }
 
         var delegate: MovieFileDelegate?
