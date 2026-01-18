@@ -5,7 +5,7 @@ import { createJiti } from "jiti";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverClawdbotPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
@@ -103,10 +103,10 @@ const resolvePluginSdkAlias = (): string | null => {
   try {
     let cursor = path.dirname(fileURLToPath(import.meta.url));
     for (let i = 0; i < 6; i += 1) {
-      const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
-      if (fs.existsSync(distCandidate)) return distCandidate;
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
       if (fs.existsSync(srcCandidate)) return srcCandidate;
+      const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
+      if (fs.existsSync(distCandidate)) return distCandidate;
       const parent = path.dirname(cursor);
       if (parent === cursor) break;
       cursor = parent;
@@ -322,6 +322,18 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   const pluginSdkAlias = resolvePluginSdkAlias();
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
+    extensions: [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".mtsx",
+      ".ctsx",
+      ".js",
+      ".mjs",
+      ".cjs",
+      ".json",
+    ],
     ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
   });
 
