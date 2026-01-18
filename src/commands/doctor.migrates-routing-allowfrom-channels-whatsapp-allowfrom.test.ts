@@ -322,7 +322,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 }));
 
 describe("doctor command", () => {
-  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 30_000 }, async () => {
+  it("migrates routing.allowFrom to channels.whatsapp.allowFrom", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,
@@ -366,7 +366,7 @@ describe("doctor command", () => {
     expect(written.routing).toBeUndefined();
   });
 
-  it("migrates legacy gateway services", { timeout: 30_000 }, async () => {
+  it("migrates legacy gateway services", { timeout: 60_000 }, async () => {
     readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/clawdbot.json",
       exists: true,

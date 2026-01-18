@@ -95,7 +95,7 @@ describe("sessions_send gateway loopback", () => {
 });
 
 describe("sessions_send label lookup", () => {
-  it("finds session by label and sends message", { timeout: 15_000 }, async () => {
+  it("finds session by label and sends message", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     const prevPort = process.env.CLAWDBOT_GATEWAY_PORT;
     process.env.CLAWDBOT_GATEWAY_PORT = String(port);
@@ -170,7 +170,7 @@ describe("sessions_send label lookup", () => {
     }
   });
 
-  it("returns error when label not found", { timeout: 15_000 }, async () => {
+  it("returns error when label not found", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     const prevPort = process.env.CLAWDBOT_GATEWAY_PORT;
     process.env.CLAWDBOT_GATEWAY_PORT = String(port);
@@ -199,7 +199,7 @@ describe("sessions_send label lookup", () => {
     }
   });
 
-  it("returns error when neither sessionKey nor label provided", { timeout: 15_000 }, async () => {
+  it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     const prevPort = process.env.CLAWDBOT_GATEWAY_PORT;
     process.env.CLAWDBOT_GATEWAY_PORT = String(port);

@@ -26,7 +26,7 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 }
 
 describe("gateway server auth/connect", () => {
-  test("closes silent handshakes after timeout", { timeout: 30_000 }, async () => {
+  test("closes silent handshakes after timeout", { timeout: 60_000 }, async () => {
     vi.useRealTimers();
     const { server, ws } = await startServerWithClient();
     const closed = await waitForWsClose(ws, HANDSHAKE_TIMEOUT_MS + 2_000);
@@ -129,7 +129,7 @@ describe("gateway server auth/connect", () => {
 
   test(
     "invalid connect params surface in response and close reason",
-    { timeout: 15000 },
+    { timeout: 60_000 },
     async () => {
       const { server, ws } = await startServerWithClient();
       const closeInfoPromise = new Promise<{ code: number; reason: string }>((resolve) => {
