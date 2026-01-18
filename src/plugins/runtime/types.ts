@@ -41,7 +41,14 @@ export type PluginRuntime = {
         channel: string;
         accountId: string;
         peer: { kind: "dm" | "group" | "channel"; id: string };
-      }) => { sessionKey: string; accountId: string };
+      }) => {
+        agentId: string;
+        channel: string;
+        accountId: string;
+        sessionKey: string;
+        mainSessionKey: string;
+        matchedBy: string;
+      };
     };
     pairing: {
       buildPairingReply: (params: { channel: string; idLine: string; code: string }) => string;

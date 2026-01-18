@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 - Docs: document plugin slots and memory plugin behavior.
 - Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
 - Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
 
 ## 2026.1.17-5
 
