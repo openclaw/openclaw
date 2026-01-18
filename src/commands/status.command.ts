@@ -65,6 +65,7 @@ export async function statusCommand(
     channels,
     summary,
     memory,
+    memoryPlugin,
   } = scan;
 
   const securityAudit = await withProgress(
@@ -116,6 +117,7 @@ export async function statusCommand(
           os: osSummary,
           update,
           memory,
+          memoryPlugin,
           gateway: {
             mode: gatewayMode,
             url: gatewayConnection.url,
@@ -235,11 +237,19 @@ export async function statusCommand(
       : (summary.sessions.paths[0] ?? "unknown");
 
   const memoryValue = (() => {
-    if (!memory) return muted("disabled");
+    if (!memoryPlugin.enabled) {
+      const suffix = memoryPlugin.reason ? ` (${memoryPlugin.reason})` : "";
+      return muted(`disabled${suffix}`);
+    }
+    if (!memory) {
+      const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
+      return muted(`enabled (${slot}) · unavailable`);
+    }
     const parts: string[] = [];
     const dirtySuffix = memory.dirty ? ` · ${warn("dirty")}` : "";
     parts.push(`${memory.files} files · ${memory.chunks} chunks${dirtySuffix}`);
     if (memory.sources?.length) parts.push(`sources ${memory.sources.join(", ")}`);
+    if (memoryPlugin.slot) parts.push(`plugin ${memoryPlugin.slot}`);
     const vector = memory.vector;
     parts.push(
       vector?.enabled === false
