@@ -5,6 +5,7 @@ import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
+  extractToolErrorMessage,
   extractToolResultText,
   extractMessagingToolSend,
   isToolResultError,
@@ -154,6 +155,14 @@ export function handleToolExecutionEnd(
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
+  if (isToolError) {
+    const errorMessage = extractToolErrorMessage(sanitizedResult);
+    ctx.state.lastToolError = {
+      toolName,
+      meta,
+      error: errorMessage,
+    };
+  }
 
   // Commit messaging tool text on success, discard on error.
   const pendingText = ctx.state.pendingMessagingTexts.get(toolCallId);

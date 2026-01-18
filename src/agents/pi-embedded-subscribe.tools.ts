@@ -4,10 +4,42 @@ import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
+const TOOL_ERROR_MAX_CHARS = 400;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
   return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+}
+
+function normalizeToolErrorText(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+  if (!firstLine) return undefined;
+  return firstLine.length > TOOL_ERROR_MAX_CHARS
+    ? `${truncateUtf16Safe(firstLine, TOOL_ERROR_MAX_CHARS)}…`
+    : firstLine;
+}
+
+function readErrorCandidate(value: unknown): string | undefined {
+  if (typeof value === "string") return normalizeToolErrorText(value);
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.message === "string") return normalizeToolErrorText(record.message);
+  if (typeof record.error === "string") return normalizeToolErrorText(record.error);
+  return undefined;
+}
+
+function extractErrorField(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const direct =
+    readErrorCandidate(record.error) ??
+    readErrorCandidate(record.message) ??
+    readErrorCandidate(record.reason);
+  if (direct) return direct;
+  const status = typeof record.status === "string" ? record.status.trim() : "";
+  return status ? normalizeToolErrorText(status) : undefined;
 }
 
 export function sanitizeToolResult(result: unknown): unknown {
@@ -61,6 +93,25 @@ export function isToolResultError(result: unknown): boolean {
   if (typeof status !== "string") return false;
   const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
+}
+
+export function extractToolErrorMessage(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const record = result as Record<string, unknown>;
+  const fromDetails = extractErrorField(record.details);
+  if (fromDetails) return fromDetails;
+  const fromRoot = extractErrorField(record);
+  if (fromRoot) return fromRoot;
+  const text = extractToolResultText(result);
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const fromJson = extractErrorField(parsed);
+    if (fromJson) return fromJson;
+  } catch {
+    // Fall through to first-line text fallback.
+  }
+  return normalizeToolErrorText(text);
 }
 
 export function extractMessagingToolSend(
