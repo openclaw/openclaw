@@ -214,8 +214,9 @@ async function maybeConfigureDmPolicies(params: {
   cfg: ClawdbotConfig;
   selection: ChannelChoice[];
   prompter: WizardPrompter;
+  accountIdsByChannel?: Map<ChannelChoice, string>;
 }): Promise<ClawdbotConfig> {
-  const { selection, prompter } = params;
+  const { selection, prompter, accountIdsByChannel } = params;
   const dmPolicies = selection
     .map((channel) => getChannelOnboardingAdapter(channel)?.dmPolicy)
     .filter(Boolean) as ChannelOnboardingDmPolicy[];
@@ -233,6 +234,7 @@ async function maybeConfigureDmPolicies(params: {
       [
         "Default: pairing (unknown DMs get a pairing code).",
         `Approve: clawdbot pairing approve ${policy.channel} <code>`,
+        `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
         `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
         'Multi-user DMs: set session.dmScope="per-channel-peer" to isolate sessions.',
         `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
@@ -243,6 +245,7 @@ async function maybeConfigureDmPolicies(params: {
       message: `${policy.label} DM policy`,
       options: [
         { value: "pairing", label: "Pairing (recommended)" },
+        { value: "allowlist", label: "Allowlist (specific users only)" },
         { value: "open", label: "Open (public inbound DMs)" },
         { value: "disabled", label: "Disabled (ignore DMs)" },
       ],
@@ -254,6 +257,13 @@ async function maybeConfigureDmPolicies(params: {
     const nextPolicy = await selectPolicy(policy);
     if (nextPolicy !== current) {
       cfg = policy.setPolicy(cfg, nextPolicy);
+    }
+    if (nextPolicy === "allowlist" && policy.promptAllowFrom) {
+      cfg = await policy.promptAllowFrom({
+        cfg,
+        prompter,
+        accountId: accountIdsByChannel?.get(policy.channel),
+      });
     }
   }
 
@@ -320,10 +330,12 @@ export async function setupChannels(
     options?.initialSelection?.[0] ?? resolveQuickstartDefault(statusByChannel);
 
   const shouldPromptAccountIds = options?.promptAccountIds === true;
+  const accountIdsByChannel = new Map<ChannelChoice, string>();
   const recordAccount = (channel: ChannelChoice, accountId: string) => {
     options?.onAccountId?.(channel, accountId);
     const adapter = getChannelOnboardingAdapter(channel);
     adapter?.onAccountRecorded?.(accountId, options);
+    accountIdsByChannel.set(channel, accountId);
   };
 
   const selection: ChannelChoice[] = [];
@@ -614,7 +626,12 @@ export async function setupChannels(
   }
 
   if (!options?.skipDmPolicyPrompt) {
-    next = await maybeConfigureDmPolicies({ cfg: next, selection, prompter });
+    next = await maybeConfigureDmPolicies({
+      cfg: next,
+      selection,
+      prompter,
+      accountIdsByChannel,
+    });
   }
 
   return next;

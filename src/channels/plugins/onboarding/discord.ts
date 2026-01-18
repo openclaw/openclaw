@@ -7,6 +7,7 @@ import {
   resolveDiscordAccount,
 } from "../../../discord/accounts.js";
 import { normalizeDiscordSlug } from "../../../discord/monitor/allow-list.js";
+import { resolveDiscordUserAllowlist } from "../../../discord/resolve-users.js";
 import {
   resolveDiscordChannelAllowlist,
   type DiscordChannelResolution,
@@ -148,6 +149,113 @@ function setDiscordGuildChannelAllowlist(
   };
 }
 
+function setDiscordAllowFrom(cfg: ClawdbotConfig, allowFrom: string[]): ClawdbotConfig {
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      discord: {
+        ...cfg.channels?.discord,
+        dm: {
+          ...cfg.channels?.discord?.dm,
+          enabled: cfg.channels?.discord?.dm?.enabled ?? true,
+          allowFrom,
+        },
+      },
+    },
+  };
+}
+
+function parseDiscordAllowFromInput(raw: string): string[] {
+  return raw
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+async function promptDiscordAllowFrom(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+  accountId?: string;
+}): Promise<ClawdbotConfig> {
+  const accountId =
+    params.accountId && normalizeAccountId(params.accountId)
+      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      : resolveDefaultDiscordAccountId(params.cfg);
+  const resolved = resolveDiscordAccount({ cfg: params.cfg, accountId });
+  const token = resolved.token;
+  const existing = params.cfg.channels?.discord?.dm?.allowFrom ?? [];
+  await params.prompter.note(
+    [
+      "Allowlist Discord DMs by username (we resolve to user ids).",
+      "Examples:",
+      "- 123456789012345678",
+      "- @alice",
+      "- alice#1234",
+      "Multiple entries: comma-separated.",
+      `Docs: ${formatDocsLink("/discord", "discord")}`,
+    ].join("\n"),
+    "Discord allowlist",
+  );
+
+  const parseInputs = (value: string) => parseDiscordAllowFromInput(value);
+  const parseId = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const mention = trimmed.match(/^<@!?(\d+)>$/);
+    if (mention) return mention[1];
+    const prefixed = trimmed.replace(/^(user:|discord:)/i, "");
+    if (/^\d+$/.test(prefixed)) return prefixed;
+    return null;
+  };
+
+  while (true) {
+    const entry = await params.prompter.text({
+      message: "Discord allowFrom (usernames or ids)",
+      placeholder: "@alice, 123456789012345678",
+      initialValue: existing[0] ? String(existing[0]) : undefined,
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const parts = parseInputs(String(entry));
+    if (!token) {
+      const ids = parts.map(parseId).filter(Boolean) as string[];
+      if (ids.length !== parts.length) {
+        await params.prompter.note(
+          "Bot token missing; use numeric user ids (or mention form) only.",
+          "Discord allowlist",
+        );
+        continue;
+      }
+      const unique = [...new Set([...existing.map((v) => String(v).trim()), ...ids])].filter(
+        Boolean,
+      );
+      return setDiscordAllowFrom(params.cfg, unique);
+    }
+
+    const results = await resolveDiscordUserAllowlist({
+      token,
+      entries: parts,
+    }).catch(() => null);
+    if (!results) {
+      await params.prompter.note("Failed to resolve usernames. Try again.", "Discord allowlist");
+      continue;
+    }
+    const unresolved = results.filter((res) => !res.resolved || !res.id);
+    if (unresolved.length > 0) {
+      await params.prompter.note(
+        `Could not resolve: ${unresolved.map((res) => res.input).join(", ")}`,
+        "Discord allowlist",
+      );
+      continue;
+    }
+    const ids = results.map((res) => res.id as string);
+    const unique = [
+      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
+    ];
+    return setDiscordAllowFrom(params.cfg, unique);
+  }
+}
+
 const dmPolicy: ChannelOnboardingDmPolicy = {
   label: "Discord",
   channel,
@@ -155,6 +263,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.discord.dm.allowFrom",
   getCurrent: (cfg) => cfg.channels?.discord?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setDiscordDmPolicy(cfg, policy),
+  promptAllowFrom: promptDiscordAllowFrom,
 };
 
 export const discordOnboardingAdapter: ChannelOnboardingAdapter = {
