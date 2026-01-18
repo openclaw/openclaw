@@ -1,4 +1,5 @@
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { parseDiscordTarget } from "../../discord/targets.js";
 
 export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -39,27 +40,8 @@ export function looksLikeSlackTargetId(raw: string): boolean {
 }
 
 export function normalizeDiscordMessagingTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
-  if (mentionMatch) return `user:${mentionMatch[1]}`.toLowerCase();
-  if (trimmed.startsWith("user:")) {
-    const id = trimmed.slice(5).trim();
-    return id ? `user:${id}`.toLowerCase() : undefined;
-  }
-  if (trimmed.startsWith("channel:")) {
-    const id = trimmed.slice(8).trim();
-    return id ? `channel:${id}`.toLowerCase() : undefined;
-  }
-  if (trimmed.startsWith("discord:")) {
-    const id = trimmed.slice(8).trim();
-    return id ? `user:${id}`.toLowerCase() : undefined;
-  }
-  if (trimmed.startsWith("@")) {
-    const id = trimmed.slice(1).trim();
-    return id ? `user:${id}`.toLowerCase() : undefined;
-  }
-  return `channel:${trimmed}`.toLowerCase();
+  const target = parseDiscordTarget(raw, { defaultKind: "channel" });
+  return target?.normalized;
 }
 
 export function looksLikeDiscordTargetId(raw: string): boolean {
