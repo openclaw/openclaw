@@ -443,7 +443,6 @@ actor MacNodeRuntime {
         let approvals = ExecApprovalsStore.resolve(agentId: agentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
-        let askFallback = approvals.agent.askFallback
         let autoAllowSkills = approvals.agent.autoAllowSkills
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -489,7 +488,7 @@ actor MacNodeRuntime {
 
         var approvedByAsk = false
         if requiresAsk {
-            let decision: ExecApprovalDecision? = await ExecApprovalsPromptPresenter.prompt(
+            let decision = await ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: displayCommand,
                     cwd: params.cwd,
@@ -500,7 +499,7 @@ actor MacNodeRuntime {
                     resolvedPath: resolution?.resolvedPath))
 
             switch decision {
-            case .deny?:
+            case .deny:
                 await self.emitExecEvent(
                     "exec.denied",
                     payload: ExecEventPayload(
@@ -513,41 +512,7 @@ actor MacNodeRuntime {
                     req,
                     code: .unavailable,
                     message: "SYSTEM_RUN_DENIED: user denied")
-            case nil:
-                if askFallback == .full {
-                    approvedByAsk = true
-                } else if askFallback == .allowlist {
-                    if allowlistMatch != nil || skillAllow {
-                        approvedByAsk = true
-                    } else {
-                        await self.emitExecEvent(
-                            "exec.denied",
-                            payload: ExecEventPayload(
-                                sessionKey: sessionKey,
-                                runId: runId,
-                                host: "node",
-                                command: displayCommand,
-                                reason: "approval-required"))
-                        return Self.errorResponse(
-                            req,
-                            code: .unavailable,
-                            message: "SYSTEM_RUN_DENIED: approval required")
-                    }
-                } else {
-                    await self.emitExecEvent(
-                        "exec.denied",
-                        payload: ExecEventPayload(
-                            sessionKey: sessionKey,
-                            runId: runId,
-                            host: "node",
-                            command: displayCommand,
-                            reason: "approval-required"))
-                    return Self.errorResponse(
-                        req,
-                        code: .unavailable,
-                        message: "SYSTEM_RUN_DENIED: approval required")
-                }
-            case .allowAlways?:
+            case .allowAlways:
                 approvedByAsk = true
                 if security == .allowlist {
                     let pattern = resolution?.resolvedPath ??
@@ -558,7 +523,7 @@ actor MacNodeRuntime {
                         ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
                     }
                 }
-            case .allowOnce?:
+            case .allowOnce:
                 approvedByAsk = true
             }
         }
