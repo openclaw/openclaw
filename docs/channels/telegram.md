@@ -305,7 +305,7 @@ Use the global setting when all Telegram bots/accounts should behave the same. U
   - `clawdbot pairing list telegram`
   - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
-- `channels.telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries. It is **not** the bot username; use the human sender’s ID.
+- `channels.telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries. It is **not** the bot username; use the human sender’s ID. The wizard accepts `@username` and resolves it to the numeric ID when possible.
 
 #### Finding your Telegram user ID
 Safer (no third-party bot):

@@ -6,11 +6,12 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
-- CLI: show Telegram bot username in channel status (probe/runtime).
-- CLI: add agent targeting and reply routing overrides for `clawdbot agent`. (#1165)
+- Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels.
+- Docs: clarify allowlist input types and onboarding behavior for messaging channels.
 
 ### Fixes
-- Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
+- macOS: load menu session previews asynchronously so items populate while the menu is open.
+- Telegram: honor pairing allowlists for native slash commands.
 
 ## 2026.1.18-4
 

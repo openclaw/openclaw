@@ -308,7 +308,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 ## Config quick map
 - `channels.whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `channels.whatsapp.selfChatMode` (same-phone setup; bot uses your personal WhatsApp number).
-- `channels.whatsapp.allowFrom` (DM allowlist).
+- `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp uses E.164 phone numbers (no usernames).
 - `channels.whatsapp.mediaMaxMb` (inbound media save cap).
 - `channels.whatsapp.ackReaction` (auto-reaction on message receipt: `{emoji, direct, group}`).
 - `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).

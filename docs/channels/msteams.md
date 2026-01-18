@@ -76,7 +76,7 @@ Disable with:
 
 **DM access**
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names (resolved at startup when Graph allows).
+- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names. The wizard resolves names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
@@ -413,7 +413,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
-- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs or UPNs).
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
 - `channels.msteams.requireMention`: require @mention in channels/groups (default true).

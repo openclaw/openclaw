@@ -92,7 +92,7 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
   - `clawdbot pairing list zalo`
   - `clawdbot pairing approve zalo <CODE>`
 - Pairing is the default token exchange. Details: [Pairing](/start/pairing)
-- `channels.zalo.allowFrom` accepts numeric user IDs.
+- `channels.zalo.allowFrom` accepts numeric user IDs (no username lookup available).
 
 ## Long-polling vs webhook
 - Default: long-polling (no public URL required).
@@ -147,7 +147,7 @@ Provider options:
 - `channels.zalo.botToken`: bot token from Zalo Bot Platform.
 - `channels.zalo.tokenFile`: read token from file path.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`.
+- `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
 - `channels.zalo.webhookUrl`: enable webhook mode (HTTPS required).
 - `channels.zalo.webhookSecret`: webhook secret (8-256 chars).

@@ -120,7 +120,7 @@ Provider options:
 - `channels.signal.ignoreStories`: ignore stories from the daemon.
 - `channels.signal.sendReadReceipts`: forward read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`.
+- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID ids.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group sender allowlist.
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
