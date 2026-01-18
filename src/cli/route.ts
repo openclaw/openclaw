@@ -6,18 +6,12 @@ import { sessionsCommand } from "../commands/sessions.js";
 import { agentsListCommand } from "../commands/agents.js";
 import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { hasHelpOrVersion, getCommandPath } from "./argv.js";
+import { emitCliBanner } from "./banner.js";
+import { VERSION } from "../version.js";
+import { getCommandPath, getFlagValue, hasFlag, hasHelpOrVersion } from "./argv.js";
 import { parsePositiveIntOrUndefined } from "./program/helpers.js";
 import { ensureConfigReady } from "./program/config-guard.js";
 import { runMemoryStatus } from "./memory-cli.js";
-
-const getFlagValue = (argv: string[], name: string): string | undefined => {
-  const index = argv.indexOf(name);
-  if (index === -1) return undefined;
-  return argv[index + 1];
-};
-
-const hasFlag = (argv: string[], name: string): boolean => argv.includes(name);
 
 export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_ROUTE_FIRST)) return false;
@@ -28,11 +22,13 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   if (!primary) return false;
 
   if (primary === "health") {
+    emitCliBanner(VERSION, { argv });
     await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
     ensurePluginRegistryLoaded();
     const json = hasFlag(argv, "--json");
     const verbose = hasFlag(argv, "--verbose") || hasFlag(argv, "--debug");
     const timeout = getFlagValue(argv, "--timeout");
+    if (timeout === null) return false;
     const timeoutMs = parsePositiveIntOrUndefined(timeout);
     setVerbose(verbose);
     await healthCommand({ json, timeoutMs, verbose }, defaultRuntime);
@@ -40,6 +36,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "status") {
+    emitCliBanner(VERSION, { argv });
     await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
     ensurePluginRegistryLoaded();
     const json = hasFlag(argv, "--json");
@@ -48,6 +45,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
     const usage = hasFlag(argv, "--usage");
     const verbose = hasFlag(argv, "--verbose") || hasFlag(argv, "--debug");
     const timeout = getFlagValue(argv, "--timeout");
+    if (timeout === null) return false;
     const timeoutMs = parsePositiveIntOrUndefined(timeout);
     setVerbose(verbose);
     await statusCommand({ json, deep, all, usage, timeoutMs, verbose }, defaultRuntime);
@@ -55,17 +53,21 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "sessions") {
+    emitCliBanner(VERSION, { argv });
     await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
     const json = hasFlag(argv, "--json");
     const verbose = hasFlag(argv, "--verbose");
     const store = getFlagValue(argv, "--store");
+    if (store === null) return false;
     const active = getFlagValue(argv, "--active");
+    if (active === null) return false;
     setVerbose(verbose);
     await sessionsCommand({ json, store, active }, defaultRuntime);
     return true;
   }
 
   if (primary === "agents" && secondary === "list") {
+    emitCliBanner(VERSION, { argv });
     await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
     const json = hasFlag(argv, "--json");
     const bindings = hasFlag(argv, "--bindings");
@@ -74,7 +76,9 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "memory" && secondary === "status") {
+    emitCliBanner(VERSION, { argv });
     const agent = getFlagValue(argv, "--agent");
+    if (agent === null) return false;
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
     const index = hasFlag(argv, "--index");

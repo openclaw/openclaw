@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildParseArgv,
+  getFlagValue,
   getCommandPath,
   getPrimaryCommand,
   hasHelpOrVersion,
+  hasFlag,
 } from "./argv.js";
 
 describe("argv helpers", () => {
@@ -30,6 +32,25 @@ describe("argv helpers", () => {
   it("returns primary command", () => {
     expect(getPrimaryCommand(["node", "clawdbot", "agents", "list"])).toBe("agents");
     expect(getPrimaryCommand(["node", "clawdbot"])).toBeNull();
+  });
+
+  it("parses boolean flags and ignores terminator", () => {
+    expect(hasFlag(["node", "clawdbot", "status", "--json"], "--json")).toBe(true);
+    expect(hasFlag(["node", "clawdbot", "--", "--json"], "--json")).toBe(false);
+  });
+
+  it("extracts flag values with equals and missing values", () => {
+    expect(getFlagValue(["node", "clawdbot", "status", "--timeout", "5000"], "--timeout")).toBe(
+      "5000",
+    );
+    expect(getFlagValue(["node", "clawdbot", "status", "--timeout=2500"], "--timeout")).toBe(
+      "2500",
+    );
+    expect(getFlagValue(["node", "clawdbot", "status", "--timeout"], "--timeout")).toBeNull();
+    expect(getFlagValue(["node", "clawdbot", "status", "--timeout", "--json"], "--timeout")).toBe(
+      null,
+    );
+    expect(getFlagValue(["node", "clawdbot", "--", "--timeout=99"], "--timeout")).toBeUndefined();
   });
 
   it("builds parse argv from raw args", () => {

@@ -24,13 +24,13 @@ export async function runCli(argv: string[] = process.argv) {
   normalizeEnv();
   ensureClawdbotCliOnPath();
 
-  // Capture all console output into structured logs while keeping stdout/stderr behavior.
-  enableConsoleCapture();
-
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
   if (await tryRouteCli(argv)) return;
+
+  // Capture all console output into structured logs while keeping stdout/stderr behavior.
+  enableConsoleCapture();
 
   const { buildProgram } = await import("./program.js");
   const program = buildProgram();
