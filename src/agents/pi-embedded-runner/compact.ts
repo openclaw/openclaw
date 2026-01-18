@@ -16,6 +16,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { applyBootstrapHookOverrides } from "../bootstrap-hooks.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -182,11 +183,21 @@ export async function compactEmbeddedPiSession(params: {
           await loadWorkspaceBootstrapFiles(effectiveWorkspace),
           params.sessionKey ?? params.sessionId,
         );
-        const sessionLabel = params.sessionKey ?? params.sessionId;
-        const contextFiles: EmbeddedContextFile[] = buildBootstrapContextFiles(bootstrapFiles, {
-          maxChars: resolveBootstrapMaxChars(params.config),
-          warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+        const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
+          files: bootstrapFiles,
+          workspaceDir: effectiveWorkspace,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
         });
+        const sessionLabel = params.sessionKey ?? params.sessionId;
+        const contextFiles: EmbeddedContextFile[] = buildBootstrapContextFiles(
+          hookAdjustedBootstrapFiles,
+          {
+            maxChars: resolveBootstrapMaxChars(params.config),
+            warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+          },
+        );
         const runAbortController = new AbortController();
         const toolsRaw = createClawdbotCodingTools({
           exec: {

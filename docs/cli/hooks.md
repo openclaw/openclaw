@@ -256,3 +256,15 @@ grep '"action":"new"' ~/.clawdbot/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/hooks#command-logger)
+
+### soul-evil
+
+Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
+
+**Enable:**
+
+```bash
+clawdbot hooks enable soul-evil
+```
+
+**See:** [soul-evil documentation](/hooks#soul-evil)
