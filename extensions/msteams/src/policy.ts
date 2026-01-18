@@ -5,6 +5,12 @@ import type {
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
 } from "../../../src/config/types.js";
+import {
+  buildChannelKeyCandidates,
+  normalizeChannelSlug,
+  resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
+} from "../../../src/channels/plugins/channel-config.js";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
@@ -29,56 +35,53 @@ export function resolveMSTeamsRouteConfig(params: {
   const conversationId = params.conversationId?.trim();
   const channelName = params.channelName?.trim();
   const teams = params.cfg?.teams ?? {};
-  const teamKeys = Object.keys(teams);
-  const allowlistConfigured = teamKeys.length > 0;
-
-  const normalize = (value: string) =>
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/^#/, "")
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-
-  let teamKey: string | undefined;
-  if (teamId && teams[teamId]) teamKey = teamId;
-  if (!teamKey && teamName) {
-    const slug = normalize(teamName);
-    if (slug) {
-      teamKey = teamKeys.find((key) => normalize(key) === slug);
-    }
-  }
-  if (!teamKey && teams["*"]) teamKey = "*";
-
-  const teamConfig = teamKey ? teams[teamKey] : undefined;
+  const allowlistConfigured = Object.keys(teams).length > 0;
+  const teamCandidates = buildChannelKeyCandidates(
+    teamId,
+    teamName,
+    teamName ? normalizeChannelSlug(teamName) : undefined,
+  );
+  const teamMatch = resolveChannelEntryMatchWithFallback({
+    entries: teams,
+    keys: teamCandidates,
+    wildcardKey: "*",
+    normalizeKey: normalizeChannelSlug,
+  });
+  const teamConfig = teamMatch.entry;
   const channels = teamConfig?.channels ?? {};
-  const channelKeys = Object.keys(channels);
+  const channelAllowlistConfigured = Object.keys(channels).length > 0;
+  const channelCandidates = buildChannelKeyCandidates(
+    conversationId,
+    channelName,
+    channelName ? normalizeChannelSlug(channelName) : undefined,
+  );
+  const channelMatch = resolveChannelEntryMatchWithFallback({
+    entries: channels,
+    keys: channelCandidates,
+    wildcardKey: "*",
+    normalizeKey: normalizeChannelSlug,
+  });
+  const channelConfig = channelMatch.entry;
 
-  let channelKey: string | undefined;
-  if (conversationId && channels[conversationId]) channelKey = conversationId;
-  if (!channelKey && channelName) {
-    const slug = normalize(channelName);
-    if (slug) {
-      channelKey = channelKeys.find((key) => normalize(key) === slug);
-    }
-  }
-  if (!channelKey && channels["*"]) channelKey = "*";
-  const channelConfig = channelKey ? channels[channelKey] : undefined;
-  const channelAllowlistConfigured = channelKeys.length > 0;
-
-  const allowed = !allowlistConfigured
-    ? true
-    : Boolean(teamConfig) && (!channelAllowlistConfigured || Boolean(channelConfig));
+  const allowed = resolveNestedAllowlistDecision({
+    outerConfigured: allowlistConfigured,
+    outerMatched: Boolean(teamConfig),
+    innerConfigured: channelAllowlistConfigured,
+    innerMatched: Boolean(channelConfig),
+  });
 
   return {
     teamConfig,
     channelConfig,
     allowlistConfigured,
     allowed,
-    teamKey,
-    channelKey,
-    channelMatchKey: channelKey,
-    channelMatchSource: channelKey ? (channelKey === "*" ? "wildcard" : "direct") : undefined,
+    teamKey: teamMatch.matchKey ?? teamMatch.key,
+    channelKey: channelMatch.matchKey ?? channelMatch.key,
+    channelMatchKey: channelMatch.matchKey,
+    channelMatchSource:
+      channelMatch.matchSource === "direct" || channelMatch.matchSource === "wildcard"
+        ? channelMatch.matchSource
+        : undefined,
   };
 }
 

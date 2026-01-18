@@ -2,13 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChannelKeyCandidates,
+  normalizeChannelSlug,
   resolveChannelEntryMatch,
   resolveChannelEntryMatchWithFallback,
+  resolveNestedAllowlistDecision,
 } from "./channel-config.js";
 
 describe("buildChannelKeyCandidates", () => {
   it("dedupes and trims keys", () => {
     expect(buildChannelKeyCandidates(" a ", "a", "", "b", "b")).toEqual(["a", "b"]);
+  });
+});
+
+describe("normalizeChannelSlug", () => {
+  it("normalizes names into slugs", () => {
+    expect(normalizeChannelSlug("My Team")).toBe("my-team");
+    expect(normalizeChannelSlug("#General Chat")).toBe("general-chat");
+    expect(normalizeChannelSlug(" Dev__Chat ")).toBe("dev-chat");
   });
 });
 
@@ -65,5 +75,60 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.entry).toBe(entries["*"]);
     expect(match.matchSource).toBe("wildcard");
     expect(match.matchKey).toBe("*");
+  });
+
+  it("matches normalized keys when normalizeKey is provided", () => {
+    const entries = { "My Team": { allow: true } };
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["my-team"],
+      normalizeKey: normalizeChannelSlug,
+    });
+    expect(match.entry).toBe(entries["My Team"]);
+    expect(match.matchSource).toBe("direct");
+    expect(match.matchKey).toBe("My Team");
+  });
+});
+
+describe("resolveNestedAllowlistDecision", () => {
+  it("allows when outer allowlist is disabled", () => {
+    expect(
+      resolveNestedAllowlistDecision({
+        outerConfigured: false,
+        outerMatched: false,
+        innerConfigured: false,
+        innerMatched: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks when outer allowlist is configured but missing match", () => {
+    expect(
+      resolveNestedAllowlistDecision({
+        outerConfigured: true,
+        outerMatched: false,
+        innerConfigured: false,
+        innerMatched: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("requires inner match when inner allowlist is configured", () => {
+    expect(
+      resolveNestedAllowlistDecision({
+        outerConfigured: true,
+        outerMatched: true,
+        innerConfigured: true,
+        innerMatched: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveNestedAllowlistDecision({
+        outerConfigured: true,
+        outerMatched: true,
+        innerConfigured: true,
+        innerMatched: true,
+      }),
+    ).toBe(true);
   });
 });
