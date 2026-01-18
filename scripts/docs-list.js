@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 process.stdout.on('error', (error) => {
@@ -11,6 +11,14 @@ process.stdout.on('error', (error) => {
 });
 
 const DOCS_DIR = join(process.cwd(), 'docs');
+if (!existsSync(DOCS_DIR)) {
+  console.error('docs:list: missing docs directory. Run from repo root.');
+  process.exit(1);
+}
+if (!statSync(DOCS_DIR).isDirectory()) {
+  console.error('docs:list: docs path is not a directory.');
+  process.exit(1);
+}
 
 const EXCLUDED_DIRS = new Set(['archive', 'research']);
 
