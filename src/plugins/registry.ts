@@ -22,6 +22,9 @@ import type {
   PluginLogger,
   PluginOrigin,
   PluginKind,
+  PluginHookName,
+  PluginHookHandlerMap,
+  PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -94,6 +97,7 @@ export type PluginRecord = {
   cliCommands: string[];
   services: string[];
   httpHandlers: number;
+  hookCount: number;
   configSchema: boolean;
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: Record<string, unknown>;
@@ -103,6 +107,7 @@ export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
+  typedHooks: TypedPluginHookRegistration[];
   channels: PluginChannelRegistration[];
   providers: PluginProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
@@ -123,6 +128,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     plugins: [],
     tools: [],
     hooks: [],
+    typedHooks: [],
     channels: [],
     providers: [],
     gatewayHandlers: {},
@@ -346,6 +352,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerTypedHook = <K extends PluginHookName>(
+    record: PluginRecord,
+    hookName: K,
+    handler: PluginHookHandlerMap[K],
+    opts?: { priority?: number },
+  ) => {
+    record.hookCount += 1;
+    registry.typedHooks.push({
+      pluginId: record.id,
+      hookName,
+      handler,
+      priority: opts?.priority,
+      source: record.source,
+    } as TypedPluginHookRegistration);
+  };
+
   const normalizeLogger = (logger: PluginLogger): PluginLogger => ({
     info: logger.info,
     warn: logger.warn,
@@ -380,6 +402,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       registerService: (service) => registerService(record, service),
       resolvePath: (input: string) => resolveUserPath(input),
+      on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };
   };
 
@@ -393,5 +416,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerGatewayMethod,
     registerCli,
     registerService,
+    registerHook,
+    registerTypedHook,
   };
 }

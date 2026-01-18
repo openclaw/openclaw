@@ -64,8 +64,9 @@ import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
-import { mapThinkingLevel } from "../utils.js";
+import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -458,9 +459,40 @@ export async function runEmbeddedAttempt(
         }
       }
 
+      // Get hook runner once for both before_agent_start and agent_end hooks
+      const hookRunner = getGlobalHookRunner();
+
       let promptError: unknown = null;
       try {
         const promptStartedAt = Date.now();
+
+        // Run before_agent_start hooks to allow plugins to inject context
+        let effectivePrompt = params.prompt;
+        if (hookRunner?.hasHooks("before_agent_start")) {
+          try {
+            const hookResult = await hookRunner.runBeforeAgentStart(
+              {
+                prompt: params.prompt,
+                messages: activeSession.messages,
+              },
+              {
+                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+              },
+            );
+            if (hookResult?.prependContext) {
+              effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+              log.debug(
+                `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
+              );
+            }
+          } catch (hookErr) {
+            log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
+          }
+        }
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
 
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
@@ -480,7 +512,7 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await abortable(activeSession.prompt(params.prompt, { images: params.images }));
+          await abortable(activeSession.prompt(effectivePrompt, { images: params.images }));
         } catch (err) {
           promptError = err;
         } finally {
@@ -501,6 +533,29 @@ export async function runEmbeddedAttempt(
 
         messagesSnapshot = activeSession.messages.slice();
         sessionIdUsed = activeSession.sessionId;
+
+        // Run agent_end hooks to allow plugins to analyze the conversation
+        // This is fire-and-forget, so we don't await
+        if (hookRunner?.hasHooks("agent_end")) {
+          hookRunner
+            .runAgentEnd(
+              {
+                messages: messagesSnapshot,
+                success: !aborted && !promptError,
+                error: promptError ? describeUnknownError(promptError) : undefined,
+                durationMs: Date.now() - promptStartedAt,
+              },
+              {
+                agentId: params.sessionKey?.split(":")[0] ?? "main",
+                sessionKey: params.sessionKey,
+                workspaceDir: params.workspaceDir,
+                messageProvider: params.messageProvider ?? undefined,
+              },
+            )
+            .catch((err) => {
+              log.warn(`agent_end hook failed: ${err}`);
+            });
+        }
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) clearTimeout(abortWarnTimer);
