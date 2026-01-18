@@ -37,10 +37,11 @@ The hooks system allows you to:
 
 ### Bundled Hooks
 
-Clawdbot ships with two bundled hooks that are automatically discovered:
+Clawdbot ships with three bundled hooks that are automatically discovered:
 
 - **💾 session-memory**: Saves session context to your agent workspace (default `~/clawd/memory/`) when you issue `/new`
 - **📝 command-logger**: Logs all command events to `~/.clawdbot/logs/commands.log`
+- **😈 soul-evil**: Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance
 
 List available hooks:
 
