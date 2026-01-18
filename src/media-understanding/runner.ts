@@ -587,7 +587,7 @@ export async function runCapability(params: {
     activeModel: params.activeModel,
   });
   let resolvedEntries = entries;
-  if (resolvedEntries.length === 0 && capability === "audio" && config?.enabled !== false) {
+  if (resolvedEntries.length === 0 && capability === "audio") {
     resolvedEntries = await resolveAutoAudioEntries({
       cfg,
       agentDir: params.agentDir,

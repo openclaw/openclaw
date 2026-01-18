@@ -97,7 +97,7 @@ export async function runCliAgent(params: {
     extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
     heartbeatPrompt,
-    docsPath,
+    docsPath: docsPath ?? undefined,
     tools: [],
     contextFiles,
     modelDisplay,
