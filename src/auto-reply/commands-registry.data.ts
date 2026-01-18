@@ -368,6 +368,20 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "exec",
+      nativeName: "exec",
+      description: "Set exec defaults for this session.",
+      textAlias: "/exec",
+      args: [
+        {
+          name: "options",
+          description: "host=... security=... ask=... node=...",
+          type: "string",
+        },
+      ],
+      argsParsing: "none",
+    }),
+    defineChatCommand({
       key: "model",
       nativeName: "model",
       description: "Show or set the model.",

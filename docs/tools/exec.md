@@ -41,6 +41,16 @@ Notes:
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
 
+## Session overrides (`/exec`)
+
+Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
+Send `/exec` with no arguments to show the current values.
+
+Example:
+```
+/exec host=gateway security=allowlist ask=on-miss node=mac-1
+```
+
 ## Exec approvals (macOS app)
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
