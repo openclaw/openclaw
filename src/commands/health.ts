@@ -8,6 +8,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import {
   type HeartbeatSummary,
   resolveHeartbeatSummaryForAgent,
@@ -71,7 +72,7 @@ export type HealthSummary = {
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 const debugHealth = (...args: unknown[]) => {
-  if (process.env.CLAWDBOT_DEBUG_HEALTH === "1") {
+  if (isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_HEALTH)) {
     console.warn("[health:debug]", ...args);
   }
 };
@@ -523,7 +524,7 @@ export async function healthCommand(
   if (opts.json) {
     runtime.log(JSON.stringify(summary, null, 2));
   } else {
-    const debugEnabled = process.env.CLAWDBOT_DEBUG_HEALTH === "1";
+    const debugEnabled = isTruthyEnvValue(process.env.CLAWDBOT_DEBUG_HEALTH);
     if (opts.verbose) {
       const details = buildGatewayConnectionDetails();
       runtime.log(info("Gateway connection:"));

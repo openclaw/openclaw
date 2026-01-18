@@ -150,7 +150,13 @@ export function enableConsoleCapture(): void {
   if (loggingState.consolePatched) return;
   loggingState.consolePatched = true;
 
-  const logger = getLogger();
+  let logger: ReturnType<typeof getLogger> | null = null;
+  const getLoggerLazy = () => {
+    if (!logger) {
+      logger = getLogger();
+    }
+    return logger;
+  };
 
   const original = {
     log: console.log,
@@ -182,19 +188,20 @@ export function enableConsoleCapture(): void {
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
       try {
+        const resolvedLogger = getLoggerLazy();
         // Map console levels to file logger
         if (level === "trace") {
-          logger.trace(formatted);
+          resolvedLogger.trace(formatted);
         } else if (level === "debug") {
-          logger.debug(formatted);
+          resolvedLogger.debug(formatted);
         } else if (level === "info") {
-          logger.info(formatted);
+          resolvedLogger.info(formatted);
         } else if (level === "warn") {
-          logger.warn(formatted);
+          resolvedLogger.warn(formatted);
         } else if (level === "error" || level === "fatal") {
-          logger.error(formatted);
+          resolvedLogger.error(formatted);
         } else {
-          logger.info(formatted);
+          resolvedLogger.info(formatted);
         }
       } catch {
         // never block console output on logging failures

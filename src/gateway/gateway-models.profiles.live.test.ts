@@ -24,15 +24,17 @@ import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
 import type { ClawdbotConfig, ModelProviderConfig } from "../config/types.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
-const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
-const GATEWAY_LIVE = process.env.CLAWDBOT_LIVE_GATEWAY === "1";
-const ZAI_FALLBACK = process.env.CLAWDBOT_LIVE_GATEWAY_ZAI_FALLBACK === "1";
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
+const GATEWAY_LIVE = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_GATEWAY);
+const ZAI_FALLBACK = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_GATEWAY_ZAI_FALLBACK);
 const PROVIDERS = parseFilter(process.env.CLAWDBOT_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;

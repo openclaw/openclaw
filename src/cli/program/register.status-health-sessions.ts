@@ -7,6 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { parsePositiveIntOrUndefined } from "./helpers.js";
+import { ensureConfigReady } from "./config-guard.js";
 
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
@@ -37,6 +38,7 @@ Examples:
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/status", "docs.clawd.bot/cli/status")}\n`,
     )
     .action(async (opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
       const verbose = Boolean(opts.verbose || opts.debug);
       setVerbose(verbose);
       const timeout = parsePositiveIntOrUndefined(opts.timeout);
@@ -76,6 +78,7 @@ Examples:
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/health", "docs.clawd.bot/cli/health")}\n`,
     )
     .action(async (opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
       const verbose = Boolean(opts.verbose || opts.debug);
       setVerbose(verbose);
       const timeout = parsePositiveIntOrUndefined(opts.timeout);
@@ -123,6 +126,7 @@ Shows token usage per session when the agent reports it; set agents.defaults.con
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.clawd.bot/cli/sessions")}\n`,
     )
     .action(async (opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
       setVerbose(Boolean(opts.verbose));
       await sessionsCommand(
         {

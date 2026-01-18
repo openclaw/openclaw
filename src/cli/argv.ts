@@ -1,0 +1,94 @@
+const HELP_FLAGS = new Set(["-h", "--help"]);
+const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+const FLAG_TERMINATOR = "--";
+
+export function hasHelpOrVersion(argv: string[]): boolean {
+  return argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg));
+}
+
+function isValueToken(arg: string | undefined): boolean {
+  if (!arg) return false;
+  if (arg === FLAG_TERMINATOR) return false;
+  if (!arg.startsWith("-")) return true;
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+}
+
+export function hasFlag(argv: string[], name: string): boolean {
+  const args = argv.slice(2);
+  for (const arg of args) {
+    if (arg === FLAG_TERMINATOR) break;
+    if (arg === name) return true;
+  }
+  return false;
+}
+
+export function getFlagValue(argv: string[], name: string): string | null | undefined {
+  const args = argv.slice(2);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === FLAG_TERMINATOR) break;
+    if (arg === name) {
+      const next = args[i + 1];
+      return isValueToken(next) ? next : null;
+    }
+    if (arg.startsWith(`${name}=`)) {
+      const value = arg.slice(name.length + 1);
+      return value ? value : null;
+    }
+  }
+  return undefined;
+}
+
+export function getCommandPath(argv: string[], depth = 2): string[] {
+  const args = argv.slice(2);
+  const path: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) continue;
+    if (arg === "--") break;
+    if (arg.startsWith("-")) continue;
+    path.push(arg);
+    if (path.length >= depth) break;
+  }
+  return path;
+}
+
+export function getPrimaryCommand(argv: string[]): string | null {
+  const [primary] = getCommandPath(argv, 1);
+  return primary ?? null;
+}
+
+export function buildParseArgv(params: {
+  programName?: string;
+  rawArgs?: string[];
+  fallbackArgv?: string[];
+}): string[] {
+  const baseArgv =
+    params.rawArgs && params.rawArgs.length > 0
+      ? params.rawArgs
+      : params.fallbackArgv && params.fallbackArgv.length > 0
+        ? params.fallbackArgv
+        : process.argv;
+  const programName = params.programName ?? "";
+  const normalizedArgv =
+    programName && baseArgv[0] === programName
+      ? baseArgv.slice(1)
+      : baseArgv[0]?.endsWith("clawdbot")
+        ? baseArgv.slice(1)
+        : baseArgv;
+  const executable = normalizedArgv[0]?.split(/[/\\]/).pop() ?? "";
+  const looksLikeNode =
+    normalizedArgv.length >= 2 && (executable === "node" || executable === "bun");
+  if (looksLikeNode) return normalizedArgv;
+  return ["node", programName || "clawdbot", ...normalizedArgv];
+}
+
+export function isReadOnlyCommand(argv: string[]): boolean {
+  const path = getCommandPath(argv, 2);
+  if (path.length === 0) return false;
+  const [primary, secondary] = path;
+  if (primary === "health" || primary === "status" || primary === "sessions") return true;
+  if (primary === "memory" && secondary === "status") return true;
+  if (primary === "agents" && secondary === "list") return true;
+  return false;
+}

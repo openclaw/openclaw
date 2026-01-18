@@ -7,6 +7,7 @@ import {
 } from "../agents/model-selection.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { startGmailWatcher } from "../hooks/gmail-watcher.js";
 import {
   clearInternalHooks,
@@ -46,7 +47,7 @@ export async function startGatewaySidecars(params: {
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
-  if (process.env.CLAWDBOT_SKIP_GMAIL_WATCHER !== "1") {
+  if (!isTruthyEnvValue(process.env.CLAWDBOT_SKIP_GMAIL_WATCHER)) {
     try {
       const gmailResult = await startGmailWatcher(params.cfg);
       if (gmailResult.started) {
@@ -113,7 +114,8 @@ export async function startGatewaySidecars(params: {
   // Launch configured channels so gateway replies via the surface the message came from.
   // Tests can opt out via CLAWDBOT_SKIP_CHANNELS (or legacy CLAWDBOT_SKIP_PROVIDERS).
   const skipChannels =
-    process.env.CLAWDBOT_SKIP_CHANNELS === "1" || process.env.CLAWDBOT_SKIP_PROVIDERS === "1";
+    isTruthyEnvValue(process.env.CLAWDBOT_SKIP_CHANNELS) ||
+    isTruthyEnvValue(process.env.CLAWDBOT_SKIP_PROVIDERS);
   if (!skipChannels) {
     try {
       await params.startChannels();
