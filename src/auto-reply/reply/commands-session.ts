@@ -6,6 +6,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
+import { normalizeUsageDisplay } from "../thinking.js";
 import {
   formatAbortReplyText,
   isAbortTrigger,
@@ -124,6 +125,57 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   return {
     shouldContinue: false,
     reply: { text: `⚙️ Send policy set to ${label}.` },
+  };
+};
+
+export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) return null;
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/usage" && !normalized.startsWith("/usage ")) return null;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+  if (rawArgs && !requested) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /usage off|tokens|full" },
+    };
+  }
+
+  const currentRaw =
+    params.sessionEntry?.responseUsage ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
+  const current =
+    currentRaw === "full"
+      ? "full"
+      : currentRaw === "tokens" || currentRaw === "on"
+        ? "tokens"
+        : "off";
+  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    if (next === "off") delete params.sessionEntry.responseUsage;
+    else params.sessionEntry.responseUsage = next;
+    params.sessionEntry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+    if (params.storePath) {
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      });
+    }
+  }
+
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ Usage footer: ${next}.`,
+    },
   };
 };
 

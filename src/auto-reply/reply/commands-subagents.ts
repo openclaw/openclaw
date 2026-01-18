@@ -180,10 +180,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     const sorted = sortSubagentRuns(runs);
     const active = sorted.filter((entry) => !entry.endedAt);
     const done = sorted.length - active.length;
-    const lines = [
-      "🧭 Subagents (current session)",
-      `Active: ${active.length} · Done: ${done}`,
-    ];
+    const lines = ["🧭 Subagents (current session)", `Active: ${active.length} · Done: ${done}`];
     sorted.forEach((entry, index) => {
       const status = formatRunStatus(entry);
       const label = formatRunLabel(entry);
@@ -396,8 +393,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
       shouldContinue: false,
       reply: {
         text:
-          replyText ??
-          `✅ Sent to ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
+          replyText ?? `✅ Sent to ${formatRunLabel(resolved.entry)} (run ${runId.slice(0, 8)}).`,
       },
     };
   }

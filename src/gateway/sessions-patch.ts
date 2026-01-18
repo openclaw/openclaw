@@ -132,7 +132,7 @@ export async function applySessionsPatchToStore(params: {
       delete next.responseUsage;
     } else if (raw !== undefined) {
       const normalized = normalizeUsageDisplay(String(raw));
-      if (!normalized) return invalid('invalid responseUsage (use "on"|"off")');
+      if (!normalized) return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       if (normalized === "off") delete next.responseUsage;
       else next.responseUsage = normalized;
     }

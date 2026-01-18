@@ -159,12 +159,12 @@ describe("trigger handling", () => {
       expect(String(replies[0]?.text ?? "")).toContain("Model:");
     });
   });
-  it("emits /usage once (alias of /status)", async () => {
+  it("sets per-response usage footer via /usage", async () => {
     await withTempHome(async (home) => {
       const blockReplies: Array<{ text?: string }> = [];
       const res = await getReplyFromConfig(
         {
-          Body: "/usage",
+          Body: "/usage tokens",
           From: "+1000",
           To: "+2000",
           Provider: "whatsapp",
@@ -181,7 +181,8 @@ describe("trigger handling", () => {
       const replies = res ? (Array.isArray(res) ? res : [res]) : [];
       expect(blockReplies.length).toBe(0);
       expect(replies.length).toBe(1);
-      expect(String(replies[0]?.text ?? "")).toContain("Model:");
+      expect(String(replies[0]?.text ?? "")).toContain("Usage footer: tokens");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
   it("sends one inline status and still returns agent reply for mixed text", async () => {

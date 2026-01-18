@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 - Exec: add host/security/ask routing for gateway + node exec.
 - macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.
 - macOS: add approvals socket UI server + node exec lifecycle events.
+- Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
 - Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
 
 ### Fixes

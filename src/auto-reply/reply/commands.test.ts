@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "../../agents/subagent-registry.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../../agents/subagent-registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import * as internalHooks from "../../hooks/internal-hooks.js";
 import type { MsgContext } from "../templating.js";

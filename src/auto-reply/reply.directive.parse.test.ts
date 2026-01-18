@@ -144,10 +144,10 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("thats not /tmp/hello");
   });
 
-  it("preserves spacing when stripping usage directives before paths", () => {
+  it("does not treat /usage as a status directive", () => {
     const res = extractStatusDirective("thats not /usage:/tmp/hello");
-    expect(res.hasDirective).toBe(true);
-    expect(res.cleaned).toBe("thats not /tmp/hello");
+    expect(res.hasDirective).toBe(false);
+    expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
   });
 
   it("parses queue options and modes", () => {

@@ -252,153 +252,158 @@ async function connectClient(params: { url: string; token: string }) {
 }
 
 describe("gateway (mock openai): tool calling", () => {
-  it("runs a Read tool call end-to-end via gateway agent loop", { timeout: 90_000 }, async () => {
-    const prev = {
-      home: process.env.HOME,
-      configPath: process.env.CLAWDBOT_CONFIG_PATH,
-      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
-      skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
-      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.CLAWDBOT_SKIP_CRON,
-      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
-    };
+  it(
+    "runs a Read tool call end-to-end via gateway agent loop",
+    { timeout: 90_000 },
+    async () => {
+      const prev = {
+        home: process.env.HOME,
+        configPath: process.env.CLAWDBOT_CONFIG_PATH,
+        token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+        skipChannels: process.env.CLAWDBOT_SKIP_CHANNELS,
+        skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+        skipCron: process.env.CLAWDBOT_SKIP_CRON,
+        skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+      };
 
-    const originalFetch = globalThis.fetch;
-    const openaiResponsesUrl = "https://api.openai.com/v1/responses";
-    const isOpenAIResponsesRequest = (url: string) =>
-      url === openaiResponsesUrl ||
-      url.startsWith(`${openaiResponsesUrl}/`) ||
-      url.startsWith(`${openaiResponsesUrl}?`);
-    const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const originalFetch = globalThis.fetch;
+      const openaiResponsesUrl = "https://api.openai.com/v1/responses";
+      const isOpenAIResponsesRequest = (url: string) =>
+        url === openaiResponsesUrl ||
+        url.startsWith(`${openaiResponsesUrl}/`) ||
+        url.startsWith(`${openaiResponsesUrl}?`);
+      const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 
-      if (isOpenAIResponsesRequest(url)) {
-        const bodyText =
-          typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
-            ? decodeBodyText((init as { body?: unknown }).body)
-            : input instanceof Request
-              ? await input.clone().text()
-              : "";
+        if (isOpenAIResponsesRequest(url)) {
+          const bodyText =
+            typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+              ? decodeBodyText((init as { body?: unknown }).body)
+              : input instanceof Request
+                ? await input.clone().text()
+                : "";
 
-        const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
-        const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
-        return await buildOpenAIResponsesSse({ input: inputItems });
-      }
+          const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
+          const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
+          return await buildOpenAIResponsesSse({ input: inputItems });
+        }
 
-      if (!originalFetch) {
-        throw new Error(`fetch is not available (url=${url})`);
-      }
-      return await originalFetch(input, init);
-    };
-    // TypeScript: Bun's fetch typing includes extra properties; keep this test portable.
-    (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
+        if (!originalFetch) {
+          throw new Error(`fetch is not available (url=${url})`);
+        }
+        return await originalFetch(input, init);
+      };
+      // TypeScript: Bun's fetch typing includes extra properties; keep this test portable.
+      (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-mock-home-"));
-    process.env.HOME = tempHome;
-    process.env.CLAWDBOT_SKIP_CHANNELS = "1";
-    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
-    process.env.CLAWDBOT_SKIP_CRON = "1";
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-mock-home-"));
+      process.env.HOME = tempHome;
+      process.env.CLAWDBOT_SKIP_CHANNELS = "1";
+      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+      process.env.CLAWDBOT_SKIP_CRON = "1";
+      process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
 
-    const token = `test-${randomUUID()}`;
-    process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+      const token = `test-${randomUUID()}`;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = token;
 
-    const workspaceDir = path.join(tempHome, "clawd");
-    await fs.mkdir(workspaceDir, { recursive: true });
+      const workspaceDir = path.join(tempHome, "clawd");
+      await fs.mkdir(workspaceDir, { recursive: true });
 
-    const nonceA = randomUUID();
-    const nonceB = randomUUID();
-    const toolProbePath = path.join(workspaceDir, `.clawdbot-tool-probe.${nonceA}.txt`);
-    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+      const nonceA = randomUUID();
+      const nonceB = randomUUID();
+      const toolProbePath = path.join(workspaceDir, `.clawdbot-tool-probe.${nonceA}.txt`);
+      await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    const configDir = path.join(tempHome, ".clawdbot");
-    await fs.mkdir(configDir, { recursive: true });
-    const configPath = path.join(configDir, "clawdbot.json");
+      const configDir = path.join(tempHome, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      const configPath = path.join(configDir, "clawdbot.json");
 
-    const cfg = {
-      agents: { defaults: { workspace: workspaceDir } },
-      models: {
-        mode: "replace",
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "test",
-            api: "openai-responses",
-            models: [
-              {
-                id: "gpt-5.2",
-                name: "gpt-5.2",
-                api: "openai-responses",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 4096,
-              },
-            ],
+      const cfg = {
+        agents: { defaults: { workspace: workspaceDir } },
+        models: {
+          mode: "replace",
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: "test",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.2",
+                  name: "gpt-5.2",
+                  api: "openai-responses",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
           },
         },
-      },
-      gateway: { auth: { token } },
-    };
+        gateway: { auth: { token } },
+      };
 
-    await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-    process.env.CLAWDBOT_CONFIG_PATH = configPath;
+      await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+      process.env.CLAWDBOT_CONFIG_PATH = configPath;
 
-    const port = await getFreeGatewayPort();
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-    });
-
-    const client = await connectClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-    });
-
-    try {
-      const sessionKey = "agent:dev:mock-openai";
-
-      await client.request<Record<string, unknown>>("sessions.patch", {
-        key: sessionKey,
-        model: "openai/gpt-5.2",
+      const port = await getFreeGatewayPort();
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
       });
 
-      const runId = randomUUID();
-      const payload = await client.request<{
-        status?: unknown;
-        result?: unknown;
-      }>(
-        "agent",
-        {
-          sessionKey,
-          idempotencyKey: `idem-${runId}`,
-          message:
-            `Call the read tool on "${toolProbePath}". ` +
-            `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
-          deliver: false,
-        },
-        { expectFinal: true },
-      );
+      const client = await connectClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+      });
 
-      expect(payload?.status).toBe("ok");
-      const text = extractPayloadText(payload?.result);
-      expect(text).toContain(nonceA);
-      expect(text).toContain(nonceB);
-    } finally {
-      client.stop();
-      await server.close({ reason: "mock openai test complete" });
-      await fs.rm(tempHome, { recursive: true, force: true });
-      (globalThis as unknown as { fetch: unknown }).fetch = originalFetch;
-      process.env.HOME = prev.home;
-      process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
-      process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
-      process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
-      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
-      process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
-      process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
-    }
-  }, 30_000);
+      try {
+        const sessionKey = "agent:dev:mock-openai";
+
+        await client.request<Record<string, unknown>>("sessions.patch", {
+          key: sessionKey,
+          model: "openai/gpt-5.2",
+        });
+
+        const runId = randomUUID();
+        const payload = await client.request<{
+          status?: unknown;
+          result?: unknown;
+        }>(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `idem-${runId}`,
+            message:
+              `Call the read tool on "${toolProbePath}". ` +
+              `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
+            deliver: false,
+          },
+          { expectFinal: true },
+        );
+
+        expect(payload?.status).toBe("ok");
+        const text = extractPayloadText(payload?.result);
+        expect(text).toContain(nonceA);
+        expect(text).toContain(nonceB);
+      } finally {
+        client.stop();
+        await server.close({ reason: "mock openai test complete" });
+        await fs.rm(tempHome, { recursive: true, force: true });
+        (globalThis as unknown as { fetch: unknown }).fetch = originalFetch;
+        process.env.HOME = prev.home;
+        process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
+        process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
+        process.env.CLAWDBOT_SKIP_CHANNELS = prev.skipChannels;
+        process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prev.skipGmail;
+        process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
+        process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
+      }
+    },
+    30_000,
+  );
 });
