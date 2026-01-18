@@ -53,6 +53,56 @@ import { resolveMentions } from "./mentions.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "../../directory-live.js";
+
+function mergeAllowlist(params: {
+  existing?: Array<string | number>;
+  additions: string[];
+}): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const push = (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  };
+  for (const entry of params.existing ?? []) {
+    push(String(entry));
+  }
+  for (const entry of params.additions) {
+    push(entry);
+  }
+  return merged;
+}
+
+function summarizeMapping(
+  label: string,
+  mapping: string[],
+  unresolved: string[],
+  runtime: RuntimeEnv,
+) {
+  const lines: string[] = [];
+  if (mapping.length > 0) {
+    const sample = mapping.slice(0, 6);
+    const suffix = mapping.length > sample.length ? ` (+${mapping.length - sample.length})` : "";
+    lines.push(`${label} resolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (unresolved.length > 0) {
+    const sample = unresolved.slice(0, 6);
+    const suffix =
+      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
+    lines.push(`${label} unresolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (lines.length > 0) {
+    runtime.log?.(lines.join("\n"));
+  }
+}
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -68,7 +118,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   if (isBunRuntime()) {
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
-  const cfg = loadConfig() as CoreConfig;
+  let cfg = loadConfig() as CoreConfig;
   if (cfg.channels?.matrix?.enabled === false) return;
 
   const runtime: RuntimeEnv = opts.runtime ?? {
@@ -76,6 +126,109 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     error: console.error,
     exit: (code: number): never => {
       throw new Error(`exit ${code}`);
+    },
+  };
+
+  const normalizeUserEntry = (raw: string) =>
+    raw.replace(/^matrix:/i, "").replace(/^user:/i, "").trim();
+  const normalizeRoomEntry = (raw: string) =>
+    raw.replace(/^matrix:/i, "").replace(/^(room|channel):/i, "").trim();
+  const isMatrixUserId = (value: string) => value.startsWith("@") && value.includes(":");
+
+  let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
+  let roomsConfig = cfg.channels?.matrix?.rooms;
+
+  if (allowFrom.length > 0) {
+    const entries = allowFrom
+      .map((entry) => normalizeUserEntry(String(entry)))
+      .filter((entry) => entry && entry !== "*");
+    if (entries.length > 0) {
+      const mapping: string[] = [];
+      const unresolved: string[] = [];
+      const additions: string[] = [];
+      for (const entry of entries) {
+        if (isMatrixUserId(entry)) {
+          additions.push(entry);
+          continue;
+        }
+        try {
+          const matches = await listMatrixDirectoryPeersLive({
+            cfg,
+            query: entry,
+            limit: 5,
+          });
+          const best = matches[0];
+          if (best?.id) {
+            additions.push(best.id);
+            mapping.push(`${entry}→${best.id}`);
+          } else {
+            unresolved.push(entry);
+          }
+        } catch (err) {
+          runtime.log?.(`matrix user resolve failed; using config entries. ${String(err)}`);
+          unresolved.push(entry);
+        }
+      }
+      allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+      summarizeMapping("matrix users", mapping, unresolved, runtime);
+    }
+  }
+
+  if (roomsConfig && Object.keys(roomsConfig).length > 0) {
+    const entries = Object.keys(roomsConfig).filter((key) => key !== "*");
+    const mapping: string[] = [];
+    const unresolved: string[] = [];
+    const nextRooms = { ...roomsConfig };
+    for (const entry of entries) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const cleaned = normalizeRoomEntry(trimmed);
+      if (cleaned.startsWith("!") && cleaned.includes(":")) {
+        if (!nextRooms[cleaned]) {
+          nextRooms[cleaned] = roomsConfig[entry];
+        }
+        mapping.push(`${entry}→${cleaned}`);
+        continue;
+      }
+      try {
+        const matches = await listMatrixDirectoryGroupsLive({
+          cfg,
+          query: trimmed,
+          limit: 10,
+        });
+        const exact = matches.find(
+          (match) => (match.name ?? "").toLowerCase() === trimmed.toLowerCase(),
+        );
+        const best = exact ?? matches[0];
+        if (best?.id) {
+          if (!nextRooms[best.id]) {
+            nextRooms[best.id] = roomsConfig[entry];
+          }
+          mapping.push(`${entry}→${best.id}`);
+        } else {
+          unresolved.push(entry);
+        }
+      } catch (err) {
+        runtime.log?.(`matrix room resolve failed; using config entries. ${String(err)}`);
+        unresolved.push(entry);
+      }
+    }
+    roomsConfig = nextRooms;
+    summarizeMapping("matrix rooms", mapping, unresolved, runtime);
+  }
+
+  cfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      matrix: {
+        ...cfg.channels?.matrix,
+        dm: {
+          ...cfg.channels?.matrix?.dm,
+          allowFrom,
+        },
+        rooms: roomsConfig,
+      },
     },
   };
 
@@ -98,7 +251,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mentionRegexes = buildMentionRegexes(cfg);
   const logger = getChildLogger({ module: "matrix-auto-reply" });
   const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
-  const groupPolicyRaw = cfg.channels?.matrix?.groupPolicy ?? "allowlist";
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicyRaw = cfg.channels?.matrix?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? cfg.channels?.matrix?.replyToMode ?? "off";
   const threadReplies = cfg.channels?.matrix?.threadReplies ?? "inbound";

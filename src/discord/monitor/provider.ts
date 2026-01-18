@@ -12,13 +12,15 @@ import {
 } from "../../config/commands.js";
 import type { ClawdbotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
+import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
+import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import {
   DiscordMessageListener,
@@ -58,6 +60,52 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   return `${sample.join(", ")}${suffix}`;
 }
 
+function mergeAllowlist(params: {
+  existing?: Array<string | number>;
+  additions: string[];
+}): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const push = (value: string) => {
+    const normalized = value.trim();
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  };
+  for (const entry of params.existing ?? []) {
+    push(String(entry));
+  }
+  for (const entry of params.additions) {
+    push(entry);
+  }
+  return merged;
+}
+
+function summarizeMapping(
+  label: string,
+  mapping: string[],
+  unresolved: string[],
+  runtime: RuntimeEnv,
+) {
+  const lines: string[] = [];
+  if (mapping.length > 0) {
+    const sample = mapping.slice(0, 6);
+    const suffix = mapping.length > sample.length ? ` (+${mapping.length - sample.length})` : "";
+    lines.push(`${label} resolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (unresolved.length > 0) {
+    const sample = unresolved.slice(0, 6);
+    const suffix =
+      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
+    lines.push(`${label} unresolved: ${sample.join(", ")}${suffix}`);
+  }
+  if (lines.length > 0) {
+    runtime.log?.(lines.join("\n"));
+  }
+}
+
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const account = resolveDiscordAccount({
@@ -81,9 +129,22 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const discordCfg = account.config;
   const dmConfig = discordCfg.dm;
-  const guildEntries = discordCfg.guilds;
-  const groupPolicy = discordCfg.groupPolicy ?? "open";
-  const allowFrom = dmConfig?.allowFrom;
+  let guildEntries = discordCfg.guilds;
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = discordCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
+  if (
+    discordCfg.groupPolicy === undefined &&
+    discordCfg.guilds === undefined &&
+    defaultGroupPolicy === undefined &&
+    groupPolicy === "open"
+  ) {
+    runtime.log?.(
+      warn(
+        'discord: groupPolicy defaults to "open" when channels.discord is missing; set channels.discord.groupPolicy (or channels.defaults.groupPolicy) or add channels.discord.guilds to restrict access.',
+      ),
+    );
+  }
+  let allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes = (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
@@ -114,6 +175,186 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = true;
+
+  if (token) {
+    if (guildEntries && Object.keys(guildEntries).length > 0) {
+      try {
+        const entries: Array<{ input: string; guildKey: string; channelKey?: string }> = [];
+        for (const [guildKey, guildCfg] of Object.entries(guildEntries)) {
+          if (guildKey === "*") continue;
+          const channels = guildCfg?.channels ?? {};
+          const channelKeys = Object.keys(channels).filter((key) => key !== "*");
+          if (channelKeys.length === 0) {
+            entries.push({ input: guildKey, guildKey });
+            continue;
+          }
+          for (const channelKey of channelKeys) {
+            entries.push({
+              input: `${guildKey}/${channelKey}`,
+              guildKey,
+              channelKey,
+            });
+          }
+        }
+        if (entries.length > 0) {
+          const resolved = await resolveDiscordChannelAllowlist({
+            token,
+            entries: entries.map((entry) => entry.input),
+          });
+          const nextGuilds = { ...(guildEntries ?? {}) };
+          const mapping: string[] = [];
+          const unresolved: string[] = [];
+          for (const entry of resolved) {
+            const source = entries.find((item) => item.input === entry.input);
+            if (!source) continue;
+            const sourceGuild = guildEntries?.[source.guildKey] ?? {};
+            if (!entry.resolved || !entry.guildId) {
+              unresolved.push(entry.input);
+              continue;
+            }
+            mapping.push(
+              entry.channelId
+                ? `${entry.input}→${entry.guildId}/${entry.channelId}`
+                : `${entry.input}→${entry.guildId}`,
+            );
+            const existing = nextGuilds[entry.guildId] ?? {};
+            const mergedChannels = {
+              ...(sourceGuild.channels ?? {}),
+              ...(existing.channels ?? {}),
+            };
+            const mergedGuild = { ...sourceGuild, ...existing, channels: mergedChannels };
+            nextGuilds[entry.guildId] = mergedGuild;
+            if (source.channelKey && entry.channelId) {
+              const sourceChannel = sourceGuild.channels?.[source.channelKey];
+              if (sourceChannel) {
+                nextGuilds[entry.guildId] = {
+                  ...mergedGuild,
+                  channels: {
+                    ...mergedChannels,
+                    [entry.channelId]: {
+                      ...sourceChannel,
+                      ...(mergedChannels?.[entry.channelId] ?? {}),
+                    },
+                  },
+                };
+              }
+            }
+          }
+          guildEntries = nextGuilds;
+          summarizeMapping("discord channels", mapping, unresolved, runtime);
+        }
+      } catch (err) {
+        runtime.log?.(`discord channel resolve failed; using config entries. ${String(err)}`);
+      }
+    }
+
+    const allowEntries =
+      allowFrom?.filter((entry) => String(entry).trim() && String(entry).trim() !== "*") ?? [];
+    if (allowEntries.length > 0) {
+      try {
+        const resolvedUsers = await resolveDiscordUserAllowlist({
+          token,
+          entries: allowEntries.map((entry) => String(entry)),
+        });
+        const mapping: string[] = [];
+        const unresolved: string[] = [];
+        const additions: string[] = [];
+        for (const entry of resolvedUsers) {
+          if (entry.resolved && entry.id) {
+            mapping.push(`${entry.input}→${entry.id}`);
+            additions.push(entry.id);
+          } else {
+            unresolved.push(entry.input);
+          }
+        }
+        allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+        summarizeMapping("discord users", mapping, unresolved, runtime);
+      } catch (err) {
+        runtime.log?.(`discord user resolve failed; using config entries. ${String(err)}`);
+      }
+    }
+
+    if (guildEntries && Object.keys(guildEntries).length > 0) {
+      const userEntries = new Set<string>();
+      for (const guild of Object.values(guildEntries)) {
+        if (!guild || typeof guild !== "object") continue;
+        const users = (guild as { users?: Array<string | number> }).users;
+        if (Array.isArray(users)) {
+          for (const entry of users) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") userEntries.add(trimmed);
+          }
+        }
+        const channels = (guild as { channels?: Record<string, unknown> }).channels ?? {};
+        for (const channel of Object.values(channels)) {
+          if (!channel || typeof channel !== "object") continue;
+          const channelUsers = (channel as { users?: Array<string | number> }).users;
+          if (!Array.isArray(channelUsers)) continue;
+          for (const entry of channelUsers) {
+            const trimmed = String(entry).trim();
+            if (trimmed && trimmed !== "*") userEntries.add(trimmed);
+          }
+        }
+      }
+
+      if (userEntries.size > 0) {
+        try {
+          const resolvedUsers = await resolveDiscordUserAllowlist({
+            token,
+            entries: Array.from(userEntries),
+          });
+          const resolvedMap = new Map(resolvedUsers.map((entry) => [entry.input, entry]));
+          const mapping = resolvedUsers
+            .filter((entry) => entry.resolved && entry.id)
+            .map((entry) => `${entry.input}→${entry.id}`);
+          const unresolved = resolvedUsers
+            .filter((entry) => !entry.resolved)
+            .map((entry) => entry.input);
+
+          const nextGuilds = { ...(guildEntries ?? {}) };
+          for (const [guildKey, guildConfig] of Object.entries(guildEntries ?? {})) {
+            if (!guildConfig || typeof guildConfig !== "object") continue;
+            const nextGuild = { ...guildConfig } as Record<string, unknown>;
+            const users = (guildConfig as { users?: Array<string | number> }).users;
+            if (Array.isArray(users) && users.length > 0) {
+              const additions: string[] = [];
+              for (const entry of users) {
+                const trimmed = String(entry).trim();
+                const resolved = resolvedMap.get(trimmed);
+                if (resolved?.resolved && resolved.id) additions.push(resolved.id);
+              }
+              nextGuild.users = mergeAllowlist({ existing: users, additions });
+            }
+            const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
+            if (channels && typeof channels === "object") {
+              const nextChannels: Record<string, unknown> = { ...channels };
+              for (const [channelKey, channelConfig] of Object.entries(channels)) {
+                if (!channelConfig || typeof channelConfig !== "object") continue;
+                const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
+                if (!Array.isArray(channelUsers) || channelUsers.length === 0) continue;
+                const additions: string[] = [];
+                for (const entry of channelUsers) {
+                  const trimmed = String(entry).trim();
+                  const resolved = resolvedMap.get(trimmed);
+                  if (resolved?.resolved && resolved.id) additions.push(resolved.id);
+                }
+                nextChannels[channelKey] = {
+                  ...channelConfig,
+                  users: mergeAllowlist({ existing: channelUsers, additions }),
+                };
+              }
+              nextGuild.channels = nextChannels;
+            }
+            nextGuilds[guildKey] = nextGuild;
+          }
+          guildEntries = nextGuilds;
+          summarizeMapping("discord channel users", mapping, unresolved, runtime);
+        } catch (err) {
+          runtime.log?.(`discord channel user resolve failed; using config entries. ${String(err)}`);
+        }
+      }
+    }
+  }
 
   if (shouldLogVerbose()) {
     logVerbose(

@@ -105,7 +105,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       imessageCfg.groupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
-  const groupPolicy = imessageCfg.groupPolicy ?? "open";
+  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const groupPolicy = imessageCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;

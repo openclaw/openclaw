@@ -29,6 +29,8 @@ describe("msteams policy", () => {
 
       expect(res.teamConfig?.requireMention).toBe(false);
       expect(res.channelConfig?.requireMention).toBe(true);
+      expect(res.allowlistConfigured).toBe(true);
+      expect(res.allowed).toBe(true);
     });
 
     it("returns undefined configs when teamId is missing", () => {
@@ -43,6 +45,32 @@ describe("msteams policy", () => {
       });
       expect(res.teamConfig).toBeUndefined();
       expect(res.channelConfig).toBeUndefined();
+      expect(res.allowlistConfigured).toBe(true);
+      expect(res.allowed).toBe(false);
+    });
+
+    it("matches team and channel by name", () => {
+      const cfg: MSTeamsConfig = {
+        teams: {
+          "My Team": {
+            requireMention: true,
+            channels: {
+              "General Chat": { requireMention: false },
+            },
+          },
+        },
+      };
+
+      const res = resolveMSTeamsRouteConfig({
+        cfg,
+        teamName: "My Team",
+        channelName: "General Chat",
+        conversationId: "ignored",
+      });
+
+      expect(res.teamConfig?.requireMention).toBe(true);
+      expect(res.channelConfig?.requireMention).toBe(false);
+      expect(res.allowed).toBe(true);
     });
   });
 
