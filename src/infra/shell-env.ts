@@ -1,14 +1,10 @@
 import { execFileSync } from "node:child_process";
 
+import { isTruthyEnvValue } from "./env.js";
+
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 let lastAppliedKeys: string[] = [];
-
-function isTruthy(raw: string | undefined): boolean {
-  if (!raw) return false;
-  const value = raw.trim().toLowerCase();
-  return value === "1" || value === "true" || value === "yes" || value === "on";
-}
 
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
@@ -93,7 +89,11 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
 }
 
 export function shouldEnableShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
-  return isTruthy(env.CLAWDBOT_LOAD_SHELL_ENV);
+  return isTruthyEnvValue(env.CLAWDBOT_LOAD_SHELL_ENV);
+}
+
+export function shouldDeferShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
+  return isTruthyEnvValue(env.CLAWDBOT_DEFER_SHELL_ENV_FALLBACK);
 }
 
 export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number {

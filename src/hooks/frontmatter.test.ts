@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseFrontmatter, resolveClawdbotMetadata } from "./frontmatter.js";
+import {
+  parseFrontmatter,
+  resolveClawdbotMetadata,
+  resolveHookInvocationPolicy,
+} from "./frontmatter.js";
 
 describe("parseFrontmatter", () => {
   it("parses single-line key-value pairs", () => {
@@ -271,5 +275,16 @@ metadata:
     const clawdbot = resolveClawdbotMetadata(frontmatter);
     expect(clawdbot?.emoji).toBe("disk");
     expect(clawdbot?.events).toEqual(["command:new"]);
+  });
+});
+
+describe("resolveHookInvocationPolicy", () => {
+  it("defaults to enabled when missing", () => {
+    expect(resolveHookInvocationPolicy({}).enabled).toBe(true);
+  });
+
+  it("parses enabled flag", () => {
+    expect(resolveHookInvocationPolicy({ enabled: "no" }).enabled).toBe(false);
+    expect(resolveHookInvocationPolicy({ enabled: "on" }).enabled).toBe(true);
   });
 });

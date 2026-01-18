@@ -7,14 +7,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
-const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
-const CLI_LIVE = process.env.CLAWDBOT_LIVE_CLI_BACKEND === "1";
-const CLI_IMAGE = process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE === "1";
-const CLI_RESUME = process.env.CLAWDBOT_LIVE_CLI_BACKEND_RESUME_PROBE === "1";
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
+const CLI_LIVE = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_CLI_BACKEND);
+const CLI_IMAGE = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE);
+const CLI_RESUME = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-5";

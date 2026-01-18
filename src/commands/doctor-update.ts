@@ -1,4 +1,5 @@
 import { runGatewayUpdate } from "../infra/update-runner.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -27,7 +28,7 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   outro: (message: string) => void;
 }) {
-  const updateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS === "1";
+  const updateInProgress = isTruthyEnvValue(process.env.CLAWDBOT_UPDATE_IN_PROGRESS);
   const canOfferUpdate =
     !updateInProgress &&
     params.options.nonInteractive !== true &&

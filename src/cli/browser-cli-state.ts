@@ -14,14 +14,13 @@ import {
 import { browserAct } from "../browser/client-actions-core.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
 
 function parseOnOff(raw: string): boolean | null {
-  const v = raw.trim().toLowerCase();
-  if (v === "on" || v === "true" || v === "1") return true;
-  if (v === "off" || v === "false" || v === "0") return false;
-  return null;
+  const parsed = parseBooleanValue(raw);
+  return parsed === undefined ? null : parsed;
 }
 
 export function registerBrowserStateCommands(

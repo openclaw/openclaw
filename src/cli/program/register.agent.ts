@@ -9,6 +9,7 @@ import { theme } from "../../terminal/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { createDefaultDeps } from "../deps.js";
 import { collectOption } from "./helpers.js";
+import { ensureConfigReady } from "./config-guard.js";
 
 export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
   program
@@ -57,6 +58,7 @@ Examples:
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
     )
     .action(async (opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
@@ -84,6 +86,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--json", "Output JSON instead of text", false)
     .option("--bindings", "Include routing bindings", false)
     .action(async (opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
       try {
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
@@ -105,6 +108,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
       try {
         const hasFlags = hasExplicitOptions(command, [
           "workspace",
@@ -138,6 +142,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--force", "Skip confirmation", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts) => {
+      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
       try {
         await agentsDeleteCommand(
           {
@@ -154,6 +159,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     });
 
   agents.action(async () => {
+    await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
     try {
       await agentsListCommand({}, defaultRuntime);
     } catch (err) {

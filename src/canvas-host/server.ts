@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 
 import chokidar from "chokidar";
 import { type WebSocket, WebSocketServer } from "ws";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
@@ -171,7 +172,7 @@ async function resolveFilePath(rootReal: string, urlPath: string) {
 }
 
 function isDisabledByEnv() {
-  if (process.env.CLAWDBOT_SKIP_CANVAS_HOST === "1") return true;
+  if (isTruthyEnvValue(process.env.CLAWDBOT_SKIP_CANVAS_HOST)) return true;
   if (process.env.NODE_ENV === "test") return true;
   if (process.env.VITEST) return true;
   return false;

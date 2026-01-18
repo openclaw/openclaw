@@ -1,8 +1,9 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { isTruthyEnvValue } from "../infra/env.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
-const LIVE = process.env.ZAI_LIVE_TEST === "1" || process.env.LIVE === "1";
+const LIVE = isTruthyEnvValue(process.env.ZAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeZaiEnv } from "./env.js";
+import { isTruthyEnvValue, normalizeZaiEnv } from "./env.js";
 
 describe("normalizeZaiEnv", () => {
   it("copies Z_AI_API_KEY to ZAI_API_KEY when missing", () => {
@@ -33,5 +33,21 @@ describe("normalizeZaiEnv", () => {
     else process.env.ZAI_API_KEY = prevZai;
     if (prevZAi === undefined) delete process.env.Z_AI_API_KEY;
     else process.env.Z_AI_API_KEY = prevZAi;
+  });
+});
+
+describe("isTruthyEnvValue", () => {
+  it("accepts common truthy values", () => {
+    expect(isTruthyEnvValue("1")).toBe(true);
+    expect(isTruthyEnvValue("true")).toBe(true);
+    expect(isTruthyEnvValue(" yes ")).toBe(true);
+    expect(isTruthyEnvValue("ON")).toBe(true);
+  });
+
+  it("rejects other values", () => {
+    expect(isTruthyEnvValue("0")).toBe(false);
+    expect(isTruthyEnvValue("false")).toBe(false);
+    expect(isTruthyEnvValue("")).toBe(false);
+    expect(isTruthyEnvValue(undefined)).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isTruthyEnvValue } from "../../../infra/env.js";
 
 import { transcribeDeepgramAudio } from "./audio.js";
 
@@ -9,9 +10,9 @@ const SAMPLE_URL =
   process.env.DEEPGRAM_SAMPLE_URL?.trim() ||
   "https://static.deepgram.com/examples/Bueller-Life-moves-pretty-fast.wav";
 const LIVE =
-  process.env.DEEPGRAM_LIVE_TEST === "1" ||
-  process.env.LIVE === "1" ||
-  process.env.CLAWDBOT_LIVE_TEST === "1";
+  isTruthyEnvValue(process.env.DEEPGRAM_LIVE_TEST) ||
+  isTruthyEnvValue(process.env.LIVE) ||
+  isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
 
 const describeLive = LIVE && DEEPGRAM_KEY ? describe : describe.skip;
 
