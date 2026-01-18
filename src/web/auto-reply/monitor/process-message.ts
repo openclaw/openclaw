@@ -206,26 +206,15 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  if (params.msg.chatType !== "group") {
-    const to = (() => {
-      if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
-      // In direct chats, `msg.from` is already the canonical conversation id.
-      if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
-      return normalizeE164(params.msg.from);
-    })();
-    if (to) {
-      updateLastRouteInBackground({
-        cfg: params.cfg,
-        backgroundTasks: params.backgroundTasks,
-        storeAgentId: params.route.agentId,
-        sessionKey: params.route.mainSessionKey,
-        channel: "whatsapp",
-        to,
-        accountId: params.route.accountId,
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
-    }
-  }
+  const dmRouteTarget =
+    params.msg.chatType !== "group"
+      ? (() => {
+          if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
+          // In direct chats, `msg.from` is already the canonical conversation id.
+          if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
+          return normalizeE164(params.msg.from);
+        })()
+      : undefined;
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
@@ -284,6 +273,20 @@ export async function processMessage(params: {
       OriginatingChannel: "whatsapp",
       OriginatingTo: params.msg.from,
     });
+
+  if (dmRouteTarget) {
+    updateLastRouteInBackground({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.mainSessionKey,
+      channel: "whatsapp",
+      to: dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: ctxPayload,
+      warn: params.replyLogger.warn.bind(params.replyLogger),
+    });
+  }
 
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,

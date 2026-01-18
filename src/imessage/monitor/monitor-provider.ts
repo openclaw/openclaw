@@ -475,6 +475,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             to,
             accountId: route.accountId,
           },
+          ctx: ctxPayload,
         });
       }
     }

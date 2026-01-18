@@ -368,8 +368,10 @@ export async function updateLastRoute(params: {
   to?: string;
   accountId?: string;
   deliveryContext?: DeliveryContext;
+  ctx?: MsgContext;
+  groupResolution?: import("./types.js").GroupKeyResolution | null;
 }) {
-  const { storePath, sessionKey, channel, to, accountId } = params;
+  const { storePath, sessionKey, channel, to, accountId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
     const existing = store[sessionKey];
@@ -389,13 +391,22 @@ export async function updateLastRoute(params: {
         accountId: merged?.accountId,
       },
     });
-    const next = mergeSessionEntry(existing, {
+    const metaPatch = ctx
+      ? deriveSessionMetaPatch({
+          ctx,
+          sessionKey,
+          existing,
+          groupResolution: params.groupResolution,
+        })
+      : null;
+    const basePatch: Partial<SessionEntry> = {
       updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       deliveryContext: normalized.deliveryContext,
       lastChannel: normalized.lastChannel,
       lastTo: normalized.lastTo,
       lastAccountId: normalized.lastAccountId,
-    });
+    };
+    const next = mergeSessionEntry(existing, metaPatch ? { ...basePatch, ...metaPatch } : basePatch);
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
     return next;
