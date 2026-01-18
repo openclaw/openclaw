@@ -2,21 +2,21 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.18-3
+## 2026.1.17-6
 
 ### Changes
 - Plugins: add exclusive plugin slots with a dedicated memory slot selector.
 - Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
 - Docs: document plugin slots and memory plugin behavior.
 
-## 2026.1.18-2
+## 2026.1.17-5
 
 ### Changes
 - Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
 - CLI: surface memory search state in `clawdbot status` and detailed FTS + embedding cache state in `clawdbot memory status`.
 
-## 2026.1.18-1
+## 2026.1.17-4
 
 ### Changes
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
