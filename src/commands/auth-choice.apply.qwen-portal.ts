@@ -1,3 +1,4 @@
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { resolveDefaultAgentId, resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -23,7 +24,7 @@ function enableBundledPlugin(cfg: ClawdbotConfig): ClawdbotConfig {
       entries: {
         ...cfg.plugins?.entries,
         [PLUGIN_ID]: {
-          ...(existingEntry ?? {}),
+          ...existingEntry,
           enabled: true,
         },
       },
@@ -108,7 +109,10 @@ export async function applyAuthChoiceQwenPortal(
 
   let nextConfig = enableBundledPlugin(params.config);
   const agentId = params.agentId ?? resolveDefaultAgentId(nextConfig);
-  const agentDir = params.agentDir ?? resolveAgentDir(nextConfig, agentId);
+  const defaultAgentId = resolveDefaultAgentId(nextConfig);
+  const agentDir =
+    params.agentDir ??
+    (agentId === defaultAgentId ? resolveClawdbotAgentDir() : resolveAgentDir(nextConfig, agentId));
   const workspaceDir =
     resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
 

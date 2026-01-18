@@ -100,11 +100,11 @@ async function pollDeviceToken(params: {
       return { status: "error", message: text || response.statusText };
     }
 
-    if (response.status === 400 && payload?.error === "authorization_pending") {
+    if (payload?.error === "authorization_pending") {
       return { status: "pending" };
     }
 
-    if (response.status === 429 && payload?.error === "slow_down") {
+    if (payload?.error === "slow_down") {
       return { status: "pending", slowDown: true };
     }
 
