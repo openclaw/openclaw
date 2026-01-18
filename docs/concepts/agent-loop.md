@@ -5,7 +5,7 @@ read_when:
 ---
 # Agent Loop (Clawdbot)
 
-Short, exact flow of one agent run.
+Short, exact flow of one agent run, plus the important internal stages.
 
 ## Entry points
 - Gateway RPC: `agent` and `agent.wait`.
@@ -19,8 +19,9 @@ Short, exact flow of one agent run.
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
 3) `runEmbeddedPiAgent`:
-   - builds `AgentSession` and subscribes to pi events
-   - streams assistant deltas + tool events
+   - serializes runs via per-session + global queues
+   - resolves model + auth profile and builds the pi session
+   - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
    - returns payloads + usage metadata
 4) `subscribeEmbeddedPiSession` bridges pi-agent-core events to Clawdbot `agent` stream:
@@ -30,6 +31,49 @@ Short, exact flow of one agent run.
 5) `agent.wait` uses `waitForAgentJob`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+
+## Queueing + concurrency
+- Runs are serialized per session key (session lane) and optionally through a global lane.
+- This prevents tool/session races and keeps session history consistent.
+- Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
+  See [Command Queue](/concepts/queue).
+
+## Session + workspace preparation
+- Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
+- Skills are loaded (or reused from a snapshot) and injected into env and prompt.
+- Bootstrap/context files are resolved and injected into the system prompt report.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+
+## Prompt assembly + system prompt
+- System prompt is built from Clawdbot’s base prompt, skills prompt, bootstrap context, and per-run overrides.
+- Model-specific limits and compaction reserve tokens are enforced.
+- See [System prompt](/concepts/system-prompt) for what the model sees.
+
+## Streaming + partial replies
+- Assistant deltas are streamed from pi-agent-core and emitted as `assistant` events.
+- Block streaming can emit partial replies either on `text_end` or `message_end`.
+- Reasoning streaming can be emitted as a separate stream or as block replies.
+- See [Streaming](/concepts/streaming) for chunking and block reply behavior.
+
+## Tool execution + messaging tools
+- Tool start/update/end events are emitted on the `tool` stream.
+- Tool results are sanitized for size and image payloads before logging/emitting.
+- Messaging tool sends are tracked to suppress duplicate assistant confirmations.
+
+## Reply shaping + suppression
+- Final payloads are assembled from:
+  - assistant text (and optional reasoning)
+  - inline tool summaries (when verbose + allowed)
+  - assistant error text when the model errors
+- `NO_REPLY` is treated as a silent token and filtered from outgoing payloads.
+- Messaging tool duplicates are removed from the final payload list.
+- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted
+  (unless a messaging tool already sent a user-visible reply).
+
+## Compaction + retries
+- Auto-compaction emits `compaction` stream events and can trigger a retry.
+- On retry, in-memory buffers and tool summaries are reset to avoid duplicate output.
+- See [Compaction](/concepts/compaction) for the compaction pipeline.
 
 ## Event streams (today)
 - `lifecycle`: emitted by `subscribeEmbeddedPiSession` (and as a fallback by `agentCommand`)
