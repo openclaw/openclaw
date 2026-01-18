@@ -41,7 +41,11 @@ import {
   parsePollStartContent,
 } from "../poll-types.js";
 import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
-import { resolveMatrixAllowListMatches, normalizeAllowListLower } from "./allowlist.js";
+import {
+  resolveMatrixAllowListMatch,
+  resolveMatrixAllowListMatches,
+  normalizeAllowListLower,
+} from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { downloadMatrixMedia } from "./media.js";
@@ -210,14 +214,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       if (isDirectMessage) {
         if (!dmEnabled || dmPolicy === "disabled") return;
         if (dmPolicy !== "open") {
-          const permitted =
-            effectiveAllowFrom.length > 0 &&
-            resolveMatrixAllowListMatches({
-              allowList: effectiveAllowFrom,
-              userId: senderId,
-              userName: senderName,
-            });
-          if (!permitted) {
+          const allowMatch = resolveMatrixAllowListMatch({
+            allowList: effectiveAllowFrom,
+            userId: senderId,
+            userName: senderName,
+          });
+          const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+            allowMatch.matchSource ?? "none"
+          }`;
+          if (!allowMatch.allowed) {
             if (dmPolicy === "pairing") {
               const { code, created } = await upsertChannelPairingRequest({
                 channel: "matrix",
@@ -225,6 +230,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
                 meta: { name: senderName },
               });
               if (created) {
+                logVerbose(
+                  `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                );
                 try {
                   await sendMessageMatrix(
                     `room:${roomId}`,
@@ -243,6 +251,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
                 }
               }
             }
+            if (dmPolicy !== "pairing") {
+              logVerbose(
+                `matrix: blocked dm sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+              );
+            }
             return;
           }
         }
@@ -260,6 +273,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           );
           return;
         }
+      }
+      if (isRoom) {
+        logVerbose(`matrix: allow room ${roomId} (${roomMatchMeta})`);
       }
 
       const rawBody = content.body.trim();

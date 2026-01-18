@@ -27,7 +27,7 @@ import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import type { SlackMessageEvent } from "../../types.js";
 
-import { allowListMatches, resolveSlackUserAllowed } from "../allow-list.js";
+import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
@@ -121,11 +121,14 @@ export async function prepareSlackMessage(params: {
       return null;
     }
     if (ctx.dmPolicy !== "open") {
-      const permitted = allowListMatches({
+      const allowMatch = resolveSlackAllowListMatch({
         allowList: allowFromLower,
         id: directUserId,
       });
-      if (!permitted) {
+      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+        allowMatch.matchSource ?? "none"
+      }`;
+      if (!allowMatch.allowed) {
         if (ctx.dmPolicy === "pairing") {
           const sender = await ctx.resolveUserName(directUserId);
           const senderName = sender?.name ?? undefined;
@@ -136,7 +139,9 @@ export async function prepareSlackMessage(params: {
           });
           if (created) {
             logVerbose(
-              `slack pairing request sender=${directUserId} name=${senderName ?? "unknown"}`,
+              `slack pairing request sender=${directUserId} name=${
+                senderName ?? "unknown"
+              } (${allowMatchMeta})`,
             );
             try {
               await sendMessageSlack(
@@ -158,7 +163,7 @@ export async function prepareSlackMessage(params: {
           }
         } else {
           logVerbose(
-            `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy})`,
+            `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
           );
         }
         return null;
@@ -225,11 +230,11 @@ export async function prepareSlackMessage(params: {
     surface: "slack",
   });
 
-  const ownerAuthorized = allowListMatches({
+  const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
     id: senderId,
     name: senderName,
-  });
+  }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const channelCommandAuthorized =
