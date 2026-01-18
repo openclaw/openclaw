@@ -14,8 +14,12 @@ const DOCS_DIR = join(process.cwd(), 'docs');
 
 const EXCLUDED_DIRS = new Set(['archive', 'research']);
 
-function compactStrings(values: unknown[]): string[] {
-  const result: string[] = [];
+/**
+ * @param {unknown[]} values
+ * @returns {string[]}
+ */
+function compactStrings(values) {
+  const result = [];
   for (const value of values) {
     if (value === null || value === undefined) {
       continue;
@@ -28,9 +32,14 @@ function compactStrings(values: unknown[]): string[] {
   return result;
 }
 
-function walkMarkdownFiles(dir: string, base: string = dir): string[] {
+/**
+ * @param {string} dir
+ * @param {string} base
+ * @returns {string[]}
+ */
+function walkMarkdownFiles(dir, base = dir) {
   const entries = readdirSync(dir, { withFileTypes: true });
-  const files: string[] = [];
+  const files = [];
   for (const entry of entries) {
     if (entry.name.startsWith('.')) {
       continue;
@@ -48,11 +57,11 @@ function walkMarkdownFiles(dir: string, base: string = dir): string[] {
   return files.sort((a, b) => a.localeCompare(b));
 }
 
-function extractMetadata(fullPath: string): {
-  summary: string | null;
-  readWhen: string[];
-  error?: string;
-} {
+/**
+ * @param {string} fullPath
+ * @returns {{ summary: string | null; readWhen: string[]; error?: string }}
+ */
+function extractMetadata(fullPath) {
   const content = readFileSync(fullPath, 'utf8');
 
   if (!content.startsWith('---')) {
@@ -67,9 +76,9 @@ function extractMetadata(fullPath: string): {
   const frontMatter = content.slice(3, endIndex).trim();
   const lines = frontMatter.split('\n');
 
-  let summaryLine: string | null = null;
-  const readWhen: string[] = [];
-  let collectingField: 'read_when' | null = null;
+  let summaryLine = null;
+  const readWhen = [];
+  let collectingField = null;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -85,7 +94,7 @@ function extractMetadata(fullPath: string): {
       const inline = line.slice('read_when:'.length).trim();
       if (inline.startsWith('[') && inline.endsWith(']')) {
         try {
-          const parsed = JSON.parse(inline.replace(/'/g, '"')) as unknown;
+          const parsed = JSON.parse(inline.replace(/'/g, '"'));
           if (Array.isArray(parsed)) {
             readWhen.push(...compactStrings(parsed));
           }

@@ -1,3 +1,10 @@
+---
+summary: Node + tsx "__name is not a function" crash notes and workarounds
+read_when:
+  - Debugging Node-only dev scripts or watch mode failures
+  - Investigating tsx/esbuild loader crashes in Clawdbot
+---
+
 # Node + tsx "__name is not a function" crash
 
 ## Summary
