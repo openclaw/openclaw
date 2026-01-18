@@ -63,6 +63,9 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "CLAWDBOT_STATE_DIR", value: process.env.CLAWDBOT_STATE_DIR },
     { key: "CLAWDBOT_CONFIG_PATH", value: process.env.CLAWDBOT_CONFIG_PATH },
     { key: "CLAWDBOT_TEST_HOME", value: process.env.CLAWDBOT_TEST_HOME },
+    { key: "COPILOT_GITHUB_TOKEN", value: process.env.COPILOT_GITHUB_TOKEN },
+    { key: "GH_TOKEN", value: process.env.GH_TOKEN },
+    { key: "GITHUB_TOKEN", value: process.env.GITHUB_TOKEN },
   ];
 
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-test-home-"));
@@ -75,6 +78,10 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   delete process.env.CLAWDBOT_CONFIG_PATH;
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.CLAWDBOT_STATE_DIR;
+  // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
+  delete process.env.COPILOT_GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
 
   // Windows: prefer the legacy default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {

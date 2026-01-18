@@ -116,7 +116,7 @@ export async function runEmbeddedPiAgent(
         );
       }
 
-      const authStore = ensureAuthProfileStore(agentDir);
+      const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
       const explicitProfileId = params.authProfileId?.trim();
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
