@@ -24,12 +24,10 @@ import {
   runOpenAiEmbeddingBatches,
 } from "./openai-batch.js";
 import {
-  buildFileEntry,
   chunkMarkdown,
   ensureDir,
   hashText,
   isMemoryPath,
-  listMemoryFiles,
   type MemoryChunk,
   type MemoryFileEntry,
   normalizeRelPath,
@@ -38,8 +36,13 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
+import { computeMemoryManagerCacheKey } from "./manager-cache-key.js";
+import { computeEmbeddingProviderKey } from "./provider-key.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
+import type { SessionFileEntry } from "./session-files.js";
+import { syncMemoryFiles } from "./sync-memory-files.js";
+import { syncSessionFiles } from "./sync-session-files.js";
 
 type MemorySource = "memory" | "sessions";
 
@@ -59,15 +62,6 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
-};
-
-type SessionFileEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content: string;
 };
 
 type MemorySyncProgressUpdate = {
@@ -157,7 +151,7 @@ export class MemoryIndexManager {
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) return null;
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
+    const key = computeMemoryManagerCacheKey({ agentId, workspaceDir, settings });
     const existing = INDEX_CACHE.get(key);
     if (existing) return existing;
     const providerResult = await createEmbeddingProvider({
@@ -200,7 +194,13 @@ export class MemoryIndexManager {
     this.openAi = params.providerResult.openAi;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
-    this.providerKey = this.computeProviderKey();
+    this.providerKey = computeEmbeddingProviderKey({
+      providerId: this.provider.id,
+      providerModel: this.provider.model,
+      openAi: this.openAi
+        ? { baseUrl: this.openAi.baseUrl, model: this.openAi.model, headers: this.openAi.headers }
+        : undefined,
+    });
     this.cache = {
       enabled: params.settings.cache.enabled,
       maxEntries: params.settings.cache.maxEntries,
@@ -714,170 +714,43 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await listMemoryFiles(this.workspaceDir);
-    const fileEntries = await Promise.all(
-      files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
-    );
-    log.debug("memory sync: indexing memory files", {
-      files: fileEntries.length,
+    await syncMemoryFiles({
+      workspaceDir: this.workspaceDir,
+      db: this.db,
       needsFullReindex: params.needsFullReindex,
-      batch: this.batch.enabled,
+      progress: params.progress,
+      batchEnabled: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
+      runWithConcurrency: this.runWithConcurrency.bind(this),
+      indexFile: async (entry) => await this.indexFile(entry, { source: "memory" }),
+      vectorTable: VECTOR_TABLE,
+      ftsTable: FTS_TABLE,
+      ftsEnabled: this.fts.enabled,
+      ftsAvailable: this.fts.available,
+      model: this.provider.model,
     });
-    const activePaths = new Set(fileEntries.map((entry) => entry.path));
-    if (params.progress) {
-      params.progress.total += fileEntries.length;
-      params.progress.report({
-        completed: params.progress.completed,
-        total: params.progress.total,
-        label: this.batch.enabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
-      });
-    }
-
-    const tasks = fileEntries.map((entry) => async () => {
-      const record = this.db
-        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-        .get(entry.path, "memory") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      await this.indexFile(entry, { source: "memory" });
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-    });
-    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
-
-    const staleRows = this.db
-      .prepare(`SELECT path FROM files WHERE source = ?`)
-      .all("memory") as Array<{ path: string }>;
-    for (const stale of staleRows) {
-      if (activePaths.has(stale.path)) continue;
-      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(stale.path, "memory");
-      } catch {}
-      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
-      if (this.fts.enabled && this.fts.available) {
-        try {
-          this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "memory", this.provider.model);
-        } catch {}
-      }
-    }
   }
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await this.listSessionFiles();
-    const activePaths = new Set(files.map((file) => this.sessionPathForFile(file)));
-    const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
-    log.debug("memory sync: indexing session files", {
-      files: files.length,
-      indexAll,
-      dirtyFiles: this.sessionsDirtyFiles.size,
-      batch: this.batch.enabled,
+    await syncSessionFiles({
+      agentId: this.agentId,
+      db: this.db,
+      needsFullReindex: params.needsFullReindex,
+      progress: params.progress,
+      batchEnabled: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
+      runWithConcurrency: this.runWithConcurrency.bind(this),
+      indexFile: async (entry) => await this.indexFile(entry, { source: "sessions", content: entry.content }),
+      vectorTable: VECTOR_TABLE,
+      ftsTable: FTS_TABLE,
+      ftsEnabled: this.fts.enabled,
+      ftsAvailable: this.fts.available,
+      model: this.provider.model,
+      dirtyFiles: this.sessionsDirtyFiles,
     });
-    if (params.progress) {
-      params.progress.total += files.length;
-      params.progress.report({
-        completed: params.progress.completed,
-        total: params.progress.total,
-        label: this.batch.enabled ? "Indexing session files (batch)..." : "Indexing session files…",
-      });
-    }
-
-    const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      const entry = await this.buildSessionEntry(absPath);
-      if (!entry) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      const record = this.db
-        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
-        .get(entry.path, "sessions") as { hash: string } | undefined;
-      if (!params.needsFullReindex && record?.hash === entry.hash) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
-        }
-        return;
-      }
-      await this.indexFile(entry, { source: "sessions", content: entry.content });
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-    });
-    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
-
-    const staleRows = this.db
-      .prepare(`SELECT path FROM files WHERE source = ?`)
-      .all("sessions") as Array<{ path: string }>;
-    for (const stale of staleRows) {
-      if (activePaths.has(stale.path)) continue;
-      this.db
-        .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
-        .run(stale.path, "sessions");
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(stale.path, "sessions");
-      } catch {}
-      this.db
-        .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
-        .run(stale.path, "sessions");
-      if (this.fts.enabled && this.fts.available) {
-        try {
-          this.db
-            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
-            .run(stale.path, "sessions", this.provider.model);
-        } catch {}
-      }
-    }
   }
 
   private createSyncProgress(
@@ -991,95 +864,6 @@ export class MemoryIndexManager {
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
-  }
-
-  private async listSessionFiles(): Promise<string[]> {
-    const dir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      return entries
-        .filter((entry) => entry.isFile())
-        .map((entry) => entry.name)
-        .filter((name) => name.endsWith(".jsonl"))
-        .map((name) => path.join(dir, name));
-    } catch {
-      return [];
-    }
-  }
-
-  private sessionPathForFile(absPath: string): string {
-    return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
-  }
-
-  private normalizeSessionText(value: string): string {
-    return value
-      .replace(/\s*\n+\s*/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  private extractSessionText(content: unknown): string | null {
-    if (typeof content === "string") {
-      const normalized = this.normalizeSessionText(content);
-      return normalized ? normalized : null;
-    }
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const block of content) {
-      if (!block || typeof block !== "object") continue;
-      const record = block as { type?: unknown; text?: unknown };
-      if (record.type !== "text" || typeof record.text !== "string") continue;
-      const normalized = this.normalizeSessionText(record.text);
-      if (normalized) parts.push(normalized);
-    }
-    if (parts.length === 0) return null;
-    return parts.join(" ");
-  }
-
-  private async buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
-    try {
-      const stat = await fs.stat(absPath);
-      const raw = await fs.readFile(absPath, "utf-8");
-      const lines = raw.split("\n");
-      const collected: string[] = [];
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let record: unknown;
-        try {
-          record = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (
-          !record ||
-          typeof record !== "object" ||
-          (record as { type?: unknown }).type !== "message"
-        ) {
-          continue;
-        }
-        const message = (record as { message?: unknown }).message as
-          | { role?: unknown; content?: unknown }
-          | undefined;
-        if (!message || typeof message.role !== "string") continue;
-        if (message.role !== "user" && message.role !== "assistant") continue;
-        const text = this.extractSessionText(message.content);
-        if (!text) continue;
-        const label = message.role === "user" ? "User" : "Assistant";
-        collected.push(`${label}: ${text}`);
-      }
-      const content = collected.join("\n");
-      return {
-        path: this.sessionPathForFile(absPath),
-        absPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-        hash: hashText(content),
-        content,
-      };
-    } catch (err) {
-      log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
-      return null;
-    }
   }
 
   private estimateEmbeddingTokens(text: string): number {
@@ -1231,24 +1015,6 @@ export class MemoryIndexManager {
     }
     this.upsertEmbeddingCache(toCache);
     return embeddings;
-  }
-
-  private computeProviderKey(): string {
-    if (this.provider.id === "openai" && this.openAi) {
-      const entries = Object.entries(this.openAi.headers)
-        .filter(([key]) => key.toLowerCase() !== "authorization")
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, value]) => [key, value]);
-      return hashText(
-        JSON.stringify({
-          provider: "openai",
-          baseUrl: this.openAi.baseUrl,
-          model: this.openAi.model,
-          headers: entries,
-        }),
-      );
-    }
-    return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
   }
 
   private async embedChunksWithBatch(

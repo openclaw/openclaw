@@ -6,6 +6,12 @@ import { setVerbose } from "../globals.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
+import {
+  resolveMemoryCacheState,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
+  type Tone,
+} from "../memory/status-format.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -131,6 +137,8 @@ export function registerMemoryCli(program: Command) {
           const warn = (text: string) => colorize(rich, theme.warn, text);
           const accent = (text: string) => colorize(rich, theme.accent, text);
           const label = (text: string) => muted(`${text}:`);
+          const colorForTone = (tone: Tone) =>
+            tone === "ok" ? theme.success : tone === "warn" ? theme.warn : theme.muted;
           const lines = [
             `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
             `${label("Provider")} ${info(status.provider)} ${muted(
@@ -164,18 +172,9 @@ export function registerMemoryCli(program: Command) {
             lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
           }
           if (status.vector) {
-            const vectorState = status.vector.enabled
-              ? status.vector.available
-                ? "ready"
-                : "unavailable"
-              : "disabled";
-            const vectorColor =
-              vectorState === "ready"
-                ? theme.success
-                : vectorState === "unavailable"
-                  ? theme.warn
-                  : theme.muted;
-            lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+            const vectorState = resolveMemoryVectorState(status.vector);
+            const vectorColor = colorForTone(vectorState.tone);
+            lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState.state)}`);
             if (status.vector.dims) {
               lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
             }
@@ -187,31 +186,22 @@ export function registerMemoryCli(program: Command) {
             }
           }
           if (status.fts) {
-            const ftsState = status.fts.enabled
-              ? status.fts.available
-                ? "ready"
-                : "unavailable"
-              : "disabled";
-            const ftsColor =
-              ftsState === "ready"
-                ? theme.success
-                : ftsState === "unavailable"
-                  ? theme.warn
-                  : theme.muted;
-            lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState)}`);
+            const ftsState = resolveMemoryFtsState(status.fts);
+            const ftsColor = colorForTone(ftsState.tone);
+            lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState.state)}`);
             if (status.fts.error) {
               lines.push(`${label("FTS error")} ${warn(status.fts.error)}`);
             }
           }
           if (status.cache) {
-            const cacheState = status.cache.enabled ? "enabled" : "disabled";
-            const cacheColor = status.cache.enabled ? theme.success : theme.muted;
+            const cacheState = resolveMemoryCacheState(status.cache);
+            const cacheColor = colorForTone(cacheState.tone);
             const suffix =
               status.cache.enabled && typeof status.cache.entries === "number"
                 ? ` (${status.cache.entries} entries)`
                 : "";
             lines.push(
-              `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`,
+              `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState.state)}${suffix}`,
             );
             if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
               lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
