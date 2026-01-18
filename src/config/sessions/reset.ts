@@ -40,6 +40,20 @@ export function resolveSessionResetType(params: {
   return "dm";
 }
 
+export function resolveThreadFlag(params: {
+  sessionKey?: string | null;
+  messageThreadId?: string | number | null;
+  threadLabel?: string | null;
+  threadStarterBody?: string | null;
+  parentSessionKey?: string | null;
+}): boolean {
+  if (params.messageThreadId != null) return true;
+  if (params.threadLabel?.trim()) return true;
+  if (params.threadStarterBody?.trim()) return true;
+  if (params.parentSessionKey?.trim()) return true;
+  return isThreadSessionKey(params.sessionKey);
+}
+
 export function resolveDailyResetAtMs(now: number, atHour: number): number {
   const normalizedAtHour = normalizeResetAtHour(atHour);
   const resetAt = new Date(now);

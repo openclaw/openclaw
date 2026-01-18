@@ -7,6 +7,12 @@ import {
   QueueSchema,
 } from "./zod-schema.core.js";
 
+const SessionResetConfigSchema = z.object({
+  mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+  atHour: z.number().int().min(0).max(23).optional(),
+  idleMinutes: z.number().int().positive().optional(),
+});
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -17,36 +23,12 @@ export const SessionSchema = z
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
-    reset: z
-      .object({
-        mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
-        atHour: z.number().int().min(0).max(23).optional(),
-        idleMinutes: z.number().int().positive().optional(),
-      })
-      .optional(),
+    reset: SessionResetConfigSchema.optional(),
     resetByType: z
       .object({
-        dm: z
-          .object({
-            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
-            atHour: z.number().int().min(0).max(23).optional(),
-            idleMinutes: z.number().int().positive().optional(),
-          })
-          .optional(),
-        group: z
-          .object({
-            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
-            atHour: z.number().int().min(0).max(23).optional(),
-            idleMinutes: z.number().int().positive().optional(),
-          })
-          .optional(),
-        thread: z
-          .object({
-            mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
-            atHour: z.number().int().min(0).max(23).optional(),
-            idleMinutes: z.number().int().positive().optional(),
-          })
-          .optional(),
+        dm: SessionResetConfigSchema.optional(),
+        group: SessionResetConfigSchema.optional(),
+        thread: SessionResetConfigSchema.optional(),
       })
       .optional(),
     store: z.string().optional(),

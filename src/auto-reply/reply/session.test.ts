@@ -202,6 +202,36 @@ describe("initSessionState reset policy", () => {
     }
   });
 
+  it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reset-daily-edge-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:S-edge";
+      const existingSessionId = "daily-edge-session";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 17, 3, 30, 0).getTime(),
+        },
+      });
+
+      const cfg = { session: { store: storePath } } as ClawdbotConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("expires sessions when idle timeout wins over daily reset", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
@@ -268,6 +298,76 @@ describe("initSessionState reset policy", () => {
 
       expect(result.isNewSession).toBe(false);
       expect(result.sessionId).toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("detects thread sessions without thread key suffix", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reset-thread-nosuffix-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:discord:channel:C1";
+      const existingSessionId = "thread-nosuffix";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetByType: { thread: { mode: "idle", idleMinutes: 180 } },
+        },
+      } as ClawdbotConfig;
+      const result = await initSessionState({
+        ctx: { Body: "reply", SessionKey: sessionKey, ThreadLabel: "Discord thread" },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults to daily resets when only resetByType is configured", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    try {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reset-type-default-"));
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:whatsapp:dm:S4";
+      const existingSessionId = "type-default-session";
+
+      await saveSessionStore(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          resetByType: { thread: { mode: "idle", idleMinutes: 60 } },
+        },
+      } as ClawdbotConfig;
+      const result = await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
     } finally {
       vi.useRealTimers();
     }

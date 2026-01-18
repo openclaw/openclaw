@@ -9,9 +9,9 @@ import {
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
-  isThreadSessionKey,
   type GroupKeyResolution,
   loadSessionStore,
+  resolveThreadFlag,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveGroupSessionKey,
@@ -173,12 +173,13 @@ export async function initSessionState(params: {
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
-  const isThread =
-    ctx.MessageThreadId != null ||
-    Boolean(ctx.ThreadLabel?.trim()) ||
-    Boolean(ctx.ThreadStarterBody?.trim()) ||
-    Boolean(ctx.ParentSessionKey?.trim()) ||
-    isThreadSessionKey(sessionKey);
+  const isThread = resolveThreadFlag({
+    sessionKey,
+    messageThreadId: ctx.MessageThreadId,
+    threadLabel: ctx.ThreadLabel,
+    threadStarterBody: ctx.ThreadStarterBody,
+    parentSessionKey: ctx.ParentSessionKey,
+  });
   const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
   const resetPolicy = resolveSessionResetPolicy({ sessionCfg, resetType });
   const freshEntry = entry
