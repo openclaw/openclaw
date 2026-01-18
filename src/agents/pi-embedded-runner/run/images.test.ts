@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { detectImageReferences, modelSupportsImages } from "./images.js";
+import { detectAndLoadPromptImages, detectImageReferences, modelSupportsImages } from "./images.js";
 
 describe("detectImageReferences", () => {
   it("detects absolute file paths with common extensions", () => {
@@ -44,27 +44,6 @@ describe("detectImageReferences", () => {
     expect(refs[0]?.resolved).not.toContain("~");
   });
 
-  it("detects HTTP URLs with image extensions", () => {
-    const prompt = "Check this URL: https://mysite.com/images/logo.png";
-    const refs = detectImageReferences(prompt);
-
-    expect(refs).toHaveLength(1);
-    expect(refs[0]).toEqual({
-      raw: "https://mysite.com/images/logo.png",
-      type: "url",
-      resolved: "https://mysite.com/images/logo.png",
-    });
-  });
-
-  it("detects HTTPS URLs with query parameters", () => {
-    const prompt = "Image from https://cdn.mysite.com/img.jpg?size=large&v=2";
-    const refs = detectImageReferences(prompt);
-
-    expect(refs).toHaveLength(1);
-    expect(refs[0]?.type).toBe("url");
-    expect(refs[0]?.raw).toContain("https://cdn.mysite.com/img.jpg");
-  });
-
   it("detects multiple image references in a prompt", () => {
     const prompt = `
       Compare these two images:
@@ -73,9 +52,9 @@ describe("detectImageReferences", () => {
     `;
     const refs = detectImageReferences(prompt);
 
-    expect(refs).toHaveLength(2);
+    expect(refs).toHaveLength(1);
     expect(refs.some((r) => r.type === "path")).toBe(true);
-    expect(refs.some((r) => r.type === "url")).toBe(true);
+    expect(refs.some((r) => r.type === "url")).toBe(false);
   });
 
   it("handles various image extensions", () => {
@@ -165,9 +144,10 @@ what about these images?`;
     expect(refs[0]?.resolved).toContain("IMG_6430.jpeg");
   });
 
-  it("skips example.com URLs as they are documentation examples", () => {
+  it("ignores remote URLs entirely (local-only)", () => {
     const prompt = `To send an image: MEDIA:https://example.com/image.jpg
-Here is my actual image: /path/to/real.png`;
+Here is my actual image: /path/to/real.png
+Also https://cdn.mysite.com/img.jpg`;
     const refs = detectImageReferences(prompt);
 
     expect(refs).toHaveLength(1);
@@ -214,5 +194,40 @@ describe("modelSupportsImages", () => {
   it("returns false when model input is empty", () => {
     const model = { input: [] };
     expect(modelSupportsImages(model)).toBe(false);
+  });
+});
+
+describe("detectAndLoadPromptImages", () => {
+  it("returns no images for non-vision models even when existing images are provided", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "ignore",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
+    });
+
+    expect(result.images).toHaveLength(0);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("skips history messages that already include image content", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "no images here",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      historyMessages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "See /tmp/should-not-load.png" },
+            { type: "image", data: "abc", mimeType: "image/png" },
+          ],
+        },
+      ],
+    });
+
+    expect(result.detectedRefs).toHaveLength(0);
+    expect(result.images).toHaveLength(0);
+    expect(result.historyImagesByIndex.size).toBe(0);
   });
 });

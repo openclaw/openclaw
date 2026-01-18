@@ -55,7 +55,7 @@ function isImageExtension(filePath: string): boolean {
  * - Absolute paths: /path/to/image.png
  * - Relative paths: ./image.png, ../images/photo.jpg
  * - Home paths: ~/Pictures/screenshot.png
- * - HTTP(S) URLs: https://example.com/image.png
+ * - file:// URLs: file:///path/to/image.png
  * - Message attachments: [Image: source: /path/to/image.jpg]
  *
  * @param prompt The user prompt text to scan
@@ -69,6 +69,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   const addPathRef = (raw: string) => {
     const trimmed = raw.trim();
     if (!trimmed || seen.has(trimmed.toLowerCase())) return;
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return;
     if (!isImageExtension(trimmed)) return;
     seen.add(trimmed.toLowerCase());
     const resolved = trimmed.startsWith("~") ? resolveUserPath(trimmed) : trimmed;
@@ -107,18 +108,7 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     if (raw) addPathRef(raw);
   }
 
-  // Pattern for HTTP(S) URLs ending in image extensions
-  // Skip example.com URLs as they're often just documentation examples
-  const urlPattern =
-    /https?:\/\/[^\s<>"'`\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif)(?:\?[^\s<>"'`\]]*)?/gi;
-  while ((match = urlPattern.exec(prompt)) !== null) {
-    const raw = match[0];
-    // Skip example.com URLs - they're documentation, not real images
-    if (raw.includes("example.com")) continue;
-    if (seen.has(raw.toLowerCase())) continue;
-    seen.add(raw.toLowerCase());
-    refs.push({ raw, type: "url", resolved: raw });
-  }
+  // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
   const fileUrlPattern =
@@ -171,9 +161,9 @@ export async function loadImageFromRef(
   try {
     let targetPath = ref.resolved;
 
-    // When sandbox is enabled, block remote URL loading to maintain network boundary
-    if (ref.type === "url" && options?.sandboxRoot) {
-      log.debug(`Native image: rejecting remote URL in sandboxed session: ${ref.resolved}`);
+    // Remote URL loading is disabled (local-only).
+    if (ref.type === "url") {
+      log.debug(`Native image: rejecting remote URL (local-only): ${ref.resolved}`);
       return null;
     }
 
@@ -213,7 +203,7 @@ export async function loadImageFromRef(
       }
     }
 
-    // loadWebMedia handles both file paths and HTTP(S) URLs
+    // loadWebMedia handles local file paths (including file:// URLs)
     const media = await loadWebMedia(targetPath, options?.maxBytes);
 
     if (media.kind !== "image") {
@@ -259,12 +249,26 @@ function detectImagesFromHistory(messages: unknown[]): DetectedImageRef[] {
   const allRefs: DetectedImageRef[] = [];
   const seen = new Set<string>();
 
+  const messageHasImageContent = (msg: unknown): boolean => {
+    if (!msg || typeof msg !== "object") return false;
+    const content = (msg as { content?: unknown }).content;
+    if (!Array.isArray(content)) return false;
+    return content.some(
+      (part) =>
+        part != null &&
+        typeof part === "object" &&
+        (part as { type?: string }).type === "image",
+    );
+  };
+
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object") continue;
     const message = msg as { role?: string };
     // Only scan user messages for image references
     if (message.role !== "user") continue;
+    // Skip if message already has image content (prevents reloading each turn)
+    if (messageHasImageContent(msg)) continue;
 
     const text = extractTextFromMessage(msg);
     if (!text) continue;
@@ -315,7 +319,7 @@ export async function detectAndLoadPromptImages(params: {
   // If model doesn't support images, return empty results
   if (!modelSupportsImages(params.model)) {
     return {
-      images: params.existingImages ?? [],
+      images: [],
       historyImagesByIndex: new Map(),
       detectedRefs: [],
       loadedCount: 0,

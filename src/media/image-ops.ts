@@ -59,7 +59,6 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
 
     // APP1 marker (EXIF)
     if (marker === 0xe1) {
-      const segmentLength = buffer.readUInt16BE(offset + 2);
       const exifStart = offset + 4;
 
       // Check for "Exif\0\0" header

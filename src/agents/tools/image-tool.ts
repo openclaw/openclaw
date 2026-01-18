@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -20,7 +19,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
-import { normalizeProviderId, resolveConfiguredModelRef } from "../model-selection.js";
+import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
 import type { AnyAgentTool } from "./common.js";
@@ -60,77 +59,6 @@ function hasAuthForProvider(params: { provider: string; agentDir: string }): boo
     allowKeychainPrompt: false,
   });
   return listProfilesForProvider(store, params.provider).length > 0;
-}
-
-type ProviderModelEntry = {
-  id?: string;
-  input?: string[];
-};
-
-type ProviderConfigLike = {
-  models?: ProviderModelEntry[];
-};
-
-function resolveProviderConfig(
-  providers: Record<string, ProviderConfigLike> | undefined,
-  provider: string,
-): ProviderConfigLike | null {
-  if (!providers) return null;
-  const normalized = normalizeProviderId(provider);
-  for (const [key, value] of Object.entries(providers)) {
-    if (normalizeProviderId(key) === normalized) return value;
-  }
-  return null;
-}
-
-function resolveModelSupportsImages(params: {
-  providerConfig: ProviderConfigLike | null;
-  modelId: string;
-}): boolean | null {
-  const models = params.providerConfig?.models;
-  if (!Array.isArray(models) || models.length === 0) return null;
-  const trimmedId = params.modelId.trim();
-  if (!trimmedId) return null;
-  const match =
-    models.find((model) => String(model?.id ?? "").trim() === trimmedId) ??
-    models.find(
-      (model) =>
-        String(model?.id ?? "")
-          .trim()
-          .toLowerCase() === trimmedId.toLowerCase(),
-    );
-  if (!match) return null;
-  const input = Array.isArray(match.input) ? match.input : [];
-  return input.includes("image");
-}
-
-function resolvePrimaryModelSupportsImages(params: {
-  cfg?: ClawdbotConfig;
-  agentDir: string;
-}): boolean | null {
-  if (!params.cfg) return null;
-  const primary = resolveDefaultModelRef(params.cfg);
-  const providerConfig = resolveProviderConfig(
-    params.cfg.models?.providers as Record<string, ProviderConfigLike> | undefined,
-    primary.provider,
-  );
-  const fromConfig = resolveModelSupportsImages({
-    providerConfig,
-    modelId: primary.model,
-  });
-  if (fromConfig !== null) return fromConfig;
-  try {
-    const modelsPath = path.join(params.agentDir, "models.json");
-    const raw = fsSync.readFileSync(modelsPath, "utf8");
-    const parsed = JSON.parse(raw) as { providers?: Record<string, ProviderConfigLike> };
-    const provider = resolveProviderConfig(parsed.providers, primary.provider);
-    return resolveModelSupportsImages({
-      providerConfig: provider,
-      modelId: primary.model,
-    });
-  } catch {
-    return null;
-  }
 }
 
 /**

@@ -120,6 +120,21 @@ export type ToolPolicyConfig = {
   profile?: ToolProfileId;
 };
 
+export type ExecToolConfig = {
+  host?: "sandbox" | "gateway" | "node";
+  security?: "deny" | "allowlist" | "full";
+  ask?: "off" | "on-miss" | "always";
+  node?: string;
+  backgroundMs?: number;
+  timeoutSec?: number;
+  cleanupMs?: number;
+  notifyOnExit?: boolean;
+  applyPatch?: {
+    enabled?: boolean;
+    allowModels?: string[];
+  };
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;

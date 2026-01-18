@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
 - Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
 - Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) — thanks @austinm911.
+- Agents: auto-inject local image references for vision models and avoid reloading history images. (#1098) — thanks @tyler6204.
 - Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
 - Docs: add node host CLI + update exec approvals/bridge protocol docs. https://docs.clawd.bot/cli/node
 - ACP: add experimental ACP support for IDE integrations (`clawdbot acp`). Thanks @visionik.
