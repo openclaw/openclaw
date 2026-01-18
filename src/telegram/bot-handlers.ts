@@ -10,7 +10,7 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { resolveMedia } from "./bot/delivery.js";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 import type { TelegramMessage } from "./bot/types.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
@@ -205,14 +205,14 @@ export const registerTelegramHandlers = ({
       const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
       const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFrom([
-        ...(groupAllowOverride ?? groupAllowFrom ?? []),
-        ...storeAllowFrom,
-      ]);
-      const effectiveDmAllow = normalizeAllowFrom([
-        ...(telegramCfg.allowFrom ?? []),
-        ...storeAllowFrom,
-      ]);
+      const effectiveGroupAllow = normalizeAllowFromWithStore({
+        allowFrom: groupAllowOverride ?? groupAllowFrom,
+        storeAllowFrom,
+      });
+      const effectiveDmAllow = normalizeAllowFromWithStore({
+        allowFrom: telegramCfg.allowFrom,
+        storeAllowFrom,
+      });
       const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
       const senderId = callback.from?.id ? String(callback.from.id) : "";
       const senderUsername = callback.from?.username ?? "";
@@ -393,10 +393,10 @@ export const registerTelegramHandlers = ({
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
       const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
       const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-      const effectiveGroupAllow = normalizeAllowFrom([
-        ...(groupAllowOverride ?? groupAllowFrom ?? []),
-        ...storeAllowFrom,
-      ]);
+      const effectiveGroupAllow = normalizeAllowFromWithStore({
+        allowFrom: groupAllowOverride ?? groupAllowFrom,
+        storeAllowFrom,
+      });
       const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
       if (isGroup) {
