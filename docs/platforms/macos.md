@@ -7,8 +7,8 @@ read_when:
 # Clawdbot macOS Companion (menu bar + gateway broker)
 
 The macOS app is the **menu‑bar companion** for Clawdbot. It owns permissions,
-manages the Gateway locally, and exposes macOS capabilities to the agent as a
-node.
+manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
+capabilities to the agent as a node.
 
 ## What it does
 
@@ -26,11 +26,11 @@ Planned:
 
 ## Local vs remote mode
 
-- **Local** (default): the app ensures a local Gateway is running via launchd.
+- **Local** (default): the app attaches to a running local Gateway if present;
+  otherwise it enables the launchd service via `clawdbot daemon`.
 - **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
   a local process.
-- **Attach‑only** (debug): the app connects to an already‑running local Gateway
-  and never spawns its own.
+The app does not spawn the Gateway as a child process.
 
 ## Launchd control
 
