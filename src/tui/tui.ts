@@ -22,7 +22,10 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
-import { buildWaitingStatusMessage } from "./tui-waiting.js";
+import {
+  buildWaitingStatusMessage,
+  defaultWaitingPhrases,
+} from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
@@ -289,6 +292,7 @@ export async function runTui(opts: TuiOptions) {
 
   let waitingTick = 0;
   let waitingTimer: NodeJS.Timeout | null = null;
+  let waitingPhrase: string | null = null;
 
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) return;
@@ -302,6 +306,7 @@ export async function runTui(opts: TuiOptions) {
           tick: waitingTick,
           elapsed,
           connectionStatus,
+          phrases: waitingPhrase ? [waitingPhrase] : undefined,
         }),
       );
       return;
@@ -326,6 +331,16 @@ export async function runTui(opts: TuiOptions) {
 
   const startWaitingTimer = () => {
     if (waitingTimer) return;
+
+    // Pick a phrase once per waiting session.
+    if (!waitingPhrase) {
+      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
+      waitingPhrase =
+        defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+    }
+
+    waitingTick = 0;
+
     waitingTimer = setInterval(() => {
       if (activityStatus !== "waiting") return;
       updateBusyStatusMessage();
@@ -336,6 +351,7 @@ export async function runTui(opts: TuiOptions) {
     if (!waitingTimer) return;
     clearInterval(waitingTimer);
     waitingTimer = null;
+    waitingPhrase = null;
   };
 
   const renderStatus = () => {
