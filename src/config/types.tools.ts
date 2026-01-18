@@ -163,6 +163,8 @@ export type MemorySearchConfig = {
       enabled?: boolean;
       /** Wait for batch completion (default: true). */
       wait?: boolean;
+      /** Max concurrent batch jobs (default: 2). */
+      concurrency?: number;
       /** Poll interval in ms (default: 5000). */
       pollIntervalMs?: number;
       /** Timeout in minutes (default: 60). */

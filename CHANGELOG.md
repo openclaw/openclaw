@@ -8,6 +8,8 @@ Docs: https://docs.clawd.bot
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
 - Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
 - Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
+- Memory: add `--verbose` logging for memory status + batch indexing details.
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
 
 ### Fixes
 - Memory: apply OpenAI batch defaults even without explicit remote config.

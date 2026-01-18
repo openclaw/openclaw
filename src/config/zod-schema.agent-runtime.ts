@@ -210,6 +210,7 @@ export const MemorySearchSchema = z
           .object({
             enabled: z.boolean().optional(),
             wait: z.boolean().optional(),
+            concurrency: z.number().int().positive().optional(),
             pollIntervalMs: z.number().int().nonnegative().optional(),
             timeoutMinutes: z.number().int().positive().optional(),
           })

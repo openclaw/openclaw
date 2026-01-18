@@ -17,10 +17,12 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
 }));
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockReset();
   process.exitCode = undefined;
+  const { setVerbose } = await import("../globals.js");
+  setVerbose(false);
 });
 
 describe("memory cli", () => {
@@ -133,6 +135,36 @@ describe("memory cli", () => {
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
     expect(close).toHaveBeenCalled();
+  });
+
+  it("enables verbose logging with --verbose", async () => {
+    const { registerMemoryCli } = await import("./memory-cli.js");
+    const { isVerbose } = await import("../globals.js");
+    const close = vi.fn(async () => {});
+    getMemorySearchManager.mockResolvedValueOnce({
+      manager: {
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => ({
+          files: 0,
+          chunks: 0,
+          dirty: false,
+          workspaceDir: "/tmp/clawd",
+          dbPath: "/tmp/memory.sqlite",
+          provider: "openai",
+          model: "text-embedding-3-small",
+          requestedProvider: "openai",
+          vector: { enabled: true, available: true },
+        }),
+        close,
+      },
+    });
+
+    const program = new Command();
+    program.name("test");
+    registerMemoryCli(program);
+    await program.parseAsync(["memory", "status", "--verbose"], { from: "user" });
+
+    expect(isVerbose()).toBe(true);
   });
 
   it("logs close failure after status", async () => {

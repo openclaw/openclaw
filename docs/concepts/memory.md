@@ -111,7 +111,15 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 Batch indexing (OpenAI only):
 - Enabled by default for OpenAI embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
 - Default behavior waits for batch completion; tune `remote.batch.wait`, `remote.batch.pollIntervalMs`, and `remote.batch.timeoutMinutes` if needed.
+- Set `remote.batch.concurrency` to control how many batch jobs we submit in parallel (default: 2).
 - Batch mode currently applies only when `memorySearch.provider = "openai"` and uses your OpenAI API key.
+
+Why OpenAI batch is fast + cheap:
+- For large backfills, OpenAI is typically the fastest option we support because we can submit many embedding requests in a single batch job and let OpenAI process them asynchronously.
+- OpenAI offers discounted pricing for Batch API workloads, so large indexing runs are usually cheaper than sending the same requests synchronously.
+- See the OpenAI Batch API docs and pricing for details:
+  - https://platform.openai.com/docs/api-reference/batch
+  - https://platform.openai.com/pricing
 
 Config example:
 
@@ -123,7 +131,7 @@ agents: {
       model: "text-embedding-3-small",
       fallback: "openai",
       remote: {
-        batch: { enabled: false }
+        batch: { enabled: true, concurrency: 2 }
       },
       sync: { watch: true }
     }

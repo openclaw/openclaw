@@ -175,6 +175,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
+  "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
@@ -370,6 +371,8 @@ const FIELD_HELP: Record<string, string> = {
     "Enable OpenAI Batch API for memory embeddings (default: true).",
   "agents.defaults.memorySearch.remote.batch.wait":
     "Wait for OpenAI batch completion when indexing (default: true).",
+  "agents.defaults.memorySearch.remote.batch.concurrency":
+    "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
     "Polling interval in ms for OpenAI batch status (default: 5000).",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes":

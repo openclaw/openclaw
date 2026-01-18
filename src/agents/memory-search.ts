@@ -17,6 +17,7 @@ export type ResolvedMemorySearchConfig = {
     batch?: {
       enabled: boolean;
       wait: boolean;
+      concurrency: number;
       pollIntervalMs: number;
       timeoutMinutes: number;
     };
@@ -99,6 +100,10 @@ function mergeConfig(
   const batch = {
     enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
     wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
+    concurrency: Math.max(
+      1,
+      overrides?.remote?.batch?.concurrency ?? defaults?.remote?.batch?.concurrency ?? 2,
+    ),
     pollIntervalMs:
       overrides?.remote?.batch?.pollIntervalMs ?? defaults?.remote?.batch?.pollIntervalMs ?? 5000,
     timeoutMinutes:

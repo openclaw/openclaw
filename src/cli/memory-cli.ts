@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { setVerbose } from "../globals.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
@@ -14,6 +15,7 @@ type MemoryCommandOptions = {
   json?: boolean;
   deep?: boolean;
   index?: boolean;
+  verbose?: boolean;
 };
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
@@ -41,7 +43,9 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
+    .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
+      setVerbose(Boolean(opts.verbose));
       const cfg = loadConfig();
       const agentId = resolveAgent(cfg, opts.agent);
       await withManager<MemoryManager>({

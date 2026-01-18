@@ -137,6 +137,7 @@ export class MemoryIndexManager {
   private readonly batch: {
     enabled: boolean;
     wait: boolean;
+    concurrency: number;
     pollIntervalMs: number;
     timeoutMs: number;
   };
@@ -234,6 +235,7 @@ export class MemoryIndexManager {
     this.batch = {
       enabled: Boolean(batch?.enabled && this.openAi && this.provider.id === "openai"),
       wait: batch?.wait ?? true,
+      concurrency: Math.max(1, batch?.concurrency ?? 2),
       pollIntervalMs: batch?.pollIntervalMs ?? 5000,
       timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
     };
@@ -730,6 +732,12 @@ export class MemoryIndexManager {
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );
+    log.debug("memory sync: indexing memory files", {
+      files: fileEntries.length,
+      needsFullReindex: params.needsFullReindex,
+      batch: this.batch.enabled,
+      concurrency: this.getIndexConcurrency(),
+    });
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -782,6 +790,13 @@ export class MemoryIndexManager {
     const files = await this.listSessionFiles();
     const activePaths = new Set(files.map((file) => this.sessionPathForFile(file)));
     const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    log.debug("memory sync: indexing session files", {
+      files: files.length,
+      indexAll,
+      dirtyFiles: this.sessionsDirtyFiles.size,
+      batch: this.batch.enabled,
+      concurrency: this.getIndexConcurrency(),
+    });
     if (params.progress) {
       params.progress.total += files.length;
       params.progress.report({
@@ -1270,6 +1285,7 @@ export class MemoryIndexManager {
       if (Date.now() - start > this.batch.timeoutMs) {
         throw new Error(`openai batch ${batchId} timed out after ${this.batch.timeoutMs}ms`);
       }
+      log.debug(`openai batch ${batchId} ${state}; waiting ${this.batch.pollIntervalMs}ms`);
       await new Promise((resolve) => setTimeout(resolve, this.batch.pollIntervalMs));
       current = undefined;
     }
@@ -1287,13 +1303,30 @@ export class MemoryIndexManager {
 
     const { requests, mapping } = this.buildOpenAiBatchRequests(chunks, entry, source);
     const groups = this.splitOpenAiBatchRequests(requests);
+    log.debug("memory embeddings: openai batch submit", {
+      source,
+      chunks: chunks.length,
+      requests: requests.length,
+      groups: groups.length,
+      wait: this.batch.wait,
+      concurrency: this.batch.concurrency,
+      pollIntervalMs: this.batch.pollIntervalMs,
+      timeoutMs: this.batch.timeoutMs,
+    });
     const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
 
-    for (const group of groups) {
+    const tasks = groups.map((group, groupIndex) => async () => {
       const batchInfo = await this.submitOpenAiBatch(group);
       if (!batchInfo.id) {
         throw new Error("openai batch create failed: missing batch id");
       }
+      log.debug("memory embeddings: openai batch created", {
+        batchId: batchInfo.id,
+        status: batchInfo.status,
+        group: groupIndex + 1,
+        groups: groups.length,
+        requests: group.length,
+      });
       if (!this.batch.wait && batchInfo.status !== "completed") {
         throw new Error(
           `openai batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
@@ -1349,7 +1382,8 @@ export class MemoryIndexManager {
           `openai batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
         );
       }
-    }
+    });
+    await this.runWithConcurrency(tasks, this.batch.concurrency);
 
     return embeddings;
   }
@@ -1412,7 +1446,7 @@ export class MemoryIndexManager {
   }
 
   private getIndexConcurrency(): number {
-    return this.batch.enabled ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private async indexFile(

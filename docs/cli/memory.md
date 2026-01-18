@@ -18,6 +18,11 @@ Related:
 clawdbot memory status
 clawdbot memory status --deep
 clawdbot memory status --deep --index
+clawdbot memory status --deep --index --verbose
 clawdbot memory index
 clawdbot memory search "release checklist"
 ```
+
+## Options
+
+- `--verbose`: emit debug logs during memory probes and indexing.
