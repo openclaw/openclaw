@@ -26,7 +26,11 @@ import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
 
-const { App, HTTPReceiver } = SlackBolt as typeof import("@slack/bolt");
+const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
+  default?: typeof import("@slack/bolt");
+};
+const slackBolt = slackBoltModule.default ?? slackBoltModule;
+const { App, HTTPReceiver } = slackBolt;
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) return undefined;

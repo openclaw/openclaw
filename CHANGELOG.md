@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 - macOS: suppress usage error text in the menubar cost view.
 - Telegram: honor pairing allowlists for native slash commands.
 - CLI: keep banners on routed commands, restore config guarding outside fast-path routing, and tighten fast-path flag parsing while skipping console capture for extra speed. (#1195) — thanks @gumadeiras.
+- Slack: resolve Bolt import interop for Bun + Node. (#1191) — thanks @CoreyH.
 
 ## 2026.1.18-4
 
