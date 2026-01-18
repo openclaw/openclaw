@@ -743,7 +743,8 @@ export class MemoryIndexManager {
       batchEnabled: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
       runWithConcurrency: this.runWithConcurrency.bind(this),
-      indexFile: async (entry) => await this.indexFile(entry, { source: "sessions", content: entry.content }),
+      indexFile: async (entry) =>
+        await this.indexFile(entry, { source: "sessions", content: entry.content }),
       vectorTable: VECTOR_TABLE,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,

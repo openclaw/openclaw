@@ -1,11 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 import { createSubsystemLogger } from "../logging.js";
-import {
-  buildFileEntry,
-  listMemoryFiles,
-  type MemoryFileEntry,
-} from "./internal.js";
+import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -32,7 +28,9 @@ export async function syncMemoryFiles(params: {
   model: string;
 }) {
   const files = await listMemoryFiles(params.workspaceDir);
-  const fileEntries = await Promise.all(files.map(async (file) => buildFileEntry(file, params.workspaceDir)));
+  const fileEntries = await Promise.all(
+    files.map(async (file) => buildFileEntry(file, params.workspaceDir)),
+  );
 
   log.debug("memory sync: indexing memory files", {
     files: fileEntries.length,

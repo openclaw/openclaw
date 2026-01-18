@@ -52,4 +52,3 @@ export function computeMemoryManagerCacheKey(params: {
   );
   return `${params.agentId}:${params.workspaceDir}:${fingerprint}`;
 }
-

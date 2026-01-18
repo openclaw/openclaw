@@ -73,7 +73,11 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       } catch {
         continue;
       }
-      if (!record || typeof record !== "object" || (record as { type?: unknown }).type !== "message") {
+      if (
+        !record ||
+        typeof record !== "object" ||
+        (record as { type?: unknown }).type !== "message"
+      ) {
         continue;
       }
       const message = (record as { message?: unknown }).message as
@@ -100,4 +104,3 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     return null;
   }
 }
-
