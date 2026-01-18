@@ -30,6 +30,21 @@ clawdbot acp --session-label "support inbox"
 clawdbot acp --session agent:main:main --reset-session
 ```
 
+## ACP client (debug)
+
+Use the built-in ACP client to sanity-check the bridge without an IDE.
+It spawns the ACP bridge and lets you type prompts interactively.
+
+```bash
+clawdbot acp client
+
+# Point the spawned bridge at a remote Gateway
+clawdbot acp client --server-args --url wss://gateway-host:18789 --token <token>
+
+# Override the server command (default: clawdbot)
+clawdbot acp client --server "node" --server-args dist/entry.js acp --url ws://127.0.0.1:19001
+```
+
 ## How to use this
 
 Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want
@@ -141,3 +156,11 @@ Learn more about session keys at [/concepts/session](/concepts/session).
 - `--reset-session`: reset the session key before first use.
 - `--no-prefix-cwd`: do not prefix prompts with the working directory.
 - `--verbose, -v`: verbose logging to stderr.
+
+### `acp client` options
+
+- `--cwd <dir>`: working directory for the ACP session.
+- `--server <command>`: ACP server command (default: `clawdbot`).
+- `--server-args <args...>`: extra arguments passed to the ACP server.
+- `--server-verbose`: enable verbose logging on the ACP server.
+- `--verbose, -v`: verbose client logging.

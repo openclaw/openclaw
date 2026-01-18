@@ -1,14 +1,15 @@
 import type { Command } from "commander";
 
+import { runAcpClientInteractive } from "../acp/client.js";
 import { serveAcpGateway } from "../acp/server.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 
 export function registerAcpCli(program: Command) {
-  program
-    .command("acp")
-    .description("Run an ACP bridge backed by the Gateway")
+  const acp = program.command("acp").description("Run an ACP bridge backed by the Gateway");
+
+  acp
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (if required)")
@@ -33,6 +34,29 @@ export function registerAcpCli(program: Command) {
           requireExistingSession: Boolean(opts.requireExisting),
           resetSession: Boolean(opts.resetSession),
           prefixCwd: !opts.noPrefixCwd,
+          verbose: Boolean(opts.verbose),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  acp
+    .command("client")
+    .description("Run an interactive ACP client against the local ACP bridge")
+    .option("--cwd <dir>", "Working directory for the ACP session")
+    .option("--server <command>", "ACP server command (default: clawdbot)")
+    .option("--server-args <args...>", "Extra arguments for the ACP server")
+    .option("--server-verbose", "Enable verbose logging on the ACP server", false)
+    .option("--verbose, -v", "Verbose client logging", false)
+    .action(async (opts) => {
+      try {
+        await runAcpClientInteractive({
+          cwd: opts.cwd as string | undefined,
+          serverCommand: opts.server as string | undefined,
+          serverArgs: opts.serverArgs as string[] | undefined,
+          serverVerbose: Boolean(opts.serverVerbose),
           verbose: Boolean(opts.verbose),
         });
       } catch (err) {

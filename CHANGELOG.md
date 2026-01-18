@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 - macOS: switch PeekabooBridge integration to the tagged Swift Package Manager release (no submodule).
 - macOS: stop syncing Peekaboo as a git submodule in postinstall.
 - Swabble: use the tagged Commander Swift package release.
+- CLI: add `clawdbot acp client` interactive ACP harness for debugging.
 
 ### Fixes
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
