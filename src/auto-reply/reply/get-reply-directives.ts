@@ -66,9 +66,11 @@ function resolveExecOverrides(params: {
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
 }): ExecOverrides | undefined {
-  const host = params.directives.execHost ?? (params.sessionEntry?.execHost as ExecOverrides["host"]);
+  const host =
+    params.directives.execHost ?? (params.sessionEntry?.execHost as ExecOverrides["host"]);
   const security =
-    params.directives.execSecurity ?? (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
+    params.directives.execSecurity ??
+    (params.sessionEntry?.execSecurity as ExecOverrides["security"]);
   const ask = params.directives.execAsk ?? (params.sessionEntry?.execAsk as ExecOverrides["ask"]);
   const node = params.directives.execNode ?? params.sessionEntry?.execNode;
   if (!host && !security && !ask && !node) return undefined;

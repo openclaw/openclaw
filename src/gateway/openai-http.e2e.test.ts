@@ -340,8 +340,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       expect(res.status).toBe(200);
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
-      const extraSystemPrompt = (opts as { extraSystemPrompt?: string } | undefined)
-        ?.extraSystemPrompt ?? "";
+      const extraSystemPrompt =
+        (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe("You are a helpful assistant.");
     } finally {
       await server.close({ reason: "test done" });

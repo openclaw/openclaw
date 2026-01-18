@@ -2,10 +2,7 @@ import type { ClawdbotConfig } from "../../../config/config.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
-import {
-  applySoulEvilOverride,
-  resolveSoulEvilConfigFromHook,
-} from "../../soul-evil.js";
+import { applySoulEvilOverride, resolveSoulEvilConfigFromHook } from "../../soul-evil.js";
 
 const HOOK_KEY = "soul-evil";
 

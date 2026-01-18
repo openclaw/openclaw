@@ -20,13 +20,15 @@ type ExecDirectiveParse = {
 
 function normalizeExecHost(value?: string): ExecHost | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") return normalized;
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node")
+    return normalized;
   return undefined;
 }
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") return normalized;
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full")
+    return normalized;
   return undefined;
 }
 
@@ -38,7 +40,10 @@ function normalizeExecAsk(value?: string): ExecAsk | undefined {
   return undefined;
 }
 
-function parseExecDirectiveArgs(raw: string): Omit<ExecDirectiveParse, "cleaned" | "hasDirective"> & {
+function parseExecDirectiveArgs(raw: string): Omit<
+  ExecDirectiveParse,
+  "cleaned" | "hasDirective"
+> & {
   consumed: number;
 } {
   let i = 0;
@@ -76,8 +81,7 @@ function parseExecDirectiveArgs(raw: string): Omit<ExecDirectiveParse, "cleaned"
   const splitToken = (token: string): { key: string; value: string } | null => {
     const eq = token.indexOf("=");
     const colon = token.indexOf(":");
-    const idx =
-      eq === -1 ? colon : colon === -1 ? eq : Math.min(eq, colon);
+    const idx = eq === -1 ? colon : colon === -1 ? eq : Math.min(eq, colon);
     if (idx === -1) return null;
     const key = token.slice(0, idx).trim().toLowerCase();
     const value = token.slice(idx + 1).trim();

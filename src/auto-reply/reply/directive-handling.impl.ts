@@ -1,4 +1,8 @@
-import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -50,9 +54,7 @@ function resolveExecDefaults(params: {
       (globalExec?.ask as ExecAsk | undefined) ??
       "on-miss",
     node:
-      (params.sessionEntry?.execNode as string | undefined) ??
-      agentExec?.node ??
-      globalExec?.node,
+      (params.sessionEntry?.execNode as string | undefined) ?? agentExec?.node ?? globalExec?.node,
   };
 }
 
