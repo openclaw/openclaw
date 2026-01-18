@@ -1,10 +1,6 @@
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelDirectoryEntry,
-} from "../../../src/channels/plugins/types.core.js";
+import type { ChannelAccountSnapshot, ChannelDirectoryEntry, ChannelPlugin } from "clawdbot/plugin-sdk";
 
-import { formatPairingApproveHint } from "../../../src/channels/plugins/helpers.js";
+import { formatPairingApproveHint } from "clawdbot/plugin-sdk";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,

@@ -2,36 +2,38 @@ import type { MatrixEvent, Room } from "matrix-js-sdk";
 import { EventType, RelationType, RoomEvent } from "matrix-js-sdk";
 import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
 
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../../../../src/agents/identity.js";
-import { chunkMarkdownText, resolveTextChunkLimit } from "../../../../../src/auto-reply/chunk.js";
-import { hasControlCommand } from "../../../../../src/auto-reply/command-detection.js";
-import { shouldHandleTextCommands } from "../../../../../src/auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../../../../../src/auto-reply/envelope.js";
-import { dispatchReplyFromConfig } from "../../../../../src/auto-reply/reply/dispatch-from-config.js";
-import { finalizeInboundContext } from "../../../../../src/auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
+  chunkMarkdownText,
+  createReplyDispatcherWithTyping,
+  danger,
+  dispatchReplyFromConfig,
+  enqueueSystemEvent,
+  finalizeInboundContext,
+  formatAgentEnvelope,
+  formatAllowlistMatchMeta,
+  getChildLogger,
+  hasControlCommand,
+  loadConfig,
+  logVerbose,
+  mergeAllowlist,
   matchesMentionPatterns,
-} from "../../../../../src/auto-reply/reply/mentions.js";
-import { createReplyDispatcherWithTyping } from "../../../../../src/auto-reply/reply/reply-dispatcher.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../../../src/channels/command-gating.js";
-import { formatAllowlistMatchMeta } from "../../../../../src/channels/plugins/allowlist-match.js";
-import { loadConfig } from "../../../../../src/config/config.js";
-import {
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../../../../src/config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
-import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
-import { getChildLogger } from "../../../../../src/logging.js";
-import {
   readChannelAllowFromStore,
+  recordSessionMetaFromInbound,
+  resolveAgentRoute,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveEffectiveMessagesConfig,
+  resolveHumanDelayConfig,
+  resolveStorePath,
+  resolveTextChunkLimit,
+  shouldHandleTextCommands,
+  shouldLogVerbose,
+  summarizeMapping,
+  updateLastRoute,
   upsertChannelPairingRequest,
-} from "../../../../../src/pairing/pairing-store.js";
-import { resolveAgentRoute } from "../../../../../src/routing/resolve-route.js";
-import type { RuntimeEnv } from "../../../../../src/runtime.js";
+  type ReplyPayload,
+  type RuntimeEnv,
+} from "clawdbot/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
@@ -51,7 +53,6 @@ import {
   resolveMatrixAllowListMatches,
   normalizeAllowListLower,
 } from "./allowlist.js";
-import { mergeAllowlist, summarizeMapping } from "../../../../../src/channels/allowlists/resolve-utils.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { downloadMatrixMedia } from "./media.js";

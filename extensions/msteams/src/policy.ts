@@ -1,17 +1,17 @@
 import type {
+  AllowlistMatch,
   GroupPolicy,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
-} from "../../../src/config/types.js";
+} from "clawdbot/plugin-sdk";
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-} from "../../../src/channels/plugins/channel-config.js";
-import type { AllowlistMatch } from "../../../src/channels/plugins/allowlist-match.js";
+} from "clawdbot/plugin-sdk";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;

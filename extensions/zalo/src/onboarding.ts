@@ -1,5 +1,8 @@
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../../src/channels/plugins/onboarding-types.js";
-import type { WizardPrompter } from "../../src/wizard/prompts.js";
+import type {
+  ChannelOnboardingAdapter,
+  ChannelOnboardingDmPolicy,
+  WizardPrompter,
+} from "clawdbot/plugin-sdk";
 
 import { addWildcardAllowFrom, promptAccountId } from "./shared/onboarding.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./shared/account-ids.js";

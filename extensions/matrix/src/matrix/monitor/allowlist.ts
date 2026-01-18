@@ -1,4 +1,4 @@
-import type { AllowlistMatch } from "../../../../../src/channels/plugins/allowlist-match.js";
+import type { AllowlistMatch } from "clawdbot/plugin-sdk";
 
 function normalizeAllowList(list?: Array<string | number>) {
   return (list ?? []).map((entry) => String(entry).trim()).filter(Boolean);

@@ -1,4 +1,7 @@
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../../src/channels/plugins/types.js";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "clawdbot/plugin-sdk";
 
 import type { CoreConfig } from "./types.js";
 import { listEnabledZaloAccounts } from "./accounts.js";

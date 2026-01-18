@@ -1,14 +1,16 @@
 import type { ChildProcess } from "node:child_process";
 
-import type { RuntimeEnv } from "../../../src/runtime.js";
+import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 import {
+  finalizeInboundContext,
   isControlCommandMessage,
+  mergeAllowlist,
+  recordSessionMetaFromInbound,
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveStorePath,
   shouldComputeCommandAuthorized,
-} from "../../../src/auto-reply/command-detection.js";
-import { mergeAllowlist, summarizeMapping } from "../../../src/channels/allowlists/resolve-utils.js";
-import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../../src/config/sessions.js";
+  summarizeMapping,
+} from "clawdbot/plugin-sdk";
 import { loadCoreChannelDeps, type CoreChannelDeps } from "./core-bridge.js";
 import { sendMessageZalouser } from "./send.js";
 import type {

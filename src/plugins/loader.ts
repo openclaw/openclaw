@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 
 import type { ClawdbotConfig } from "../config/config.js";
@@ -90,6 +93,24 @@ const normalizePluginsConfig = (config?: ClawdbotConfig["plugins"]): NormalizedP
     },
     entries: normalizePluginEntries(config?.entries),
   };
+};
+
+const resolvePluginSdkAlias = (): string | null => {
+  try {
+    let cursor = path.dirname(fileURLToPath(import.meta.url));
+    for (let i = 0; i < 6; i += 1) {
+      const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
+      if (fs.existsSync(distCandidate)) return distCandidate;
+      const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
+      if (fs.existsSync(srcCandidate)) return srcCandidate;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) break;
+      cursor = parent;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 };
 
 function buildCacheKey(params: {
@@ -289,8 +310,10 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   });
   pushDiagnostics(registry.diagnostics, discovery.diagnostics);
 
+  const pluginSdkAlias = resolvePluginSdkAlias();
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
+    ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
   });
 
   const seenIds = new Map<string, PluginRecord["origin"]>();

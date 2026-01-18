@@ -1,7 +1,10 @@
-import type { ClawdbotPluginApi } from "../../src/plugins/types.js";
+import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
 
-import { createMemoryGetTool, createMemorySearchTool } from "../../src/agents/tools/memory-tool.js";
-import { registerMemoryCli } from "../../src/cli/memory-cli.js";
+import {
+  createMemoryGetTool,
+  createMemorySearchTool,
+  registerMemoryCli,
+} from "clawdbot/plugin-sdk";
 
 const memoryCorePlugin = {
   id: "memory-core",
