@@ -169,9 +169,9 @@ If UI missing:
 - Stored in the gateway in-memory queue (`enqueueSystemEvent`).
 
 ### Event text
-- `Exec started (host=node, node=<id>, id=<runId>)`
-- `Exec finished (exit=<code>, tail=<...>)`
-- `Exec denied (policy=<...>, reason=<...>)`
+- `Exec started (node=<id>, id=<runId>)`
+- `Exec finished (node=<id>, id=<runId>, code=<code>)` + optional output tail
+- `Exec denied (node=<id>, id=<runId>, <reason>)`
 
 ### Transport
 Option A (recommended):
