@@ -29,6 +29,7 @@
     "dist/media-understanding/**",
     "dist/process/**",
     "dist/plugins/**",
+    "dist/plugin-sdk/**",
     "dist/security/**",
     "dist/sessions/**",
     "dist/providers/**",

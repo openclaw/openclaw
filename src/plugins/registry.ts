@@ -21,6 +21,7 @@ import type {
   PluginOrigin,
   PluginKind,
 } from "./types.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -100,6 +101,7 @@ export type PluginRegistry = {
 export type PluginRegistryParams = {
   logger: PluginLogger;
   coreGatewayHandlers?: GatewayRequestHandlers;
+  runtime: PluginRuntime;
 };
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
@@ -279,6 +281,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       config: params.config,
       pluginConfig: params.pluginConfig,
+      runtime: registryParams.runtime,
       logger: normalizeLogger(registryParams.logger),
       registerTool: (tool, opts) => registerTool(record, tool, opts),
       registerHttpHandler: (handler) => registerHttpHandler(record, handler),
