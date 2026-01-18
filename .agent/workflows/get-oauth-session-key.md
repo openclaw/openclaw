@@ -12,6 +12,42 @@ This workflow helps you obtain the CLAUDE_AI_SESSION_KEY needed for Clawdbot aut
 - **No credit limits**: No "credit balance too low" errors
 - **Full features**: Access to Claude's latest models
 
+---
+
+## Quick Method (Recommended)
+
+### Step 1: Login via Claude Code
+
+```bash
+claude login
+```
+
+Or trong Claude Code session, chạy `/login`.
+
+### Step 2: Sync Credentials to K8s
+
+```bash
+bash .agent/sync-claude-credentials/scripts/sync.sh
+```
+
+Script sẽ tự động:
+- Đọc credentials từ `~/.claude/.credentials.json`
+- Cập nhật `CLAUDE_AI_SESSION_KEY` trong `k8s/secret.yaml`
+
+### Step 3: Apply và Restart
+
+```bash
+kubectl apply -f k8s/secret.yaml && kubectl delete pod -n clawdbot -l app=clawdbot
+```
+
+Done! Skip to **Step 7** để verify.
+
+---
+
+## Manual Method (Browser)
+
+Sử dụng nếu `claude login` không hoạt động.
+
 ## Step 1: Login to Claude.ai
 
 1. Open browser and go to: **https://claude.ai**

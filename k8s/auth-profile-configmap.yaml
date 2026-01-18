@@ -33,6 +33,19 @@ data:
     }
     EOF
       echo "✅ Auth profile created with Claude AI Session Key (OAuth)"
+      
+      # Create oauth.json with actual session token
+      CREDS_DIR="/home/node/.clawdbot/credentials"
+      mkdir -p "$CREDS_DIR"
+      cat > "$CREDS_DIR/oauth.json" <<OAUTH_EOF
+    {
+      "anthropic": {
+        "sessionKey": "$CLAUDE_AI_SESSION_KEY"
+      }
+    }
+    OAUTH_EOF
+      chmod 600 "$CREDS_DIR/oauth.json"
+      echo "✅ OAuth credentials stored at $CREDS_DIR/oauth.json"
     elif [ -n "$ANTHROPIC_API_KEY" ] && [ "$ANTHROPIC_API_KEY" != "sk-ant-placeholder" ]; then
       cat > "$AUTH_FILE" <<'EOF'
     {
