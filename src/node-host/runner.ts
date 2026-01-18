@@ -19,6 +19,12 @@ import {
   saveExecApprovals,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import {
+  requestExecHostViaSocket,
+  type ExecHostRequest,
+  type ExecHostResponse,
+  type ExecHostRunResult,
+} from "../infra/exec-host.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 
@@ -85,6 +91,9 @@ type ExecEventPayload = {
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
+
+const execHostEnforced = process.env.CLAWDBOT_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
+const execHostFallbackAllowed = process.env.CLAWDBOT_NODE_EXEC_FALLBACK?.trim() === "1";
 
 const blockedEnvKeys = new Set([
   "PATH",
@@ -303,6 +312,18 @@ function buildExecEventPayload(payload: ExecEventPayload): ExecEventPayload {
   if (!trimmed) return payload;
   const { text } = truncateOutput(trimmed, OUTPUT_EVENT_TAIL);
   return { ...payload, output: text };
+}
+
+async function runViaMacAppExecHost(params: {
+  approvals: ReturnType<typeof resolveExecApprovals>;
+  request: ExecHostRequest;
+}): Promise<ExecHostResponse | null> {
+  const { approvals, request } = params;
+  return await requestExecHostViaSocket({
+    socketPath: approvals.socketPath,
+    token: approvals.token,
+    request,
+  });
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
@@ -554,6 +575,87 @@ async function handleInvoke(
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
   const skillAllow =
     autoAllowSkills && resolution?.executableName ? bins.has(resolution.executableName) : false;
+
+  const useMacAppExec = process.platform === "darwin" && (execHostEnforced || !execHostFallbackAllowed);
+  if (useMacAppExec) {
+    const execRequest: ExecHostRequest = {
+      command: argv,
+      rawCommand: rawCommand || null,
+      cwd: params.cwd ?? null,
+      env: params.env ?? null,
+      timeoutMs: params.timeoutMs ?? null,
+      needsScreenRecording: params.needsScreenRecording ?? null,
+      agentId: agentId ?? null,
+      sessionKey: sessionKey ?? null,
+    };
+    const response = await runViaMacAppExecHost({ approvals, request: execRequest });
+    if (!response) {
+      client.sendEvent(
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: "companion-unavailable",
+        }),
+      );
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
+        },
+      });
+      return;
+    }
+
+    if (!response.ok) {
+      const reason = response.error.reason ?? "approval-required";
+      client.sendEvent(
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason,
+        }),
+      );
+      client.sendInvokeResponse({
+        type: "invoke-res",
+        id: frame.id,
+        ok: false,
+        error: { code: "UNAVAILABLE", message: response.error.message },
+      });
+      return;
+    }
+
+    const result: ExecHostRunResult = response.payload;
+    const combined = [result.stdout, result.stderr, result.error].filter(Boolean).join("\n");
+    client.sendEvent(
+      "exec.finished",
+      buildExecEventPayload({
+        sessionKey,
+        runId,
+        host: "node",
+        command: cmdText,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        success: result.success,
+        output: combined,
+      }),
+    );
+    client.sendInvokeResponse({
+      type: "invoke-res",
+      id: frame.id,
+      ok: true,
+      payloadJSON: JSON.stringify(result),
+    });
+    return;
+  }
 
   if (security === "deny") {
     client.sendEvent(

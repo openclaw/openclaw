@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-5
+
+### Changes
+- Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
+
 ## 2026.1.18-4
 
 ### Changes
@@ -24,11 +29,6 @@ Docs: https://docs.clawd.bot
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
 - Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
 
-## 2026.1.18-5
-
-### Changes
-- Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
-
 ## 2026.1.18-3
 
 ### Changes
@@ -45,6 +45,14 @@ Docs: https://docs.clawd.bot
 - Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
 - Docs: add node host CLI + update exec approvals/bridge protocol docs. https://docs.clawd.bot/cli/node
 - ACP: add experimental ACP support for IDE integrations (`clawdbot acp`). Thanks @visionik.
+- Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
+- Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
+- Memory: add `--verbose` logging for memory status + batch indexing details.
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
+- macOS: add per-agent exec approvals with allowlists, skill CLI auto-allow, and settings UI.
+- Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
+- macOS: add exec-host IPC for node service `system.run` with HMAC + peer UID checks.
 
 ### Fixes
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
@@ -56,6 +64,23 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Tests: stabilize plugin SDK resolution and embedded agent timeouts.
+
+## 2026.1.18-1
+
+### Changes
+- Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
+- Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
+- Memory: add `--verbose` logging for memory status + batch indexing details.
+- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
+- macOS: add per-agent exec approvals with allowlists, skill CLI auto-allow, and settings UI.
+- Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
+
+### Fixes
+- Memory: apply OpenAI batch defaults even without explicit remote config.
+- macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
+- Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
+- Discord: only emit slow listener warnings after 30s.
 
 ## 2026.1.17-6
 
