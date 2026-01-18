@@ -5,11 +5,6 @@ Docs: https://docs.clawd.bot
 ## 2026.1.17-7
 
 ### Changes
-- Docs: outline planned macOS node-service IPC and app-owned exec flow.
-- Memory: add Gemini native embeddings support and auto-select providers when keys are available. (#1167) — thanks @gumadeiras.
-- Memory: add Gemini batch indexing and atomic reindexing for memory stores. (#1167) — thanks @gumadeiras.
-- CLI: show memory status/index across agents with richer source detail. (#1167) — thanks @gumadeiras.
-- Docs: refresh FAQ for node approvals, session resets, and memory provider defaults. (#1167) — thanks @gumadeiras.
 - Exec approvals: add `clawdbot approvals` CLI for viewing and updating gateway/node allowlists.
 - CLI: add `clawdbot service` gateway/node management and a `clawdbot node status` alias.
 - Status: show gateway + node service summaries in `clawdbot status` and `status --all`.
@@ -21,16 +16,16 @@ Docs: https://docs.clawd.bot
 - Swabble: use the tagged Commander Swift package release.
 - CLI: add `clawdbot acp client` interactive ACP harness for debugging.
 - Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
-- Memory: add native Gemini embeddings provider for memory search. (#1151) — thanks @gumadeiras.
+- Memory: add native Gemini embeddings provider for memory search. (#1151)
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
 - Slack: add HTTP webhook mode via Bolt HTTP receiver for Events API deployments. (#1143) — thanks @jdrhyne.
-- Nodes: report core/ui versions in node list + presence; surface both in CLI + macOS UI.
 - Exec: add host/security/ask routing for gateway + node exec.
 - Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node).
 - macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.
 - macOS: add approvals socket UI server + node exec lifecycle events.
 - Nodes: add headless node host (`clawdbot node start`) for `system.run`/`system.which`.
 - Nodes: add node daemon service install/status/start/stop/restart.
+- Hooks: run `BOOT.md` on gateway startup with the boot-md hook. (#1164) — thanks @ngutman.
 - Bridge: add `skills.bins` RPC to support node host auto-allow skill bins.
 - Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
 - Sessions: add daily reset policy with per-type overrides and idle windows (default 4am local), preserving legacy idle-only configs. (#1146) — thanks @austinm911.
@@ -47,15 +42,13 @@ Docs: https://docs.clawd.bot
 - Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
 
 ### Fixes
-- Tools: clamp bash foreground duration using shared helpers. (#1167) — thanks @gumadeiras.
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
 - Agents: sanitize oversized image payloads before send and surface image-dimension errors.
 - macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
-- Memory: index atomically so failed reindex preserves the previous memory database. (#1151) — thanks @gumadeiras.
+- Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
 - Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
-- Skills: improve remote bin probe logging with node labels + connectivity hints.
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
-- Exec approvals: fix command token parsing for PATH resolution. (#1167) — thanks @gumadeiras.
+- Exec approvals: parse command tokens correctly for PATH and relative resolution.
 - Tools: return a companion-app-required message when node exec is requested with no paired node.
 - Streaming: emit assistant deltas for OpenAI-compatible SSE chunks. (#1147) — thanks @alauppe.
 - Model fallback: treat timeout aborts as failover while preserving user aborts. (#1137) — thanks @cheeeee.
@@ -90,22 +83,6 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Voice call: include request query in Twilio webhook verification when publicUrl is set. (#864)
 
-## 2026.1.18-1
-
-### Changes
-- Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
-- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
-- Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
-- Memory: add `--verbose` logging for memory status + batch indexing details.
-- Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
-- macOS: add per-agent exec approvals with allowlists, skill CLI auto-allow, and settings UI.
-- Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
-
-### Fixes
-- Memory: apply OpenAI batch defaults even without explicit remote config.
-- macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
-- Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
-- Discord: only emit slow listener warnings after 30s.
 ## 2026.1.17-3
 
 ### Changes

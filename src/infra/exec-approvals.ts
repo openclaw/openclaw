@@ -242,7 +242,7 @@ function parseFirstToken(command: string): string | null {
     if (end > 1) return trimmed.slice(1, end);
     return trimmed.slice(1);
   }
-  const match = /^\S+/.exec(trimmed);
+  const match = /^[^\s]+/.exec(trimmed);
   return match ? match[0] : null;
 }
 
