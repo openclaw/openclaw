@@ -11,6 +11,9 @@ Docs: https://docs.clawd.bot
 - Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
 - Tools: centralize plugin tool policy helpers.
 
+### Fixes
+- Voice call: include request query in Twilio webhook verification when publicUrl is set. (#864)
+
 ## 2026.1.18-1
 
 ### Changes
