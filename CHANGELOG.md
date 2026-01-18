@@ -28,6 +28,7 @@ Docs: https://docs.clawd.bot
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
 - Tools: return a companion-app-required message when node exec is requested with no paired node.
 - Streaming: emit assistant deltas for OpenAI-compatible SSE chunks. (#1147) — thanks @alauppe.
+- Model fallback: treat timeout aborts as failover while preserving user aborts. (#1137) — thanks @cheeeee.
 
 ## 2026.1.18-2
 

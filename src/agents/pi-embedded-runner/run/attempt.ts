@@ -66,6 +66,7 @@ import { splitSdkTools } from "../tool-split.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { isTimeoutError } from "../../failover-error.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -353,25 +354,38 @@ export async function runEmbeddedAttempt(
 
       let aborted = Boolean(params.abortSignal?.aborted);
       let timedOut = false;
-      const abortRun = (isTimeout = false) => {
+      const getAbortReason = (signal: AbortSignal): unknown =>
+        "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
+      const makeTimeoutAbortReason = (): Error => {
+        const err = new Error("request timed out");
+        err.name = "TimeoutError";
+        return err;
+      };
+      const makeAbortError = (signal: AbortSignal): Error => {
+        const reason = getAbortReason(signal);
+        const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
+        err.name = "AbortError";
+        return err;
+      };
+      const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) timedOut = true;
-        runAbortController.abort();
+        if (isTimeout) {
+          runAbortController.abort(reason ?? makeTimeoutAbortReason());
+        } else {
+          runAbortController.abort(reason);
+        }
         void activeSession.abort();
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> => {
         const signal = runAbortController.signal;
         if (signal.aborted) {
-          const err = new Error("aborted");
-          (err as { name?: string }).name = "AbortError";
-          return Promise.reject(err);
+          return Promise.reject(makeAbortError(signal));
         }
         return new Promise<T>((resolve, reject) => {
           const onAbort = () => {
-            const err = new Error("aborted");
-            (err as { name?: string }).name = "AbortError";
             signal.removeEventListener("abort", onAbort);
-            reject(err);
+            reject(makeAbortError(signal));
           };
           signal.addEventListener("abort", onAbort, { once: true });
           promise.then(
@@ -448,7 +462,11 @@ export async function runEmbeddedAttempt(
 
       let messagesSnapshot: AgentMessage[] = [];
       let sessionIdUsed = activeSession.sessionId;
-      const onAbort = () => abortRun();
+      const onAbort = () => {
+        const reason = params.abortSignal ? getAbortReason(params.abortSignal) : undefined;
+        const timeout = reason ? isTimeoutError(reason) : false;
+        abortRun(timeout, reason);
+      };
       if (params.abortSignal) {
         if (params.abortSignal.aborted) {
           onAbort();
