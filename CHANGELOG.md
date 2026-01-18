@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.17-6
 
 ### Changes
+- Memory: render progress immediately and poll OpenAI batch status more frequently (default 500ms).
 - Plugins: add exclusive plugin slots with a dedicated memory slot selector.
 - Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
 - Docs: document plugin slots and memory plugin behavior.
