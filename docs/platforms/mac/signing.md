@@ -14,6 +14,7 @@ This app is usually built from [`scripts/package-mac-app.sh`](https://github.com
 - inject build metadata into Info.plist: `ClawdbotBuildTimestamp` (UTC) and `ClawdbotGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - **Packaging requires Node 22+**: the script runs TS builds and the Control UI build.
 - reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert. Ad-hoc signing requires explicit opt-in via `ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY="-"` (not recommended for permission testing).
+- runs a Team ID audit after signing and fails if any Mach-O inside the app bundle is signed by a different Team ID. Set `SKIP_TEAM_ID_CHECK=1` to bypass.
 
 ## Usage
 
@@ -23,6 +24,7 @@ scripts/package-mac-app.sh               # auto-selects identity; errors if none
 SIGN_IDENTITY="Developer ID Application: Your Name" scripts/package-mac-app.sh   # real cert
 ALLOW_ADHOC_SIGNING=1 scripts/package-mac-app.sh    # ad-hoc (permissions will not stick)
 SIGN_IDENTITY="-" scripts/package-mac-app.sh        # explicit ad-hoc (same caveat)
+DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Team ID mismatch workaround
 ```
 
 ### Ad-hoc Signing Note
