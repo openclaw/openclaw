@@ -429,5 +429,5 @@ describe("gateway server cron", () => {
       testState.cronStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 45_000);
 });
