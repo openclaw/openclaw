@@ -20,6 +20,10 @@ node.
 - Optionally hosts **PeekabooBridge** for UI automation.
 - Installs the global CLI (`clawdbot`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
 
+Planned:
+- Run a headless **node service** locally (launchd).
+- Keep `system.run` in the app (UI/TCC context), with the node service forwarding via IPC.
+
 ## Local vs remote mode
 
 - **Local** (default): the app ensures a local Gateway is running via launchd.
@@ -53,6 +57,18 @@ The macOS app presents itself as a node. Common commands:
 - System: `system.run`, `system.notify`
 
 The node reports a `permissions` map so agents can decide what’s allowed.
+
+Planned split:
+- Node service advertises the node surface to the Gateway.
+- macOS app performs `system.run` in UI context over IPC.
+
+Diagram (SCI):
+```
+Gateway -> Bridge -> Node Service (TS)
+                 |  IPC (UDS + token + HMAC + TTL)
+                 v
+             Mac App (UI + TCC + system.run)
+```
 
 ## Exec approvals (system.run)
 
