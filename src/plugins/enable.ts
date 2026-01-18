@@ -37,7 +37,6 @@ export function enablePluginInConfig(cfg: ClawdbotConfig, pluginId: string): Plu
     ...cfg,
     plugins: {
       ...cfg.plugins,
-      ...(cfg.plugins?.enabled === false ? { enabled: true } : {}),
       entries,
     },
   };
