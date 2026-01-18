@@ -119,6 +119,7 @@ export {
 } from "../config/sessions.js";
 export { resolveStateDir } from "../config/paths.js";
 export { loadConfig } from "../config/config.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export { danger } from "../globals.js";
 export { logVerbose, shouldLogVerbose } from "../globals.js";
 export { getChildLogger } from "../logging.js";
