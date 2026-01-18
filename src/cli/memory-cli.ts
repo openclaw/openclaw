@@ -103,6 +103,35 @@ export function registerMemoryCli(program: Command) {
                 progress.tick();
               });
               if (opts.index) {
+                const startedAt = Date.now();
+                let lastLabel = "Indexing memory…";
+                let lastCompleted = 0;
+                let lastTotal = 0;
+                const formatElapsed = () => {
+                  const elapsedMs = Math.max(0, Date.now() - startedAt);
+                  const seconds = Math.floor(elapsedMs / 1000);
+                  const minutes = Math.floor(seconds / 60);
+                  const remainingSeconds = seconds % 60;
+                  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+                };
+                const formatEta = () => {
+                  if (lastTotal <= 0 || lastCompleted <= 0) return null;
+                  const elapsedMs = Math.max(1, Date.now() - startedAt);
+                  const rate = lastCompleted / elapsedMs;
+                  if (!Number.isFinite(rate) || rate <= 0) return null;
+                  const remainingMs = Math.max(0, (lastTotal - lastCompleted) / rate);
+                  const seconds = Math.floor(remainingMs / 1000);
+                  const minutes = Math.floor(seconds / 60);
+                  const remainingSeconds = seconds % 60;
+                  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+                };
+                const buildLabel = () => {
+                  const elapsed = formatElapsed();
+                  const eta = formatEta();
+                  return eta
+                    ? `${lastLabel} · elapsed ${elapsed} · eta ${eta}`
+                    : `${lastLabel} · elapsed ${elapsed}`;
+                };
                 await withProgressTotals(
                   {
                     label: "Indexing memory…",
@@ -110,22 +139,30 @@ export function registerMemoryCli(program: Command) {
                     fallback: opts.verbose ? "line" : undefined,
                   },
                   async (update, progress) => {
+                    const interval = setInterval(() => {
+                      progress.setLabel(buildLabel());
+                    }, 1000);
                     try {
                       await manager.sync({
                         reason: "cli",
                         progress: (syncUpdate) => {
+                          if (syncUpdate.label) lastLabel = syncUpdate.label;
+                          lastCompleted = syncUpdate.completed;
+                          lastTotal = syncUpdate.total;
                           update({
                             completed: syncUpdate.completed,
                             total: syncUpdate.total,
-                            label: syncUpdate.label,
+                            label: buildLabel(),
                           });
-                          if (syncUpdate.label) progress.setLabel(syncUpdate.label);
+                          progress.setLabel(buildLabel());
                         },
                       });
                     } catch (err) {
                       indexError = formatErrorMessage(err);
                       defaultRuntime.error(`Memory index failed: ${indexError}`);
                       process.exitCode = 1;
+                    } finally {
+                      clearInterval(interval);
                     }
                   },
                 );
@@ -300,7 +337,66 @@ export function registerMemoryCli(program: Command) {
                 defaultRuntime.log(lines.join("\n"));
                 defaultRuntime.log("");
               }
-              await manager.sync({ reason: "cli", force: opts.force });
+              const startedAt = Date.now();
+              let lastLabel = "Indexing memory…";
+              let lastCompleted = 0;
+              let lastTotal = 0;
+              const formatElapsed = () => {
+                const elapsedMs = Math.max(0, Date.now() - startedAt);
+                const seconds = Math.floor(elapsedMs / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = seconds % 60;
+                return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+              };
+              const formatEta = () => {
+                if (lastTotal <= 0 || lastCompleted <= 0) return null;
+                const elapsedMs = Math.max(1, Date.now() - startedAt);
+                const rate = lastCompleted / elapsedMs;
+                if (!Number.isFinite(rate) || rate <= 0) return null;
+                const remainingMs = Math.max(0, (lastTotal - lastCompleted) / rate);
+                const seconds = Math.floor(remainingMs / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = seconds % 60;
+                return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+              };
+              const buildLabel = () => {
+                const elapsed = formatElapsed();
+                const eta = formatEta();
+                return eta
+                  ? `${lastLabel} · elapsed ${elapsed} · eta ${eta}`
+                  : `${lastLabel} · elapsed ${elapsed}`;
+              };
+              await withProgressTotals(
+                {
+                  label: "Indexing memory…",
+                  total: 0,
+                  fallback: opts.verbose ? "line" : undefined,
+                },
+                async (update, progress) => {
+                  const interval = setInterval(() => {
+                    progress.setLabel(buildLabel());
+                  }, 1000);
+                  try {
+                    await manager.sync({
+                      reason: "cli",
+                      force: opts.force,
+                      progress: (syncUpdate) => {
+                        if (syncUpdate.label) lastLabel = syncUpdate.label;
+                        lastCompleted = syncUpdate.completed;
+                        lastTotal = syncUpdate.total;
+                        update({
+                          completed: syncUpdate.completed,
+                          total: syncUpdate.total,
+                          label: buildLabel(),
+                        });
+                        progress.setLabel(buildLabel());
+                      },
+                    });
+                  } finally {
+                    clearInterval(interval);
+                  }
+                },
+              );
               defaultRuntime.log(`Memory index updated (${agentId}).`);
             } catch (err) {
               const message = formatErrorMessage(err);
