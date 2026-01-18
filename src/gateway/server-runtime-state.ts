@@ -20,9 +20,7 @@ import type { DedupeEntry } from "./server-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
 export async function createGatewayRuntimeState(params: {
-  cfg: {
-    canvasHost?: { root?: string; enabled?: boolean; liveReload?: boolean };
-  };
+  cfg: import("../config/config.js").ClawdbotConfig;
   bindHost: string;
   port: number;
   controlUiEnabled: boolean;

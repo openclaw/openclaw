@@ -1,4 +1,6 @@
-import { App } from "@slack/bolt";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+import { App, HTTPReceiver } from "@slack/bolt";
 
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -14,6 +16,7 @@ import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
+import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
@@ -49,11 +52,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const sessionScope: SessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
+  const slackMode = opts.mode ?? account.config.mode ?? "socket";
+  const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
+  const signingSecret = account.config.signingSecret?.trim();
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
-  if (!botToken || !appToken) {
+  if (!botToken || (slackMode !== "http" && !appToken)) {
+    const missing =
+      slackMode === "http"
+        ? `Slack bot token missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken or SLACK_BOT_TOKEN for default).`
+        : `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`;
+    throw new Error(missing);
+  }
+  if (slackMode === "http" && !signingSecret) {
     throw new Error(
-      `Slack bot + app tokens missing for account "${account.accountId}" (set channels.slack.accounts.${account.accountId}.botToken/appToken or SLACK_BOT_TOKEN/SLACK_APP_TOKEN for default).`,
+      `Slack signing secret missing for account "${account.accountId}" (set channels.slack.signingSecret or channels.slack.accounts.${account.accountId}.signingSecret).`,
     );
   }
 
@@ -102,11 +115,32 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
 
-  const app = new App({
-    token: botToken,
-    appToken,
-    socketMode: true,
-  });
+  const receiver =
+    slackMode === "http"
+      ? new HTTPReceiver({
+          signingSecret: signingSecret ?? "",
+          endpoints: slackWebhookPath,
+        })
+      : null;
+  const app = new App(
+    slackMode === "socket"
+      ? {
+          token: botToken,
+          appToken,
+          socketMode: true,
+        }
+      : {
+          token: botToken,
+          receiver: receiver ?? undefined,
+        },
+  );
+  const slackHttpHandler =
+    slackMode === "http" && receiver
+      ? async (req: IncomingMessage, res: ServerResponse) => {
+          await Promise.resolve(receiver.requestListener(req, res));
+        }
+      : null;
+  let unregisterHttpHandler: (() => void) | null = null;
 
   let botUserId = "";
   let teamId = "";
@@ -164,6 +198,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   registerSlackMonitorEvents({ ctx, account, handleSlackMessage });
   registerSlackMonitorSlashCommands({ ctx, account });
+  if (slackMode === "http" && slackHttpHandler) {
+    unregisterHttpHandler = registerSlackHttpHandler({
+      path: slackWebhookPath,
+      handler: slackHttpHandler,
+      log: runtime.log,
+      accountId: account.accountId,
+    });
+  }
 
   if (resolveToken) {
     void (async () => {
@@ -284,13 +326,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   const stopOnAbort = () => {
-    if (opts.abortSignal?.aborted) void app.stop();
+    if (opts.abortSignal?.aborted && slackMode === "socket") void app.stop();
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
   try {
-    await app.start();
-    runtime.log?.("slack socket mode connected");
+    if (slackMode === "socket") {
+      await app.start();
+      runtime.log?.("slack socket mode connected");
+    } else {
+      runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
+    }
     if (opts.abortSignal?.aborted) return;
     await new Promise<void>((resolve) => {
       opts.abortSignal?.addEventListener("abort", () => resolve(), {
@@ -299,6 +345,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
+    unregisterHttpHandler?.();
     await app.stop().catch(() => undefined);
   }
 }

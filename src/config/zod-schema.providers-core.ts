@@ -258,6 +258,9 @@ export const SlackThreadSchema = z.object({
 
 export const SlackAccountSchema = z.object({
   name: z.string().optional(),
+  mode: z.enum(["socket", "http"]).optional(),
+  signingSecret: z.string().optional(),
+  webhookPath: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   commands: ProviderCommandsSchema,
@@ -305,7 +308,35 @@ export const SlackAccountSchema = z.object({
 });
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
+  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  signingSecret: z.string().optional(),
+  webhookPath: z.string().optional().default("/slack/events"),
   accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  const baseMode = value.mode ?? "socket";
+  if (baseMode === "http" && !value.signingSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
+      path: ["signingSecret"],
+    });
+  }
+  if (!value.accounts) return;
+  for (const [accountId, account] of Object.entries(value.accounts)) {
+    if (!account) continue;
+    if (account.enabled === false) continue;
+    const accountMode = account.mode ?? baseMode;
+    if (accountMode !== "http") continue;
+    const accountSecret = account.signingSecret ?? value.signingSecret;
+    if (!accountSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
+        path: ["accounts", accountId, "signingSecret"],
+      });
+    }
+  }
 });
 
 export const SignalAccountSchemaBase = z.object({

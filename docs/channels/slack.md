@@ -1,11 +1,13 @@
 ---
-summary: "Slack socket mode setup and Clawdbot config"
-read_when: "Setting up Slack or debugging Slack socket mode"
+summary: "Slack setup for socket or HTTP webhook mode"
+read_when: "Setting up Slack or debugging Slack socket/HTTP mode"
 ---
 
-# Slack (socket mode)
+# Slack
 
-## Quick setup (beginner)
+## Socket mode (default)
+
+### Quick setup (beginner)
 1) Create a Slack app and enable **Socket Mode**.
 2) Create an **App Token** (`xapp-...`) and **Bot Token** (`xoxb-...`).
 3) Set tokens for Clawdbot and start the gateway.
@@ -23,7 +25,7 @@ Minimal config:
 }
 ```
 
-## Setup
+### Setup
 1) Create a Slack app (From scratch) in https://api.channels.slack.com/apps.
 2) **Socket Mode** → toggle on. Then go to **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** with scope `connections:write`. Copy the **App Token** (`xapp-...`).
 3) **OAuth & Permissions** → add bot token scopes (use the manifest below). Click **Install to Workspace**. Copy the **Bot User OAuth Token** (`xoxb-...`).
@@ -43,7 +45,7 @@ Use the manifest below so scopes and events stay in sync.
 
 Multi-account support: use `channels.slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-## Clawdbot config (minimal)
+### Clawdbot config (minimal)
 
 Set tokens via env vars (recommended):
 - `SLACK_APP_TOKEN=xapp-...`
@@ -63,7 +65,7 @@ Or via config:
 }
 ```
 
-## User token (optional)
+### User token (optional)
 Clawdbot can use a Slack user token (`xoxp-...`) for read operations (history,
 pins, reactions, emoji, member info). By default this stays read-only: reads
 prefer the user token when present, and writes still use the bot token unless
@@ -102,18 +104,51 @@ Example with userTokenReadOnly explicitly set (allow user token writes):
 }
 ```
 
-### Token usage
+#### Token usage
 - Read operations (history, reactions list, pins list, emoji list, member info,
   search) prefer the user token when configured, otherwise the bot token.
 - Write operations (send/edit/delete messages, add/remove reactions, pin/unpin,
   file uploads) use the bot token by default. If `userTokenReadOnly: false` and
   no bot token is available, Clawdbot falls back to the user token.
 
-## History context
+### History context
 - `channels.slack.historyLimit` (or `channels.slack.accounts.*.historyLimit`) controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
-## Manifest (optional)
+## HTTP mode (Events API)
+Use HTTP webhook mode when your Gateway is reachable by Slack over HTTPS (typical for server deployments).
+HTTP mode uses the Events API + Interactivity + Slash Commands with a shared request URL.
+
+### Setup
+1) Create a Slack app and **disable Socket Mode** (optional if you only use HTTP).
+2) **Basic Information** → copy the **Signing Secret**.
+3) **OAuth & Permissions** → install the app and copy the **Bot User OAuth Token** (`xoxb-...`).
+4) **Event Subscriptions** → enable events and set the **Request URL** to your gateway webhook path (default `/slack/events`).
+5) **Interactivity & Shortcuts** → enable and set the same **Request URL**.
+6) **Slash Commands** → set the same **Request URL** for your command(s).
+
+Example request URL:
+`https://gateway-host/slack/events`
+
+### Clawdbot config (minimal)
+```json5
+{
+  channels: {
+    slack: {
+      enabled: true,
+      mode: "http",
+      botToken: "xoxb-...",
+      signingSecret: "your-signing-secret",
+      webhookPath: "/slack/events"
+    }
+  }
+}
+```
+
+Multi-account HTTP mode: set `channels.slack.accounts.<id>.mode = "http"` and provide a unique
+`webhookPath` per account so each Slack app can point to its own URL.
+
+### Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want). Include the
 user scopes if you plan to configure a user token.
 

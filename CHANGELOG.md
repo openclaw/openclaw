@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 - Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
 - Memory: add native Gemini embeddings provider for memory search. (#1151)
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
+- Slack: add HTTP webhook mode via Bolt HTTP receiver for Events API deployments. (#1143) — thanks @jdrhyne.
 
 ### Fixes
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
