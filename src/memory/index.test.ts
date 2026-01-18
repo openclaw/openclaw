@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
+let embedBatchCalls = 0;
+
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
     const alpha = lower.split("alpha").length - 1;
     const beta = lower.split("beta").length - 1;
-    return [alpha, beta, 1];
+    return [alpha, beta];
   };
   return {
     createEmbeddingProvider: async (options: { model?: string }) => ({
@@ -20,7 +22,10 @@ vi.mock("./embeddings.js", () => {
         id: "mock",
         model: options.model ?? "mock-embed",
         embedQuery: async (text: string) => embedText(text),
-        embedBatch: async (texts: string[]) => texts.map(embedText),
+        embedBatch: async (texts: string[]) => {
+          embedBatchCalls += 1;
+          return texts.map(embedText);
+        },
       },
     }),
   };
@@ -32,12 +37,13 @@ describe("memory index", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
+    embedBatchCalls = 0;
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
     await fs.mkdir(path.join(workspaceDir, "memory"));
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-01-12.md"),
-      "# Log\nAlpha memory line.\nAnother line.",
+      "# Log\nAlpha memory line.\nZebra memory line.\nAnother line.",
     );
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Beta knowledge base entry.");
   });
@@ -144,6 +150,35 @@ describe("memory index", () => {
     manager = second.manager;
     const results = await second.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("reuses cached embeddings on forced reindex", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+            cache: { enabled: true },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+    await manager.sync({ force: true });
+    const afterFirst = embedBatchCalls;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    await manager.sync({ force: true });
+    expect(embedBatchCalls).toBe(afterFirst);
   });
 
   it("reports vector availability after probe", async () => {

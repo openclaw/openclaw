@@ -192,6 +192,12 @@ export type MemorySearchConfig = {
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
     };
+    cache?: {
+      /** Enable embedding cache (default: true). */
+      enabled?: boolean;
+      /** Optional max cache entries per provider/model. */
+      maxEntries?: number;
+    };
   };
   /** Chunking configuration. */
   chunking?: {
@@ -210,6 +216,23 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    hybrid?: {
+      /** Enable hybrid BM25 + vector search (default: true). */
+      enabled?: boolean;
+      /** Weight for vector similarity when merging results (0-1). */
+      vectorWeight?: number;
+      /** Weight for BM25 text relevance when merging results (0-1). */
+      textWeight?: number;
+      /** Multiplier for candidate pool size (default: 4). */
+      candidateMultiplier?: number;
+    };
+  };
+  /** Index cache behavior. */
+  cache?: {
+    /** Cache chunk embeddings in SQLite (default: true). */
+    enabled?: boolean;
+    /** Optional cap on cached embeddings (best-effort). */
+    maxEntries?: number;
   };
 };
 

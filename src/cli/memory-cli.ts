@@ -178,8 +178,20 @@ export function registerMemoryCli(program: Command) {
             if (status.vector.extensionPath) {
               lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
             }
-            if (status.vector.loadError) {
-              lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+          if (status.vector.loadError) {
+            lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+          }
+        }
+        if (status.cache) {
+          const cacheState = status.cache.enabled ? "enabled" : "disabled";
+          const cacheColor = status.cache.enabled ? theme.success : theme.muted;
+          const suffix =
+              status.cache.enabled && typeof status.cache.entries === "number"
+                ? ` (${status.cache.entries} entries)`
+                : "";
+            lines.push(`${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`);
+            if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
+              lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
             }
           }
           if (status.fallback?.reason) {

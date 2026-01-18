@@ -2,6 +2,12 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-2
+
+### Changes
+- Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
+- CLI: surface embedding cache state in `clawdbot memory status`.
+
 ## 2026.1.18-1
 
 ### Changes

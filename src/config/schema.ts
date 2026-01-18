@@ -190,6 +190,8 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
+  "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -382,11 +384,15 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.fallback":
     'Fallback to OpenAI when local embeddings fail ("openai" or "none").',
   "agents.defaults.memorySearch.store.path":
-    "SQLite index path (default: ~/.clawdbot/state/memory/{agentId}.sqlite).",
+    "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
   "agents.defaults.memorySearch.store.vector.enabled":
     "Enable sqlite-vec extension for vector search (default: true).",
   "agents.defaults.memorySearch.store.vector.extensionPath":
     "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
+  "agents.defaults.memorySearch.cache.enabled":
+    "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  "agents.defaults.memorySearch.cache.maxEntries":
+    "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
     "Lazy sync: reindex on first search after a change.",
   "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
