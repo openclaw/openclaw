@@ -99,6 +99,47 @@ describe("loadClawdbotPlugins", () => {
     const memory = registry.plugins.find((entry) => entry.id === "memory-core");
     expect(memory?.status).toBe("loaded");
   });
+
+  it("preserves package.json metadata for bundled memory plugins", () => {
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "memory-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@clawdbot/memory-core",
+        version: "1.2.3",
+        description: "Memory plugin package",
+        clawdbot: { extensions: ["./index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.ts"),
+      'export default { id: "memory-core", kind: "memory", name: "Memory (Core)", register() {} };',
+      "utf-8",
+    );
+
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      },
+    });
+
+    const memory = registry.plugins.find((entry) => entry.id === "memory-core");
+    expect(memory?.status).toBe("loaded");
+    expect(memory?.origin).toBe("bundled");
+    expect(memory?.name).toBe("Memory (Core)");
+    expect(memory?.version).toBe("1.2.3");
+  });
   it("loads plugins from config paths", () => {
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
