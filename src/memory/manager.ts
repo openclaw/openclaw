@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -19,16 +20,21 @@ import {
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
 } from "./embeddings.js";
+import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
+import { DEFAULT_OPENAI_EMBEDDING_MODEL } from "./embeddings-openai.js";
 import {
   OPENAI_BATCH_ENDPOINT,
   type OpenAiBatchRequest,
   runOpenAiEmbeddingBatches,
-} from "./openai-batch.js";
+} from "./batch-openai.js";
+import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
+  buildFileEntry,
   chunkMarkdown,
   ensureDir,
   hashText,
   isMemoryPath,
+  listMemoryFiles,
   type MemoryChunk,
   type MemoryFileEntry,
   normalizeRelPath,
@@ -37,13 +43,8 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
-import { computeMemoryManagerCacheKey } from "./manager-cache-key.js";
-import { computeEmbeddingProviderKey } from "./provider-key.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import type { SessionFileEntry } from "./session-files.js";
-import { syncMemoryFiles } from "./sync-memory-files.js";
-import { syncSessionFiles } from "./sync-session-files.js";
 
 type MemorySource = "memory" | "sessions";
 
@@ -63,6 +64,15 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
+};
+
+type SessionFileEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  content: string;
 };
 
 type MemorySyncProgressUpdate = {
@@ -104,12 +114,13 @@ export class MemoryIndexManager {
   private readonly agentId: string;
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
-  private readonly provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "gemini" | "local";
-  private readonly fallbackReason?: string;
-  private readonly openAi?: OpenAiEmbeddingClient;
-  private readonly gemini?: GeminiEmbeddingClient;
-  private readonly batch: {
+  private provider: EmbeddingProvider;
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "auto";
+  private fallbackFrom?: "openai" | "local" | "gemini";
+  private fallbackReason?: string;
+  private openAi?: OpenAiEmbeddingClient;
+  private gemini?: GeminiEmbeddingClient;
+  private batch: {
     enabled: boolean;
     wait: boolean;
     concurrency: number;
@@ -118,7 +129,7 @@ export class MemoryIndexManager {
   };
   private db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
-  private readonly providerKey: string;
+  private providerKey: string;
   private readonly cache: { enabled: boolean; maxEntries?: number };
   private readonly vector: {
     enabled: boolean;
@@ -144,7 +155,6 @@ export class MemoryIndexManager {
   private sessionsDirtyFiles = new Set<string>();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private readonly allowAtomicReindex: boolean;
 
   static async get(params: {
     cfg: ClawdbotConfig;
@@ -154,7 +164,7 @@ export class MemoryIndexManager {
     const settings = resolveMemorySearchConfig(cfg, agentId);
     if (!settings) return null;
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const key = computeMemoryManagerCacheKey({ agentId, workspaceDir, settings });
+    const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) return existing;
     const providerResult = await createEmbeddingProvider({
@@ -185,7 +195,6 @@ export class MemoryIndexManager {
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerResult: EmbeddingProviderResult;
-    options?: { allowAtomicReindex?: boolean; enableBackgroundSync?: boolean };
   }) {
     this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
@@ -194,26 +203,13 @@ export class MemoryIndexManager {
     this.settings = params.settings;
     this.provider = params.providerResult.provider;
     this.requestedProvider = params.providerResult.requestedProvider;
+    this.fallbackFrom = params.providerResult.fallbackFrom;
     this.fallbackReason = params.providerResult.fallbackReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
-    this.allowAtomicReindex = params.options?.allowAtomicReindex ?? true;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
-    this.providerKey = computeEmbeddingProviderKey({
-      providerId: this.provider.id,
-      providerModel: this.provider.model,
-      openAi: this.openAi
-        ? { baseUrl: this.openAi.baseUrl, model: this.openAi.model, headers: this.openAi.headers }
-        : undefined,
-      gemini: this.gemini
-        ? {
-            baseUrl: this.gemini.baseUrl,
-            model: this.gemini.model,
-            headers: this.gemini.headers,
-          }
-        : undefined,
-    });
+    this.providerKey = this.computeProviderKey();
     this.cache = {
       enabled: params.settings.cache.enabled,
       maxEntries: params.settings.cache.maxEntries,
@@ -229,24 +225,14 @@ export class MemoryIndexManager {
     if (meta?.vectorDims) {
       this.vector.dims = meta.vectorDims;
     }
-    const enableBackgroundSync = params.options?.enableBackgroundSync ?? true;
-    if (enableBackgroundSync) {
-      this.ensureWatcher();
-      this.ensureSessionListener();
-      this.ensureIntervalSync();
-    }
+    this.ensureWatcher();
+    this.ensureSessionListener();
+    this.ensureIntervalSync();
     this.dirty = this.sources.has("memory");
     if (this.sources.has("sessions")) {
       this.sessionsDirty = true;
     }
-    const batch = params.settings.remote?.batch;
-    this.batch = {
-      enabled: Boolean(batch?.enabled && this.openAi && this.provider.id === "openai"),
-      wait: batch?.wait ?? true,
-      concurrency: Math.max(1, batch?.concurrency ?? 2),
-      pollIntervalMs: batch?.pollIntervalMs ?? 2000,
-      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
-    };
+    this.batch = this.resolveBatchConfig();
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -502,7 +488,9 @@ export class MemoryIndexManager {
         available: this.fts.available,
         error: this.fts.loadError,
       },
-      fallback: this.fallbackReason ? { from: "local", reason: this.fallbackReason } : undefined,
+      fallback: this.fallbackReason
+        ? { from: this.fallbackFrom ?? "local", reason: this.fallbackReason }
+        : undefined,
       vector: {
         enabled: this.vector.enabled,
         available: this.vector.available ?? undefined,
@@ -624,10 +612,94 @@ export class MemoryIndexManager {
 
   private openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.path);
+    return this.openDatabaseAtPath(dbPath);
+  }
+
+  private openDatabaseAtPath(dbPath: string): DatabaseSync {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
     return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+  }
+
+  private seedEmbeddingCache(sourceDb: DatabaseSync): void {
+    if (!this.cache.enabled) return;
+    try {
+      const rows = sourceDb
+        .prepare(
+          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
+        )
+        .all() as Array<{
+        provider: string;
+        model: string;
+        provider_key: string;
+        hash: string;
+        embedding: string;
+        dims: number | null;
+        updated_at: number;
+      }>;
+      if (!rows.length) return;
+      const insert = this.db.prepare(
+        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+           embedding=excluded.embedding,
+           dims=excluded.dims,
+           updated_at=excluded.updated_at`,
+      );
+      this.db.exec("BEGIN");
+      for (const row of rows) {
+        insert.run(
+          row.provider,
+          row.model,
+          row.provider_key,
+          row.hash,
+          row.embedding,
+          row.dims,
+          row.updated_at,
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {}
+      throw err;
+    }
+  }
+
+  private async swapIndexFiles(targetPath: string, tempPath: string): Promise<void> {
+    const backupPath = `${targetPath}.backup-${randomUUID()}`;
+    await this.moveIndexFiles(targetPath, backupPath);
+    try {
+      await this.moveIndexFiles(tempPath, targetPath);
+    } catch (err) {
+      await this.moveIndexFiles(backupPath, targetPath);
+      throw err;
+    }
+    await this.removeIndexFiles(backupPath);
+  }
+
+  private async moveIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
+    const suffixes = ["", "-wal", "-shm"];
+    for (const suffix of suffixes) {
+      const source = `${sourceBase}${suffix}`;
+      const target = `${targetBase}${suffix}`;
+      try {
+        await fs.rename(source, target);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+    }
+  }
+
+  private async removeIndexFiles(basePath: string): Promise<void> {
+    const suffixes = ["", "-wal", "-shm"];
+    await Promise.all(
+      suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })),
+    );
   }
 
   private ensureSchema() {
@@ -730,44 +802,170 @@ export class MemoryIndexManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    await syncMemoryFiles({
-      workspaceDir: this.workspaceDir,
-      db: this.db,
+    const files = await listMemoryFiles(this.workspaceDir);
+    const fileEntries = await Promise.all(
+      files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
+    );
+    log.debug("memory sync: indexing memory files", {
+      files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
-      progress: params.progress,
-      batchEnabled: this.batch.enabled,
+      batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
-      runWithConcurrency: this.runWithConcurrency.bind(this),
-      indexFile: async (entry) => await this.indexFile(entry, { source: "memory" }),
-      vectorTable: VECTOR_TABLE,
-      ftsTable: FTS_TABLE,
-      ftsEnabled: this.fts.enabled,
-      ftsAvailable: this.fts.available,
-      model: this.provider.model,
     });
+    const activePaths = new Set(fileEntries.map((entry) => entry.path));
+    if (params.progress) {
+      params.progress.total += fileEntries.length;
+      params.progress.report({
+        completed: params.progress.completed,
+        total: params.progress.total,
+        label: this.batch.enabled ? "Indexing memory files (batch)..." : "Indexing memory files…",
+      });
+    }
+
+    const tasks = fileEntries.map((entry) => async () => {
+      const record = this.db
+        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+        .get(entry.path, "memory") as { hash: string } | undefined;
+      if (!params.needsFullReindex && record?.hash === entry.hash) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        return;
+      }
+      await this.indexFile(entry, { source: "memory" });
+      if (params.progress) {
+        params.progress.completed += 1;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
+    });
+    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
+
+    const staleRows = this.db
+      .prepare(`SELECT path FROM files WHERE source = ?`)
+      .all("memory") as Array<{ path: string }>;
+    for (const stale of staleRows) {
+      if (activePaths.has(stale.path)) continue;
+      this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      try {
+        this.db
+          .prepare(
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+          )
+          .run(stale.path, "memory");
+      } catch {}
+      this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      if (this.fts.enabled && this.fts.available) {
+        try {
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "memory", this.provider.model);
+        } catch {}
+      }
+    }
   }
 
   private async syncSessionFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    await syncSessionFiles({
-      agentId: this.agentId,
-      db: this.db,
-      needsFullReindex: params.needsFullReindex,
-      progress: params.progress,
-      batchEnabled: this.batch.enabled,
+    const files = await this.listSessionFiles();
+    const activePaths = new Set(files.map((file) => this.sessionPathForFile(file)));
+    const indexAll = params.needsFullReindex || this.sessionsDirtyFiles.size === 0;
+    log.debug("memory sync: indexing session files", {
+      files: files.length,
+      indexAll,
+      dirtyFiles: this.sessionsDirtyFiles.size,
+      batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
-      runWithConcurrency: this.runWithConcurrency.bind(this),
-      indexFile: async (entry) =>
-        await this.indexFile(entry, { source: "sessions", content: entry.content }),
-      vectorTable: VECTOR_TABLE,
-      ftsTable: FTS_TABLE,
-      ftsEnabled: this.fts.enabled,
-      ftsAvailable: this.fts.available,
-      model: this.provider.model,
-      dirtyFiles: this.sessionsDirtyFiles,
     });
+    if (params.progress) {
+      params.progress.total += files.length;
+      params.progress.report({
+        completed: params.progress.completed,
+        total: params.progress.total,
+        label: this.batch.enabled ? "Indexing session files (batch)..." : "Indexing session files…",
+      });
+    }
+
+    const tasks = files.map((absPath) => async () => {
+      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        return;
+      }
+      const entry = await this.buildSessionEntry(absPath);
+      if (!entry) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        return;
+      }
+      const record = this.db
+        .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
+        .get(entry.path, "sessions") as { hash: string } | undefined;
+      if (!params.needsFullReindex && record?.hash === entry.hash) {
+        if (params.progress) {
+          params.progress.completed += 1;
+          params.progress.report({
+            completed: params.progress.completed,
+            total: params.progress.total,
+          });
+        }
+        return;
+      }
+      await this.indexFile(entry, { source: "sessions", content: entry.content });
+      if (params.progress) {
+        params.progress.completed += 1;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
+    });
+    await this.runWithConcurrency(tasks, this.getIndexConcurrency());
+
+    const staleRows = this.db
+      .prepare(`SELECT path FROM files WHERE source = ?`)
+      .all("sessions") as Array<{ path: string }>;
+    for (const stale of staleRows) {
+      if (activePaths.has(stale.path)) continue;
+      this.db
+        .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
+        .run(stale.path, "sessions");
+      try {
+        this.db
+          .prepare(
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+          )
+          .run(stale.path, "sessions");
+      } catch {}
+      this.db
+        .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
+        .run(stale.path, "sessions");
+      if (this.fts.enabled && this.fts.available) {
+        try {
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "sessions", this.provider.model);
+        } catch {}
+      }
+    }
   }
 
   private createSyncProgress(
@@ -798,7 +996,7 @@ export class MemoryIndexManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progressCallback = params?.progress;
+    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
@@ -810,226 +1008,207 @@ export class MemoryIndexManager {
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
-    if (needsFullReindex && this.allowAtomicReindex) {
-      await this.runAtomicReindex({ reason: params?.reason, progress: progressCallback });
-      return;
-    }
-
-    const progress = progressCallback ? this.createSyncProgress(progressCallback) : undefined;
-    if (needsFullReindex) {
-      this.resetIndex();
-    }
-
-    const shouldSyncMemory =
-      this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
-    const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
-
-    if (shouldSyncMemory) {
-      await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-      this.dirty = false;
-    }
-
-    if (shouldSyncSessions) {
-      await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
-      this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (needsFullReindex && this.sources.has("sessions")) {
-      this.sessionsDirty = true;
-    }
-
-    const nextMeta: MemoryIndexMeta = {
-      model: this.provider.model,
-      provider: this.provider.id,
-      providerKey: this.providerKey,
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-    };
-    if (this.vector.available && this.vector.dims) {
-      nextMeta.vectorDims = this.vector.dims;
-    }
-    if (shouldSyncMemory || shouldSyncSessions || needsFullReindex) {
-      this.writeMeta(nextMeta);
-    }
-    if (shouldSyncMemory || shouldSyncSessions || needsFullReindex) {
-      this.pruneEmbeddingCacheIfNeeded();
-    }
-  }
-
-  private createScratchManager(tempPath: string): MemoryIndexManager {
-    const scratchSettings: ResolvedMemorySearchConfig = {
-      ...this.settings,
-      store: {
-        ...this.settings.store,
-        path: tempPath,
-      },
-      sync: {
-        ...this.settings.sync,
-        watch: false,
-        intervalMinutes: 0,
-      },
-    };
-
-    return new MemoryIndexManager({
-      cacheKey: `${this.cacheKey}:scratch:${Date.now()}`,
-      cfg: this.cfg,
-      agentId: this.agentId,
-      workspaceDir: this.workspaceDir,
-      settings: scratchSettings,
-      providerResult: {
-        provider: this.provider,
-        requestedProvider: this.requestedProvider,
-        fallbackReason: this.fallbackReason,
-        openAi: this.openAi,
-        gemini: this.gemini,
-      },
-      options: {
-        allowAtomicReindex: false,
-        enableBackgroundSync: false,
-      },
-    });
-  }
-
-  private buildTempIndexPath(): string {
-    const basePath = resolveUserPath(this.settings.store.path);
-    const dir = path.dirname(basePath);
-    ensureDir(dir);
-    const stamp = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-    return path.join(dir, `${path.basename(basePath)}.tmp-${stamp}`);
-  }
-
-  private seedEmbeddingCacheFrom(source: DatabaseSync): void {
-    if (!this.cache.enabled) return;
     try {
-      const insert = this.db.prepare(
-        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
-          ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
-          ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
-          `   embedding=excluded.embedding,\n` +
-          `   dims=excluded.dims,\n` +
-          `   updated_at=excluded.updated_at`,
-      );
-      const select = source.prepare(
-        `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at\n` +
-          ` FROM ${EMBEDDING_CACHE_TABLE}\n` +
-          ` WHERE provider = ? AND model = ? AND provider_key = ? AND rowid > ?\n` +
-          ` ORDER BY rowid\n` +
-          ` LIMIT ?`,
-      );
-      const batchSize = 500;
-      let lastRowId = 0;
-      while (true) {
-        const rows = select.all(
-          this.provider.id,
-          this.provider.model,
-          this.providerKey,
-          lastRowId,
-          batchSize,
-        ) as Array<{
-          rowid: number;
-          provider: string;
-          model: string;
-          provider_key: string;
-          hash: string;
-          embedding: string;
-          dims: number | null;
-          updated_at: number;
-        }>;
-        if (rows.length === 0) break;
-        for (const row of rows) {
-          insert.run(
-            row.provider,
-            row.model,
-            row.provider_key,
-            row.hash,
-            row.embedding,
-            row.dims,
-            row.updated_at,
-          );
-          lastRowId = row.rowid;
-        }
+      if (needsFullReindex) {
+        await this.runSafeReindex({
+          reason: params?.reason,
+          force: params?.force,
+          progress: progress ?? undefined,
+        });
+        return;
       }
-    } catch {
-      // Swallow cache seed errors to avoid blocking indexing.
+
+      const shouldSyncMemory =
+        this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
+      const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+
+      if (shouldSyncMemory) {
+        await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+        this.dirty = false;
+      }
+
+      if (shouldSyncSessions) {
+        await this.syncSessionFiles({ needsFullReindex, progress: progress ?? undefined });
+        this.sessionsDirty = false;
+        this.sessionsDirtyFiles.clear();
+      } else if (this.sources.has("sessions")) {
+        this.sessionsDirty = true;
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const activated =
+        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+      if (activated) {
+        await this.runSafeReindex({
+          reason: params?.reason ?? "fallback",
+          force: true,
+          progress: progress ?? undefined,
+        });
+        return;
+      }
+      throw err;
     }
   }
 
-  private reopenDatabase() {
-    this.db = this.openDatabase();
+  private shouldFallbackOnError(message: string): boolean {
+    return /embedding|embeddings|batch/i.test(message);
+  }
+
+  private resolveBatchConfig(): {
+    enabled: boolean;
+    wait: boolean;
+    concurrency: number;
+    pollIntervalMs: number;
+    timeoutMs: number;
+  } {
+    const batch = this.settings.remote?.batch;
+    const enabled = Boolean(
+      batch?.enabled &&
+        ((this.openAi && this.provider.id === "openai") ||
+          (this.gemini && this.provider.id === "gemini")),
+    );
+    return {
+      enabled,
+      wait: batch?.wait ?? true,
+      concurrency: Math.max(1, batch?.concurrency ?? 2),
+      pollIntervalMs: batch?.pollIntervalMs ?? 2000,
+      timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
+    };
+  }
+
+  private async activateFallbackProvider(reason: string): Promise<boolean> {
+    const fallback = this.settings.fallback;
+    if (!fallback || fallback === "none" || fallback === this.provider.id) return false;
+    if (this.fallbackFrom) return false;
+
+    const fallbackModel =
+      fallback === "gemini"
+        ? DEFAULT_GEMINI_EMBEDDING_MODEL
+        : fallback === "openai"
+          ? DEFAULT_OPENAI_EMBEDDING_MODEL
+          : this.settings.model;
+
+    const fallbackResult = await createEmbeddingProvider({
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      provider: fallback,
+      remote: this.settings.remote,
+      model: fallbackModel,
+      fallback: "none",
+      local: this.settings.local,
+    });
+
+    this.fallbackFrom = this.requestedProvider;
+    this.fallbackReason = reason;
+    this.provider = fallbackResult.provider;
+    this.openAi = fallbackResult.openAi;
+    this.gemini = fallbackResult.gemini;
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
+    return true;
+  }
+
+  private async runSafeReindex(params: {
+    reason?: string;
+    force?: boolean;
+    progress?: MemorySyncProgressState;
+  }): Promise<void> {
+    const dbPath = resolveUserPath(this.settings.store.path);
+    const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
+    const tempDb = this.openDatabaseAtPath(tempDbPath);
+
+    const originalDb = this.db;
+    let originalDbClosed = false;
+    const originalState = {
+      ftsAvailable: this.fts.available,
+      ftsError: this.fts.loadError,
+      vectorAvailable: this.vector.available,
+      vectorLoadError: this.vector.loadError,
+      vectorDims: this.vector.dims,
+      vectorReady: this.vectorReady,
+    };
+
+    const restoreOriginalState = () => {
+      if (originalDbClosed) {
+        this.db = this.openDatabaseAtPath(dbPath);
+      } else {
+        this.db = originalDb;
+      }
+      this.fts.available = originalState.ftsAvailable;
+      this.fts.loadError = originalState.ftsError;
+      this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
+      this.vector.loadError = originalState.vectorLoadError;
+      this.vector.dims = originalState.vectorDims;
+      this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
+    };
+
+    this.db = tempDb;
+    this.vectorReady = null;
+    this.vector.available = null;
+    this.vector.loadError = undefined;
+    this.vector.dims = undefined;
     this.fts.available = false;
     this.fts.loadError = undefined;
     this.ensureSchema();
-    this.vector.available = null;
-    this.vector.loadError = undefined;
-    this.vectorReady = null;
-    this.vector.dims = undefined;
-    const meta = this.readMeta();
-    if (meta?.vectorDims) {
-      this.vector.dims = meta.vectorDims;
-    }
-  }
 
-  private async swapIndexFile(tempPath: string): Promise<void> {
-    const dbPath = resolveUserPath(this.settings.store.path);
-    const backupPath = `${dbPath}.bak-${Date.now()}`;
-    let hasBackup = false;
-    let shouldReopen = false;
-
-    this.db.close();
+    let nextMeta: MemoryIndexMeta | null = null;
 
     try {
+      this.seedEmbeddingCache(originalDb);
+      const shouldSyncMemory = this.sources.has("memory");
+      const shouldSyncSessions = this.shouldSyncSessions(
+        { reason: params.reason, force: params.force },
+        true,
+      );
+
+      if (shouldSyncMemory) {
+        await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
+        this.dirty = false;
+      }
+
+      if (shouldSyncSessions) {
+        await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+        this.sessionsDirty = false;
+        this.sessionsDirtyFiles.clear();
+      } else if (this.sources.has("sessions")) {
+        this.sessionsDirty = true;
+      }
+
+      nextMeta = {
+        model: this.provider.model,
+        provider: this.provider.id,
+        providerKey: this.providerKey,
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+      };
+      if (this.vector.available && this.vector.dims) {
+        nextMeta.vectorDims = this.vector.dims;
+      }
+
+      this.writeMeta(nextMeta);
+      this.pruneEmbeddingCacheIfNeeded();
+
+      this.db.close();
+      originalDb.close();
+      originalDbClosed = true;
+
+      await this.swapIndexFiles(dbPath, tempDbPath);
+
+      this.db = this.openDatabaseAtPath(dbPath);
+      this.vectorReady = null;
+      this.vector.available = null;
+      this.vector.loadError = undefined;
+      this.ensureSchema();
+      this.vector.dims = nextMeta.vectorDims;
+    } catch (err) {
       try {
-        await fs.rename(dbPath, backupPath);
-        hasBackup = true;
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT") throw err;
-      }
-      await fs.rename(tempPath, dbPath);
-      shouldReopen = true;
-      if (hasBackup) {
-        await fs.rm(backupPath, { force: true });
-      }
-    } catch (err) {
-      if (hasBackup) {
-        try {
-          await fs.rename(backupPath, dbPath);
-          shouldReopen = true;
-        } catch {}
-      }
-      if (!shouldReopen) {
-        try {
-          await fs.access(dbPath);
-          shouldReopen = true;
-        } catch {}
-      }
+        this.db.close();
+      } catch {}
+      await this.removeIndexFiles(tempDbPath);
+      restoreOriginalState();
       throw err;
-    } finally {
-      await fs.rm(tempPath, { force: true });
-      if (shouldReopen) {
-        this.reopenDatabase();
-      }
     }
-  }
-
-  private async runAtomicReindex(params: {
-    reason?: string;
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) {
-    const tempPath = this.buildTempIndexPath();
-    const scratch = this.createScratchManager(tempPath);
-    try {
-      scratch.seedEmbeddingCacheFrom(this.db);
-      await scratch.sync({ reason: params.reason, force: true, progress: params.progress });
-    } catch (err) {
-      await fs.rm(tempPath, { force: true });
-      throw err;
-    } finally {
-      await scratch.close().catch(() => undefined);
-    }
-    await this.swapIndexFile(tempPath);
-    this.dirty = false;
-    this.sessionsDirty = false;
-    this.sessionsDirtyFiles.clear();
   }
 
   private resetIndex() {
@@ -1064,6 +1243,95 @@ export class MemoryIndexManager {
         `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       )
       .run(META_KEY, value);
+  }
+
+  private async listSessionFiles(): Promise<string[]> {
+    const dir = resolveSessionTranscriptsDirForAgent(this.agentId);
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      return entries
+        .filter((entry) => entry.isFile())
+        .map((entry) => entry.name)
+        .filter((name) => name.endsWith(".jsonl"))
+        .map((name) => path.join(dir, name));
+    } catch {
+      return [];
+    }
+  }
+
+  private sessionPathForFile(absPath: string): string {
+    return path.join("sessions", path.basename(absPath)).replace(/\\/g, "/");
+  }
+
+  private normalizeSessionText(value: string): string {
+    return value
+      .replace(/\s*\n+\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private extractSessionText(content: unknown): string | null {
+    if (typeof content === "string") {
+      const normalized = this.normalizeSessionText(content);
+      return normalized ? normalized : null;
+    }
+    if (!Array.isArray(content)) return null;
+    const parts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      const record = block as { type?: unknown; text?: unknown };
+      if (record.type !== "text" || typeof record.text !== "string") continue;
+      const normalized = this.normalizeSessionText(record.text);
+      if (normalized) parts.push(normalized);
+    }
+    if (parts.length === 0) return null;
+    return parts.join(" ");
+  }
+
+  private async buildSessionEntry(absPath: string): Promise<SessionFileEntry | null> {
+    try {
+      const stat = await fs.stat(absPath);
+      const raw = await fs.readFile(absPath, "utf-8");
+      const lines = raw.split("\n");
+      const collected: string[] = [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let record: unknown;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (
+          !record ||
+          typeof record !== "object" ||
+          (record as { type?: unknown }).type !== "message"
+        ) {
+          continue;
+        }
+        const message = (record as { message?: unknown }).message as
+          | { role?: unknown; content?: unknown }
+          | undefined;
+        if (!message || typeof message.role !== "string") continue;
+        if (message.role !== "user" && message.role !== "assistant") continue;
+        const text = this.extractSessionText(message.content);
+        if (!text) continue;
+        const label = message.role === "user" ? "User" : "Assistant";
+        collected.push(`${label}: ${text}`);
+      }
+      const content = collected.join("\n");
+      return {
+        path: this.sessionPathForFile(absPath),
+        absPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        hash: hashText(content),
+        content,
+      };
+    } catch (err) {
+      log.debug(`Failed reading session file ${absPath}: ${String(err)}`);
+      return null;
+    }
   }
 
   private estimateEmbeddingTokens(text: string): number {
@@ -1217,7 +1485,56 @@ export class MemoryIndexManager {
     return embeddings;
   }
 
+  private computeProviderKey(): string {
+    if (this.provider.id === "openai" && this.openAi) {
+      const entries = Object.entries(this.openAi.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "openai",
+          baseUrl: this.openAi.baseUrl,
+          model: this.openAi.model,
+          headers: entries,
+        }),
+      );
+    }
+    if (this.provider.id === "gemini" && this.gemini) {
+      const entries = Object.entries(this.gemini.headers)
+        .filter(([key]) => {
+          const lower = key.toLowerCase();
+          return lower !== "authorization" && lower !== "x-goog-api-key";
+        })
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "gemini",
+          baseUrl: this.gemini.baseUrl,
+          model: this.gemini.model,
+          headers: entries,
+        }),
+      );
+    }
+    return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
+  }
+
   private async embedChunksWithBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    if (this.provider.id === "openai" && this.openAi) {
+      return this.embedChunksWithOpenAiBatch(chunks, entry, source);
+    }
+    if (this.provider.id === "gemini" && this.gemini) {
+      return this.embedChunksWithGeminiBatch(chunks, entry, source);
+    }
+    return this.embedChunksInBatches(chunks);
+  }
+
+  private async embedChunksWithOpenAiBatch(
     chunks: MemoryChunk[],
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
@@ -1262,6 +1579,68 @@ export class MemoryIndexManager {
     }
     const byCustomId = await runOpenAiEmbeddingBatches({
       openAi: this.openAi,
+      agentId: this.agentId,
+      requests,
+      wait: this.batch.wait,
+      concurrency: this.batch.concurrency,
+      pollIntervalMs: this.batch.pollIntervalMs,
+      timeoutMs: this.batch.timeoutMs,
+      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+    });
+
+    const toCache: Array<{ hash: string; embedding: number[] }> = [];
+    for (const [customId, embedding] of byCustomId.entries()) {
+      const mapped = mapping.get(customId);
+      if (!mapped) continue;
+      embeddings[mapped.index] = embedding;
+      toCache.push({ hash: mapped.hash, embedding });
+    }
+    this.upsertEmbeddingCache(toCache);
+    return embeddings;
+  }
+
+  private async embedChunksWithGeminiBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    if (!this.gemini) {
+      return this.embedChunksInBatches(chunks);
+    }
+    if (chunks.length === 0) return [];
+    const cached = this.loadEmbeddingCache(chunks.map((chunk) => chunk.hash));
+    const embeddings: number[][] = Array.from({ length: chunks.length }, () => []);
+    const missing: Array<{ index: number; chunk: MemoryChunk }> = [];
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      const hit = chunk?.hash ? cached.get(chunk.hash) : undefined;
+      if (hit && hit.length > 0) {
+        embeddings[i] = hit;
+      } else if (chunk) {
+        missing.push({ index: i, chunk });
+      }
+    }
+
+    if (missing.length === 0) return embeddings;
+
+    const requests: GeminiBatchRequest[] = [];
+    const mapping = new Map<string, { index: number; hash: string }>();
+    for (const item of missing) {
+      const chunk = item.chunk;
+      const customId = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${item.index}`,
+      );
+      mapping.set(customId, { index: item.index, hash: chunk.hash });
+      requests.push({
+        custom_id: customId,
+        content: { parts: [{ text: chunk.text }] },
+        taskType: "RETRIEVAL_DOCUMENT",
+      });
+    }
+
+    const byCustomId = await runGeminiEmbeddingBatches({
+      gemini: this.gemini,
       agentId: this.agentId,
       requests,
       wait: this.batch.wait,
