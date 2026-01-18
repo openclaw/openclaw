@@ -10,7 +10,10 @@ Docs: https://docs.clawd.bot
 - Docs: clarify allowlist input types and onboarding behavior for messaging channels.
 
 ### Fixes
+- Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
+- Docs: make docs:list fail fast with a clear error if the docs directory is missing.
 - macOS: load menu session previews asynchronously so items populate while the menu is open.
+- macOS: use label colors for session preview text so previews render in menu subviews.
 - Telegram: honor pairing allowlists for native slash commands.
 
 ## 2026.1.18-4
