@@ -19,6 +19,22 @@ type MemoryStatusSnapshot = ReturnType<(typeof MemoryIndexManager)["prototype"][
   agentId: string;
 };
 
+type MemoryPluginStatus = {
+  enabled: boolean;
+  slot: string | null;
+  reason?: string;
+};
+
+function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPluginStatus {
+  const pluginsEnabled = cfg.plugins?.enabled !== false;
+  if (!pluginsEnabled) return { enabled: false, slot: null, reason: "plugins disabled" };
+  const raw = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
+  if (raw && raw.toLowerCase() === "none") {
+    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+  }
+  return { enabled: true, slot: raw || "memory-core" };
+}
+
 export type StatusScanResult = {
   cfg: ReturnType<typeof loadConfig>;
   osSummary: ReturnType<typeof resolveOsSummary>;
@@ -37,6 +53,7 @@ export type StatusScanResult = {
   channels: Awaited<ReturnType<typeof buildChannelsTable>>;
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
+  memoryPlugin: MemoryPluginStatus;
 };
 
 export async function scanStatus(
@@ -129,7 +146,10 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Checking memory…");
+      const memoryPlugin = resolveMemoryPluginStatus(cfg);
       const memory = await (async (): Promise<MemoryStatusSnapshot | null> => {
+        if (!memoryPlugin.enabled) return null;
+        if (memoryPlugin.slot !== "memory-core") return null;
         const agentId = agentStatus.defaultId ?? "main";
         const manager = await MemoryIndexManager.get({ cfg, agentId }).catch(() => null);
         if (!manager) return null;
@@ -167,6 +187,7 @@ export async function scanStatus(
         channels,
         summary,
         memory,
+        memoryPlugin,
       };
     },
   );
