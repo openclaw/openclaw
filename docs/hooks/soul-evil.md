@@ -45,6 +45,8 @@ Then set the config:
 }
 ```
 
+Create `SOUL_EVIL.md` in the agent workspace root (next to `SOUL.md`).
+
 ## Options
 
 - `file` (string): alternate SOUL filename (default: `SOUL_EVIL.md`)

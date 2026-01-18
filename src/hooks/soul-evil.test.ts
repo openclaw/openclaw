@@ -2,7 +2,12 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { applySoulEvilOverride, decideSoulEvil, DEFAULT_SOUL_EVIL_FILENAME } from "./soul-evil.js";
+import {
+  applySoulEvilOverride,
+  decideSoulEvil,
+  DEFAULT_SOUL_EVIL_FILENAME,
+  resolveSoulEvilConfigFromHook,
+} from "./soul-evil.js";
 import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 
@@ -86,6 +91,27 @@ describe("decideSoulEvil", () => {
     expect(active.reason).toBe("purge");
     expect(inactive.useEvil).toBe(false);
   });
+
+  it("handles purge windows that wrap past midnight", () => {
+    const result = decideSoulEvil({
+      config: {
+        purge: { at: "23:55", duration: "10m" },
+      },
+      userTimezone: "UTC",
+      now: new Date("2026-01-02T00:02:00Z"),
+    });
+    expect(result.useEvil).toBe(true);
+    expect(result.reason).toBe("purge");
+  });
+
+  it("clamps chance above 1", () => {
+    const result = decideSoulEvil({
+      config: { chance: 2 },
+      random: () => 0.5,
+    });
+    expect(result.useEvil).toBe(true);
+    expect(result.reason).toBe("chance");
+  });
 });
 
 describe("applySoulEvilOverride", () => {
@@ -131,6 +157,57 @@ describe("applySoulEvilOverride", () => {
     expect(soul?.content).toBe("friendly");
   });
 
+  it("uses custom evil filename when configured", async () => {
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: "SOUL_EVIL_CUSTOM.md",
+      content: "chaotic",
+    });
+
+    const files = makeFiles({
+      path: path.join(tempDir, DEFAULT_SOUL_FILENAME),
+    });
+
+    const updated = await applySoulEvilOverride({
+      files,
+      workspaceDir: tempDir,
+      config: { chance: 1, file: "SOUL_EVIL_CUSTOM.md" },
+      userTimezone: "UTC",
+      random: () => 0,
+    });
+
+    const soul = updated.find((file) => file.name === DEFAULT_SOUL_FILENAME);
+    expect(soul?.content).toBe("chaotic");
+  });
+
+  it("warns and skips when evil file is empty", async () => {
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_SOUL_EVIL_FILENAME,
+      content: " ",
+    });
+
+    const warnings: string[] = [];
+    const files = makeFiles({
+      path: path.join(tempDir, DEFAULT_SOUL_FILENAME),
+    });
+
+    const updated = await applySoulEvilOverride({
+      files,
+      workspaceDir: tempDir,
+      config: { chance: 1 },
+      userTimezone: "UTC",
+      random: () => 0,
+      log: { warn: (message) => warnings.push(message) },
+    });
+
+    const soul = updated.find((file) => file.name === DEFAULT_SOUL_FILENAME);
+    expect(soul?.content).toBe("friendly");
+    expect(warnings.some((message) => message.includes("file empty"))).toBe(true);
+  });
+
   it("leaves files untouched when SOUL.md is not in bootstrap files", async () => {
     const tempDir = await makeTempWorkspace("clawdbot-soul-");
     await writeWorkspaceFile({
@@ -157,5 +234,21 @@ describe("applySoulEvilOverride", () => {
     });
 
     expect(updated).toEqual(files);
+  });
+});
+
+describe("resolveSoulEvilConfigFromHook", () => {
+  it("returns null and warns when config is invalid", () => {
+    const warnings: string[] = [];
+    const result = resolveSoulEvilConfigFromHook(
+      { file: 42, chance: "nope", purge: "later" },
+      { warn: (message) => warnings.push(message) },
+    );
+    expect(result).toBeNull();
+    expect(warnings).toEqual([
+      "soul-evil config: file must be a string",
+      "soul-evil config: chance must be a number",
+      "soul-evil config: purge must be an object",
+    ]);
   });
 });
