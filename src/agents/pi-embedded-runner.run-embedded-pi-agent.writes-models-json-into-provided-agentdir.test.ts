@@ -78,6 +78,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
               ? buildAssistantErrorMessage(model)
               : buildAssistantMessage(model),
         });
+        stream.end();
       });
       return stream;
     },
@@ -112,6 +113,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
 
 const ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
   ensureClawdbotModelsJson(cfg, agentDir);
+
+const testSessionKey = "agent:test:embedded-models";
+const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -169,7 +173,7 @@ describe("runEmbeddedPiAgent", () => {
     await expect(
       runEmbeddedPiAgent({
         sessionId: "session:test",
-        sessionKey: "agent:dev:test",
+        sessionKey: testSessionKey,
         sessionFile,
         workspaceDir,
         config: cfg,
@@ -178,6 +182,7 @@ describe("runEmbeddedPiAgent", () => {
         model: "definitely-not-a-model",
         timeoutMs: 1,
         agentDir,
+        enqueue: immediateEnqueue,
       }),
     ).rejects.toThrow(/Unknown model:/);
 
@@ -193,7 +198,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -202,6 +207,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     const messages = await readSessionMessages(sessionFile);
@@ -224,7 +230,7 @@ describe("runEmbeddedPiAgent", () => {
 
     const result = await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -233,6 +239,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-error",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
     expect(result.payloads[0]?.isError).toBe(true);
 

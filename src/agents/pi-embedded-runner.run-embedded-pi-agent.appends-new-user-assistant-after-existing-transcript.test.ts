@@ -78,6 +78,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
               ? buildAssistantErrorMessage(model)
               : buildAssistantMessage(model),
         });
+        stream.end();
       });
       return stream;
     },
@@ -112,6 +113,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
 
 const ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
   ensureClawdbotModelsJson(cfg, agentDir);
+
+const testSessionKey = "agent:test:embedded-ordering";
+const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
   if (typeof content === "string") return content;
@@ -179,7 +183,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -188,6 +192,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     const messages = await readSessionMessages(sessionFile);
@@ -219,7 +224,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -228,11 +233,12 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -241,6 +247,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     const messages = await readSessionMessages(sessionFile);
@@ -306,7 +313,7 @@ describe("runEmbeddedPiAgent", () => {
 
     const result = await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -315,6 +322,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     expect(result.meta.error).toBeUndefined();
@@ -339,7 +347,7 @@ describe("runEmbeddedPiAgent", () => {
 
     const result = await runEmbeddedPiAgent({
       sessionId: "session:test",
-      sessionKey: "agent:main:main",
+      sessionKey: testSessionKey,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -348,6 +356,7 @@ describe("runEmbeddedPiAgent", () => {
       model: "mock-1",
       timeoutMs: 5_000,
       agentDir,
+      enqueue: immediateEnqueue,
     });
 
     expect(result.meta.error).toBeUndefined();
