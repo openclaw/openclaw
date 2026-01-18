@@ -14,6 +14,25 @@ const installRegistry = async () => {
   setActivePluginRegistry(
     createTestRegistry([
       {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          id: "discord",
+          meta: {
+            id: "discord",
+            label: "Discord",
+            selectionLabel: "Discord",
+            docsPath: "/channels/discord",
+            blurb: "Discord test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
         pluginId: "whatsapp",
         source: "test",
         plugin: {

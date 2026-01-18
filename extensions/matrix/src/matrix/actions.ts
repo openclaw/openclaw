@@ -15,7 +15,7 @@ import type {
   RoomTopicEventContent,
 } from "matrix-js-sdk/lib/@types/state_events.js";
 
-import { loadConfig } from "clawdbot/plugin-sdk";
+import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import {
@@ -74,12 +74,14 @@ async function resolveActionClient(opts: MatrixActionClientOpts = {}): Promise<M
   const shouldShareClient = Boolean(process.env.CLAWDBOT_GATEWAY_PORT);
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
-      cfg: loadConfig() as CoreConfig,
+      cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
       timeoutMs: opts.timeoutMs,
     });
     return { client, stopOnDone: false };
   }
-  const auth = await resolveMatrixAuth({ cfg: loadConfig() as CoreConfig });
+  const auth = await resolveMatrixAuth({
+    cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,
+  });
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
     userId: auth.userId,

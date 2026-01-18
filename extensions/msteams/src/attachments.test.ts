@@ -1,15 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { PluginRuntime } from "clawdbot/plugin-sdk";
+import { setMSTeamsRuntime } from "./runtime.js";
+
 const detectMimeMock = vi.fn(async () => "image/png");
 const saveMediaBufferMock = vi.fn(async () => ({
   path: "/tmp/saved.png",
   contentType: "image/png",
 }));
 
-vi.mock("clawdbot/plugin-sdk", () => ({
-  detectMime: (...args: unknown[]) => detectMimeMock(...args),
-  saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
-}));
+const runtimeStub = {
+  media: {
+    detectMime: (...args: unknown[]) => detectMimeMock(...args),
+  },
+  channel: {
+    media: {
+      saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
+    },
+  },
+} as unknown as PluginRuntime;
 
 describe("msteams attachments", () => {
   const load = async () => {
@@ -19,6 +28,7 @@ describe("msteams attachments", () => {
   beforeEach(() => {
     detectMimeMock.mockClear();
     saveMediaBufferMock.mockClear();
+    setMSTeamsRuntime(runtimeStub);
   });
 
   describe("buildMSTeamsAttachmentPlaceholder", () => {

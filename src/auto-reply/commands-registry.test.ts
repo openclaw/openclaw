@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   buildCommandText,
@@ -10,6 +10,16 @@ import {
   normalizeCommandBody,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+
+beforeEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+});
 
 describe("commands registry", () => {
   it("builds command text with args", () => {

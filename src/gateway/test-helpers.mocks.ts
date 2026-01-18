@@ -346,6 +346,8 @@ vi.mock("../commands/status.js", () => ({
 vi.mock("../web/outbound.js", () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+  sendPollWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 vi.mock("../channels/web/index.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/web/index.js")>(

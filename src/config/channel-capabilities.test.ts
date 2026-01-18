@@ -7,11 +7,11 @@ import type { ClawdbotConfig } from "./config.js";
 
 describe("resolveChannelCapabilities", () => {
   beforeEach(() => {
-    setActivePluginRegistry(emptyRegistry);
+    setActivePluginRegistry(baseRegistry);
   });
 
   afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
+    setActivePluginRegistry(baseRegistry);
   });
 
   it("returns undefined for missing inputs", () => {
@@ -139,7 +139,26 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   diagnostics: [],
 });
 
-const emptyRegistry = createRegistry([]);
+const createStubPlugin = (id: string): ChannelPlugin => ({
+  id,
+  meta: {
+    id,
+    label: id,
+    selectionLabel: id,
+    docsPath: `/channels/${id}`,
+    blurb: "test stub.",
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => [],
+    resolveAccount: () => ({}),
+  },
+});
+
+const baseRegistry = createRegistry([
+  { pluginId: "telegram", source: "test", plugin: createStubPlugin("telegram") },
+  { pluginId: "slack", source: "test", plugin: createStubPlugin("slack") },
+]);
 
 const createMSTeamsPlugin = (): ChannelPlugin => ({
   id: "msteams",

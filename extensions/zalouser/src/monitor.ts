@@ -1,17 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 
 import type { ClawdbotConfig, RuntimeEnv } from "clawdbot/plugin-sdk";
-import {
-  finalizeInboundContext,
-  formatAgentEnvelope,
-  isControlCommandMessage,
-  mergeAllowlist,
-  recordSessionMetaFromInbound,
-  resolveCommandAuthorizedFromAuthorizers,
-  resolveStorePath,
-  shouldComputeCommandAuthorized,
-  summarizeMapping,
-} from "clawdbot/plugin-sdk";
+import { mergeAllowlist, summarizeMapping } from "clawdbot/plugin-sdk";
 import { sendMessageZalouser } from "./send.js";
 import type {
   ResolvedZalouserAccount,
@@ -193,7 +183,10 @@ async function processMessage(
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = content.trim();
-  const shouldComputeAuth = shouldComputeCommandAuthorized(rawBody, config);
+  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
+    rawBody,
+    config,
+  );
   const storeAllowFrom =
     !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("zalouser").catch(() => [])
@@ -202,7 +195,7 @@ async function processMessage(
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = isSenderAllowed(senderId, effectiveAllowFrom);
   const commandAuthorized = shouldComputeAuth
-    ? resolveCommandAuthorizedFromAuthorizers({
+    ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [{ configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands }],
       })
@@ -258,7 +251,11 @@ async function processMessage(
     }
   }
 
-  if (isGroup && isControlCommandMessage(rawBody, config) && commandAuthorized !== true) {
+  if (
+    isGroup &&
+    core.channel.commands.isControlCommandMessage(rawBody, config) &&
+    commandAuthorized !== true
+  ) {
     logVerbose(core, runtime, `zalouser: drop control command from unauthorized sender ${senderId}`);
     return;
   }
@@ -277,14 +274,14 @@ async function processMessage(
   });
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const body = formatAgentEnvelope({
+  const body = core.channel.reply.formatAgentEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: timestamp ? timestamp * 1000 : undefined,
     body: rawBody,
   });
 
-  const ctxPayload = finalizeInboundContext({
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
     RawBody: rawBody,
     CommandBody: rawBody,
@@ -304,10 +301,10 @@ async function processMessage(
     OriginatingTo: `zalouser:${chatId}`,
   });
 
-  const storePath = resolveStorePath(config.session?.store, {
+  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
     agentId: route.agentId,
   });
-  void recordSessionMetaFromInbound({
+  void core.channel.session.recordSessionMetaFromInbound({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
     ctx: ctxPayload,

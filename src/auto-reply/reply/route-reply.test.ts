@@ -48,6 +48,7 @@ vi.mock("../../telegram/send.js", () => ({
 }));
 vi.mock("../../web/outbound.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
+  sendPollWhatsApp: mocks.sendMessageWhatsApp,
 }));
 vi.mock("../../infra/outbound/deliver.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(

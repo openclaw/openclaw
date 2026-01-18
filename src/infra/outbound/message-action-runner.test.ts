@@ -26,7 +26,15 @@ const whatsappConfig = {
 } as ClawdbotConfig;
 
 describe("runMessageAction context isolation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { createPluginRuntime } = await import("../../plugins/runtime/index.js");
+    const { setSlackRuntime } = await import("../../../extensions/slack/src/runtime.js");
+    const { setTelegramRuntime } = await import("../../../extensions/telegram/src/runtime.js");
+    const { setWhatsAppRuntime } = await import("../../../extensions/whatsapp/src/runtime.js");
+    const runtime = createPluginRuntime();
+    setSlackRuntime(runtime);
+    setTelegramRuntime(runtime);
+    setWhatsAppRuntime(runtime);
     setActivePluginRegistry(
       createTestRegistry([
         {

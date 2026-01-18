@@ -4,9 +4,11 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import { handleWhatsAppAction } from "./whatsapp-actions.js";
 
 const sendReactionWhatsApp = vi.fn(async () => undefined);
+const sendPollWhatsApp = vi.fn(async () => ({ messageId: "poll-1", toJid: "jid-1" }));
 
 vi.mock("../../web/outbound.js", () => ({
   sendReactionWhatsApp: (...args: unknown[]) => sendReactionWhatsApp(...args),
+  sendPollWhatsApp: (...args: unknown[]) => sendPollWhatsApp(...args),
 }));
 
 const enabledConfig = {
