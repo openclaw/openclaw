@@ -53,7 +53,7 @@ final class TailscaleService {
     #endif
 
     func checkAppInstallation() -> Bool {
-        let installed = FileManager.default.fileExists(atPath: "/Applications/Tailscale.app")
+        let installed = FileManager().fileExists(atPath: "/Applications/Tailscale.app")
         self.logger.info("Tailscale app installed: \(installed)")
         return installed
     }

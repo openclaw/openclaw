@@ -69,8 +69,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.isEmpty {
             let indexA = sessionRoot.appendingPathComponent("index.html", isDirectory: false)
             let indexB = sessionRoot.appendingPathComponent("index.htm", isDirectory: false)
-            if !FileManager.default.fileExists(atPath: indexA.path),
-               !FileManager.default.fileExists(atPath: indexB.path)
+            if !FileManager().fileExists(atPath: indexA.path),
+               !FileManager().fileExists(atPath: indexB.path)
             {
                 return self.scaffoldPage(sessionRoot: sessionRoot)
             }
@@ -106,7 +106,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func resolveFileURL(sessionRoot: URL, requestPath: String) -> URL? {
-        let fm = FileManager.default
+        let fm = FileManager()
         var candidate = sessionRoot.appendingPathComponent(requestPath, isDirectory: false)
 
         var isDir: ObjCBool = false
@@ -137,7 +137,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func resolveIndex(in dir: URL) -> URL? {
-        let fm = FileManager.default
+        let fm = FileManager()
         let a = dir.appendingPathComponent("index.html", isDirectory: false)
         if fm.fileExists(atPath: a.path) { return a }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)

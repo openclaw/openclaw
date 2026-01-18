@@ -109,7 +109,7 @@ enum TestIsolation {
     }
 
     nonisolated static func tempConfigPath() -> String {
-        FileManager.default.temporaryDirectory
+        FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-test-config-\(UUID().uuidString).json")
             .path
     }

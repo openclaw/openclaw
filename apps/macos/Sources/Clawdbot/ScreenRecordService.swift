@@ -42,10 +42,10 @@ final class ScreenRecordService {
             if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return URL(fileURLWithPath: outPath)
             }
-            return FileManager.default.temporaryDirectory
+            return FileManager().temporaryDirectory
                 .appendingPathComponent("clawdbot-screen-record-\(UUID().uuidString).mp4")
         }()
-        try? FileManager.default.removeItem(at: outURL)
+        try? FileManager().removeItem(at: outURL)
 
         let content = try await SCShareableContent.current
         let displays = content.displays.sorted { $0.displayID < $1.displayID }

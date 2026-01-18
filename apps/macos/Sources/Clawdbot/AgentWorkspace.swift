@@ -23,7 +23,7 @@ enum AgentWorkspace {
     }
 
     static func displayPath(for url: URL) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = FileManager().homeDirectoryForCurrentUser.path
         let path = url.path
         if path == home { return "~" }
         if path.hasPrefix(home + "/") {
@@ -44,12 +44,12 @@ enum AgentWorkspace {
     }
 
     static func workspaceEntries(workspaceURL: URL) throws -> [String] {
-        let contents = try FileManager.default.contentsOfDirectory(atPath: workspaceURL.path)
+        let contents = try FileManager().contentsOfDirectory(atPath: workspaceURL.path)
         return contents.filter { !self.ignoredEntries.contains($0) }
     }
 
     static func isWorkspaceEmpty(workspaceURL: URL) -> Bool {
-        let fm = FileManager.default
+        let fm = FileManager()
         var isDir: ObjCBool = false
         if !fm.fileExists(atPath: workspaceURL.path, isDirectory: &isDir) {
             return true
@@ -66,7 +66,7 @@ enum AgentWorkspace {
     }
 
     static func bootstrapSafety(for workspaceURL: URL) -> BootstrapSafety {
-        let fm = FileManager.default
+        let fm = FileManager()
         var isDir: ObjCBool = false
         if !fm.fileExists(atPath: workspaceURL.path, isDirectory: &isDir) {
             return .safe
@@ -90,29 +90,29 @@ enum AgentWorkspace {
 
     static func bootstrap(workspaceURL: URL) throws -> URL {
         let shouldSeedBootstrap = self.isWorkspaceEmpty(workspaceURL: workspaceURL)
-        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: workspaceURL, withIntermediateDirectories: true)
         let agentsURL = self.agentsURL(workspaceURL: workspaceURL)
-        if !FileManager.default.fileExists(atPath: agentsURL.path) {
+        if !FileManager().fileExists(atPath: agentsURL.path) {
             try self.defaultTemplate().write(to: agentsURL, atomically: true, encoding: .utf8)
             self.logger.info("Created AGENTS.md at \(agentsURL.path, privacy: .public)")
         }
         let soulURL = workspaceURL.appendingPathComponent(self.soulFilename)
-        if !FileManager.default.fileExists(atPath: soulURL.path) {
+        if !FileManager().fileExists(atPath: soulURL.path) {
             try self.defaultSoulTemplate().write(to: soulURL, atomically: true, encoding: .utf8)
             self.logger.info("Created SOUL.md at \(soulURL.path, privacy: .public)")
         }
         let identityURL = workspaceURL.appendingPathComponent(self.identityFilename)
-        if !FileManager.default.fileExists(atPath: identityURL.path) {
+        if !FileManager().fileExists(atPath: identityURL.path) {
             try self.defaultIdentityTemplate().write(to: identityURL, atomically: true, encoding: .utf8)
             self.logger.info("Created IDENTITY.md at \(identityURL.path, privacy: .public)")
         }
         let userURL = workspaceURL.appendingPathComponent(self.userFilename)
-        if !FileManager.default.fileExists(atPath: userURL.path) {
+        if !FileManager().fileExists(atPath: userURL.path) {
             try self.defaultUserTemplate().write(to: userURL, atomically: true, encoding: .utf8)
             self.logger.info("Created USER.md at \(userURL.path, privacy: .public)")
         }
         let bootstrapURL = workspaceURL.appendingPathComponent(self.bootstrapFilename)
-        if shouldSeedBootstrap, !FileManager.default.fileExists(atPath: bootstrapURL.path) {
+        if shouldSeedBootstrap, !FileManager().fileExists(atPath: bootstrapURL.path) {
             try self.defaultBootstrapTemplate().write(to: bootstrapURL, atomically: true, encoding: .utf8)
             self.logger.info("Created BOOTSTRAP.md at \(bootstrapURL.path, privacy: .public)")
         }
@@ -120,7 +120,7 @@ enum AgentWorkspace {
     }
 
     static func needsBootstrap(workspaceURL: URL) -> Bool {
-        let fm = FileManager.default
+        let fm = FileManager()
         var isDir: ObjCBool = false
         if !fm.fileExists(atPath: workspaceURL.path, isDirectory: &isDir) {
             return true
@@ -305,7 +305,7 @@ enum AgentWorkspace {
         if let dev = self.devTemplateURL(named: named) {
             urls.append(dev)
         }
-        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let cwd = URL(fileURLWithPath: FileManager().currentDirectoryPath)
         urls.append(cwd.appendingPathComponent("docs")
             .appendingPathComponent(self.templateDirname)
             .appendingPathComponent(named))

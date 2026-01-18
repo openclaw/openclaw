@@ -6,7 +6,7 @@ import Testing
 struct ClawdbotOAuthStoreTests {
     @Test
     func returnsMissingWhenFileAbsent() {
-        let url = FileManager.default.temporaryDirectory
+        let url = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)")
             .appendingPathComponent("oauth.json")
         #expect(ClawdbotOAuthStore.anthropicOAuthStatus(at: url) == .missingFile)
@@ -24,7 +24,7 @@ struct ClawdbotOAuthStoreTests {
             }
         }
 
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
         setenv(key, dir.path, 1)
 
@@ -85,9 +85,9 @@ struct ClawdbotOAuthStoreTests {
     }
 
     private func writeOAuthFile(_ json: [String: Any]) throws -> URL {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
 
         let url = dir.appendingPathComponent("oauth.json")
         let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])

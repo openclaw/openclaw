@@ -25,7 +25,7 @@ final class CanvasManager {
     var defaultAnchorProvider: (() -> NSRect?)?
 
     private nonisolated static let canvasRoot: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("Clawdbot/canvas", isDirectory: true)
     }()
 
@@ -83,7 +83,7 @@ final class CanvasManager {
         self.panelSessionKey = nil
 
         Self.logger.debug("showDetailed ensure canvas root dir")
-        try FileManager.default.createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
         Self.logger.debug("showDetailed init CanvasWindowController")
         let controller = try CanvasWindowController(
             sessionKey: session,
@@ -258,7 +258,7 @@ final class CanvasManager {
         // (Avoid treating Canvas routes like "/" as filesystem paths.)
         if trimmed.hasPrefix("/") {
             var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
+            if FileManager().fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
                 return URL(fileURLWithPath: trimmed)
             }
         }
@@ -293,7 +293,7 @@ final class CanvasManager {
     }
 
     private static func localStatus(sessionDir: URL, target: String) -> CanvasShowStatus {
-        let fm = FileManager.default
+        let fm = FileManager()
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first
             .map(String.init) ?? trimmed
@@ -331,7 +331,7 @@ final class CanvasManager {
     }
 
     private static func indexExists(in dir: URL) -> Bool {
-        let fm = FileManager.default
+        let fm = FileManager()
         let a = dir.appendingPathComponent("index.html", isDirectory: false)
         if fm.fileExists(atPath: a.path) { return true }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)

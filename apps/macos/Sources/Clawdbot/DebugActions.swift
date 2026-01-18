@@ -26,7 +26,7 @@ enum DebugActions {
     static func openLog() {
         let path = self.pinoLogPath()
         let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: path) else {
+        guard FileManager().fileExists(atPath: path) else {
             let alert = NSAlert()
             alert.messageText = "Log file not found"
             alert.informativeText = path
@@ -38,7 +38,7 @@ enum DebugActions {
 
     @MainActor
     static func openConfigFolder() {
-        let url = FileManager.default
+        let url = FileManager()
             .homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot", isDirectory: true)
         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -55,7 +55,7 @@ enum DebugActions {
         }
         let path = self.resolveSessionStorePath()
         let url = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: path) {
+        if FileManager().fileExists(atPath: path) {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } else {
             NSWorkspace.shared.open(url.deletingLastPathComponent())
@@ -195,7 +195,7 @@ enum DebugActions {
     @MainActor
     private static func resolveSessionStorePath() -> String {
         let defaultPath = SessionLoader.defaultStorePath
-        let configURL = FileManager.default.homeDirectoryForCurrentUser
+        let configURL = FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot/clawdbot.json")
         guard
             let data = try? Data(contentsOf: configURL),

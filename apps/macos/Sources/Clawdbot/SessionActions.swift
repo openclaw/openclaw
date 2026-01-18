@@ -66,12 +66,12 @@ enum SessionActions {
                 let dir = URL(fileURLWithPath: storePath).deletingLastPathComponent()
                 urls.append(dir.appendingPathComponent("\(sessionId).jsonl"))
             }
-            let home = FileManager.default.homeDirectoryForCurrentUser
+            let home = FileManager().homeDirectoryForCurrentUser
             urls.append(home.appendingPathComponent(".clawdbot/sessions/\(sessionId).jsonl"))
             return urls
         }()
 
-        let existing = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        let existing = candidates.first(where: { FileManager().fileExists(atPath: $0.path) })
         guard let url = existing else {
             let alert = NSAlert()
             alert.messageText = "Session log not found"

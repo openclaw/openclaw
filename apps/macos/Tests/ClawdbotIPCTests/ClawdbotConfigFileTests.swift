@@ -6,7 +6,7 @@ import Testing
 struct ClawdbotConfigFileTests {
     @Test
     func configPathRespectsEnvOverride() async {
-        let override = FileManager.default.temporaryDirectory
+        let override = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-config-\(UUID().uuidString)")
             .appendingPathComponent("clawdbot.json")
             .path
@@ -19,7 +19,7 @@ struct ClawdbotConfigFileTests {
     @MainActor
     @Test
     func remoteGatewayPortParsesAndMatchesHost() async {
-        let override = FileManager.default.temporaryDirectory
+        let override = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-config-\(UUID().uuidString)")
             .appendingPathComponent("clawdbot.json")
             .path
@@ -42,7 +42,7 @@ struct ClawdbotConfigFileTests {
     @MainActor
     @Test
     func setRemoteGatewayUrlPreservesScheme() async {
-        let override = FileManager.default.temporaryDirectory
+        let override = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-config-\(UUID().uuidString)")
             .appendingPathComponent("clawdbot.json")
             .path
@@ -64,7 +64,7 @@ struct ClawdbotConfigFileTests {
 
     @Test
     func stateDirOverrideSetsConfigPath() async {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-state-\(UUID().uuidString)", isDirectory: true)
             .path
 

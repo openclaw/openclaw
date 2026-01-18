@@ -167,20 +167,20 @@ actor CameraCaptureService {
         defer { session.stopRunning() }
         await Self.warmUpCaptureSession()
 
-        let tmpMovURL = FileManager.default.temporaryDirectory
+        let tmpMovURL = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mov")
-        defer { try? FileManager.default.removeItem(at: tmpMovURL) }
+        defer { try? FileManager().removeItem(at: tmpMovURL) }
 
         let outputURL: URL = {
             if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return URL(fileURLWithPath: outPath)
             }
-            return FileManager.default.temporaryDirectory
+            return FileManager().temporaryDirectory
                 .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mp4")
         }()
 
         // Ensure we don't fail exporting due to an existing file.
-        try? FileManager.default.removeItem(at: outputURL)
+        try? FileManager().removeItem(at: outputURL)
 
         let logger = self.logger
         var delegate: MovieFileDelegate?

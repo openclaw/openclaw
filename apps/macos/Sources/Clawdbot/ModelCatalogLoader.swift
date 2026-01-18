@@ -2,7 +2,7 @@ import Foundation
 import JavaScriptCore
 
 enum ModelCatalogLoader {
-    static let defaultPath: String = FileManager.default.homeDirectoryForCurrentUser
+    static let defaultPath: String = FileManager().homeDirectoryForCurrentUser
         .appendingPathComponent("Projects/pi-mono/packages/ai/src/models.generated.ts").path
     private static let logger = Logger(subsystem: "com.clawdbot", category: "models")
 

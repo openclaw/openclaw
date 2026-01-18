@@ -61,7 +61,7 @@ enum CLIInstaller {
     }
 
     private static func installPrefix() -> String {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot")
             .path
     }

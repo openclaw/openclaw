@@ -19,9 +19,9 @@ struct ModelCatalogLoaderTests {
         };
         """
 
-        let tmp = FileManager.default.temporaryDirectory
+        let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("models-\(UUID().uuidString).ts")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        defer { try? FileManager().removeItem(at: tmp) }
         try src.write(to: tmp, atomically: true, encoding: .utf8)
 
         let choices = try await ModelCatalogLoader.load(from: tmp.path)
@@ -42,9 +42,9 @@ struct ModelCatalogLoaderTests {
     @Test
     func loadWithNoExportReturnsEmptyChoices() async throws {
         let src = "const NOPE = 1;"
-        let tmp = FileManager.default.temporaryDirectory
+        let tmp = FileManager().temporaryDirectory
             .appendingPathComponent("models-\(UUID().uuidString).ts")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        defer { try? FileManager().removeItem(at: tmp) }
         try src.write(to: tmp, atomically: true, encoding: .utf8)
 
         let choices = try await ModelCatalogLoader.load(from: tmp.path)

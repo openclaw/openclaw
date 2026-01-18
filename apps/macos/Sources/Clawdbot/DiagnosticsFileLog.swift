@@ -20,8 +20,8 @@ actor DiagnosticsFileLog {
     }
 
     nonisolated static func logDirectoryURL() -> URL {
-        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library", isDirectory: true)
+        let library = FileManager().urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? FileManager().homeDirectoryForCurrentUser.appendingPathComponent("Library", isDirectory: true)
         return library
             .appendingPathComponent("Logs", isDirectory: true)
             .appendingPathComponent("Clawdbot", isDirectory: true)
@@ -43,7 +43,7 @@ actor DiagnosticsFileLog {
     }
 
     func clear() throws {
-        let fm = FileManager.default
+        let fm = FileManager()
         let base = Self.logFileURL()
         if fm.fileExists(atPath: base.path) {
             try fm.removeItem(at: base)
@@ -67,7 +67,7 @@ actor DiagnosticsFileLog {
     }
 
     private func ensureDirectory() throws {
-        try FileManager.default.createDirectory(
+        try FileManager().createDirectory(
             at: Self.logDirectoryURL(),
             withIntermediateDirectories: true)
     }
@@ -79,7 +79,7 @@ actor DiagnosticsFileLog {
         line.append(data)
         line.append(0x0A) // newline
 
-        let fm = FileManager.default
+        let fm = FileManager()
         if !fm.fileExists(atPath: url.path) {
             fm.createFile(atPath: url.path, contents: nil)
         }
@@ -92,13 +92,13 @@ actor DiagnosticsFileLog {
 
     private func rotateIfNeeded() throws {
         let url = Self.logFileURL()
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+        guard let attrs = try? FileManager().attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? NSNumber
         else { return }
 
         if size.int64Value < self.maxBytes { return }
 
-        let fm = FileManager.default
+        let fm = FileManager()
 
         let oldest = self.rotatedURL(index: self.maxBackups)
         if fm.fileExists(atPath: oldest.path) {

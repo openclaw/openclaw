@@ -409,7 +409,7 @@ extension Request: Codable {
 
 // Shared transport settings
 public let controlSocketPath =
-    FileManager.default
+    FileManager()
         .homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/clawdbot/control.sock")
         .path

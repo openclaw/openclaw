@@ -77,9 +77,9 @@ struct LowCoverageHelperTests {
     }
 
     @Test func pairedNodesStorePersists() async throws {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager().temporaryDirectory
             .appendingPathComponent("paired-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("nodes.json")
         let store = PairedNodesStore(fileURL: url)
         await store.load()
@@ -143,12 +143,12 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func canvasSchemeHandlerResolvesFilesAndErrors() throws {
-        let root = FileManager.default.temporaryDirectory
+        let root = FileManager().temporaryDirectory
             .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
         let session = root.appendingPathComponent("main", isDirectory: true)
-        try FileManager.default.createDirectory(at: session, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: session, withIntermediateDirectories: true)
 
         let index = session.appendingPathComponent("index.html")
         try "<h1>Hello</h1>".write(to: index, atomically: true, encoding: .utf8)

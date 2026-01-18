@@ -7,13 +7,13 @@ import Testing
     private func makeTempDir() throws -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let dir = base.appendingPathComponent("clawdbot-canvaswatch-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     @Test func detectsInPlaceFileWrites() async throws {
         let dir = try self.makeTempDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
+        defer { try? FileManager().removeItem(at: dir) }
 
         let file = dir.appendingPathComponent("index.html")
         try "hello".write(to: file, atomically: false, encoding: .utf8)

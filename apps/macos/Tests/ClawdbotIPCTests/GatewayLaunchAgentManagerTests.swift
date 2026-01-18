@@ -4,7 +4,7 @@ import Testing
 
 @Suite struct GatewayLaunchAgentManagerTests {
     @Test func launchAgentPlistSnapshotParsesArgsAndEnv() throws {
-        let url = FileManager.default.temporaryDirectory
+        let url = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [
             "ProgramArguments": ["clawdbot", "gateway-daemon", "--port", "18789", "--bind", "loopback"],
@@ -15,7 +15,7 @@ import Testing
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: url, options: [.atomic])
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager().removeItem(at: url) }
 
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)
@@ -25,14 +25,14 @@ import Testing
     }
 
     @Test func launchAgentPlistSnapshotAllowsMissingBind() throws {
-        let url = FileManager.default.temporaryDirectory
+        let url = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [
             "ProgramArguments": ["clawdbot", "gateway-daemon", "--port", "18789"],
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: url, options: [.atomic])
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager().removeItem(at: url) }
 
         let snapshot = try #require(LaunchAgentPlist.snapshot(url: url))
         #expect(snapshot.port == 18789)

@@ -32,7 +32,7 @@ import Testing
     }
 
     private static func swiftFiles(under root: URL) throws -> [URL] {
-        let fm = FileManager.default
+        let fm = FileManager()
         guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else {
             return []
         }

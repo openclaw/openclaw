@@ -6,9 +6,9 @@ enum CommandResolver {
 
     static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
-        if FileManager.default.isReadableFile(atPath: distEntry) { return distEntry }
+        if FileManager().isReadableFile(atPath: distEntry) { return distEntry }
         let binEntry = root.appendingPathComponent("bin/clawdbot.js").path
-        if FileManager.default.isReadableFile(atPath: binEntry) { return binEntry }
+        if FileManager().isReadableFile(atPath: binEntry) { return binEntry }
         return nil
     }
 
@@ -47,16 +47,16 @@ enum CommandResolver {
     static func projectRoot() -> URL {
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
            let url = self.expandPath(stored),
-           FileManager.default.fileExists(atPath: url.path)
+           FileManager().fileExists(atPath: url.path)
         {
             return url
         }
-        let fallback = FileManager.default.homeDirectoryForCurrentUser
+        let fallback = FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Projects/clawdbot")
-        if FileManager.default.fileExists(atPath: fallback.path) {
+        if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        return FileManager().homeDirectoryForCurrentUser
     }
 
     static func setProjectRoot(_ path: String) {
@@ -70,7 +70,7 @@ enum CommandResolver {
     static func preferredPaths() -> [String] {
         let current = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":").map(String.init) ?? []
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = FileManager().homeDirectoryForCurrentUser
         let projectRoot = self.projectRoot()
         return self.preferredPaths(home: home, current: current, projectRoot: projectRoot)
     }
@@ -99,10 +99,10 @@ enum CommandResolver {
         let bin = base.appendingPathComponent("bin")
         let nodeBin = base.appendingPathComponent("tools/node/bin")
         var paths: [String] = []
-        if FileManager.default.fileExists(atPath: bin.path) {
+        if FileManager().fileExists(atPath: bin.path) {
             paths.append(bin.path)
         }
-        if FileManager.default.fileExists(atPath: nodeBin.path) {
+        if FileManager().fileExists(atPath: nodeBin.path) {
             paths.append(nodeBin.path)
         }
         return paths
@@ -113,13 +113,13 @@ enum CommandResolver {
 
         // Volta
         let volta = home.appendingPathComponent(".volta/bin")
-        if FileManager.default.fileExists(atPath: volta.path) {
+        if FileManager().fileExists(atPath: volta.path) {
             bins.append(volta.path)
         }
 
         // asdf
         let asdf = home.appendingPathComponent(".asdf/shims")
-        if FileManager.default.fileExists(atPath: asdf.path) {
+        if FileManager().fileExists(atPath: asdf.path) {
             bins.append(asdf.path)
         }
 
@@ -137,10 +137,10 @@ enum CommandResolver {
     }
 
     private static func versionedNodeBinPaths(base: URL, suffix: String) -> [String] {
-        guard FileManager.default.fileExists(atPath: base.path) else { return [] }
+        guard FileManager().fileExists(atPath: base.path) else { return [] }
         let entries: [String]
         do {
-            entries = try FileManager.default.contentsOfDirectory(atPath: base.path)
+            entries = try FileManager().contentsOfDirectory(atPath: base.path)
         } catch {
             return []
         }
@@ -167,7 +167,7 @@ enum CommandResolver {
         for entry in sorted {
             let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
             let node = binDir.appendingPathComponent("node")
-            if FileManager.default.isExecutableFile(atPath: node.path) {
+            if FileManager().isExecutableFile(atPath: node.path) {
                 paths.append(binDir.path)
             }
         }
@@ -177,7 +177,7 @@ enum CommandResolver {
     static func findExecutable(named name: String, searchPaths: [String]? = nil) -> String? {
         for dir in searchPaths ?? self.preferredPaths() {
             let candidate = (dir as NSString).appendingPathComponent(name)
-            if FileManager.default.isExecutableFile(atPath: candidate) {
+            if FileManager().isExecutableFile(atPath: candidate) {
                 return candidate
             }
         }
@@ -191,12 +191,12 @@ enum CommandResolver {
     static func projectClawdbotExecutable(projectRoot: URL? = nil) -> String? {
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
     }
 
     static func nodeCliPath() -> String? {
         let candidate = self.projectRoot().appendingPathComponent("bin/clawdbot.js").path
-        return FileManager.default.isReadableFile(atPath: candidate) ? candidate : nil
+        return FileManager().isReadableFile(atPath: candidate) ? candidate : nil
     }
 
     static func hasAnyClawdbotInvoker(searchPaths: [String]? = nil) -> Bool {
@@ -459,7 +459,7 @@ enum CommandResolver {
     private static func expandPath(_ path: String) -> URL? {
         var expanded = path
         if expanded.hasPrefix("~") {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let home = FileManager().homeDirectoryForCurrentUser.path
             expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
         }
         return URL(fileURLWithPath: expanded)
