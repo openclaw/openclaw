@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "./health.js";
 import { healthCommand } from "./health.js";
 import { stripAnsi } from "../terminal/ansi.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
 const logWebSelfIdMock = vi.fn();
@@ -26,6 +28,32 @@ describe("healthCommand (coverage)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            id: "whatsapp",
+            meta: {
+              id: "whatsapp",
+              label: "WhatsApp",
+              selectionLabel: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+              blurb: "WhatsApp test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+            status: {
+              logSelfId: () => logWebSelfIdMock(),
+            },
+          },
+        },
+      ]),
+    );
   });
 
   it("prints the rich text summary when linked and configured", async () => {

@@ -2,8 +2,8 @@ import type { ChannelMeta } from "./plugins/types.js";
 import type { ChannelId } from "./plugins/types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 
-// Channel docking: add new channels here (order + meta + aliases), then
-// register the plugin in src/channels/plugins/index.ts and keep protocol IDs in sync.
+// Channel docking: add new core channels here (order + meta + aliases), then
+// register the plugin in its extension entrypoint and keep protocol IDs in sync.
 export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",

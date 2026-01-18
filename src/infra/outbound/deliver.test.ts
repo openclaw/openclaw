@@ -1,7 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
+import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
+import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createIMessageTestPlugin,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -20,6 +29,13 @@ vi.mock("../../config/sessions.js", async () => {
 const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
 
 describe("deliverOutboundPayloads", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(defaultRegistry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     const cfg: ClawdbotConfig = {
@@ -154,6 +170,15 @@ describe("deliverOutboundPayloads", () => {
 
   it("uses iMessage media maxBytes from agent fallback", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
     const cfg: ClawdbotConfig = {
       agents: { defaults: { mediaMaxMb: 3 } },
     };
@@ -234,3 +259,27 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 });
+
+const emptyRegistry = createTestRegistry([]);
+const defaultRegistry = createTestRegistry([
+  {
+    pluginId: "telegram",
+    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+    source: "test",
+  },
+  {
+    pluginId: "signal",
+    plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutbound }),
+    source: "test",
+  },
+  {
+    pluginId: "whatsapp",
+    plugin: createOutboundTestPlugin({ id: "whatsapp", outbound: whatsappOutbound }),
+    source: "test",
+  },
+  {
+    pluginId: "imessage",
+    plugin: createIMessageTestPlugin(),
+    source: "test",
+  },
+]);

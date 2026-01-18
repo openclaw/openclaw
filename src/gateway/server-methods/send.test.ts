@@ -8,9 +8,15 @@ const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/config.js")>(
+    "../../config/config.js",
+  );
+  return {
+    ...actual,
+    loadConfig: () => ({}),
+  };
+});
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => ({ outbound: {} }),

@@ -1,4 +1,5 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
@@ -28,8 +29,13 @@ type OutboundDeliveryMeta = {
   meta?: Record<string, unknown>;
 };
 
-const resolveChannelLabel = (channel: string) =>
-  getChannelPlugin(channel as ChannelId)?.meta.label ?? channel;
+const resolveChannelLabel = (channel: string) => {
+  const pluginLabel = getChannelPlugin(channel as ChannelId)?.meta.label;
+  if (pluginLabel) return pluginLabel;
+  const normalized = normalizeChatChannelId(channel);
+  if (normalized) return getChatChannelMeta(normalized).label;
+  return channel;
+};
 
 export function formatOutboundDeliverySummary(
   channel: string,

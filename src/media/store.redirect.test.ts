@@ -19,7 +19,7 @@ vi.doMock("node:https", () => ({
   request: (...args: unknown[]) => mockRequest(...args),
 }));
 
-const { saveMediaSource } = await import("./store.js");
+const loadStore = async () => await import("./store.js");
 
 describe("media store redirects", () => {
   beforeAll(async () => {
@@ -28,6 +28,7 @@ describe("media store redirects", () => {
 
   beforeEach(() => {
     mockRequest.mockReset();
+    vi.resetModules();
   });
 
   afterAll(async () => {
@@ -36,6 +37,7 @@ describe("media store redirects", () => {
   });
 
   it("follows redirects and keeps detected mime/extension", async () => {
+    const { saveMediaSource } = await loadStore();
     let call = 0;
     mockRequest.mockImplementation((_url, _opts, cb) => {
       call += 1;
@@ -78,6 +80,7 @@ describe("media store redirects", () => {
   });
 
   it("sniffs xlsx from zip content when headers and url extension are missing", async () => {
+    const { saveMediaSource } = await loadStore();
     mockRequest.mockImplementationOnce((_url, _opts, cb) => {
       const res = new PassThrough();
       const req = {

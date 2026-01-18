@@ -46,6 +46,14 @@ const registryCache = new Map<string, PluginRegistry>();
 
 const defaultLogger = () => createSubsystemLogger("plugins");
 
+const BUNDLED_ENABLED_BY_DEFAULT = new Set([
+  "telegram",
+  "whatsapp",
+  "discord",
+  "slack",
+  "signal",
+]);
+
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
@@ -173,6 +181,9 @@ function resolveEnableState(
   }
   if (entry?.enabled === false) {
     return { enabled: false, reason: "disabled in config" };
+  }
+  if (origin === "bundled" && BUNDLED_ENABLED_BY_DEFAULT.has(id)) {
+    return { enabled: true };
   }
   if (origin === "bundled") {
     return { enabled: false, reason: "bundled (disabled by default)" };

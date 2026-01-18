@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEnv } from "../runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { signalPlugin } from "../../extensions/signal/src/channel.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -59,6 +62,13 @@ describe("channels command", () => {
       version: 1,
       profiles: {},
     });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "signal", source: "test", plugin: signalPlugin }]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
   });
 
   it("surfaces Signal runtime errors in channels status output", () => {
@@ -81,6 +91,15 @@ describe("channels command", () => {
   });
 
   it("surfaces iMessage runtime errors in channels status output", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
     const lines = formatGatewayChannelsStatusLines({
       channelAccounts: {
         imessage: [

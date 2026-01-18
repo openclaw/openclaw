@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
@@ -114,6 +114,7 @@ describe("onboard (non-interactive): gateway auth", () => {
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
+    vi.resetModules();
 
     const token = "tok_test_123";
     const workspace = path.join(tempHome, "clawd");
