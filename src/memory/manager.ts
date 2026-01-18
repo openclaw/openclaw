@@ -897,6 +897,62 @@ export class MemoryIndexManager {
     return path.join(dir, `${path.basename(basePath)}.tmp-${stamp}`);
   }
 
+  private seedEmbeddingCacheFrom(source: DatabaseSync): void {
+    if (!this.cache.enabled) return;
+    try {
+      const insert = this.db.prepare(
+        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +
+          ` VALUES (?, ?, ?, ?, ?, ?, ?)\n` +
+          ` ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET\n` +
+          `   embedding=excluded.embedding,\n` +
+          `   dims=excluded.dims,\n` +
+          `   updated_at=excluded.updated_at`,
+      );
+      const select = source.prepare(
+        `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at\n` +
+          ` FROM ${EMBEDDING_CACHE_TABLE}\n` +
+          ` WHERE provider = ? AND model = ? AND provider_key = ? AND rowid > ?\n` +
+          ` ORDER BY rowid\n` +
+          ` LIMIT ?`,
+      );
+      const batchSize = 500;
+      let lastRowId = 0;
+      while (true) {
+        const rows = select.all(
+          this.provider.id,
+          this.provider.model,
+          this.providerKey,
+          lastRowId,
+          batchSize,
+        ) as Array<{
+          rowid: number;
+          provider: string;
+          model: string;
+          provider_key: string;
+          hash: string;
+          embedding: string;
+          dims: number | null;
+          updated_at: number;
+        }>;
+        if (rows.length === 0) break;
+        for (const row of rows) {
+          insert.run(
+            row.provider,
+            row.model,
+            row.provider_key,
+            row.hash,
+            row.embedding,
+            row.dims,
+            row.updated_at,
+          );
+          lastRowId = row.rowid;
+        }
+      }
+    } catch {
+      // Swallow cache seed errors to avoid blocking indexing.
+    }
+  }
+
   private reopenDatabase() {
     this.db = this.openDatabase();
     this.fts.available = false;
@@ -962,6 +1018,7 @@ export class MemoryIndexManager {
     const tempPath = this.buildTempIndexPath();
     const scratch = this.createScratchManager(tempPath);
     try {
+      scratch.seedEmbeddingCacheFrom(this.db);
       await scratch.sync({ reason: params.reason, force: true, progress: params.progress });
     } catch (err) {
       await fs.rm(tempPath, { force: true });

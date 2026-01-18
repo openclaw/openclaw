@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 describe("onboard (non-interactive): Vercel AI Gateway", () => {
   it("stores the API key and configures the default model", async () => {
@@ -27,8 +27,9 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
 
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-onboard-gateway-"));
     process.env.HOME = tempHome;
-    delete process.env.CLAWDBOT_STATE_DIR;
-    delete process.env.CLAWDBOT_CONFIG_PATH;
+    process.env.CLAWDBOT_STATE_DIR = tempHome;
+    process.env.CLAWDBOT_CONFIG_PATH = path.join(tempHome, "clawdbot.json");
+    vi.resetModules();
 
     const runtime = {
       log: () => {},
