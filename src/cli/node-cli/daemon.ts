@@ -46,7 +46,7 @@ type NodeDaemonStatusOptions = {
 };
 
 function renderNodeServiceStartHints(): string[] {
-  const base = ["clawdbot node daemon install", "clawdbot node start"];
+  const base = ["clawdbot node service install", "clawdbot node start"];
   switch (process.platform) {
     case "darwin":
       return [
@@ -133,7 +133,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   };
 
   if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; daemon install is disabled.");
+    fail("Nix mode detected; service install is disabled.");
     return;
   }
 
@@ -168,7 +168,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     });
     if (!json) {
       defaultRuntime.log(`Node service already ${service.loadedText}.`);
-      defaultRuntime.log("Reinstall with: clawdbot node daemon install --force");
+      defaultRuntime.log("Reinstall with: clawdbot node service install --force");
     }
     return;
   }
@@ -244,7 +244,7 @@ export async function runNodeDaemonUninstall(opts: NodeDaemonLifecycleOptions = 
   };
 
   if (resolveIsNixMode(process.env)) {
-    fail("Nix mode detected; daemon uninstall is disabled.");
+    fail("Nix mode detected; service uninstall is disabled.");
     return;
   }
 

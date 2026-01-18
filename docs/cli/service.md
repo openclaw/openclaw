@@ -46,5 +46,6 @@ Notes:
 ## Aliases
 
 - `clawdbot daemon …` → `clawdbot service gateway …`
-- `clawdbot node daemon …` → `clawdbot service node …`
+- `clawdbot node service …` → `clawdbot service node …`
 - `clawdbot node status` → `clawdbot service node status`
+- `clawdbot node daemon …` → `clawdbot service node …` (legacy)

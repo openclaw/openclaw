@@ -51,71 +51,71 @@ export function registerNodeCli(program: Command) {
       });
     });
 
+  const registerNodeServiceCommands = (cmd: Command) => {
+    cmd
+      .command("status")
+      .description("Show node service status")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonStatus(opts);
+      });
+
+    cmd
+      .command("install")
+      .description("Install the node service (launchd/systemd/schtasks)")
+      .option("--host <host>", "Gateway bridge host")
+      .option("--port <port>", "Gateway bridge port")
+      .option("--tls", "Use TLS for the bridge connection", false)
+      .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
+      .option("--node-id <id>", "Override node id (clears pairing token)")
+      .option("--display-name <name>", "Override node display name")
+      .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+      .option("--force", "Reinstall/overwrite if already installed", false)
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonInstall(opts);
+      });
+
+    cmd
+      .command("uninstall")
+      .description("Uninstall the node service (launchd/systemd/schtasks)")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonUninstall(opts);
+      });
+
+    cmd
+      .command("start")
+      .description("Start the node service (launchd/systemd/schtasks)")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonStart(opts);
+      });
+
+    cmd
+      .command("stop")
+      .description("Stop the node service (launchd/systemd/schtasks)")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonStop(opts);
+      });
+
+    cmd
+      .command("restart")
+      .description("Restart the node service (launchd/systemd/schtasks)")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runNodeDaemonRestart(opts);
+      });
+  };
+
+  const service = node
+    .command("service")
+    .description("Manage the headless node service (launchd/systemd/schtasks)");
+  registerNodeServiceCommands(service);
+
   const daemon = node
-    .command("daemon")
-    .description("Manage the headless node daemon service (launchd/systemd/schtasks)");
-
-  node
-    .command("status")
-    .description("Show node service status")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStatus(opts);
-    });
-
-  daemon
-    .command("status")
-    .description("Show node daemon status")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStatus(opts);
-    });
-
-  daemon
-    .command("install")
-    .description("Install the node daemon service (launchd/systemd/schtasks)")
-    .option("--host <host>", "Gateway bridge host")
-    .option("--port <port>", "Gateway bridge port")
-    .option("--tls", "Use TLS for the bridge connection", false)
-    .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
-    .option("--display-name <name>", "Override node display name")
-    .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
-    .option("--force", "Reinstall/overwrite if already installed", false)
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonInstall(opts);
-    });
-
-  daemon
-    .command("uninstall")
-    .description("Uninstall the node daemon service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonUninstall(opts);
-    });
-
-  daemon
-    .command("start")
-    .description("Start the node daemon service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStart(opts);
-    });
-
-  daemon
-    .command("stop")
-    .description("Stop the node daemon service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonStop(opts);
-    });
-
-  daemon
-    .command("restart")
-    .description("Restart the node daemon service (launchd/systemd/schtasks)")
-    .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await runNodeDaemonRestart(opts);
-    });
+    .command("daemon", { hidden: true })
+    .description("Legacy alias for node service commands");
+  registerNodeServiceCommands(daemon);
 }

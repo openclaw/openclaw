@@ -805,12 +805,15 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
 Subcommands:
 - `node start --host <gateway-host> --port 18790`
-- `node daemon status`
-- `node daemon install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
-- `node daemon uninstall`
-- `node daemon start`
-- `node daemon stop`
-- `node daemon restart`
+- `node service status`
+- `node service install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
+- `node service uninstall`
+- `node service start`
+- `node service stop`
+- `node service restart`
+
+Legacy alias:
+- `node daemon …` (same as `node service …`)
 
 ## Nodes
 
