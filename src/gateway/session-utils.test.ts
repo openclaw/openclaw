@@ -7,6 +7,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  listSessionsFromStore,
   parseGroupKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionStoreKey,
@@ -185,5 +186,149 @@ describe("deriveSessionTitle", () => {
       subject: "Actual Subject",
     } as SessionEntry;
     expect(deriveSessionTitle(entry)).toBe("Actual Subject");
+  });
+});
+
+describe("listSessionsFromStore search", () => {
+  const baseCfg = {
+    session: { mainKey: "main" },
+    agents: { list: [{ id: "main", default: true }] },
+  } as ClawdbotConfig;
+
+  const makeStore = (): Record<string, SessionEntry> => ({
+    "agent:main:work-project": {
+      sessionId: "sess-work-1",
+      updatedAt: Date.now(),
+      displayName: "Work Project Alpha",
+      label: "work",
+    } as SessionEntry,
+    "agent:main:personal-chat": {
+      sessionId: "sess-personal-1",
+      updatedAt: Date.now() - 1000,
+      displayName: "Personal Chat",
+      subject: "Family Reunion Planning",
+    } as SessionEntry,
+    "agent:main:discord:group:dev-team": {
+      sessionId: "sess-discord-1",
+      updatedAt: Date.now() - 2000,
+      label: "discord",
+      subject: "Dev Team Discussion",
+    } as SessionEntry,
+  });
+
+  test("returns all sessions when search is empty", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "" },
+    });
+    expect(result.sessions.length).toBe(3);
+  });
+
+  test("returns all sessions when search is undefined", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+    expect(result.sessions.length).toBe(3);
+  });
+
+  test("filters by displayName case-insensitively", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "WORK PROJECT" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].displayName).toBe("Work Project Alpha");
+  });
+
+  test("filters by subject", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "reunion" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].subject).toBe("Family Reunion Planning");
+  });
+
+  test("filters by label", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "discord" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].label).toBe("discord");
+  });
+
+  test("filters by sessionId", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "sess-personal" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].sessionId).toBe("sess-personal-1");
+  });
+
+  test("filters by key", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "dev-team" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].key).toBe("agent:main:discord:group:dev-team");
+  });
+
+  test("returns empty array when no matches", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "nonexistent-term" },
+    });
+    expect(result.sessions.length).toBe(0);
+  });
+
+  test("matches partial strings", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "alpha" },
+    });
+    expect(result.sessions.length).toBe(1);
+    expect(result.sessions[0].displayName).toBe("Work Project Alpha");
+  });
+
+  test("trims whitespace from search query", () => {
+    const store = makeStore();
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: { search: "  personal  " },
+    });
+    expect(result.sessions.length).toBe(1);
   });
 });
