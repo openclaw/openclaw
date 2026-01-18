@@ -61,7 +61,7 @@ function resolveSubagentTarget(
     const sorted = sortSubagentRuns(runs);
     return { entry: sorted[0] };
   }
-  const sorted = sortRuns(runs);
+  const sorted = sortSubagentRuns(runs);
   if (/^\d+$/.test(trimmed)) {
     const idx = Number.parseInt(trimmed, 10);
     if (!Number.isFinite(idx) || idx <= 0 || idx > sorted.length) {
