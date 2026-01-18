@@ -8,7 +8,7 @@ read_when:
 
 # Exec approvals
 
-Exec approvals are the **companion app guardrail** for letting a sandboxed agent run
+Exec approvals are the **companion app / node host guardrail** for letting a sandboxed agent run
 commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
 Exec approvals are **in addition** to tool policy and elevated gating.
@@ -20,11 +20,11 @@ resolved by the **ask fallback** (default: deny).
 
 Exec approvals are enforced locally on the execution host:
 - **gateway host** → `clawdbot` process on the gateway machine
-- **node host** → node runner (macOS companion app or headless node)
+- **node host** → node runner (macOS companion app or headless node host)
 
 ## Settings and storage
 
-Approvals live in a local JSON file:
+Approvals live in a local JSON file on the execution host:
 
 `~/.clawdbot/exec-approvals.json`
 
@@ -97,8 +97,8 @@ Each allowlist entry tracks:
 ## Auto-allow skill CLIs
 
 When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
-are treated as allowlisted (node hosts only). Disable this if you want strict
-manual allowlists.
+are treated as allowlisted on nodes (macOS node or headless node host). This uses the Bridge RPC to ask the
+gateway for the skill bin list. Disable this if you want strict manual allowlists.
 
 ## Approval flow
 

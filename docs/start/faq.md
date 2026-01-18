@@ -60,6 +60,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 - [Remote gateways + nodes](#remote-gateways-nodes)
   - [How do commands propagate between Telegram, the gateway, and nodes?](#how-do-commands-propagate-between-telegram-the-gateway-and-nodes)
   - [Do nodes run a gateway daemon?](#do-nodes-run-a-gateway-daemon)
+  - [Can I run a headless node host without the macOS app?](#can-i-run-a-headless-node-host-without-the-macos-app)
   - [Is there an API / RPC way to apply config?](#is-there-an-api-rpc-way-to-apply-config)
   - [What’s a minimal “sane” config for a first install?](#whats-a-minimal-sane-config-for-a-first-install)
   - [How do I set up Tailscale on a VPS and connect from my Mac?](#how-do-i-set-up-tailscale-on-a-vps-and-connect-from-my-mac)
@@ -405,7 +406,7 @@ You have three supported patterns:
 Run the Gateway where the macOS binaries exist, then connect from Linux in [remote mode](#how-do-i-run-clawdbot-in-remote-mode-client-connects-to-a-gateway-elsewhere) or over Tailscale. The skills load normally because the Gateway host is macOS.
 
 **Option B - use a macOS node (no SSH).**  
-Run the Gateway on Linux, pair a macOS node (menubar app), and set **Node Run Commands** to "Always Ask" or "Always Allow" on the Mac. Clawdbot can treat macOS-only skills as eligible when the required binaries exist on the node. The agent runs those skills via the `nodes` tool. If you choose "Always Ask", approving "Always Allow" in the prompt adds that command to the allowlist.
+Run the Gateway on Linux, pair a macOS node (menubar app), and configure **Exec approvals** (Settings → Exec approvals) to "Ask" or "Always Allow". Clawdbot can treat macOS-only skills as eligible when the required binaries exist on the node. The agent runs those skills via the `nodes` tool. If you choose "Ask", selecting "Always Allow" in the prompt adds that command to the allowlist.
 
 **Option C - proxy macOS binaries over SSH (advanced).**  
 Keep the Gateway on Linux, but make the required CLI binaries resolve to SSH wrappers that run on a Mac. Then override the skill to allow Linux so it stays eligible.
@@ -741,6 +742,23 @@ No. Only **one gateway** should run per host unless you intentionally run isolat
 to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
 
 A full restart is required for `gateway`, `bridge`, `discovery`, and `canvasHost` changes.
+
+### Can I run a headless node host without the macOS app?
+
+Yes. The headless node host is a **command-only** node that exposes `system.run` / `system.which`
+without any UI. It has no screen/camera/notify support (use the macOS app for those).
+
+Start it:
+```bash
+clawdbot node start --host <gateway-host> --port 18790
+```
+
+Notes:
+- Pairing is still required (`clawdbot nodes pending` → `clawdbot nodes approve <requestId>`).
+- Exec approvals still apply via `~/.clawdbot/exec-approvals.json`.
+- If prompts are enabled but no companion UI is reachable, `askFallback` decides (default: deny).
+
+Docs: [Node CLI](/cli/node), [Nodes](/nodes), [Exec approvals](/tools/exec-approvals).
 
 ### Is there an API / RPC way to apply config?
 

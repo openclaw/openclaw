@@ -432,6 +432,7 @@ actor MacNodeRuntime {
         guard !command.isEmpty else {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
+        let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: params.rawCommand)
 
         let trimmedAgent = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agentId = trimmedAgent.isEmpty ? nil : trimmedAgent
@@ -444,7 +445,12 @@ actor MacNodeRuntime {
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
-        let resolution = ExecCommandResolution.resolve(command: command, cwd: params.cwd, env: params.env)
+        let env = Self.sanitizedEnv(params.env)
+        let resolution = ExecCommandResolution.resolve(
+            command: command,
+            rawCommand: params.rawCommand,
+            cwd: params.cwd,
+            env: env)
         let allowlistMatch = security == .allowlist
             ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
             : nil
@@ -463,7 +469,7 @@ actor MacNodeRuntime {
                     sessionKey: sessionKey,
                     runId: runId,
                     host: "node",
-                    command: ExecCommandFormatter.displayString(for: command),
+                    command: displayCommand,
                     reason: "security=deny"))
             return Self.errorResponse(
                 req,
@@ -477,12 +483,13 @@ actor MacNodeRuntime {
             return false
         }()
 
+        var approvedByAsk = false
         if requiresAsk {
             let decision = await ExecApprovalsSocketClient.requestDecision(
                 socketPath: approvals.socketPath,
                 token: approvals.token,
                 request: ExecApprovalPromptRequest(
-                    command: ExecCommandFormatter.displayString(for: command),
+                    command: displayCommand,
                     cwd: params.cwd,
                     host: "node",
                     security: security.rawValue,
@@ -498,21 +505,40 @@ actor MacNodeRuntime {
                         sessionKey: sessionKey,
                         runId: runId,
                         host: "node",
-                        command: ExecCommandFormatter.displayString(for: command),
+                        command: displayCommand,
                         reason: "user-denied"))
                 return Self.errorResponse(
                     req,
                     code: .unavailable,
                     message: "SYSTEM_RUN_DENIED: user denied")
             case nil:
-                if askFallback == .deny || (askFallback == .allowlist && allowlistMatch == nil && !skillAllow) {
+                if askFallback == .full {
+                    approvedByAsk = true
+                } else if askFallback == .allowlist {
+                    if allowlistMatch != nil || skillAllow {
+                        approvedByAsk = true
+                    } else {
+                        await self.emitExecEvent(
+                            "exec.denied",
+                            payload: ExecEventPayload(
+                                sessionKey: sessionKey,
+                                runId: runId,
+                                host: "node",
+                                command: displayCommand,
+                                reason: "approval-required"))
+                        return Self.errorResponse(
+                            req,
+                            code: .unavailable,
+                            message: "SYSTEM_RUN_DENIED: approval required")
+                    }
+                } else {
                     await self.emitExecEvent(
                         "exec.denied",
                         payload: ExecEventPayload(
                             sessionKey: sessionKey,
                             runId: runId,
                             host: "node",
-                            command: ExecCommandFormatter.displayString(for: command),
+                            command: displayCommand,
                             reason: "approval-required"))
                     return Self.errorResponse(
                         req,
@@ -520,6 +546,7 @@ actor MacNodeRuntime {
                         message: "SYSTEM_RUN_DENIED: approval required")
                 }
             case .allowAlways?:
+                approvedByAsk = true
                 if security == .allowlist {
                     let pattern = resolution?.resolvedPath ??
                         resolution?.rawExecutable ??
@@ -530,19 +557,32 @@ actor MacNodeRuntime {
                     }
                 }
             case .allowOnce?:
-                break
+                approvedByAsk = true
             }
+        }
+
+        if security == .allowlist && allowlistMatch == nil && !skillAllow && !approvedByAsk {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
+                    host: "node",
+                    command: displayCommand,
+                    reason: "allowlist-miss"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DENIED: allowlist miss")
         }
 
         if let match = allowlistMatch {
             ExecApprovalsStore.recordAllowlistUse(
                 agentId: agentId,
                 pattern: match.pattern,
-                command: ExecCommandFormatter.displayString(for: command),
+                command: displayCommand,
                 resolvedPath: resolution?.resolvedPath)
         }
-
-        let env = Self.sanitizedEnv(params.env)
 
         if params.needsScreenRecording == true {
             let authorized = await PermissionManager
@@ -554,7 +594,7 @@ actor MacNodeRuntime {
                         sessionKey: sessionKey,
                         runId: runId,
                         host: "node",
-                        command: ExecCommandFormatter.displayString(for: command),
+                        command: displayCommand,
                         reason: "permission:screenRecording"))
                 return Self.errorResponse(
                     req,
@@ -570,7 +610,7 @@ actor MacNodeRuntime {
                 sessionKey: sessionKey,
                 runId: runId,
                 host: "node",
-                command: ExecCommandFormatter.displayString(for: command)))
+                command: displayCommand))
         let result = await ShellExecutor.runDetailed(
             command: command,
             cwd: params.cwd,
@@ -583,7 +623,7 @@ actor MacNodeRuntime {
                 sessionKey: sessionKey,
                 runId: runId,
                 host: "node",
-                command: ExecCommandFormatter.displayString(for: command),
+                command: displayCommand,
                 exitCode: result.exitCode,
                 timedOut: result.timedOut,
                 success: result.success,

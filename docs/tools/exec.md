@@ -30,7 +30,7 @@ Notes:
 - `host` defaults to `sandbox`.
 - `elevated` is ignored when sandboxing is off (exec already runs on the host).
 - `gateway`/`node` approvals are controlled by `~/.clawdbot/exec-approvals.json`.
-- `node` requires a paired node (macOS companion app).
+- `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 
 ## Config
@@ -51,7 +51,7 @@ Example:
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
 
-## Exec approvals (macOS app)
+## Exec approvals (companion app / node host)
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
 See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.

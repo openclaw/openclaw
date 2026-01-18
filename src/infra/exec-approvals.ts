@@ -106,7 +106,7 @@ export function loadExecApprovals(): ExecApprovalsFile {
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as ExecApprovalsFile;
     if (parsed?.version !== 1) {
-      return normalizeExecApprovals({ version: 1, agents: parsed?.agents ?? {} });
+      return normalizeExecApprovals({ version: 1, agents: {} });
     }
     return normalizeExecApprovals(parsed);
   } catch {
@@ -117,7 +117,12 @@ export function loadExecApprovals(): ExecApprovalsFile {
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
   ensureDir(filePath);
-  fs.writeFileSync(filePath, JSON.stringify(file, null, 2));
+  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // best-effort on platforms without chmod
+  }
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {

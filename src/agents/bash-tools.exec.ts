@@ -17,6 +17,7 @@ import {
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo } from "../logger.js";
 import {
@@ -392,7 +393,7 @@ export function createExecTool(
         const nodes = await listNodes({});
         if (nodes.length === 0) {
           throw new Error(
-            "exec host=node requires a paired node (none available). This requires the macOS companion app.",
+            "exec host=node requires a paired node (none available). This requires a companion app or node host.",
           );
         }
         let nodeId: string;
@@ -411,14 +412,17 @@ export function createExecTool(
           ? nodeInfo?.commands?.includes("system.run")
           : false;
         if (!supportsSystemRun) {
-          throw new Error("exec host=node requires a node that supports system.run.");
+          throw new Error(
+            "exec host=node requires a node that supports system.run (companion app or node host).",
+          );
         }
-        const argv = ["/bin/sh", "-lc", params.command];
+        const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
         const invokeParams: Record<string, unknown> = {
           nodeId,
           command: "system.run",
           params: {
             command: argv,
+            rawCommand: params.command,
             cwd: workdir,
             env: params.env,
             timeoutMs: typeof params.timeout === "number" ? params.timeout * 1000 : undefined,
@@ -471,6 +475,7 @@ export function createExecTool(
           hostAsk === "always" ||
           (hostAsk === "on-miss" && hostSecurity === "allowlist" && !allowlistMatch);
 
+        let approvedByAsk = false;
         if (requiresAsk) {
           const decision =
             (await requestExecApprovalViaSocket({
@@ -491,29 +496,41 @@ export function createExecTool(
             throw new Error("exec denied: user denied");
           }
           if (!decision) {
-            if (askFallback === "deny") {
-              throw new Error(
-                "exec denied: approval required (companion app approval UI not available)",
-              );
-            }
-            if (askFallback === "allowlist") {
+            if (askFallback === "full") {
+              approvedByAsk = true;
+            } else if (askFallback === "allowlist") {
               if (!allowlistMatch) {
                 throw new Error(
                   "exec denied: approval required (companion app approval UI not available)",
                 );
               }
+              approvedByAsk = true;
+            } else {
+              throw new Error(
+                "exec denied: approval required (companion app approval UI not available)",
+              );
             }
           }
-          if (decision === "allow-always" && hostSecurity === "allowlist") {
-            const pattern =
-              resolution?.resolvedPath ??
-              resolution?.rawExecutable ??
-              params.command.split(/\s+/).shift() ??
-              "";
-            if (pattern) {
-              addAllowlistEntry(approvals.file, defaults?.agentId, pattern);
+          if (decision === "allow-once") {
+            approvedByAsk = true;
+          }
+          if (decision === "allow-always") {
+            approvedByAsk = true;
+            if (hostSecurity === "allowlist") {
+              const pattern =
+                resolution?.resolvedPath ??
+                resolution?.rawExecutable ??
+                params.command.split(/\s+/).shift() ??
+                "";
+              if (pattern) {
+                addAllowlistEntry(approvals.file, defaults?.agentId, pattern);
+              }
             }
           }
+        }
+
+        if (hostSecurity === "allowlist" && !allowlistMatch && !approvedByAsk) {
+          throw new Error("exec denied: allowlist miss");
         }
 
         if (allowlistMatch) {

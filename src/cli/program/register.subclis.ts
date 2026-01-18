@@ -13,6 +13,7 @@ import { registerWebhooksCli } from "../webhooks-cli.js";
 import { registerLogsCli } from "../logs-cli.js";
 import { registerModelsCli } from "../models-cli.js";
 import { registerNodesCli } from "../nodes-cli.js";
+import { registerNodeCli } from "../node-cli.js";
 import { registerPairingCli } from "../pairing-cli.js";
 import { registerPluginsCli } from "../plugins-cli.js";
 import { registerSandboxCli } from "../sandbox-cli.js";
@@ -27,6 +28,7 @@ export function registerSubCliCommands(program: Command) {
   registerLogsCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerNodeCli(program);
   registerSandboxCli(program);
   registerTuiCli(program);
   registerCronCli(program);
