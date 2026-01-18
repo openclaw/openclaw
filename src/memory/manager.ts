@@ -1406,8 +1406,11 @@ export class MemoryIndexManager {
           now,
         );
       if (vectorReady && embedding.length > 0) {
+        try {
+          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
+        } catch {}
         this.db
-          .prepare(`INSERT OR REPLACE INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
           .run(id, vectorToBlob(embedding));
       }
       if (this.fts.enabled && this.fts.available) {

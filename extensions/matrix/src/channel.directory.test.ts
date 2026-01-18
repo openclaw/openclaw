@@ -1,3 +1,5 @@
+import os from "node:os";
+
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { PluginRuntime } from "clawdbot/plugin-sdk";
@@ -8,7 +10,11 @@ import { setMatrixRuntime } from "./runtime.js";
 
 describe("matrix directory", () => {
   beforeEach(() => {
-    setMatrixRuntime({} as PluginRuntime);
+    setMatrixRuntime({
+      state: {
+        resolveStateDir: () => os.tmpdir(),
+      },
+    } as PluginRuntime);
   });
 
   it("lists peers and groups from config", async () => {

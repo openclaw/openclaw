@@ -16,6 +16,7 @@ Docs: https://docs.clawd.bot
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
 - macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
 - Memory: index atomically so failed reindex preserves the previous memory database. (#1151) — thanks @gumadeiras.
+- Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151) — thanks @gumadeiras.
 
 ## 2026.1.18-3
 
