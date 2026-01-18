@@ -10,6 +10,8 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
+- macOS: load menu session previews asynchronously so items populate while the menu is open.
+- macOS: use label colors for session preview text so previews render in menu subviews.
 
 ## 2026.1.18-4
 

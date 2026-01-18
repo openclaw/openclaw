@@ -86,11 +86,17 @@ struct SessionMenuPreviewView: View {
     }
 
     private var primaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
+        if self.isHighlighted {
+            return Color(nsColor: .selectedMenuItemTextColor)
+        }
+        return Color(nsColor: .labelColor)
     }
 
     private var secondaryColor: Color {
-        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
+        if self.isHighlighted {
+            return Color(nsColor: .selectedMenuItemTextColor).opacity(0.85)
+        }
+        return Color(nsColor: .secondaryLabelColor)
     }
 
     var body: some View {
@@ -104,21 +110,19 @@ struct SessionMenuPreviewView: View {
 
             switch self.status {
             case .loading:
-                Text("Loading preview…")
-                    .font(.caption)
-                    .foregroundStyle(self.secondaryColor)
+                self.placeholder("Loading preview…")
             case .empty:
-                Text("No recent messages")
-                    .font(.caption)
-                    .foregroundStyle(self.secondaryColor)
+                self.placeholder("No recent messages")
             case let .error(message):
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(self.secondaryColor)
+                self.placeholder(message)
             case .ready:
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(self.items) { item in
-                        self.previewRow(item)
+                if self.items.isEmpty {
+                    self.placeholder("No recent messages")
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(self.items) { item in
+                            self.previewRow(item)
+                        }
                     }
                 }
             }
@@ -156,6 +160,13 @@ struct SessionMenuPreviewView: View {
         case .system: return .gray
         case .other: return .secondary
         }
+    }
+
+    @ViewBuilder
+    private func placeholder(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(self.primaryColor)
     }
 
 }
