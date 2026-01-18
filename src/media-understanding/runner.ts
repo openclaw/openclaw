@@ -39,6 +39,8 @@ import {
 import { describeImageWithModel } from "./providers/image.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
+const AUTO_AUDIO_PROVIDERS = ["openai", "groq", "deepgram"] as const;
+
 export type ActiveMediaModel = {
   provider: string;
   model?: string;
@@ -63,6 +65,29 @@ export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
 
 export function createMediaAttachmentCache(attachments: MediaAttachment[]): MediaAttachmentCache {
   return new MediaAttachmentCache(attachments);
+}
+
+async function resolveAutoAudioEntries(params: {
+  cfg: ClawdbotConfig;
+  agentDir?: string;
+  providerRegistry: ProviderRegistry;
+}): Promise<MediaUnderstandingModelConfig[]> {
+  const entries: MediaUnderstandingModelConfig[] = [];
+  for (const providerId of AUTO_AUDIO_PROVIDERS) {
+    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+    if (!provider?.transcribeAudio) continue;
+    try {
+      await resolveApiKeyForProvider({
+        provider: providerId,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      });
+      entries.push({ type: "provider", provider: providerId });
+    } catch {
+      continue;
+    }
+  }
+  return entries;
 }
 
 function trimOutput(text: string, maxChars?: number): string {
@@ -561,7 +586,15 @@ export async function runCapability(params: {
     providerRegistry: params.providerRegistry,
     activeModel: params.activeModel,
   });
-  if (entries.length === 0) {
+  let resolvedEntries = entries;
+  if (resolvedEntries.length === 0 && capability === "audio" && config?.enabled !== false) {
+    resolvedEntries = await resolveAutoAudioEntries({
+      cfg,
+      agentDir: params.agentDir,
+      providerRegistry: params.providerRegistry,
+    });
+  }
+  if (resolvedEntries.length === 0) {
     return {
       outputs: [],
       decision: {
@@ -583,7 +616,7 @@ export async function runCapability(params: {
       agentDir: params.agentDir,
       providerRegistry: params.providerRegistry,
       cache: params.attachments,
-      entries,
+      entries: resolvedEntries,
       config,
     });
     if (output) outputs.push(output);

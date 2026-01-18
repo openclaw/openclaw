@@ -104,6 +104,29 @@ Rules:
 - If `<capability>.enabled: true` but no models are configured, Clawdbot tries the
   **active reply model** when its provider supports the capability.
 
+### Auto-enable audio (when keys exist)
+If `tools.media.audio.enabled` is **not** set to `false` and you have any supported
+audio provider keys configured, Clawdbot will **auto-enable audio transcription**
+even when you haven’t listed models explicitly.
+
+Providers checked (in order):
+1) OpenAI
+2) Groq
+3) Deepgram
+
+To disable this behavior, set:
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: false
+      }
+    }
+  }
+}
+```
+
 ## Capabilities (optional)
 If you set `capabilities`, the entry only runs for those media types. For shared
 lists, Clawdbot can infer defaults:
