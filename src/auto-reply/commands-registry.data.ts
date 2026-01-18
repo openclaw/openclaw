@@ -145,6 +145,32 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/whoami",
     }),
     defineChatCommand({
+      key: "subagents",
+      nativeName: "subagents",
+      description: "List/stop/log/info subagent runs for this session.",
+      textAlias: "/subagents",
+      args: [
+        {
+          name: "action",
+          description: "list | stop | log | info | send",
+          type: "string",
+          choices: ["list", "stop", "log", "info", "send"],
+        },
+        {
+          name: "target",
+          description: "Run id, index, or session key",
+          type: "string",
+        },
+        {
+          name: "value",
+          description: "Additional input (limit/message)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "config",
       nativeName: "config",
       description: "Show or set config values.",

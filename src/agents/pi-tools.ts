@@ -284,7 +284,7 @@ export function createClawdbotCodingTools(options?: {
   ];
   const pluginGroups = buildPluginToolGroups({
     tools,
-    toolMeta: (tool) => getPluginToolMeta(tool),
+    toolMeta: (tool) => getPluginToolMeta(tool as AnyAgentTool),
   });
   const profilePolicyExpanded = expandPolicyWithPluginGroups(profilePolicy, pluginGroups);
   const providerProfileExpanded = expandPolicyWithPluginGroups(providerProfilePolicy, pluginGroups);

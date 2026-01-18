@@ -22,6 +22,7 @@ Docs: https://docs.clawd.bot
 - Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default.
 - Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
 - Tools: centralize plugin tool policy helpers.
+- Commands: add `/subagents info` and show sub-agent counts in `/status`.
 - Docs: clarify plugin agent tool configuration. https://docs.clawd.bot/plugins/agent-tools
 
 ### Fixes

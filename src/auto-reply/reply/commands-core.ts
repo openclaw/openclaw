@@ -13,6 +13,7 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
+import { handleSubagentsCommand } from "./commands-subagents.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -36,6 +37,7 @@ const HANDLERS: CommandHandler[] = [
   handleStatusCommand,
   handleContextCommand,
   handleWhoamiCommand,
+  handleSubagentsCommand,
   handleConfigCommand,
   handleDebugCommand,
   handleStopCommand,
