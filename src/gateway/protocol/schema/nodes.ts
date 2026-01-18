@@ -8,6 +8,8 @@ export const NodePairRequestParamsSchema = Type.Object(
     displayName: Type.Optional(NonEmptyString),
     platform: Type.Optional(NonEmptyString),
     version: Type.Optional(NonEmptyString),
+    coreVersion: Type.Optional(NonEmptyString),
+    uiVersion: Type.Optional(NonEmptyString),
     deviceFamily: Type.Optional(NonEmptyString),
     modelIdentifier: Type.Optional(NonEmptyString),
     caps: Type.Optional(Type.Array(NonEmptyString)),

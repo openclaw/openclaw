@@ -346,6 +346,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     displayName,
     platform: process.platform,
     version: VERSION,
+    coreVersion: VERSION,
     deviceFamily: os.platform(),
     modelIdentifier: os.hostname(),
     caps: ["system"],

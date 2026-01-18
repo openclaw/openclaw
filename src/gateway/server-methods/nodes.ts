@@ -42,6 +42,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       displayName?: string;
       platform?: string;
       version?: string;
+      coreVersion?: string;
+      uiVersion?: string;
       deviceFamily?: string;
       modelIdentifier?: string;
       caps?: string[];
@@ -55,6 +57,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
         displayName: p.displayName,
         platform: p.platform,
         version: p.version,
+        coreVersion: p.coreVersion,
+        uiVersion: p.uiVersion,
         deviceFamily: p.deviceFamily,
         modelIdentifier: p.modelIdentifier,
         caps: p.caps,
@@ -215,6 +219,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
           displayName: live?.displayName ?? paired?.displayName,
           platform: live?.platform ?? paired?.platform,
           version: live?.version ?? paired?.version,
+          coreVersion: live?.coreVersion ?? paired?.coreVersion,
+          uiVersion: live?.uiVersion ?? paired?.uiVersion,
           deviceFamily: live?.deviceFamily ?? paired?.deviceFamily,
           modelIdentifier: live?.modelIdentifier ?? paired?.modelIdentifier,
           remoteIp: live?.remoteIp ?? paired?.remoteIp,
@@ -275,6 +281,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
           displayName: live?.displayName ?? paired?.displayName,
           platform: live?.platform ?? paired?.platform,
           version: live?.version ?? paired?.version,
+          coreVersion: live?.coreVersion ?? paired?.coreVersion,
+          uiVersion: live?.uiVersion ?? paired?.uiVersion,
           deviceFamily: live?.deviceFamily ?? paired?.deviceFamily,
           modelIdentifier: live?.modelIdentifier ?? paired?.modelIdentifier,
           remoteIp: live?.remoteIp ?? paired?.remoteIp,

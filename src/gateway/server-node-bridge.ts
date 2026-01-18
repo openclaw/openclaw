@@ -43,6 +43,25 @@ export async function startGatewayNodeBridge(params: {
 }): Promise<GatewayNodeBridgeRuntime> {
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
 
+  const formatVersionLabel = (raw: string): string => {
+    const trimmed = raw.trim();
+    if (!trimmed) return raw;
+    if (trimmed.toLowerCase().startsWith("v")) return trimmed;
+    return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
+  };
+
+  const resolveNodeVersionLabel = (node: {
+    coreVersion?: string;
+    uiVersion?: string;
+  }): string | null => {
+    const core = node.coreVersion?.trim();
+    const ui = node.uiVersion?.trim();
+    const parts: string[] = [];
+    if (core) parts.push(`core ${formatVersionLabel(core)}`);
+    if (ui) parts.push(`ui ${formatVersionLabel(ui)}`);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  };
+
   const stopNodePresenceTimer = (nodeId: string) => {
     const timer = nodePresenceTimers.get(nodeId);
     if (timer) {
@@ -57,6 +76,8 @@ export async function startGatewayNodeBridge(params: {
       displayName?: string;
       remoteIp?: string;
       version?: string;
+      coreVersion?: string;
+      uiVersion?: string;
       platform?: string;
       deviceFamily?: string;
       modelIdentifier?: string;
@@ -66,7 +87,7 @@ export async function startGatewayNodeBridge(params: {
     const host = node.displayName?.trim() || node.nodeId;
     const rawIp = node.remoteIp?.trim();
     const ip = rawIp && !isLoopbackAddress(rawIp) ? rawIp : undefined;
-    const version = node.version?.trim() || "unknown";
+    const version = resolveNodeVersionLabel(node) ?? node.version?.trim() ?? "unknown";
     const platform = node.platform?.trim() || undefined;
     const deviceFamily = node.deviceFamily?.trim() || undefined;
     const modelIdentifier = node.modelIdentifier?.trim() || undefined;
