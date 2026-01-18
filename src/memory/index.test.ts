@@ -14,11 +14,11 @@ vi.mock("./embeddings.js", () => {
     return [alpha, beta, 1];
   };
   return {
-    createEmbeddingProvider: async () => ({
+    createEmbeddingProvider: async (options: { model?: string }) => ({
       requestedProvider: "openai",
       provider: {
         id: "mock",
-        model: "mock-embed",
+        model: options.model ?? "mock-embed",
         embedQuery: async (text: string) => embedText(text),
         embedBatch: async (texts: string[]) => texts.map(embedText),
       },
@@ -84,6 +84,66 @@ describe("memory index", () => {
         }),
       ]),
     );
+  });
+
+  it("reindexes when the embedding model changes", async () => {
+    const base = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            store: { path: indexPath },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0 },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const first = await getMemorySearchManager({
+      cfg: {
+        ...base,
+        agents: {
+          ...base.agents,
+          defaults: {
+            ...base.agents.defaults,
+            memorySearch: {
+              ...base.agents.defaults.memorySearch,
+              model: "mock-embed-v1",
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(first.manager).not.toBeNull();
+    if (!first.manager) throw new Error("manager missing");
+    await first.manager.sync({ force: true });
+    await first.manager.close();
+
+    const second = await getMemorySearchManager({
+      cfg: {
+        ...base,
+        agents: {
+          ...base.agents,
+          defaults: {
+            ...base.agents.defaults,
+            memorySearch: {
+              ...base.agents.defaults.memorySearch,
+              model: "mock-embed-v2",
+            },
+          },
+        },
+      },
+      agentId: "main",
+    });
+    expect(second.manager).not.toBeNull();
+    if (!second.manager) throw new Error("manager missing");
+    manager = second.manager;
+    const results = await second.manager.search("alpha");
+    expect(results.length).toBeGreaterThan(0);
   });
 
   it("reports vector availability after probe", async () => {
