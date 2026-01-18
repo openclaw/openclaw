@@ -109,7 +109,6 @@ export const selectListTheme: SelectListTheme = {
 export const filterableSelectListTheme = {
   ...selectListTheme,
   filterLabel: (text: string) => fg(palette.dim)(text),
-  filterInput: (text: string) => fg(palette.text)(text),
 };
 
 export const settingsListTheme: SettingsListTheme = {
