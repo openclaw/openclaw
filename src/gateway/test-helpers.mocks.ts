@@ -281,7 +281,7 @@ vi.mock("../config/config.js", async () => {
               ? { ...testState.channelsConfig }
               : {};
           const existing = baseChannels.whatsapp;
-          const mergedWhatsApp =
+          const mergedWhatsApp: Record<string, unknown> =
             existing && typeof existing === "object" && !Array.isArray(existing)
               ? { ...existing }
               : {};
