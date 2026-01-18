@@ -7,10 +7,10 @@ read_when:
 
 # Date & Time
 
-Clawdbot uses **UTC for transport timestamps** and **user-local time only in the system prompt**.
-We avoid rewriting provider timestamps so tools keep their native semantics.
+Clawdbot defaults to **UTC for transport timestamps** and **user-local time only in the system prompt**.
+Provider timestamps are preserved so tools keep their native semantics.
 
-## Message envelopes (UTC)
+## Message envelopes (UTC by default)
 
 Inbound messages are wrapped with a UTC timestamp (minute precision):
 
@@ -18,7 +18,47 @@ Inbound messages are wrapped with a UTC timestamp (minute precision):
 [Provider ... 2026-01-05T21:26Z] message text
 ```
 
-This envelope timestamp is **always UTC**, regardless of the host timezone.
+This envelope timestamp is **UTC by default**, regardless of the host timezone.
+
+You can override this behavior:
+
+```json5
+{
+  agents: {
+    defaults: {
+      envelopeTimezone: "utc", // "utc" | "local" | "user" | IANA timezone
+      envelopeTimestamp: "on", // "on" | "off"
+      envelopeElapsed: "on" // "on" | "off"
+    }
+  }
+}
+```
+
+- `envelopeTimezone: "local"` uses the host timezone.
+- `envelopeTimezone: "user"` uses `agents.defaults.userTimezone` (falls back to host timezone).
+- Use an explicit IANA timezone (e.g., `"America/Chicago"`) for a fixed zone.
+- `envelopeTimestamp: "off"` removes absolute timestamps from envelope headers.
+- `envelopeElapsed: "off"` removes elapsed time suffixes (the `+2m` style).
+
+### Examples
+
+**UTC (default):**
+
+```
+[WhatsApp +1555 2026-01-18T05:19Z] hello
+```
+
+**User timezone:**
+
+```
+[WhatsApp +1555 2026-01-18 00:19 CST] hello
+```
+
+**Elapsed time enabled:**
+
+```
+[WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
+```
 
 ## System prompt: Current Date & Time
 

@@ -328,9 +328,13 @@ describe("web auto-reply", () => {
       expect(resolver).toHaveBeenCalledTimes(2);
       const firstArgs = resolver.mock.calls[0][0];
       const secondArgs = resolver.mock.calls[1][0];
-      expect(firstArgs.Body).toContain("[WhatsApp +1 2025-01-01T00:00Z] [clawdbot] first");
+      expect(firstArgs.Body).toMatch(
+        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T00:00Z\] \[clawdbot\] first/,
+      );
       expect(firstArgs.Body).not.toContain("second");
-      expect(secondArgs.Body).toContain("[WhatsApp +1 2025-01-01T01:00Z] [clawdbot] second");
+      expect(secondArgs.Body).toMatch(
+        /\[WhatsApp \+1 (\+\d+[smhd] )?2025-01-01T01:00Z\] \[clawdbot\] second/,
+      );
       expect(secondArgs.Body).not.toContain("first");
 
       // Max listeners bumped to avoid warnings in multi-instance test runs

@@ -5,6 +5,7 @@ import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
+  resolveEnvelopeFormatOptions,
 } from "../../../auto-reply/envelope.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -21,7 +22,11 @@ import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../../config/sessions.js";
+import {
+  readSessionUpdatedAt,
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+} from "../../../config/sessions.js";
 
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -372,6 +377,14 @@ export async function prepareSlackMessage(params: {
       From: slackFrom,
     }) ?? (isDirectMessage ? senderName : roomLabel);
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
+  const previousTimestamp = readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
@@ -379,6 +392,8 @@ export async function prepareSlackMessage(params: {
     body: textWithId,
     chatType: isDirectMessage ? "direct" : "channel",
     sender: { name: senderName, id: senderId },
+    previousTimestamp,
+    envelope: envelopeOptions,
   });
 
   let combinedBody = body;
@@ -389,17 +404,18 @@ export async function prepareSlackMessage(params: {
       limit: ctx.historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatInboundEnvelope({
-          channel: "Slack",
-          from: roomLabel,
-          timestamp: entry.timestamp,
-          body: `${entry.body}${
-            entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
-          }`,
-          chatType: "channel",
-          senderLabel: entry.sender,
-        }),
-    });
+          formatInboundEnvelope({
+            channel: "Slack",
+            from: roomLabel,
+            timestamp: entry.timestamp,
+            body: `${entry.body}${
+              entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
+            }`,
+            chatType: "channel",
+            senderLabel: entry.sender,
+            envelope: envelopeOptions,
+          }),
+      });
   }
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
@@ -433,6 +449,7 @@ export async function prepareSlackMessage(params: {
         author: starterName,
         timestamp: starter.ts ? Math.round(Number(starter.ts) * 1000) : undefined,
         body: starterWithId,
+        envelope: envelopeOptions,
       });
       const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
@@ -472,9 +489,6 @@ export async function prepareSlackMessage(params: {
     OriginatingTo: slackTo,
   }) satisfies FinalizedMsgContext;
 
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
   void recordSessionMetaFromInbound({
     storePath,
     sessionKey: sessionKey,

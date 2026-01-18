@@ -11,7 +11,11 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
@@ -33,6 +37,7 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import {
+  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
@@ -157,6 +162,8 @@ export function createPluginRuntime(): PluginRuntime {
         dispatchReplyFromConfig,
         finalizeInboundContext,
         formatAgentEnvelope,
+        formatInboundEnvelope,
+        resolveEnvelopeFormatOptions,
       },
       routing: {
         resolveAgentRoute,
@@ -172,6 +179,7 @@ export function createPluginRuntime(): PluginRuntime {
       },
       session: {
         resolveStorePath,
+        readSessionUpdatedAt,
         recordSessionMetaFromInbound,
         updateLastRoute,
       },

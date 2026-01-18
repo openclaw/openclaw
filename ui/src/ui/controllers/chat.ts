@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway";
-import { stripThinkingTags } from "../format";
+import { extractText } from "../chat/message-extract";
 import { generateUUID } from "../uuid";
 
 export type ChatState = {
@@ -141,30 +141,4 @@ export function handleChatEvent(
     state.lastError = payload.errorMessage ?? "chat error";
   }
   return payload.state;
-}
-
-function extractText(message: unknown): string | null {
-  const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role : "";
-  const content = m.content;
-  if (typeof content === "string") {
-    return role === "assistant" ? stripThinkingTags(content) : content;
-  }
-  if (Array.isArray(content)) {
-    const parts = content
-      .map((p) => {
-        const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") return item.text;
-        return null;
-      })
-      .filter((v): v is string => typeof v === "string");
-    if (parts.length > 0) {
-      const joined = parts.join("\n");
-      return role === "assistant" ? stripThinkingTags(joined) : joined;
-    }
-  }
-  if (typeof m.text === "string") {
-    return role === "assistant" ? stripThinkingTags(m.text) : m.text;
-  }
-  return null;
 }

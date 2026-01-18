@@ -44,10 +44,14 @@ type DispatchReplyFromConfig =
 type FinalizeInboundContext =
   typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
 type FormatAgentEnvelope = typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
+type FormatInboundEnvelope = typeof import("../../auto-reply/envelope.js").formatInboundEnvelope;
+type ResolveEnvelopeFormatOptions =
+  typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
 type ResolveStateDir = typeof import("../../config/paths.js").resolveStateDir;
 type RecordSessionMetaFromInbound =
   typeof import("../../config/sessions.js").recordSessionMetaFromInbound;
 type ResolveStorePath = typeof import("../../config/sessions.js").resolveStorePath;
+type ReadSessionUpdatedAt = typeof import("../../config/sessions.js").readSessionUpdatedAt;
 type UpdateLastRoute = typeof import("../../config/sessions.js").updateLastRoute;
 type LoadConfig = typeof import("../../config/config.js").loadConfig;
 type WriteConfigFile = typeof import("../../config/config.js").writeConfigFile;
@@ -169,6 +173,8 @@ export type PluginRuntime = {
       dispatchReplyFromConfig: DispatchReplyFromConfig;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
+      formatInboundEnvelope: FormatInboundEnvelope;
+      resolveEnvelopeFormatOptions: ResolveEnvelopeFormatOptions;
     };
     routing: {
       resolveAgentRoute: ResolveAgentRoute;
@@ -184,6 +190,7 @@ export type PluginRuntime = {
     };
     session: {
       resolveStorePath: ResolveStorePath;
+      readSessionUpdatedAt: ReadSessionUpdatedAt;
       recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
       updateLastRoute: UpdateLastRoute;
     };
