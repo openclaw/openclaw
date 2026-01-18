@@ -161,6 +161,33 @@ Local mode:
 - Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, Clawdbot automatically resets and reindexes the entire store.
 
+### Hybrid search (BM25 + vector)
+
+When enabled, Clawdbot combines:
+- **Vector similarity** (semantic match, wording can differ)
+- **BM25 keyword relevance** (exact tokens like IDs, env vars, code symbols)
+
+If full-text search is unavailable on your platform, Clawdbot falls back to vector-only search.
+
+Config:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      query: {
+        hybrid: {
+          enabled: true,
+          vectorWeight: 0.7,
+          textWeight: 0.3,
+          candidateMultiplier: 4
+        }
+      }
+    }
+  }
+}
+```
+
 ### Embedding cache
 
 Clawdbot can cache **chunk embeddings** in SQLite so reindexing and frequent updates (especially session transcripts) don't re-embed unchanged text.

@@ -107,6 +107,7 @@ type OpenAiBatchOutputLine = {
 const META_KEY = "memory_index_meta_v1";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
+const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
@@ -153,6 +154,11 @@ export class MemoryIndexManager {
     extensionPath?: string;
     loadError?: string;
     dims?: number;
+  };
+  private readonly fts: {
+    enabled: boolean;
+    available: boolean;
+    loadError?: string;
   };
   private vectorReady: Promise<boolean> | null = null;
   private watcher: FSWatcher | null = null;
@@ -223,6 +229,7 @@ export class MemoryIndexManager {
       enabled: params.settings.cache.enabled,
       maxEntries: params.settings.cache.maxEntries,
     };
+    this.fts = { enabled: params.settings.query.hybrid.enabled, available: false };
     this.ensureSchema();
     this.vector = {
       enabled: params.settings.store.vector.enabled,
@@ -274,13 +281,46 @@ export class MemoryIndexManager {
     if (!cleaned) return [];
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const hybrid = this.settings.query.hybrid;
+    const candidates = Math.min(
+      200,
+      Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
+    );
+
+    const keywordResults = hybrid.enabled
+      ? await this.searchKeyword(cleaned, candidates).catch(() => [])
+      : [];
+
     const queryVec = await this.provider.embedQuery(cleaned);
-    if (!queryVec.some((v) => v !== 0)) return [];
+    const hasVector = queryVec.some((v) => v !== 0);
+    const vectorResults = hasVector
+      ? await this.searchVector(queryVec, candidates).catch(() => [])
+      : [];
+
+    if (!hybrid.enabled) {
+      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    }
+
+    const merged = this.mergeHybridResults({
+      vector: vectorResults,
+      keyword: keywordResults,
+      vectorWeight: hybrid.vectorWeight,
+      textWeight: hybrid.textWeight,
+    });
+
+    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+  }
+
+  private async searchVector(
+    queryVec: number[],
+    limit: number,
+  ): Promise<Array<MemorySearchResult & { id: string }>> {
+    if (queryVec.length === 0 || limit <= 0) return [];
     if (await this.ensureVectorReady(queryVec.length)) {
       const sourceFilter = this.buildSourceFilter("c");
       const rows = this.db
         .prepare(
-          `SELECT c.path, c.start_line, c.end_line, c.text,\n` +
+          `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
             `       c.source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${VECTOR_TABLE} v\n` +
@@ -293,8 +333,9 @@ export class MemoryIndexManager {
           vectorToBlob(queryVec),
           this.provider.model,
           ...sourceFilter.params,
-          maxResults,
+          limit,
         ) as Array<{
+        id: string;
         path: string;
         start_line: number;
         end_line: number;
@@ -302,17 +343,17 @@ export class MemoryIndexManager {
         source: MemorySource;
         dist: number;
       }>;
-      return rows
-        .map((row) => ({
-          path: row.path,
-          startLine: row.start_line,
-          endLine: row.end_line,
-          score: 1 - row.dist,
-          snippet: truncateUtf16Safe(row.text, SNIPPET_MAX_CHARS),
-          source: row.source,
-        }))
-        .filter((entry) => entry.score >= minScore);
+      return rows.map((row) => ({
+        id: row.id,
+        path: row.path,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score: 1 - row.dist,
+        snippet: truncateUtf16Safe(row.text, SNIPPET_MAX_CHARS),
+        source: row.source,
+      }));
     }
+
     const candidates = this.listChunks();
     const scored = candidates
       .map((chunk) => ({
@@ -321,10 +362,10 @@ export class MemoryIndexManager {
       }))
       .filter((entry) => Number.isFinite(entry.score));
     return scored
-      .filter((entry) => entry.score >= minScore)
       .sort((a, b) => b.score - a.score)
-      .slice(0, maxResults)
+      .slice(0, limit)
       .map((entry) => ({
+        id: entry.chunk.id,
         path: entry.chunk.path,
         startLine: entry.chunk.startLine,
         endLine: entry.chunk.endLine,
@@ -332,6 +373,121 @@ export class MemoryIndexManager {
         snippet: truncateUtf16Safe(entry.chunk.text, SNIPPET_MAX_CHARS),
         source: entry.chunk.source,
       }));
+  }
+
+  private buildFtsQuery(raw: string): string | null {
+    const tokens = raw.match(/[A-Za-z0-9_]+/g)?.map((t) => t.trim()).filter(Boolean) ?? [];
+    if (tokens.length === 0) return null;
+    const quoted = tokens.map((t) => `"${t.replaceAll("\"", "")}"`);
+    return quoted.join(" AND ");
+  }
+
+  private async searchKeyword(
+    query: string,
+    limit: number,
+  ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+    if (!this.fts.enabled || !this.fts.available) return [];
+    if (limit <= 0) return [];
+    const ftsQuery = this.buildFtsQuery(query);
+    if (!ftsQuery) return [];
+    const sourceFilter = this.buildSourceFilter();
+    const rows = this.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       bm25(${FTS_TABLE}) AS rank\n` +
+          `  FROM ${FTS_TABLE}\n` +
+          ` WHERE ${FTS_TABLE} MATCH ? AND model = ?${sourceFilter.sql}\n` +
+          ` ORDER BY rank ASC\n` +
+          ` LIMIT ?`,
+      )
+      .all(ftsQuery, this.provider.model, ...sourceFilter.params, limit) as Array<{
+      id: string;
+      path: string;
+      source: MemorySource;
+      start_line: number;
+      end_line: number;
+      text: string;
+      rank: number;
+    }>;
+    return rows.map((row) => {
+      const rank = Number.isFinite(row.rank) ? Math.max(0, row.rank) : 999;
+      const textScore = 1 / (1 + rank);
+      return {
+        id: row.id,
+        path: row.path,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score: textScore,
+        textScore,
+        snippet: truncateUtf16Safe(row.text, SNIPPET_MAX_CHARS),
+        source: row.source,
+      };
+    });
+  }
+
+  private mergeHybridResults(params: {
+    vector: Array<MemorySearchResult & { id: string }>;
+    keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
+    vectorWeight: number;
+    textWeight: number;
+  }): MemorySearchResult[] {
+    const byId = new Map<
+      string,
+      {
+        id: string;
+        path: string;
+        startLine: number;
+        endLine: number;
+        source: MemorySource;
+        snippet: string;
+        vectorScore: number;
+        textScore: number;
+      }
+    >();
+
+    for (const r of params.vector) {
+      byId.set(r.id, {
+        id: r.id,
+        path: r.path,
+        startLine: r.startLine,
+        endLine: r.endLine,
+        source: r.source,
+        snippet: r.snippet,
+        vectorScore: r.score,
+        textScore: 0,
+      });
+    }
+    for (const r of params.keyword) {
+      const existing = byId.get(r.id);
+      if (existing) {
+        existing.textScore = r.textScore;
+        if (r.snippet && r.snippet.length > 0) existing.snippet = r.snippet;
+      } else {
+        byId.set(r.id, {
+          id: r.id,
+          path: r.path,
+          startLine: r.startLine,
+          endLine: r.endLine,
+          source: r.source,
+          snippet: r.snippet,
+          vectorScore: 0,
+          textScore: r.textScore,
+        });
+      }
+    }
+
+    const merged = Array.from(byId.values()).map((entry) => {
+      const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+      return {
+        path: entry.path,
+        startLine: entry.startLine,
+        endLine: entry.endLine,
+        score,
+        snippet: entry.snippet,
+        source: entry.source,
+      } satisfies MemorySearchResult;
+    });
+    return merged.sort((a, b) => b.score - a.score);
   }
 
   async sync(params?: {
@@ -382,6 +538,7 @@ export class MemoryIndexManager {
     sources: MemorySource[];
     sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
     cache?: { enabled: boolean; entries?: number; maxEntries?: number };
+    fts?: { enabled: boolean; available: boolean; error?: string };
     fallback?: { from: string; reason?: string };
     vector?: {
       enabled: boolean;
@@ -452,6 +609,11 @@ export class MemoryIndexManager {
             maxEntries: this.cache.maxEntries,
           }
         : { enabled: false, maxEntries: this.cache.maxEntries },
+      fts: {
+        enabled: this.fts.enabled,
+        available: this.fts.available,
+        error: this.fts.loadError,
+      },
       fallback: this.fallbackReason ? { from: "local", reason: this.fallbackReason } : undefined,
       vector: {
         enabled: this.vector.enabled,
@@ -638,6 +800,27 @@ export class MemoryIndexManager {
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${EMBEDDING_CACHE_TABLE}(updated_at);`,
     );
+    if (this.fts.enabled) {
+      try {
+        this.db.exec(
+          `CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(\n` +
+            `  text,\n` +
+            `  id UNINDEXED,\n` +
+            `  path UNINDEXED,\n` +
+            `  source UNINDEXED,\n` +
+            `  model UNINDEXED,\n` +
+            `  start_line UNINDEXED,\n` +
+            `  end_line UNINDEXED\n` +
+            `);`,
+        );
+        this.fts.available = true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.fts.available = false;
+        this.fts.loadError = message;
+        log.warn(`fts unavailable: ${message}`);
+      }
+    }
     this.ensureColumn("files", "source", "TEXT NOT NULL DEFAULT 'memory'");
     this.ensureColumn("chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
@@ -825,6 +1008,13 @@ export class MemoryIndexManager {
           .run(stale.path, "memory");
       } catch {}
       this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
+      if (this.fts.enabled && this.fts.available) {
+        try {
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "memory", this.provider.model);
+        } catch {}
+      }
     }
   }
 
@@ -915,6 +1105,13 @@ export class MemoryIndexManager {
       this.db
         .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
         .run(stale.path, "sessions");
+      if (this.fts.enabled && this.fts.available) {
+        try {
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+            .run(stale.path, "sessions", this.provider.model);
+        } catch {}
+      }
     }
   }
 
@@ -1000,6 +1197,11 @@ export class MemoryIndexManager {
   private resetIndex() {
     this.db.exec(`DELETE FROM files`);
     this.db.exec(`DELETE FROM chunks`);
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        this.db.exec(`DELETE FROM ${FTS_TABLE}`);
+      } catch {}
+    }
     this.dropVectorTable();
     this.vector.dims = undefined;
     this.sessionsDirtyFiles.clear();
@@ -1687,6 +1889,13 @@ export class MemoryIndexManager {
           .run(entry.path, options.source);
       } catch {}
     }
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+          .run(entry.path, options.source, this.provider.model);
+      } catch {}
+    }
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(entry.path, options.source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -1721,6 +1930,22 @@ export class MemoryIndexManager {
         this.db
           .prepare(`INSERT OR REPLACE INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
           .run(id, vectorToBlob(embedding));
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            chunk.text,
+            id,
+            entry.path,
+            options.source,
+            this.provider.model,
+            chunk.startLine,
+            chunk.endLine,
+          );
       }
     }
     this.db

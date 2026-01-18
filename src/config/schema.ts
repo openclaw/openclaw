@@ -190,6 +190,11 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
+  "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Memory Search Hybrid Candidate Multiplier",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   "auth.profiles": "Auth Profiles",
@@ -389,6 +394,14 @@ const FIELD_HELP: Record<string, string> = {
     "Enable sqlite-vec extension for vector search (default: true).",
   "agents.defaults.memorySearch.store.vector.extensionPath":
     "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
+  "agents.defaults.memorySearch.query.hybrid.enabled":
+    "Enable hybrid BM25 + vector search for memory (default: true).",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight":
+    "Weight for vector similarity when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.textWeight":
+    "Weight for BM25 text relevance when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Multiplier for candidate pool size (default: 4).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   "agents.defaults.memorySearch.cache.maxEntries":
