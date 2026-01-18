@@ -286,9 +286,52 @@ export async function runTui(opts: TuiOptions) {
     statusContainer.addChild(statusLoader);
   };
 
+  const waitingPhrases = [
+    "flibbertigibbeting",
+    "kerfuffling",
+    "dillydallying",
+    "twiddling thumbs",
+    "noodling",
+    "bamboozling",
+    "moseying",
+    "hobnobbing",
+    "pondering",
+    "conjuring",
+    "vibing",
+    "clawding",
+  ];
+
+  let waitingTick = 0;
+  let waitingTimer: NodeJS.Timeout | null = null;
+
+  const shimmerWaitingText = (text: string, tick: number) => {
+    const width = 6;
+    const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
+
+    const pos = tick % (text.length + width);
+    const start = Math.max(0, pos - width);
+    const end = Math.min(text.length - 1, pos);
+
+    let out = "";
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      out += i >= start && i <= end ? hi(ch) : theme.dim(ch);
+    }
+    return out;
+  };
+
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) return;
     const elapsed = formatElapsed(statusStartedAt);
+
+    if (activityStatus === "waiting") {
+      waitingTick++;
+      const phrase = waitingPhrases[Math.floor(waitingTick / 10) % waitingPhrases.length];
+      const cute = shimmerWaitingText(`${phrase}…`, waitingTick);
+      statusLoader.setMessage(`${cute} • ${elapsed} | ${connectionStatus}`);
+      return;
+    }
+
     statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
   };
 
@@ -306,6 +349,20 @@ export async function runTui(opts: TuiOptions) {
     statusTimer = null;
   };
 
+  const startWaitingTimer = () => {
+    if (waitingTimer) return;
+    waitingTimer = setInterval(() => {
+      if (activityStatus !== "waiting") return;
+      updateBusyStatusMessage();
+    }, 120);
+  };
+
+  const stopWaitingTimer = () => {
+    if (!waitingTimer) return;
+    clearInterval(waitingTimer);
+    waitingTimer = null;
+  };
+
   const renderStatus = () => {
     const isBusy = busyStates.has(activityStatus);
     if (isBusy) {
@@ -315,9 +372,12 @@ export async function runTui(opts: TuiOptions) {
       ensureStatusLoader();
       updateBusyStatusMessage();
       startStatusTimer();
+      if (activityStatus === "waiting") startWaitingTimer();
+      else stopWaitingTimer();
     } else {
       statusStartedAt = null;
       stopStatusTimer();
+      stopWaitingTimer();
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();
