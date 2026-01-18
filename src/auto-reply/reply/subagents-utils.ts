@@ -28,10 +28,7 @@ export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subag
   return raw || fallback;
 }
 
-export function formatRunLabel(
-  entry: SubagentRunRecord,
-  options?: { maxLength?: number },
-) {
+export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?: number }) {
   const raw = resolveSubagentLabel(entry);
   const maxLength = options?.maxLength ?? 72;
   if (!Number.isFinite(maxLength) || maxLength <= 0) return raw;

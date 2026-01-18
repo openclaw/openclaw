@@ -49,12 +49,10 @@ describe("subagents utils", () => {
 
   it("formats run status from outcome and timestamps", () => {
     expect(formatRunStatus({ ...baseRun })).toBe("running");
-    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe(
-      "done",
+    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "ok" } })).toBe("done");
+    expect(formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "timeout" } })).toBe(
+      "timeout",
     );
-    expect(
-      formatRunStatus({ ...baseRun, endedAt: 2000, outcome: { status: "timeout" } }),
-    ).toBe("timeout");
   });
 
   it("formats duration short for seconds and minutes", () => {

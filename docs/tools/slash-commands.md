@@ -17,7 +17,7 @@ There are two related systems:
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
 
-There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
+There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## Config
@@ -60,12 +60,11 @@ Text + native (when enabled):
 - `/commands`
 - `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
-- `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/subagents list|stop|log|info|send` (inspect, stop, log, or message sub-agent runs for the current session)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
-- `/cost on|off` (toggle per-response usage line)
+- `/usage off|tokens|full` (per-response usage footer)
 - `/stop`
 - `/restart`
 - `/dock-telegram` (alias: `/dock_telegram`) (switch replies to Telegram)
@@ -90,8 +89,8 @@ Text-only:
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
-- `/status` and `/usage` show the same status output; for full provider usage breakdown, use `clawdbot status --usage`.
-- `/cost` appends per-response token usage; it only shows dollar cost when the model uses an API key (OAuth hides cost).
+- For full provider usage breakdown, use `clawdbot status --usage`.
+- `/usage` controls the per-response usage footer. It only shows dollar cost when the model uses an API key (OAuth hides cost).
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
@@ -99,15 +98,15 @@ Notes:
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
   - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
-  - Currently: `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
+- Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
 - **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
-## Usage vs cost (what shows where)
+## Usage surfaces (what shows where)
 
 - **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled.
-- **Per-response tokens/cost** is controlled by `/cost on|off` (appended to normal replies).
+- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
 ## Model selection (`/model`)

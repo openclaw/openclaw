@@ -383,7 +383,7 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
     "/reasoning on|off",
     "/elevated on|off",
     "/model <id>",
-    "/cost on|off",
+    "/usage off|tokens|full",
   ];
   if (cfg?.commands?.config === true) options.push("/config show");
   if (cfg?.commands?.debug === true) options.push("/debug show");

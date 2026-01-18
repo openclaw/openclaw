@@ -225,16 +225,16 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       formatArgs: COMMAND_ARG_FORMATTERS.debug,
     }),
     defineChatCommand({
-      key: "cost",
-      nativeName: "cost",
+      key: "usage",
+      nativeName: "usage",
       description: "Toggle per-response usage line.",
-      textAlias: "/cost",
+      textAlias: "/usage",
       args: [
         {
           name: "mode",
-          description: "on or off",
+          description: "off, tokens, or full",
           type: "string",
-          choices: ["on", "off"],
+          choices: ["off", "tokens", "full"],
         },
       ],
       argsMenu: "auto",
@@ -431,7 +431,6 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       .map((dock) => defineDockCommand(dock)),
   ];
 
-  registerAlias(commands, "status", "/usage");
   registerAlias(commands, "whoami", "/id");
   registerAlias(commands, "think", "/thinking", "/t");
   registerAlias(commands, "verbose", "/v");

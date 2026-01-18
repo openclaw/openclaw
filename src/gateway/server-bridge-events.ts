@@ -196,7 +196,6 @@ export const handleBridgeEvent = async (
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const success = obj.success === true;
       const output = typeof obj.output === "string" ? obj.output.trim() : "";
       const reason = typeof obj.reason === "string" ? obj.reason.trim() : "";
 

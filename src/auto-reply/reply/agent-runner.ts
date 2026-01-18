@@ -457,10 +457,16 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const responseUsageEnabled =
-      (activeSessionEntry?.responseUsage ??
-        (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined)) === "on";
-    if (responseUsageEnabled && hasNonzeroUsage(usage)) {
+    const responseUsageRaw =
+      activeSessionEntry?.responseUsage ??
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+    const responseUsageMode =
+      responseUsageRaw === "full"
+        ? "full"
+        : responseUsageRaw === "tokens" || responseUsageRaw === "on"
+          ? "tokens"
+          : "off";
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost
@@ -470,11 +476,14 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
-      const formatted = formatResponseUsageLine({
+      let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
       });
+      if (formatted && responseUsageMode === "full" && sessionKey) {
+        formatted = `${formatted} · session ${sessionKey}`;
+      }
       if (formatted) responseUsageLine = formatted;
     }
 
