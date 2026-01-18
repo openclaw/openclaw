@@ -22,6 +22,7 @@ import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordShouldRequireMention,
@@ -89,13 +90,20 @@ export async function preflightDiscordMessage(
       const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
       const effectiveAllowFrom = [...(params.allowFrom ?? []), ...storeAllowFrom];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:"]);
-      const permitted = allowList
-        ? allowListMatches(allowList, {
-            id: author.id,
-            name: author.username,
-            tag: formatDiscordUserTag(author),
+      const allowMatch = allowList
+        ? resolveDiscordAllowListMatch({
+            allowList,
+            candidate: {
+              id: author.id,
+              name: author.username,
+              tag: formatDiscordUserTag(author),
+            },
           })
-        : false;
+        : { allowed: false };
+      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+        allowMatch.matchSource ?? "none"
+      }`;
+      const permitted = allowMatch.allowed;
       if (!permitted) {
         commandAuthorized = false;
         if (dmPolicy === "pairing") {
@@ -109,7 +117,7 @@ export async function preflightDiscordMessage(
           });
           if (created) {
             logVerbose(
-              `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)}`,
+              `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
             );
             try {
               await sendMessageDiscord(
@@ -130,7 +138,9 @@ export async function preflightDiscordMessage(
             }
           }
         } else {
-          logVerbose(`Blocked unauthorized discord sender ${author.id} (dmPolicy=${dmPolicy})`);
+          logVerbose(
+            `Blocked unauthorized discord sender ${author.id} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+          );
         }
         return null;
       }

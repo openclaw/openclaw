@@ -34,7 +34,12 @@ import {
   hasBotMention,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFrom,
+  resolveSenderAllowMatch,
+} from "./bot-access.js";
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
 import type { TelegramContext } from "./bot/types.js";
 
@@ -174,14 +179,16 @@ export const buildTelegramMessageContext = async ({
     if (dmPolicy !== "open") {
       const candidate = String(chatId);
       const senderUsername = msg.from?.username ?? "";
+      const allowMatch = resolveSenderAllowMatch({
+        allow: effectiveDmAllow,
+        senderId: candidate,
+        senderUsername,
+      });
+      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+        allowMatch.matchSource ?? "none"
+      }`;
       const allowed =
-        effectiveDmAllow.hasWildcard ||
-        (effectiveDmAllow.hasEntries &&
-          isSenderAllowed({
-            allow: effectiveDmAllow,
-            senderId: candidate,
-            senderUsername,
-          }));
+        effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
       if (!allowed) {
         if (dmPolicy === "pairing") {
           try {
@@ -207,6 +214,8 @@ export const buildTelegramMessageContext = async ({
                   username: from?.username,
                   firstName: from?.first_name,
                   lastName: from?.last_name,
+                  matchKey: allowMatch.matchKey ?? "none",
+                  matchSource: allowMatch.matchSource ?? "none",
                 },
                 "telegram pairing request",
               );
@@ -228,7 +237,9 @@ export const buildTelegramMessageContext = async ({
             logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
           }
         } else {
-          logVerbose(`Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy})`);
+          logVerbose(
+            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+          );
         }
         return null;
       }

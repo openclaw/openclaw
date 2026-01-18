@@ -9,6 +9,12 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
+export type DiscordAllowListMatch = {
+  allowed: boolean;
+  matchKey?: string;
+  matchSource?: "wildcard" | "id" | "name" | "tag";
+};
+
 export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
@@ -90,6 +96,28 @@ export function allowListMatches(
   if (slug && list.names.has(slug)) return true;
   if (candidate.tag && list.names.has(normalizeDiscordSlug(candidate.tag))) return true;
   return false;
+}
+
+export function resolveDiscordAllowListMatch(params: {
+  allowList: DiscordAllowList;
+  candidate: { id?: string; name?: string; tag?: string };
+}): DiscordAllowListMatch {
+  const { allowList, candidate } = params;
+  if (allowList.allowAll) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+  if (candidate.id && allowList.ids.has(candidate.id)) {
+    return { allowed: true, matchKey: candidate.id, matchSource: "id" };
+  }
+  const nameSlug = candidate.name ? normalizeDiscordSlug(candidate.name) : "";
+  if (nameSlug && allowList.names.has(nameSlug)) {
+    return { allowed: true, matchKey: nameSlug, matchSource: "name" };
+  }
+  const tagSlug = candidate.tag ? normalizeDiscordSlug(candidate.tag) : "";
+  if (tagSlug && allowList.names.has(tagSlug)) {
+    return { allowed: true, matchKey: tagSlug, matchSource: "tag" };
+  }
+  return { allowed: false };
 }
 
 export function resolveDiscordUserAllowed(params: {
