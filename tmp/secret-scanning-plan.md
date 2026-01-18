@@ -19,7 +19,7 @@
   - `mode: "off" | "redact" | "block"` (default: "off").
   - `maxChars: number` (cap; block if exceeded).
   - `overflow: "truncate" | "block"` (default: "block" or "truncate").
-  - Optional `redactPreview: boolean` (allow redacted previews in logs/errors).
+  - `logSecretMatches: "off" | "redacted"` (default: "off").
 
 ## Core Module (PR 1)
 - New module: `src/security/secret-scan/`.
