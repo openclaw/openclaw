@@ -19,6 +19,44 @@ Docs: https://docs.clawd.bot
 - Memory: add native Gemini embeddings provider for memory search. (#1151)
 - Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
 - Slack: add HTTP webhook mode via Bolt HTTP receiver for Events API deployments. (#1143) — thanks @jdrhyne.
+- Nodes: report core/ui versions in node list + presence; surface both in CLI + macOS UI.
+<<<<<<< HEAD
+- Agents: add local docs path resolution and include docs/mirror/source/community pointers in the system prompt.
+- Slack: add HTTP webhook mode via Bolt HTTP receiver for Events API deployments. (#1143) — thanks @jdrhyne.
+||||||| parent of 903e9be49 (feat: surface node core/ui versions in macOS)
+
+### Fixes
+- Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
+- macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
+- Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
+- Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
+
+## 2026.1.18-5
+
+### Changes
+- Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
+
+## 2026.1.18-3
+
+### Changes
+=======
+- Nodes: report core/ui versions in node list + presence; surface both in CLI + macOS UI.
+
+### Fixes
+- Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
+- macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
+- Memory: index atomically so failed reindex preserves the previous memory database. (#1151)
+- Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
+
+## 2026.1.18-5
+
+### Changes
+- Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
+
+## 2026.1.18-3
+
+### Changes
+>>>>>>> 903e9be49 (feat: surface node core/ui versions in macOS)
 - Exec: add host/security/ask routing for gateway + node exec.
 - Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node).
 - macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.

@@ -747,8 +747,8 @@ extension MenuSessionsInjector {
             menu.addItem(self.makeNodeCopyItem(label: "Platform", value: platform))
         }
 
-        if let version = entry.version?.nonEmpty {
-            menu.addItem(self.makeNodeCopyItem(label: "Version", value: self.formatVersionLabel(version)))
+        if let version = NodeMenuEntryFormatter.detailRightVersion(entry)?.nonEmpty {
+            menu.addItem(self.makeNodeCopyItem(label: "Version", value: version))
         }
 
         menu.addItem(self.makeNodeDetailItem(label: "Connected", value: entry.isConnected ? "Yes" : "No"))
