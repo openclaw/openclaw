@@ -148,4 +148,102 @@ describe("memory indexing with OpenAI batches", () => {
     expect(fetchMock).toHaveBeenCalled();
     expect(labels.some((label) => label.toLowerCase().includes("batch"))).toBe(true);
   });
+
+  it("retries OpenAI batch create on transient failures", async () => {
+    const content = ["retry", "the", "batch"].join("\n\n");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-01-08.md"), content);
+
+    let uploadedRequests: Array<{ custom_id?: string }> = [];
+    let batchCreates = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith("/files")) {
+        const body = init?.body;
+        if (!(body instanceof FormData)) {
+          throw new Error("expected FormData upload");
+        }
+        for (const [key, value] of body.entries()) {
+          if (key !== "file") continue;
+          if (typeof value === "string") {
+            uploadedRequests = value
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line) as { custom_id?: string });
+          } else {
+            const text = await value.text();
+            uploadedRequests = text
+              .split("\n")
+              .filter(Boolean)
+              .map((line) => JSON.parse(line) as { custom_id?: string });
+          }
+        }
+        return new Response(JSON.stringify({ id: "file_1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/batches")) {
+        batchCreates += 1;
+        if (batchCreates === 1) {
+          return new Response("upstream connect error", { status: 503 });
+        }
+        return new Response(JSON.stringify({ id: "batch_1", status: "in_progress" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url.endsWith("/batches/batch_1")) {
+        return new Response(
+          JSON.stringify({ id: "batch_1", status: "completed", output_file_id: "file_out" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.endsWith("/files/file_out/content")) {
+        const lines = uploadedRequests.map((request, index) =>
+          JSON.stringify({
+            custom_id: request.custom_id,
+            response: {
+              status_code: 200,
+              body: { data: [{ embedding: [index + 1, 0, 0], index: 0 }] },
+            },
+          }),
+        );
+        return new Response(lines.join("\n"), {
+          status: 200,
+          headers: { "Content-Type": "application/jsonl" },
+        });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+            store: { path: indexPath },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { minScore: 0 },
+            remote: { batch: { enabled: true, wait: true } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+    await manager.sync({ force: true });
+
+    const status = manager.status();
+    expect(status.chunks).toBeGreaterThan(0);
+    expect(batchCreates).toBe(2);
+  });
 });
