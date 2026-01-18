@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { hashText } from "./internal.js";

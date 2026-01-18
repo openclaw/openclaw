@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 
 const log = createSubsystemLogger("memory");

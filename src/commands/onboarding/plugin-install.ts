@@ -3,7 +3,7 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { recordPluginInstall } from "../../plugins/installs.js";
 import { enablePluginInConfig } from "../../plugins/enable.js";
 import { loadClawdbotPlugins } from "../../plugins/loader.js";

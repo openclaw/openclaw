@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
-import type { createSubsystemLogger } from "../../logging.js";
+import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 
 import type { ResolvedGatewayAuth } from "../auth.js";

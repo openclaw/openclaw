@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 export const whatsappLog = createSubsystemLogger("gateway/channels/whatsapp");
 export const whatsappInboundLog = whatsappLog.child("inbound");

@@ -5,7 +5,7 @@
  * and can be called from anywhere in the codebase.
  */
 
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 

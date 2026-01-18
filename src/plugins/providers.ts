@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadClawdbotPlugins, type PluginLoadOptions } from "./loader.js";
 import type { ProviderPlugin } from "./types.js";
 

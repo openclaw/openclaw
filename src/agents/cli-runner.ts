@@ -4,7 +4,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { shouldLogVerbose } from "../globals.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotDocsPath } from "./docs-path.js";

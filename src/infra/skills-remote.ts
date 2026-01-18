@@ -4,7 +4,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { ClawdbotConfig } from "../config/config.js";
 import type { NodeBridgeServer } from "./bridge/server.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 
 type RemoteNodeRecord = {

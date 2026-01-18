@@ -1,11 +1,12 @@
 import { createRequire } from "node:module";
 import util from "node:util";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
+import { readLoggingConfig } from "./config.js";
 import { loggingState } from "./state.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
@@ -31,10 +32,9 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  let cfg: ClawdbotConfig["logging"] | undefined;
-  if (loggingState.overrideSettings) {
-    cfg = loggingState.overrideSettings as LoggerSettings;
-  } else {
+  let cfg: ClawdbotConfig["logging"] | undefined =
+    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+  if (!cfg) {
     try {
       const loaded = requireConfig("../config/config.js") as {
         loadConfig?: () => ClawdbotConfig;

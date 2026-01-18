@@ -8,7 +8,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";

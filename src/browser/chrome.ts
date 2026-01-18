@@ -5,7 +5,7 @@ import path from "node:path";
 import WebSocket from "ws";
 
 import { ensurePortAvailable } from "../infra/ports.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import { appendCdpPath } from "./cdp.helpers.js";
