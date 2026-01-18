@@ -32,6 +32,9 @@ To build the macOS app and package it into `dist/Clawdbot.app`, run:
 
 If you don't have an Apple Developer ID certificate, the script will automatically use **ad-hoc signing** (`-`). 
 
+For dev run modes, signing flags, and Team ID troubleshooting, see the macOS app README:
+https://github.com/clawdbot/clawdbot/blob/main/apps/macos/README.md
+
 > **Note**: Ad-hoc signed apps may trigger security prompts. If the app crashes immediately with "Abort trap 6", see the [Troubleshooting](#troubleshooting) section.
 
 ## 3. Install the CLI
