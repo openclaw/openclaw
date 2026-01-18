@@ -20,9 +20,7 @@ export function normalizeChannelSlug(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function buildChannelKeyCandidates(
-  ...keys: Array<string | undefined | null>
-): string[] {
+export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
   const seen = new Set<string>();
   const candidates: string[] = [];
   for (const key of keys) {

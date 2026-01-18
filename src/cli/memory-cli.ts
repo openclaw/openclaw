@@ -189,7 +189,11 @@ export function registerMemoryCli(program: Command) {
                 : "unavailable"
               : "disabled";
             const ftsColor =
-              ftsState === "ready" ? theme.success : ftsState === "unavailable" ? theme.warn : theme.muted;
+              ftsState === "ready"
+                ? theme.success
+                : ftsState === "unavailable"
+                  ? theme.warn
+                  : theme.muted;
             lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState)}`);
             if (status.fts.error) {
               lines.push(`${label("FTS error")} ${warn(status.fts.error)}`);

@@ -329,12 +329,7 @@ export class MemoryIndexManager {
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
         )
-        .all(
-          vectorToBlob(queryVec),
-          this.provider.model,
-          ...sourceFilter.params,
-          limit,
-        ) as Array<{
+        .all(vectorToBlob(queryVec), this.provider.model, ...sourceFilter.params, limit) as Array<{
         id: string;
         path: string;
         start_line: number;
@@ -376,9 +371,13 @@ export class MemoryIndexManager {
   }
 
   private buildFtsQuery(raw: string): string | null {
-    const tokens = raw.match(/[A-Za-z0-9_]+/g)?.map((t) => t.trim()).filter(Boolean) ?? [];
+    const tokens =
+      raw
+        .match(/[A-Za-z0-9_]+/g)
+        ?.map((t) => t.trim())
+        .filter(Boolean) ?? [];
     if (tokens.length === 0) return null;
-    const quoted = tokens.map((t) => `"${t.replaceAll("\"", "")}"`);
+    const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
     return quoted.join(" AND ");
   }
 
@@ -603,9 +602,11 @@ export class MemoryIndexManager {
         ? {
             enabled: true,
             entries:
-              (this.db
-                .prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`)
-                .get() as { c: number } | undefined)?.c ?? 0,
+              (
+                this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+                  | { c: number }
+                  | undefined
+              )?.c ?? 0,
             maxEntries: this.cache.maxEntries,
           }
         : { enabled: false, maxEntries: this.cache.maxEntries },
@@ -1412,9 +1413,9 @@ export class MemoryIndexManager {
     if (!this.cache.enabled) return;
     const max = this.cache.maxEntries;
     if (!max || max <= 0) return;
-    const row = this.db
-      .prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`)
-      .get() as { c: number } | undefined;
+    const row = this.db.prepare(`SELECT COUNT(*) as c FROM ${EMBEDDING_CACHE_TABLE}`).get() as
+      | { c: number }
+      | undefined;
     const count = row?.c ?? 0;
     if (count <= max) return;
     const excess = count - max;
@@ -1896,7 +1897,9 @@ export class MemoryIndexManager {
           .run(entry.path, options.source, this.provider.model);
       } catch {}
     }
-    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(entry.path, options.source);
+    this.db
+      .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
+      .run(entry.path, options.source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];

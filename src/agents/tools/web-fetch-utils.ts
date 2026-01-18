@@ -68,7 +68,10 @@ export function markdownToText(markdown: string): string {
   return normalizeWhitespace(text);
 }
 
-export function truncateText(value: string, maxChars: number): { text: string; truncated: boolean } {
+export function truncateText(
+  value: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
   if (value.length <= maxChars) return { text: value, truncated: false };
   return { text: value.slice(0, maxChars), truncated: true };
 }

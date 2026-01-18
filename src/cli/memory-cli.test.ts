@@ -65,7 +65,9 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embedding cache: enabled (123 entries)"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Embedding cache: enabled (123 entries)"),
+    );
     expect(close).toHaveBeenCalled();
   });
 

@@ -79,11 +79,7 @@ type PerplexityConfig = {
   model?: string;
 };
 
-type PerplexityApiKeySource =
-  | "config"
-  | "perplexity_env"
-  | "openrouter_env"
-  | "none";
+type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
 
 type PerplexitySearchResponse = {
   choices?: Array<{

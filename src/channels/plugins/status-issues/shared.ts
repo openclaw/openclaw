@@ -17,8 +17,10 @@ export function formatMatchMetadata(params: {
         ? String(params.matchKey)
         : undefined;
   const matchSource = asString(params.matchSource);
-  const parts = [matchKey ? `matchKey=${matchKey}` : null, matchSource ? `matchSource=${matchSource}` : null]
-    .filter((entry): entry is string => Boolean(entry));
+  const parts = [
+    matchKey ? `matchKey=${matchKey}` : null,
+    matchSource ? `matchSource=${matchSource}` : null,
+  ].filter((entry): entry is string => Boolean(entry));
   return parts.length > 0 ? parts.join(" ") : undefined;
 }
 

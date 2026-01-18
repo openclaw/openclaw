@@ -104,8 +104,7 @@ describe("web_search perplexity baseUrl defaults", () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
       } as Response),
     );
     // @ts-expect-error mock fetch
@@ -127,8 +126,7 @@ describe("web_search perplexity baseUrl defaults", () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
       } as Response),
     );
     // @ts-expect-error mock fetch
@@ -150,8 +148,7 @@ describe("web_search perplexity baseUrl defaults", () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
       } as Response),
     );
     // @ts-expect-error mock fetch
@@ -172,8 +169,7 @@ describe("web_search perplexity baseUrl defaults", () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
       } as Response),
     );
     // @ts-expect-error mock fetch
@@ -202,8 +198,7 @@ describe("web_search perplexity baseUrl defaults", () => {
     const mockFetch = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () =>
-          Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
+        json: () => Promise.resolve({ choices: [{ message: { content: "ok" } }], citations: [] }),
       } as Response),
     );
     // @ts-expect-error mock fetch

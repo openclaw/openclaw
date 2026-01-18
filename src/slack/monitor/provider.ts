@@ -187,9 +187,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 unresolved.push(entry.input);
                 continue;
               }
-              mapping.push(
-                `${entry.input}→${entry.id}${entry.archived ? " (archived)" : ""}`,
-              );
+              mapping.push(`${entry.input}→${entry.id}${entry.archived ? " (archived)" : ""}`);
               const existing = nextChannels[entry.id] ?? {};
               nextChannels[entry.id] = { ...source, ...existing };
             }
@@ -276,7 +274,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channel users", mapping, unresolved, runtime);
           } catch (err) {
-            runtime.log?.(`slack channel user resolve failed; using config entries. ${String(err)}`);
+            runtime.log?.(
+              `slack channel user resolve failed; using config entries. ${String(err)}`,
+            );
           }
         }
       }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveCommandAuthorizedFromAuthorizers, resolveControlCommandGate } from "./command-gating.js";
+import {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveControlCommandGate,
+} from "./command-gating.js";
 
 describe("resolveCommandAuthorizedFromAuthorizers", () => {
   it("denies when useAccessGroups is enabled and no authorizer is configured", () => {
