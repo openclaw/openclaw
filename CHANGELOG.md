@@ -10,13 +10,13 @@ Docs: https://docs.clawd.bot
 - Swabble: use the tagged Commander Swift package release.
 - CLI: add `clawdbot acp client` interactive ACP harness for debugging.
 - Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
-- Memory: add native Gemini embeddings provider for memory search. (#1151) — thanks @gumadeiras.
+- Memory: add native Gemini embeddings provider for memory search. (#1151) — thanks @steipete.
 
 ### Fixes
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
 - macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
-- Memory: index atomically so failed reindex preserves the previous memory database. (#1151) — thanks @gumadeiras.
-- Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151) — thanks @gumadeiras.
+- Memory: index atomically so failed reindex preserves the previous memory database. (#1151) — thanks @steipete.
+- Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151) — thanks @steipete.
 
 ## 2026.1.18-3
 
