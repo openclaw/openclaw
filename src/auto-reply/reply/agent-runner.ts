@@ -161,11 +161,14 @@ export async function runReplyAgent(params: {
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       if (activeSessionEntry && activeSessionStore && sessionKey) {
-        activeSessionEntry.updatedAt = Date.now();
+        const updatedAt = Date.now();
+        activeSessionEntry.updatedAt = updatedAt;
         activeSessionStore[sessionKey] = activeSessionEntry;
         if (storePath) {
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = activeSessionEntry as SessionEntry;
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({ updatedAt }),
           });
         }
       }
@@ -177,11 +180,14 @@ export async function runReplyAgent(params: {
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     if (activeSessionEntry && activeSessionStore && sessionKey) {
-      activeSessionEntry.updatedAt = Date.now();
+      const updatedAt = Date.now();
+      activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = activeSessionEntry as SessionEntry;
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({ updatedAt }),
         });
       }
     }
@@ -328,12 +334,18 @@ export async function runReplyAgent(params: {
       sessionKey &&
       activeSessionEntry.groupActivationNeedsSystemIntro
     ) {
+      const updatedAt = Date.now();
       activeSessionEntry.groupActivationNeedsSystemIntro = false;
-      activeSessionEntry.updatedAt = Date.now();
+      activeSessionEntry.updatedAt = updatedAt;
       activeSessionStore[sessionKey] = activeSessionEntry;
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = activeSessionEntry as SessionEntry;
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            groupActivationNeedsSystemIntro: false,
+            updatedAt,
+          }),
         });
       }
     }

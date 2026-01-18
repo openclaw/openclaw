@@ -206,6 +206,37 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
   });
 
+  it("updateSessionStoreEntry preserves existing fields when patching", async () => {
+    const sessionKey = "agent:main:main";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 100,
+            reasoningLevel: "on",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey,
+      update: async () => ({ updatedAt: 200 }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
+    expect(store[sessionKey]?.reasoningLevel).toBe("on");
+  });
+
   it("updateSessionStore preserves concurrent additions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
