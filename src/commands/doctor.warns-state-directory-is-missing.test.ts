@@ -248,6 +248,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "", created: false }),
 }));
 
 vi.mock("../telegram/token.js", () => ({
