@@ -54,8 +54,12 @@ the workspace is writable. See [Memory](/concepts/memory) and
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
   - Node bridge runs: `node-<nodeId>`
 
-## Lifecyle
-- Idle expiry: `session.idleMinutes` (default 60). After the timeout a new `sessionId` is minted on the next message.
+## Lifecycle
+- Reset policy: sessions are reused until they expire, and expiry is evaluated on the next inbound message.
+- Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
+- Idle reset (optional): `idleMinutes` adds a sliding idle window. When both daily and idle resets are configured, **whichever expires first** forces a new session.
+- Legacy idle-only: if you set `session.idleMinutes` without any `session.reset`/`resetByType` config, Clawdbot stays in idle-only mode for backward compatibility.
+- Per-type overrides (optional): `resetByType` lets you override the policy for `dm`, `group`, and `thread` sessions (thread = Slack/Discord threads, Telegram topics, Matrix threads when provided by the connector).
 - Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. If `/new` or `/reset` is sent alone, Clawdbot runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
 - Isolated cron jobs always mint a fresh `sessionId` per run (no idle reuse).
@@ -93,7 +97,18 @@ Send these as standalone messages so they register.
     identityLinks: {
       alice: ["telegram:123456789", "discord:987654321012345678"]
     },
-    idleMinutes: 120,
+    reset: {
+      // Defaults: mode=daily, atHour=4 (gateway host local time).
+      // If you also set idleMinutes, whichever expires first wins.
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 120
+    },
+    resetByType: {
+      thread: { mode: "daily", atHour: 4 },
+      dm: { mode: "idle", idleMinutes: 240 },
+      group: { mode: "idle", idleMinutes: 120 }
+    },
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdbot/agents/{agentId}/sessions/sessions.json",
     mainKey: "main",
