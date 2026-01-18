@@ -5,7 +5,88 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
-import { installLaunchAgent, parseLaunchctlPrint, resolveLaunchAgentPlistPath } from "./launchd.js";
+import {
+  installLaunchAgent,
+  isLaunchAgentListed,
+  parseLaunchctlPrint,
+  repairLaunchAgentBootstrap,
+  resolveLaunchAgentPlistPath,
+} from "./launchd.js";
+
+async function withLaunchctlStub(
+  options: { listOutput?: string },
+  run: (context: { env: Record<string, string | undefined>; logPath: string }) => Promise<void>,
+) {
+  const originalPath = process.env.PATH;
+  const originalLogPath = process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;
+  const originalListOutput = process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT;
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-launchctl-test-"));
+  try {
+    const binDir = path.join(tmpDir, "bin");
+    const homeDir = path.join(tmpDir, "home");
+    const logPath = path.join(tmpDir, "launchctl.log");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(homeDir, { recursive: true });
+
+    const stubJsPath = path.join(binDir, "launchctl.js");
+    await fs.writeFile(
+      stubJsPath,
+      [
+        'import fs from "node:fs";',
+        "const args = process.argv.slice(2);",
+        "const logPath = process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;",
+        "if (logPath) {",
+        '  fs.appendFileSync(logPath, JSON.stringify(args) + "\\n", "utf8");',
+        "}",
+        'if (args[0] === "list") {',
+        "  const output = process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT || \"\";",
+        "  process.stdout.write(output);",
+        "}",
+        "process.exit(0);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    if (process.platform === "win32") {
+      await fs.writeFile(
+        path.join(binDir, "launchctl.cmd"),
+        `@echo off\r\nnode "%~dp0\\launchctl.js" %*\r\n`,
+        "utf8",
+      );
+    } else {
+      const shPath = path.join(binDir, "launchctl");
+      await fs.writeFile(shPath, `#!/bin/sh\nnode "$(dirname "$0")/launchctl.js" "$@"\n`, "utf8");
+      await fs.chmod(shPath, 0o755);
+    }
+
+    process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG = logPath;
+    process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT = options.listOutput ?? "";
+    process.env.PATH = `${binDir}${path.delimiter}${originalPath ?? ""}`;
+
+    await run({
+      env: {
+        HOME: homeDir,
+        CLAWDBOT_PROFILE: "default",
+      },
+      logPath,
+    });
+  } finally {
+    process.env.PATH = originalPath;
+    if (originalLogPath === undefined) {
+      delete process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG;
+    } else {
+      process.env.CLAWDBOT_TEST_LAUNCHCTL_LOG = originalLogPath;
+    }
+    if (originalListOutput === undefined) {
+      delete process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT;
+    } else {
+      process.env.CLAWDBOT_TEST_LAUNCHCTL_LIST_OUTPUT = originalListOutput;
+    }
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
 
 describe("launchd runtime parsing", () => {
   it("parses state, pid, and exit status", () => {
@@ -20,6 +101,46 @@ describe("launchd runtime parsing", () => {
       pid: 4242,
       lastExitStatus: 1,
       lastExitReason: "exited",
+    });
+  });
+});
+
+describe("launchctl list detection", () => {
+  it("detects the resolved label in launchctl list", async () => {
+    await withLaunchctlStub(
+      { listOutput: "123 0 com.clawdbot.gateway\n" },
+      async ({ env }) => {
+        const listed = await isLaunchAgentListed({ env });
+        expect(listed).toBe(true);
+      },
+    );
+  });
+
+  it("returns false when the label is missing", async () => {
+    await withLaunchctlStub({ listOutput: "123 0 com.other.service\n" }, async ({ env }) => {
+      const listed = await isLaunchAgentListed({ env });
+      expect(listed).toBe(false);
+    });
+  });
+});
+
+describe("launchd bootstrap repair", () => {
+  it("bootstraps and kickstarts the resolved label", async () => {
+    await withLaunchctlStub({}, async ({ env, logPath }) => {
+      const repair = await repairLaunchAgentBootstrap({ env });
+      expect(repair.ok).toBe(true);
+
+      const calls = (await fs.readFile(logPath, "utf8"))
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as string[]);
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const label = "com.clawdbot.gateway";
+      const plistPath = resolveLaunchAgentPlistPath(env);
+
+      expect(calls).toContainEqual(["bootstrap", domain, plistPath]);
+      expect(calls).toContainEqual(["kickstart", "-k", `${domain}/${label}`]);
     });
   });
 });
