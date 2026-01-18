@@ -2,26 +2,15 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.17-6
-
-### Changes
-- Memory: render progress immediately and poll OpenAI batch status more frequently (default 500ms).
-- Plugins: add exclusive plugin slots with a dedicated memory slot selector.
-- Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
-- Docs: document plugin slots and memory plugin behavior.
-- Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
-- Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
-- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
-- Sessions: persist origin metadata for last-route updates so DM/channel/group sessions keep explainers. (#1133) — thanks @adam91holt.
-
-## 2026.1.17-5
+## 2026.1.18-2
 
 ### Changes
 - Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
-- CLI: surface memory search state in `clawdbot status` and detailed FTS + embedding cache state in `clawdbot memory status`.
+- CLI: surface FTS + embedding cache state in `clawdbot memory status`.
+- Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
 
-## 2026.1.17-4
+## 2026.1.18-1
 
 ### Changes
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
@@ -37,13 +26,11 @@ Docs: https://docs.clawd.bot
 - macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
 - Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
 - Discord: only emit slow listener warnings after 30s.
-
 ## 2026.1.17-3
 
 ### Changes
 - Memory: add OpenAI Batch API indexing for embeddings when configured.
 - Memory: enable OpenAI batch indexing by default for OpenAI embeddings.
-- Sessions: persist origin metadata across connectors for generic session explainers.
 
 ### Fixes
 - Memory: retry transient 5xx errors (Cloudflare) during embedding indexing.

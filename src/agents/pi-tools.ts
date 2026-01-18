@@ -39,7 +39,8 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
-import { resolveToolProfilePolicy } from "./tool-policy.js";
+import { normalizeToolName, resolveToolProfilePolicy } from "./tool-policy.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -66,6 +67,77 @@ function isApplyPatchAllowedForModel(params: {
     if (!normalized) return false;
     return normalized === normalizedModelId || normalized === normalizedFull;
   });
+}
+
+type ToolPolicyLike = {
+  allow?: string[];
+  deny?: string[];
+};
+
+function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
+  const entries: string[] = [];
+  for (const policy of policies) {
+    if (!policy?.allow) continue;
+    for (const value of policy.allow) {
+      if (typeof value !== "string") continue;
+      const trimmed = value.trim();
+      if (trimmed) entries.push(trimmed);
+    }
+  }
+  return entries;
+}
+
+function buildPluginToolGroups(tools: AnyAgentTool[]) {
+  const all: string[] = [];
+  const byPlugin = new Map<string, string[]>();
+  for (const tool of tools) {
+    const meta = getPluginToolMeta(tool);
+    if (!meta) continue;
+    const name = normalizeToolName(tool.name);
+    all.push(name);
+    const pluginId = meta.pluginId.toLowerCase();
+    const list = byPlugin.get(pluginId) ?? [];
+    list.push(name);
+    byPlugin.set(pluginId, list);
+  }
+  return { all, byPlugin };
+}
+
+function expandPluginGroups(
+  list: string[] | undefined,
+  groups: { all: string[]; byPlugin: Map<string, string[]> },
+): string[] | undefined {
+  if (!list || list.length === 0) return list;
+  const expanded: string[] = [];
+  for (const entry of list) {
+    const normalized = normalizeToolName(entry);
+    if (normalized === "group:plugins") {
+      if (groups.all.length > 0) {
+        expanded.push(...groups.all);
+      } else {
+        expanded.push(normalized);
+      }
+      continue;
+    }
+    const tools = groups.byPlugin.get(normalized);
+    if (tools && tools.length > 0) {
+      expanded.push(...tools);
+      continue;
+    }
+    expanded.push(normalized);
+  }
+  return Array.from(new Set(expanded));
+}
+
+function expandPolicyWithPluginGroups(
+  policy: ToolPolicyLike | undefined,
+  groups: { all: string[]; byPlugin: Map<string, string[]> },
+): ToolPolicyLike | undefined {
+  if (!policy) return undefined;
+  return {
+    allow: expandPluginGroups(policy.allow, groups),
+    deny: expandPluginGroups(policy.deny, groups),
+  };
 }
 
 export const __testing = {
@@ -235,33 +307,64 @@ export function createClawdbotCodingTools(options?: {
       workspaceDir: options?.workspaceDir,
       sandboxed: !!sandbox,
       config: options?.config,
+      pluginToolAllowlist: collectExplicitAllowlist([
+        profilePolicy,
+        providerProfilePolicy,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        sandbox?.tools,
+        subagentPolicy,
+      ]),
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
-  const toolsFiltered = profilePolicy ? filterToolsByPolicy(tools, profilePolicy) : tools;
-  const providerProfileFiltered = providerProfilePolicy
-    ? filterToolsByPolicy(toolsFiltered, providerProfilePolicy)
+  const pluginGroups = buildPluginToolGroups(tools);
+  const profilePolicyExpanded = expandPolicyWithPluginGroups(profilePolicy, pluginGroups);
+  const providerProfileExpanded = expandPolicyWithPluginGroups(
+    providerProfilePolicy,
+    pluginGroups,
+  );
+  const globalPolicyExpanded = expandPolicyWithPluginGroups(globalPolicy, pluginGroups);
+  const globalProviderExpanded = expandPolicyWithPluginGroups(
+    globalProviderPolicy,
+    pluginGroups,
+  );
+  const agentPolicyExpanded = expandPolicyWithPluginGroups(agentPolicy, pluginGroups);
+  const agentProviderExpanded = expandPolicyWithPluginGroups(
+    agentProviderPolicy,
+    pluginGroups,
+  );
+  const sandboxPolicyExpanded = expandPolicyWithPluginGroups(sandbox?.tools, pluginGroups);
+  const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
+
+  const toolsFiltered = profilePolicyExpanded
+    ? filterToolsByPolicy(tools, profilePolicyExpanded)
+    : tools;
+  const providerProfileFiltered = providerProfileExpanded
+    ? filterToolsByPolicy(toolsFiltered, providerProfileExpanded)
     : toolsFiltered;
-  const globalFiltered = globalPolicy
-    ? filterToolsByPolicy(providerProfileFiltered, globalPolicy)
+  const globalFiltered = globalPolicyExpanded
+    ? filterToolsByPolicy(providerProfileFiltered, globalPolicyExpanded)
     : providerProfileFiltered;
-  const globalProviderFiltered = globalProviderPolicy
-    ? filterToolsByPolicy(globalFiltered, globalProviderPolicy)
+  const globalProviderFiltered = globalProviderExpanded
+    ? filterToolsByPolicy(globalFiltered, globalProviderExpanded)
     : globalFiltered;
-  const agentFiltered = agentPolicy
-    ? filterToolsByPolicy(globalProviderFiltered, agentPolicy)
+  const agentFiltered = agentPolicyExpanded
+    ? filterToolsByPolicy(globalProviderFiltered, agentPolicyExpanded)
     : globalProviderFiltered;
-  const agentProviderFiltered = agentProviderPolicy
-    ? filterToolsByPolicy(agentFiltered, agentProviderPolicy)
+  const agentProviderFiltered = agentProviderExpanded
+    ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
     : agentFiltered;
-  const sandboxed = sandbox
-    ? filterToolsByPolicy(agentProviderFiltered, sandbox.tools)
+  const sandboxed = sandboxPolicyExpanded
+    ? filterToolsByPolicy(agentProviderFiltered, sandboxPolicyExpanded)
     : agentProviderFiltered;
-  const subagentFiltered = subagentPolicy
-    ? filterToolsByPolicy(sandboxed, subagentPolicy)
+  const subagentFiltered = subagentPolicyExpanded
+    ? filterToolsByPolicy(sandboxed, subagentPolicyExpanded)
     : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.

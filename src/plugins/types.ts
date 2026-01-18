@@ -65,6 +65,12 @@ export type ClawdbotPluginToolFactory = (
   ctx: ClawdbotPluginToolContext,
 ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 
+export type ClawdbotPluginToolOptions = {
+  name?: string;
+  names?: string[];
+  optional?: boolean;
+};
+
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
 export type ProviderAuthResult = {
@@ -171,7 +177,7 @@ export type ClawdbotPluginApi = {
   logger: PluginLogger;
   registerTool: (
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
-    opts?: { name?: string; names?: string[] },
+    opts?: ClawdbotPluginToolOptions,
   ) => void;
   registerHttpHandler: (handler: ClawdbotPluginHttpHandler) => void;
   registerChannel: (registration: ClawdbotPluginChannelRegistration | ChannelPlugin) => void;
