@@ -235,7 +235,7 @@ export async function runEmbeddedAttempt(
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
       skillsPrompt,
-      docsPath,
+      docsPath: docsPath ?? undefined,
       reactionGuidance,
       promptMode,
       runtimeInfo,

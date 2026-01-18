@@ -97,7 +97,6 @@ describe("buildAgentSystemPrompt", () => {
       "Use `Read` to load the SKILL.md at the location listed for that skill.",
     );
     expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
-    expect(prompt).toContain("read the docs first using `Read`");
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -109,7 +108,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
     expect(prompt).toContain(
-      "When a user asks about Clawdbot behavior, commands, config, or architecture",
+      "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
     );
   });
 

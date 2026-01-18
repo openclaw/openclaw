@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { App, HTTPReceiver } from "@slack/bolt";
+import SlackBolt from "@slack/bolt";
 
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -25,6 +25,8 @@ import { registerSlackMonitorSlashCommands } from "./slash.js";
 import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
+
+const { App, HTTPReceiver } = SlackBolt;
 
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();

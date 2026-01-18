@@ -268,7 +268,7 @@ export async function compactEmbeddedPiSession(params: {
             ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
             : undefined,
           skillsPrompt,
-          docsPath,
+          docsPath: docsPath ?? undefined,
           promptMode,
           runtimeInfo,
           sandboxInfo,
