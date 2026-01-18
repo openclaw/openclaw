@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S node --import tsx
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";

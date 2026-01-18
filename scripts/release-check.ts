@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S node --import tsx
 
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
