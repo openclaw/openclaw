@@ -27,6 +27,7 @@ Tool params:
 - `label?` (optional)
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
+- `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
 
