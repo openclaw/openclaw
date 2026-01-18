@@ -1,4 +1,8 @@
-import type { ClawdbotTheme } from "./theme/theme.js";
+type MinimalTheme = {
+  dim: (s: string) => string;
+  bold: (s: string) => string;
+  accentSoft: (s: string) => string;
+};
 
 export const defaultWaitingPhrases = [
   "flibbertigibbeting",
@@ -18,7 +22,7 @@ export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases)
   return phrases[idx] ?? phrases[0] ?? "waiting";
 }
 
-export function shimmerText(theme: ClawdbotTheme, text: string, tick: number) {
+export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
 
@@ -35,7 +39,7 @@ export function shimmerText(theme: ClawdbotTheme, text: string, tick: number) {
 }
 
 export function buildWaitingStatusMessage(params: {
-  theme: ClawdbotTheme;
+  theme: MinimalTheme;
   tick: number;
   elapsed: string;
   connectionStatus: string;
