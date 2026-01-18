@@ -23,6 +23,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
+  lastToolError?: { toolName: string; meta?: string; error?: string };
   config?: ClawdbotConfig;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
@@ -152,6 +153,19 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+    });
+  }
+
+  if (replyItems.length === 0 && params.lastToolError) {
+    const toolSummary = formatToolAggregate(
+      params.lastToolError.toolName,
+      params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+      { markdown: useMarkdown },
+    );
+    const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    replyItems.push({
+      text: `⚠️ ${toolSummary} failed${errorSuffix}`,
+      isError: true,
     });
   }
 
