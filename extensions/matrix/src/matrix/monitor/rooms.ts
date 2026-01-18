@@ -8,6 +8,8 @@ export type MatrixRoomConfigResolved = {
   allowed: boolean;
   allowlistConfigured: boolean;
   config?: MatrixRoomConfig;
+  matchKey?: string;
+  matchSource?: "direct" | "wildcard";
 };
 
 export function resolveMatrixRoomConfig(params: {
@@ -25,12 +27,20 @@ export function resolveMatrixRoomConfig(params: {
     ...params.aliases,
     params.name ?? "",
   );
-  const { entry: matched, wildcardEntry } = resolveChannelEntryMatch({
+  const { entry: matched, key: matchedKey, wildcardEntry, wildcardKey } = resolveChannelEntryMatch({
     entries: rooms,
     keys: candidates,
     wildcardKey: "*",
   });
   const resolved = matched ?? wildcardEntry;
   const allowed = resolved ? resolved.enabled !== false && resolved.allow !== false : false;
-  return { allowed, allowlistConfigured, config: resolved };
+  const matchKey = matchedKey ?? wildcardKey;
+  const matchSource = matched ? "direct" : wildcardEntry ? "wildcard" : undefined;
+  return {
+    allowed,
+    allowlistConfigured,
+    config: resolved,
+    matchKey,
+    matchSource,
+  };
 }

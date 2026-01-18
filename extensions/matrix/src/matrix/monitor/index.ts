@@ -184,18 +184,21 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         aliases: roomAliases,
         name: roomName,
       });
+      const roomMatchMeta = `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
+        roomConfigInfo.matchSource ?? "none"
+      }`;
 
       if (roomConfigInfo.config && !roomConfigInfo.allowed) {
-        logVerbose(`matrix: room disabled room=${roomId}`);
+        logVerbose(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
         return;
       }
       if (groupPolicy === "allowlist") {
         if (!roomConfigInfo.allowlistConfigured) {
-          logVerbose("matrix: drop room message (no allowlist)");
+          logVerbose(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
           return;
         }
         if (!roomConfigInfo.config) {
-          logVerbose("matrix: drop room message (not in allowlist)");
+          logVerbose(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
           return;
         }
       }
@@ -252,7 +255,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           userName: senderName,
         });
         if (!userAllowed) {
-          logVerbose(`matrix: blocked sender ${senderId} (room users allowlist)`);
+          logVerbose(
+            `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta})`,
+          );
           return;
         }
       }
