@@ -7,6 +7,7 @@ import {
   type WizardPrompter,
 } from "clawdbot/plugin-sdk";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
+import { listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
 import type { CoreConfig, DmPolicy } from "./types.js";
@@ -49,40 +50,86 @@ async function promptMatrixAllowFrom(params: {
 }): Promise<CoreConfig> {
   const { cfg, prompter } = params;
   const existingAllowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
-  const entry = await prompter.text({
-    message: "Matrix allowFrom (user id)",
-    placeholder: "@user:server",
-    initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
-    validate: (value) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
-      if (!raw.startsWith("@")) return "Matrix user IDs should start with @";
-      if (!raw.includes(":")) return "Matrix user IDs should include a server (:@server)";
-      return undefined;
-    },
-  });
-  const normalized = String(entry).trim();
-  const merged = [
-    ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-    normalized,
-  ];
-  const unique = [...new Set(merged)];
+  const account = resolveMatrixAccount({ cfg });
+  const canResolve = Boolean(account.configured);
 
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      matrix: {
-        ...cfg.channels?.matrix,
-        enabled: true,
-        dm: {
-          ...cfg.channels?.matrix?.dm,
-          policy: "allowlist",
-          allowFrom: unique,
+  const parseInput = (raw: string) =>
+    raw
+      .split(/[\n,;]+/g)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+
+  const isFullUserId = (value: string) => value.startsWith("@") && value.includes(":");
+
+  while (true) {
+    const entry = await prompter.text({
+      message: "Matrix allowFrom (username or user id)",
+      placeholder: "@user:server",
+      initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const parts = parseInput(String(entry));
+    const resolvedIds: string[] = [];
+    let unresolved: string[] = [];
+
+    for (const part of parts) {
+      if (isFullUserId(part)) {
+        resolvedIds.push(part);
+        continue;
+      }
+      if (!canResolve) {
+        unresolved.push(part);
+        continue;
+      }
+      const results = await listMatrixDirectoryPeersLive({
+        cfg,
+        query: part,
+        limit: 5,
+      }).catch(() => []);
+      const match = results.find((result) => result.id);
+      if (match?.id) {
+        resolvedIds.push(match.id);
+        if (results.length > 1) {
+          await prompter.note(
+            `Multiple matches for "${part}", using ${match.id}.`,
+            "Matrix allowlist",
+          );
+        }
+      } else {
+        unresolved.push(part);
+      }
+    }
+
+    if (unresolved.length > 0) {
+      await prompter.note(
+        `Could not resolve: ${unresolved.join(", ")}. Use full @user:server IDs.`,
+        "Matrix allowlist",
+      );
+      continue;
+    }
+
+    const unique = [
+      ...new Set([
+        ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
+        ...resolvedIds,
+      ]),
+    ];
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        matrix: {
+          ...cfg.channels?.matrix,
+          enabled: true,
+          dm: {
+            ...cfg.channels?.matrix?.dm,
+            policy: "allowlist",
+            allowFrom: unique,
+          },
         },
       },
-    },
-  };
+    };
+  }
 }
 
 function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
@@ -121,6 +168,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.matrix.dm.allowFrom",
   getCurrent: (cfg) => (cfg as CoreConfig).channels?.matrix?.dm?.policy ?? "pairing",
   setPolicy: (cfg, policy) => setMatrixDmPolicy(cfg as CoreConfig, policy),
+  promptAllowFrom: promptMatrixAllowFrom,
 };
 
 export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {

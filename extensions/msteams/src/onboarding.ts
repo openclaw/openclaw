@@ -16,6 +16,7 @@ import { resolveMSTeamsCredentials } from "./token.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
+  resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 
 const channel = "msteams" as const;
@@ -36,6 +37,97 @@ function setMSTeamsDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
       },
     },
   };
+}
+
+function setMSTeamsAllowFrom(cfg: ClawdbotConfig, allowFrom: string[]): ClawdbotConfig {
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: {
+        ...cfg.channels?.msteams,
+        allowFrom,
+      },
+    },
+  };
+}
+
+function parseAllowFromInput(raw: string): string[] {
+  return raw
+    .split(/[\n,;]+/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function looksLikeGuid(value: string): boolean {
+  return /^[0-9a-fA-F-]{16,}$/.test(value);
+}
+
+async function promptMSTeamsAllowFrom(params: {
+  cfg: ClawdbotConfig;
+  prompter: WizardPrompter;
+}): Promise<ClawdbotConfig> {
+  const existing = params.cfg.channels?.msteams?.allowFrom ?? [];
+  await params.prompter.note(
+    [
+      "Allowlist MS Teams DMs by display name, UPN/email, or user id.",
+      "We resolve names to user IDs via Microsoft Graph when credentials allow.",
+      "Examples:",
+      "- alex@example.com",
+      "- Alex Johnson",
+      "- 00000000-0000-0000-0000-000000000000",
+    ].join("\n"),
+    "MS Teams allowlist",
+  );
+
+  while (true) {
+    const entry = await params.prompter.text({
+      message: "MS Teams allowFrom (usernames or ids)",
+      placeholder: "alex@example.com, Alex Johnson",
+      initialValue: existing[0] ? String(existing[0]) : undefined,
+      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+    });
+    const parts = parseAllowFromInput(String(entry));
+    if (parts.length === 0) {
+      await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
+      continue;
+    }
+
+    const resolved = await resolveMSTeamsUserAllowlist({
+      cfg: params.cfg,
+      entries: parts,
+    }).catch(() => null);
+
+    if (!resolved) {
+      const ids = parts.filter((part) => looksLikeGuid(part));
+      if (ids.length !== parts.length) {
+        await params.prompter.note(
+          "Graph lookup unavailable. Use user IDs only.",
+          "MS Teams allowlist",
+        );
+        continue;
+      }
+      const unique = [
+        ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
+      ];
+      return setMSTeamsAllowFrom(params.cfg, unique);
+    }
+
+    const unresolved = resolved.filter((item) => !item.resolved || !item.id);
+    if (unresolved.length > 0) {
+      await params.prompter.note(
+        `Could not resolve: ${unresolved.map((item) => item.input).join(", ")}`,
+        "MS Teams allowlist",
+      );
+      continue;
+    }
+
+    const ids = resolved.map((item) => item.id as string);
+    const unique = [
+      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
+    ];
+    return setMSTeamsAllowFrom(params.cfg, unique);
+  }
 }
 
 async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
@@ -106,6 +198,7 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.msteams.allowFrom",
   getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy) => setMSTeamsDmPolicy(cfg, policy),
+  promptAllowFrom: promptMSTeamsAllowFrom,
 };
 
 export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
