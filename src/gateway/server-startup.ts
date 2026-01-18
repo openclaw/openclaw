@@ -8,7 +8,11 @@ import {
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher } from "../hooks/gmail-watcher.js";
-import { clearInternalHooks } from "../hooks/internal-hooks.js";
+import {
+  clearInternalHooks,
+  createInternalHookEvent,
+  triggerInternalHook,
+} from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
 import type { loadClawdbotPlugins } from "../plugins/loader.js";
 import { type PluginServicesHandle, startPluginServices } from "../plugins/services.js";
@@ -120,6 +124,17 @@ export async function startGatewaySidecars(params: {
     params.logChannels.info(
       "skipping channel start (CLAWDBOT_SKIP_CHANNELS=1 or CLAWDBOT_SKIP_PROVIDERS=1)",
     );
+  }
+
+  if (params.cfg.hooks?.internal?.enabled) {
+    setTimeout(() => {
+      const hookEvent = createInternalHookEvent("gateway", "startup", "gateway:startup", {
+        cfg: params.cfg,
+        deps: params.deps,
+        workspaceDir: params.defaultWorkspaceDir,
+      });
+      void triggerInternalHook(hookEvent);
+    }, 250);
   }
 
   let pluginServices: PluginServicesHandle | null = null;
