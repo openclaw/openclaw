@@ -46,6 +46,8 @@ export type NodeListNode = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
@@ -62,6 +64,8 @@ export type PendingRequest = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   isRepair?: boolean;
   ts: number;
@@ -73,6 +77,8 @@ export type PairedNode = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   remoteIp?: string;
   permissions?: Record<string, boolean>;
   createdAtMs?: number;

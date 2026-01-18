@@ -9,6 +9,8 @@ export type BridgeHelloFrame = {
   token?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
   caps?: string[];
@@ -22,6 +24,8 @@ export type BridgePairRequestFrame = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
   caps?: string[];
@@ -113,6 +117,8 @@ export type NodeBridgeClientInfo = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
   remoteIp?: string;

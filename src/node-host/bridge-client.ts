@@ -27,6 +27,8 @@ export type BridgeClientOptions = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
   caps?: string[];
@@ -172,6 +174,8 @@ export class BridgeClient {
       displayName: this.opts.displayName,
       platform: this.opts.platform,
       version: this.opts.version,
+      coreVersion: this.opts.coreVersion,
+      uiVersion: this.opts.uiVersion,
       deviceFamily: this.opts.deviceFamily,
       modelIdentifier: this.opts.modelIdentifier,
       caps: this.opts.caps,
@@ -188,6 +192,8 @@ export class BridgeClient {
       displayName: this.opts.displayName,
       platform: this.opts.platform,
       version: this.opts.version,
+      coreVersion: this.opts.coreVersion,
+      uiVersion: this.opts.uiVersion,
       deviceFamily: this.opts.deviceFamily,
       modelIdentifier: this.opts.modelIdentifier,
       caps: this.opts.caps,
