@@ -151,6 +151,7 @@ Local mode:
 - File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
 - Index storage: per-agent SQLite at `~/.clawdbot/state/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
 - Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval. Reindex triggers when embedding model/provider or chunk sizes change.
+- Model changes: the index stores the embedding **model + provider + chunking params**. If any of those change, Clawdbot automatically resets and reindexes the entire store.
 
 ### Session memory search (experimental)
 
