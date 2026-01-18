@@ -5,17 +5,8 @@ import type {
   ReactionEventContent,
 } from "matrix-js-sdk/lib/@types/events.js";
 
-import {
-  chunkMarkdownText,
-  getImageMetadata,
-  isVoiceCompatibleAudio,
-  loadConfig,
-  loadWebMedia,
-  mediaKindFromMime,
-  type PollInput,
-  resolveTextChunkLimit,
-  resizeToJpeg,
-} from "clawdbot/plugin-sdk";
+import type { PollInput } from "clawdbot/plugin-sdk";
+import { getMatrixRuntime } from "../runtime.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import {
   createMatrixClient,
@@ -29,6 +20,7 @@ import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import type { CoreConfig } from "../types.js";
 
 const MATRIX_TEXT_LIMIT = 4000;
+const getCore = () => getMatrixRuntime();
 
 type MatrixDirectAccountData = AccountDataEvents[EventType.Direct];
 
@@ -65,7 +57,7 @@ function ensureNodeRuntime() {
 }
 
 function resolveMediaMaxBytes(): number | undefined {
-  const cfg = loadConfig() as CoreConfig;
+  const cfg = getCore().config.loadConfig() as CoreConfig;
   if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
     return cfg.channels.matrix.mediaMaxMb * 1024 * 1024;
   }
@@ -224,7 +216,7 @@ function resolveMatrixMsgType(
   contentType?: string,
   fileName?: string,
 ): MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File {
-  const kind = mediaKindFromMime(contentType ?? "");
+  const kind = getCore().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
       return MsgType.Image;
@@ -243,7 +235,7 @@ function resolveMatrixVoiceDecision(opts: {
   fileName?: string;
 }): { useVoice: boolean } {
   if (!opts.wantsVoice) return { useVoice: false };
-  if (isVoiceCompatibleAudio({ contentType: opts.contentType, fileName: opts.fileName })) {
+  if (getCore().media.isVoiceCompatibleAudio({ contentType: opts.contentType, fileName: opts.fileName })) {
     return { useVoice: true };
   }
   return { useVoice: false };
@@ -256,19 +248,19 @@ async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
 }): Promise<MatrixImageInfo | undefined> {
-  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  const meta = await getCore().media.getImageMetadata(params.buffer).catch(() => null);
   if (!meta) return undefined;
   const imageInfo: MatrixImageInfo = { w: meta.width, h: meta.height };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
-      const thumbBuffer = await resizeToJpeg({
+      const thumbBuffer = await getCore().media.resizeToJpeg({
         buffer: params.buffer,
         maxSide: THUMBNAIL_MAX_SIDE,
         quality: THUMBNAIL_QUALITY,
         withoutEnlargement: true,
       });
-      const thumbMeta = await getImageMetadata(thumbBuffer).catch(() => null);
+      const thumbMeta = await getCore().media.getImageMetadata(thumbBuffer).catch(() => null);
       const thumbUri = await params.client.uploadContent(thumbBuffer as MatrixUploadContent, {
         type: "image/jpeg",
         name: "thumbnail.jpg",
@@ -352,10 +344,10 @@ export async function sendMessageMatrix(
   });
   try {
     const roomId = await resolveMatrixRoomId(client, to);
-    const cfg = loadConfig();
-    const textLimit = resolveTextChunkLimit(cfg, "matrix");
+    const cfg = getCore().config.loadConfig();
+    const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix");
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
-    const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
+    const chunks = getCore().channel.text.chunkMarkdownText(trimmedMessage, chunkLimit);
     const threadId = normalizeThreadId(opts.threadId);
     const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
     const sendContent = (content: RoomMessageEventContent) =>
@@ -364,7 +356,7 @@ export async function sendMessageMatrix(
     let lastMessageId = "";
     if (opts.mediaUrl) {
       const maxBytes = resolveMediaMaxBytes();
-      const media = await loadWebMedia(opts.mediaUrl, maxBytes);
+      const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
       const contentUri = await uploadFile(client, media.buffer, {
         contentType: media.contentType,
         filename: media.fileName,

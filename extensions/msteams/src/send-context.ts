@@ -1,5 +1,4 @@
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
-import type { getChildLogger as getChildLoggerFn } from "clawdbot/plugin-sdk";
+import type { ClawdbotConfig, PluginRuntime } from "clawdbot/plugin-sdk";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
@@ -9,8 +8,10 @@ import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-let _log: ReturnType<typeof getChildLoggerFn> | undefined;
-const getLog = async (): Promise<ReturnType<typeof getChildLoggerFn>> => {
+type GetChildLogger = PluginRuntime["logging"]["getChildLogger"];
+
+let _log: ReturnType<GetChildLogger> | undefined;
+const getLog = async (): Promise<ReturnType<GetChildLogger>> => {
   if (_log) return _log;
   const { getChildLogger } = await import("../logging.js");
   _log = getChildLogger({ name: "msteams:send" });

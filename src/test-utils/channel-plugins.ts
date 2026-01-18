@@ -32,6 +32,7 @@ export const createIMessageTestPlugin = (params?: {
     selectionLabel: "iMessage (imsg)",
     docsPath: "/channels/imessage",
     blurb: "iMessage test stub.",
+    aliases: ["imsg"],
   },
   capabilities: { chatTypes: ["direct", "group"], media: true },
   config: {

@@ -1,6 +1,6 @@
 import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
 
-import { matchesMentionPatterns } from "clawdbot/plugin-sdk";
+import { getMatrixRuntime } from "../../runtime.js";
 
 export function resolveMentions(params: {
   content: RoomMessageEventContent;
@@ -17,6 +17,9 @@ export function resolveMentions(params: {
   const wasMentioned =
     Boolean(mentions?.room) ||
     (params.userId ? mentionedUsers.has(params.userId) : false) ||
-    matchesMentionPatterns(params.text ?? "", params.mentionRegexes);
+    getMatrixRuntime().channel.mentions.matchesMentionPatterns(
+      params.text ?? "",
+      params.mentionRegexes,
+    );
   return { wasMentioned, hasExplicitMention: Boolean(mentions) };
 }

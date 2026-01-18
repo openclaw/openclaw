@@ -1,6 +1,6 @@
 import type { ChannelMeta } from "./plugins/types.js";
 import type { ChannelId } from "./plugins/types.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 
 // Channel docking: add new core channels here (order + meta + aliases), then
 // register the plugin in its extension entrypoint and keep protocol IDs in sync.
@@ -113,21 +113,15 @@ export function normalizeChannelId(raw?: string | null): ChatChannelId | null {
   return normalizeChatChannelId(raw);
 }
 
-// Normalizes core chat channels plus any *already-loaded* plugin channels.
+// Normalizes registered channel plugins (bundled or external).
 //
-// Keep this light: we do not import core channel plugins here (those are "heavy" and can pull in
-// monitors, web login, etc). If plugins are not loaded (e.g. in many tests), only core channel IDs
-// resolve.
+// Keep this light: we do not import channel plugins here (those are "heavy" and can pull in
+// monitors, web login, etc). The plugin registry must be initialized first.
 export function normalizeAnyChannelId(raw?: string | null): ChannelId | null {
-  const core = normalizeChatChannelId(raw);
-  if (core) return core;
-
   const key = normalizeChannelKey(raw);
   if (!key) return null;
 
-  const registry = getActivePluginRegistry();
-  if (!registry) return null;
-
+  const registry = requireActivePluginRegistry();
   const hit = registry.channels.find((entry) => {
     const id = String(entry.plugin.id ?? "")
       .trim()

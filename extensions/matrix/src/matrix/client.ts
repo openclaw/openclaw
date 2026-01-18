@@ -1,7 +1,7 @@
 import { ClientEvent, type MatrixClient, SyncState } from "matrix-js-sdk";
 
-import { loadConfig } from "clawdbot/plugin-sdk";
 import type { CoreConfig } from "../types.js";
+import { getMatrixRuntime } from "../runtime.js";
 
 export type MatrixResolvedConfig = {
   homeserver: string;
@@ -46,7 +46,7 @@ function clean(value?: string): string {
 }
 
 export function resolveMatrixConfig(
-  cfg: CoreConfig = loadConfig() as CoreConfig,
+  cfg: CoreConfig = getMatrixRuntime().config.loadConfig() as CoreConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
   const matrix = cfg.channels?.matrix ?? {};
@@ -75,7 +75,7 @@ export async function resolveMatrixAuth(params?: {
   cfg?: CoreConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<MatrixAuth> {
-  const cfg = params?.cfg ?? (loadConfig() as CoreConfig);
+  const cfg = params?.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
   const env = params?.env ?? process.env;
   const resolved = resolveMatrixConfig(cfg, env);
   if (!resolved.homeserver) {

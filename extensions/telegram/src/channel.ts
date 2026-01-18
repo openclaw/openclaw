@@ -1,10 +1,7 @@
 import {
   applyAccountNameToChannelSection,
-  auditTelegramGroupMembership,
   buildChannelConfigSchema,
-  chunkMarkdownText,
   collectTelegramStatusIssues,
-  collectTelegramUnmentionedGroupIds,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -17,24 +14,29 @@ import {
   normalizeAccountId,
   normalizeTelegramMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
-  probeTelegram,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
   resolveTelegramGroupRequireMention,
-  resolveTelegramToken,
-  sendMessageTelegram,
   setAccountEnabledInConfigSection,
-  shouldLogVerbose,
-  telegramMessageActions,
   telegramOnboardingAdapter,
   TelegramConfigSchema,
+  type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ClawdbotConfig,
   type ResolvedTelegramAccount,
-  writeConfigFile,
 } from "clawdbot/plugin-sdk";
 
+import { getTelegramRuntime } from "./runtime.js";
+
 const meta = getChatChannelMeta("telegram");
+
+const telegramMessageActions: ChannelMessageActionAdapter = {
+  listActions: (ctx) => getTelegramRuntime().channel.telegram.messageActions.listActions(ctx),
+  extractToolSend: (ctx) =>
+    getTelegramRuntime().channel.telegram.messageActions.extractToolSend(ctx),
+  handleAction: async (ctx) =>
+    await getTelegramRuntime().channel.telegram.messageActions.handleAction(ctx),
+};
 
 function parseReplyToMessageId(replyToId?: string | null) {
   if (!replyToId) return undefined;
@@ -63,9 +65,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     idLabel: "telegramUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(telegram|tg):/i, ""),
     notifyApproval: async ({ cfg, id }) => {
-      const { token } = resolveTelegramToken(cfg);
+      const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
       if (!token) throw new Error("telegram token not configured");
-      await sendMessageTelegram(id, PAIRING_APPROVED_MESSAGE, { token });
+      await getTelegramRuntime().channel.telegram.sendMessageTelegram(id, PAIRING_APPROVED_MESSAGE, {
+        token,
+      });
     },
   },
   capabilities: {
@@ -244,10 +248,11 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkMarkdownText,
+    chunker: (text, limit) => getTelegramRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
-      const send = deps?.sendTelegram ?? sendMessageTelegram;
+      const send =
+        deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);
       const messageThreadId = parseThreadId(threadId);
       const result = await send(to, text, {
@@ -259,7 +264,8 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       return { channel: "telegram", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId }) => {
-      const send = deps?.sendTelegram ?? sendMessageTelegram;
+      const send =
+        deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);
       const messageThreadId = parseThreadId(threadId);
       const result = await send(to, text, {
@@ -293,13 +299,17 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account, timeoutMs }) =>
-      probeTelegram(account.token, timeoutMs, account.config.proxy),
+      getTelegramRuntime().channel.telegram.probeTelegram(
+        account.token,
+        timeoutMs,
+        account.config.proxy,
+      ),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
         cfg.channels?.telegram?.groups;
       const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
-        collectTelegramUnmentionedGroupIds(groups);
+        getTelegramRuntime().channel.telegram.collectUnmentionedGroupIds(groups);
       if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
         return undefined;
       }
@@ -318,7 +328,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
           elapsedMs: 0,
         };
       }
-      const audit = await auditTelegramGroupMembership({
+      const audit = await getTelegramRuntime().channel.telegram.auditGroupMembership({
         token: account.token,
         botId,
         groupIds,
@@ -368,18 +378,20 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       const token = account.token.trim();
       let telegramBotLabel = "";
       try {
-        const probe = await probeTelegram(token, 2500, account.config.proxy);
+        const probe = await getTelegramRuntime().channel.telegram.probeTelegram(
+          token,
+          2500,
+          account.config.proxy,
+        );
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) telegramBotLabel = ` (@${username})`;
       } catch (err) {
-        if (shouldLogVerbose()) {
+        if (getTelegramRuntime().logging.shouldLogVerbose()) {
           ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
-      // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorTelegramProvider } = await import("clawdbot/plugin-sdk");
-      return monitorTelegramProvider({
+      return getTelegramRuntime().channel.telegram.monitorTelegramProvider({
         token,
         accountId: account.accountId,
         config: ctx.cfg,
@@ -455,7 +467,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       });
       const loggedOut = resolved.tokenSource === "none";
       if (changed) {
-        await writeConfigFile(nextCfg);
+        await getTelegramRuntime().config.writeConfigFile(nextCfg);
       }
       return { cleared, envToken: Boolean(envToken), loggedOut };
     },

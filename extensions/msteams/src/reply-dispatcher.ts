@@ -1,11 +1,7 @@
-import {
-  createReplyDispatcherWithTyping,
-  danger,
-  resolveEffectiveMessagesConfig,
-  resolveHumanDelayConfig,
-  type ClawdbotConfig,
-  type MSTeamsReplyStyle,
-  type RuntimeEnv,
+import type {
+  ClawdbotConfig,
+  MSTeamsReplyStyle,
+  RuntimeEnv,
 } from "clawdbot/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
@@ -20,6 +16,7 @@ import {
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 
 export function createMSTeamsReplyDispatcher(params: {
   cfg: ClawdbotConfig;
@@ -34,6 +31,7 @@ export function createMSTeamsReplyDispatcher(params: {
   textLimit: number;
   onSentMessageIds?: (ids: string[]) => void;
 }) {
+  const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
     try {
       await params.context.sendActivities([{ type: "typing" }]);
@@ -42,9 +40,12 @@ export function createMSTeamsReplyDispatcher(params: {
     }
   };
 
-  return createReplyDispatcherWithTyping({
-    responsePrefix: resolveEffectiveMessagesConfig(params.cfg, params.agentId).responsePrefix,
-    humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
+  return core.channel.reply.createReplyDispatcherWithTyping({
+    responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(
+      params.cfg,
+      params.agentId,
+    ).responsePrefix,
+    humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
     deliver: async (payload) => {
       const messages = renderReplyPayloadsToMessages([payload], {
         textChunkLimit: params.textLimit,
@@ -74,7 +75,7 @@ export function createMSTeamsReplyDispatcher(params: {
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
       params.runtime.error?.(
-        danger(`msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`),
+        `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
       );
       params.log.error("reply failed", {
         kind: info.kind,

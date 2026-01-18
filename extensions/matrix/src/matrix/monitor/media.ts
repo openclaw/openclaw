@@ -1,6 +1,6 @@
 import type { MatrixClient } from "matrix-js-sdk";
 
-import { saveMediaBuffer } from "clawdbot/plugin-sdk";
+import { getMatrixRuntime } from "../../runtime.js";
 
 async function fetchMatrixMediaBuffer(params: {
   client: MatrixClient;
@@ -49,7 +49,12 @@ export async function downloadMatrixMedia(params: {
   });
   if (!fetched) return null;
   const headerType = fetched.headerType ?? params.contentType ?? undefined;
-  const saved = await saveMediaBuffer(fetched.buffer, headerType, "inbound", params.maxBytes);
+  const saved = await getMatrixRuntime().channel.media.saveMediaBuffer(
+    fetched.buffer,
+    headerType,
+    "inbound",
+    params.maxBytes,
+  );
   return {
     path: saved.path,
     contentType: saved.contentType,

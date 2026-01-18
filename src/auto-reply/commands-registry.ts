@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
-import { CHAT_COMMANDS, getNativeCommandSurfaces } from "./commands-registry.data.js";
+import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type {
@@ -16,7 +16,6 @@ import type {
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 
-export { CHAT_COMMANDS } from "./commands-registry.data.js";
 export type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -37,9 +36,16 @@ type TextAliasSpec = {
   acceptsArgs: boolean;
 };
 
-const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
+let cachedTextAliasMap: Map<string, TextAliasSpec> | null = null;
+let cachedTextAliasCommands: ChatCommandDefinition[] | null = null;
+let cachedDetection: CommandDetection | undefined;
+let cachedDetectionCommands: ChatCommandDefinition[] | null = null;
+
+function getTextAliasMap(): Map<string, TextAliasSpec> {
+  const commands = getChatCommands();
+  if (cachedTextAliasMap && cachedTextAliasCommands === commands) return cachedTextAliasMap;
   const map = new Map<string, TextAliasSpec>();
-  for (const command of CHAT_COMMANDS) {
+  for (const command of commands) {
     // Canonicalize to the *primary* text alias, not `/${key}`. Some command keys are
     // internal identifiers (e.g. `dock:telegram`) while the public text command is
     // the alias (e.g. `/dock-telegram`).
@@ -53,10 +59,10 @@ const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
       }
     }
   }
+  cachedTextAliasMap = map;
+  cachedTextAliasCommands = commands;
   return map;
-})();
-
-let cachedDetection: CommandDetection | undefined;
+}
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -78,8 +84,9 @@ function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatC
 export function listChatCommands(params?: {
   skillCommands?: SkillCommandSpec[];
 }): ChatCommandDefinition[] {
-  if (!params?.skillCommands?.length) return [...CHAT_COMMANDS];
-  return [...CHAT_COMMANDS, ...buildSkillCommandDefinitions(params.skillCommands)];
+  const commands = getChatCommands();
+  if (!params?.skillCommands?.length) return [...commands];
+  return [...commands, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
 
 export function isCommandEnabled(cfg: ClawdbotConfig, commandKey: string): boolean {
@@ -93,7 +100,7 @@ export function listChatCommandsForConfig(
   cfg: ClawdbotConfig,
   params?: { skillCommands?: SkillCommandSpec[] },
 ): ChatCommandDefinition[] {
-  const base = CHAT_COMMANDS.filter((command) => isCommandEnabled(cfg, command.key));
+  const base = getChatCommands().filter((command) => isCommandEnabled(cfg, command.key));
   if (!params?.skillCommands?.length) return base;
   return [...base, ...buildSkillCommandDefinitions(params.skillCommands)];
 }
@@ -127,7 +134,7 @@ export function listNativeCommandSpecsForConfig(
 
 export function findCommandByNativeName(name: string): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
-  return CHAT_COMMANDS.find(
+  return getChatCommands().find(
     (command) => command.scope !== "text" && command.nativeName?.toLowerCase() === normalized,
   );
 }
@@ -299,14 +306,15 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
       : normalized;
 
   const lowered = commandBody.toLowerCase();
-  const exact = TEXT_ALIAS_MAP.get(lowered);
+  const textAliasMap = getTextAliasMap();
+  const exact = textAliasMap.get(lowered);
   if (exact) return exact.canonical;
 
   const tokenMatch = commandBody.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!tokenMatch) return commandBody;
   const [, token, rest] = tokenMatch;
   const tokenKey = `/${token.toLowerCase()}`;
-  const tokenSpec = TEXT_ALIAS_MAP.get(tokenKey);
+  const tokenSpec = textAliasMap.get(tokenKey);
   if (!tokenSpec) return commandBody;
   if (rest && !tokenSpec.acceptsArgs) return commandBody;
   const normalizedRest = rest?.trimStart();
@@ -319,10 +327,11 @@ export function isCommandMessage(raw: string): boolean {
 }
 
 export function getCommandDetection(_cfg?: ClawdbotConfig): CommandDetection {
-  if (cachedDetection) return cachedDetection;
+  const commands = getChatCommands();
+  if (cachedDetection && cachedDetectionCommands === commands) return cachedDetection;
   const exact = new Set<string>();
   const patterns: string[] = [];
-  for (const cmd of CHAT_COMMANDS) {
+  for (const cmd of commands) {
     for (const alias of cmd.textAliases) {
       const normalized = alias.trim().toLowerCase();
       if (!normalized) continue;
@@ -340,6 +349,7 @@ export function getCommandDetection(_cfg?: ClawdbotConfig): CommandDetection {
     exact,
     regex: patterns.length ? new RegExp(`^(?:${patterns.join("|")})$`, "i") : /$^/,
   };
+  cachedDetectionCommands = commands;
   return cachedDetection;
 }
 
@@ -353,7 +363,7 @@ export function maybeResolveTextAlias(raw: string, cfg?: ClawdbotConfig) {
   const tokenMatch = normalized.match(/^\/([^\s:]+)(?:\s|$)/);
   if (!tokenMatch) return null;
   const tokenKey = `/${tokenMatch[1]}`;
-  return TEXT_ALIAS_MAP.has(tokenKey) ? tokenKey : null;
+  return getTextAliasMap().has(tokenKey) ? tokenKey : null;
 }
 
 export function resolveTextCommand(
@@ -366,9 +376,9 @@ export function resolveTextCommand(
   const trimmed = normalizeCommandBody(raw).trim();
   const alias = maybeResolveTextAlias(trimmed, cfg);
   if (!alias) return null;
-  const spec = TEXT_ALIAS_MAP.get(alias);
+  const spec = getTextAliasMap().get(alias);
   if (!spec) return null;
-  const command = CHAT_COMMANDS.find((entry) => entry.key === spec.key);
+  const command = getChatCommands().find((entry) => entry.key === spec.key);
   if (!command) return null;
   if (!spec.acceptsArgs) return { command };
   const args = trimmed.slice(alias.length).trim();

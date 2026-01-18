@@ -25,6 +25,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",
   loadSessionStore: () => testStore,
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+  updateLastRoute: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../web/auth-store.js", () => ({
@@ -32,13 +33,17 @@ vi.mock("../web/auth-store.js", () => ({
   getWebAuthAgeMs: vi.fn(() => 1234),
   readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
   logWebSelfId: vi.fn(),
+  logoutWeb: vi.fn(),
 }));
 
 describe("getHealthSnapshot", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
     );
+    const { createPluginRuntime } = await import("../plugins/runtime/index.js");
+    const { setTelegramRuntime } = await import("../../extensions/telegram/src/runtime.js");
+    setTelegramRuntime(createPluginRuntime());
   });
 
   afterEach(() => {

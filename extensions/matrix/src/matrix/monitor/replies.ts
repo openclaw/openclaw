@@ -1,13 +1,8 @@
 import type { MatrixClient } from "matrix-js-sdk";
 
-import {
-  chunkMarkdownText,
-  danger,
-  logVerbose,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "clawdbot/plugin-sdk";
+import type { ReplyPayload, RuntimeEnv } from "clawdbot/plugin-sdk";
 import { sendMessageMatrix } from "../send.js";
+import { getMatrixRuntime } from "../../runtime.js";
 
 export async function deliverMatrixReplies(params: {
   replies: ReplyPayload[];
@@ -18,6 +13,12 @@ export async function deliverMatrixReplies(params: {
   replyToMode: "off" | "first" | "all";
   threadId?: string;
 }): Promise<void> {
+  const core = getMatrixRuntime();
+  const logVerbose = (message: string) => {
+    if (core.logging.shouldLogVerbose()) {
+      params.runtime.log?.(message);
+    }
+  };
   const chunkLimit = Math.min(params.textLimit, 4000);
   let hasReplied = false;
   for (const reply of params.replies) {
@@ -27,7 +28,7 @@ export async function deliverMatrixReplies(params: {
         logVerbose("matrix reply has audioAsVoice without media/text; skipping");
         continue;
       }
-      params.runtime.error?.(danger("matrix reply missing text/media"));
+      params.runtime.error?.("matrix reply missing text/media");
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
@@ -42,7 +43,7 @@ export async function deliverMatrixReplies(params: {
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(reply.text ?? "", chunkLimit)) {
+      for (const chunk of core.channel.text.chunkMarkdownText(reply.text ?? "", chunkLimit)) {
         const trimmed = chunk.trim();
         if (!trimmed) continue;
         await sendMessageMatrix(params.roomId, trimmed, {

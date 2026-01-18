@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - macOS: stop syncing Peekaboo as a git submodule in postinstall.
 - Swabble: use the tagged Commander Swift package release.
 - CLI: add `clawdbot acp client` interactive ACP harness for debugging.
+- Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
 - Memory: add native Gemini embeddings provider for memory search. (#1151) — thanks @gumadeiras.
 
 ### Fixes

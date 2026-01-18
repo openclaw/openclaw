@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { resolveStateDir } from "clawdbot/plugin-sdk";
+import { getMatrixRuntime } from "../runtime.js";
 
 export type MatrixStoredCredentials = {
   homeserver: string;
@@ -16,9 +16,11 @@ const CREDENTIALS_FILENAME = "credentials.json";
 
 export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, os.homedir),
+  stateDir?: string,
 ): string {
-  return path.join(stateDir, "credentials", "matrix");
+  const resolvedStateDir =
+    stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  return path.join(resolvedStateDir, "credentials", "matrix");
 }
 
 export function resolveMatrixCredentialsPath(env: NodeJS.ProcessEnv = process.env): string {

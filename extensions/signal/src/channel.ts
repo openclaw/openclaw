@@ -1,7 +1,6 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
-  chunkText,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -13,17 +12,17 @@ import {
   normalizeE164,
   normalizeSignalMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
-  probeSignal,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
-  sendMessageSignal,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
   SignalConfigSchema,
   type ChannelPlugin,
   type ResolvedSignalAccount,
 } from "clawdbot/plugin-sdk";
+
+import { getSignalRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("signal");
 
@@ -37,7 +36,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     idLabel: "signalNumber",
     normalizeAllowEntry: (entry) => entry.replace(/^signal:/i, ""),
     notifyApproval: async ({ id }) => {
-      await sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
+      await getSignalRuntime().channel.signal.sendMessageSignal(id, PAIRING_APPROVED_MESSAGE);
     },
   },
   capabilities: {
@@ -197,10 +196,10 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   },
   outbound: {
     deliveryMode: "direct",
-    chunker: chunkText,
+    chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = deps?.sendSignal ?? sendMessageSignal;
+      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -215,7 +214,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       return { channel: "signal", ...result };
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, accountId, deps }) => {
-      const send = deps?.sendSignal ?? sendMessageSignal;
+      const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -264,7 +263,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     }),
     probeAccount: async ({ account, timeoutMs }) => {
       const baseUrl = account.baseUrl;
-      return await probeSignal(baseUrl, timeoutMs);
+      return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       accountId: account.accountId,
@@ -290,8 +289,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       });
       ctx.log?.info(`[${account.accountId}] starting provider (${account.baseUrl})`);
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorSignalProvider } = await import("clawdbot/plugin-sdk");
-      return monitorSignalProvider({
+      return getSignalRuntime().channel.signal.monitorSignalProvider({
         accountId: account.accountId,
         config: ctx.cfg,
         runtime: ctx.runtime,

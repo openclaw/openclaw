@@ -1,5 +1,4 @@
 import {
-  chunkMarkdownText,
   isSilentReplyText,
   type MSTeamsReplyStyle,
   type ReplyPayload,
@@ -7,6 +6,7 @@ import {
 } from "clawdbot/plugin-sdk";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 
 type SendContext = {
   sendActivity: (textOrActivity: string | object) => Promise<unknown>;
@@ -108,7 +108,7 @@ function pushTextMessages(
 ) {
   if (!text) return;
   if (opts.chunkText) {
-    for (const chunk of chunkMarkdownText(text, opts.chunkLimit)) {
+    for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownText(text, opts.chunkLimit)) {
       const trimmed = chunk.trim();
       if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
       out.push(trimmed);
