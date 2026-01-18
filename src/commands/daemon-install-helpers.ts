@@ -1,5 +1,3 @@
-import path from "node:path";
-
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
@@ -20,7 +18,8 @@ export type GatewayInstallPlan = {
 
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
-  return Boolean(entry?.includes(`${path.sep}src${path.sep}`) && entry.endsWith(".ts"));
+  const normalizedEntry = entry?.replaceAll("\\", "/");
+  return Boolean(normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts"));
 }
 
 export async function buildGatewayInstallPlan(params: {

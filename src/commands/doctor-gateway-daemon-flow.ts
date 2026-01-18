@@ -15,10 +15,7 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import {
-  buildGatewayInstallPlan,
-  gatewayInstallErrorHint,
-} from "./daemon-install-helpers.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { healthCommand } from "./health.js";

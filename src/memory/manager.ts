@@ -711,7 +711,10 @@ export class MemoryIndexManager {
     }));
   }
 
-  private shouldSyncSessions(params?: { reason?: string; force?: boolean }, needsFullReindex = false) {
+  private shouldSyncSessions(
+    params?: { reason?: string; force?: boolean },
+    needsFullReindex = false,
+  ) {
     if (!this.sources.has("sessions")) return false;
     if (params?.force) return true;
     const reason = params?.reason;
@@ -876,9 +879,7 @@ export class MemoryIndexManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    const progress = params?.progress
-      ? this.createSyncProgress(params.progress)
-      : undefined;
+    const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
     const needsFullReindex =
@@ -972,7 +973,10 @@ export class MemoryIndexManager {
   }
 
   private normalizeSessionText(value: string): string {
-    return value.replace(/\s*\n+\s*/g, " ").replace(/\s+/g, " ").trim();
+    return value
+      .replace(/\s*\n+\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   private extractSessionText(content: unknown): string | null {

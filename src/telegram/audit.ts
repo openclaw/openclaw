@@ -115,8 +115,8 @@ export async function auditTelegramGroupMembership(params: {
           matchKey: chatId,
           matchSource: "id",
         });
-      continue;
-    }
+        continue;
+      }
       const status = isRecord((json as TelegramApiOk<unknown>).result)
         ? ((json as TelegramApiOk<{ status?: string }>).result.status ?? null)
         : null;

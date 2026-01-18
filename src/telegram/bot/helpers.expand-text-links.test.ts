@@ -48,8 +48,6 @@ describe("expandTextLinks", () => {
   it("preserves offsets from the original string", () => {
     const text = " Hello world";
     const entities = [{ type: "text_link", offset: 1, length: 5, url: "https://example.com" }];
-    expect(expandTextLinks(text, entities)).toBe(
-      " [Hello](https://example.com) world",
-    );
+    expect(expandTextLinks(text, entities)).toBe(" [Hello](https://example.com) world");
   });
 });

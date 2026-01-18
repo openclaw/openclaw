@@ -5,18 +5,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 import { fetchSlackScopes } from "../../slack/scopes.js";
-import {
-  getChannelPlugin,
-  listChannelPlugins,
-} from "../../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 
 const logs: string[] = [];
 const errors: string[] = [];
 
 vi.mock("./shared.js", () => ({
   requireValidConfig: vi.fn(async () => ({ channels: {} })),
-  formatChannelAccountLabel: vi.fn(({ channel, accountId }: { channel: string; accountId: string }) =>
-    `${channel}:${accountId}`,
+  formatChannelAccountLabel: vi.fn(
+    ({ channel, accountId }: { channel: string; accountId: string }) => `${channel}:${accountId}`,
   ),
 }));
 

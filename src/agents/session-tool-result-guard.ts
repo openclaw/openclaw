@@ -112,8 +112,9 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
 
     const result = originalAppend(sanitized as never);
 
-    const sessionFile = (sessionManager as { getSessionFile?: () => string | null })
-      .getSessionFile?.();
+    const sessionFile = (
+      sessionManager as { getSessionFile?: () => string | null }
+    ).getSessionFile?.();
     if (sessionFile) {
       emitSessionTranscriptUpdate(sessionFile);
     }

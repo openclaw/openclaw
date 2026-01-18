@@ -55,11 +55,7 @@ describe("memory indexing with OpenAI batches", () => {
     let uploadedRequests: Array<{ custom_id?: string }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url =
-        typeof input === "string"
-          ? input
-          : input instanceof URL
-            ? input.toString()
-            : input.url;
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       if (url.endsWith("/files")) {
         const body = init?.body;
         if (!(body instanceof FormData)) {

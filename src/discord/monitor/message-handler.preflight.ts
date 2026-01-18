@@ -266,7 +266,9 @@ export async function preflightDiscordMessage(
     channelConfig?.matchSource ?? "none"
   }`;
   if (isGuildMessage && channelConfig?.enabled === false) {
-    logVerbose(`Blocked discord channel ${message.channelId} (channel disabled, ${channelMatchMeta})`);
+    logVerbose(
+      `Blocked discord channel ${message.channelId} (channel disabled, ${channelMatchMeta})`,
+    );
     return null;
   }
 

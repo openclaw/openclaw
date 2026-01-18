@@ -1,6 +1,9 @@
 import type { Guild, User } from "@buape/carbon";
 
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "../../channels/channel-config.js";
+import {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatch,
+} from "../../channels/channel-config.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {

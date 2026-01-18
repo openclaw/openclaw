@@ -4,10 +4,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { findLegacyGatewayServices, uninstallLegacyGatewayServices } from "../daemon/legacy.js";
-import {
-  renderSystemNodeWarning,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
+import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import {
   auditGatewayServiceConfig,
@@ -16,10 +13,7 @@ import {
 } from "../daemon/service-audit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import {
-  buildGatewayInstallPlan,
-  gatewayInstallErrorHint,
-} from "./daemon-install-helpers.js";
+import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,

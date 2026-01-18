@@ -17,7 +17,14 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
 export type SlackAllowListMatch = {
   allowed: boolean;
   matchKey?: string;
-  matchSource?: "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug";
+  matchSource?:
+    | "wildcard"
+    | "id"
+    | "prefixed-id"
+    | "prefixed-user"
+    | "name"
+    | "prefixed-name"
+    | "slug";
 };
 
 export function resolveSlackAllowListMatch(params: {
