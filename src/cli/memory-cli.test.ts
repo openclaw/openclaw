@@ -248,69 +248,6 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("applies index mode overrides", async () => {
-    const { registerMemoryCli } = await import("./memory-cli.js");
-    const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
-    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
-    loadConfig.mockReturnValueOnce({
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              batch: { enabled: true },
-            },
-          },
-        },
-      },
-    });
-    getMemorySearchManager.mockResolvedValueOnce({
-      manager: {
-        probeVectorAvailability: vi.fn(async () => true),
-        probeEmbeddingAvailability,
-        sync,
-        status: () => ({
-          files: 1,
-          chunks: 1,
-          dirty: false,
-          workspaceDir: "/tmp/clawd",
-          dbPath: "/tmp/memory.sqlite",
-          provider: "openai",
-          model: "text-embedding-3-small",
-          requestedProvider: "openai",
-          vector: { enabled: true, available: true },
-        }),
-        close,
-      },
-    });
-
-    const program = new Command();
-    program.name("test");
-    registerMemoryCli(program);
-    await program.parseAsync(["memory", "status", "--index", "--index-mode", "direct"], {
-      from: "user",
-    });
-
-    expect(getMemorySearchManager).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              memorySearch: expect.objectContaining({
-                remote: expect.objectContaining({
-                  batch: expect.objectContaining({ enabled: false }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(sync).toHaveBeenCalled();
-    expect(probeEmbeddingAvailability).toHaveBeenCalled();
-    expect(close).toHaveBeenCalled();
-  });
-
   it("closes manager after index", async () => {
     const { registerMemoryCli } = await import("./memory-cli.js");
     const { defaultRuntime } = await import("../runtime.js");
@@ -329,31 +266,9 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
-    expect(close).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("Memory index updated.");
-  });
-
-  it("skips progress when --progress none", async () => {
-    const { registerMemoryCli } = await import("./memory-cli.js");
-    const close = vi.fn(async () => {});
-    const sync = vi.fn(async () => {});
-    getMemorySearchManager.mockResolvedValueOnce({
-      manager: {
-        sync,
-        close,
-      },
-    });
-
-    const program = new Command();
-    program.name("test");
-    registerMemoryCli(program);
-    await program.parseAsync(["memory", "index", "--progress", "none"], { from: "user" });
-
     expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
     expect(close).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
 
   it("logs close failures without failing the command", async () => {
@@ -376,9 +291,7 @@ describe("memory cli", () => {
     registerMemoryCli(program);
     await program.parseAsync(["memory", "index"], { from: "user" });
 
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    expect(sync).toHaveBeenCalledWith({ reason: "cli", force: false });
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
       expect.stringContaining("Memory manager close failed: close boom"),
