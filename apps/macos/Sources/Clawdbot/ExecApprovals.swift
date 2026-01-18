@@ -204,7 +204,7 @@ enum ExecApprovalsStore {
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
-        var file = self.ensureFile()
+        let file = self.ensureFile()
         let defaults = file.defaults ?? ExecApprovalsDefaults()
         let resolvedDefaults = ExecApprovalsResolvedDefaults(
             security: defaults.security ?? self.defaultSecurity,

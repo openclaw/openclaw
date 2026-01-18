@@ -616,7 +616,10 @@ actor MacNodeRuntime {
             cwd: params.cwd,
             env: env,
             timeout: timeoutSec)
-        let combined = [result.stdout, result.stderr, result.errorMessage].filter { !$0.isEmpty }.joined(separator: "\n")
+        let combined = [result.stdout, result.stderr, result.errorMessage]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
         await self.emitExecEvent(
             "exec.finished",
             payload: ExecEventPayload(
