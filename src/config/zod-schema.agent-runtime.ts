@@ -258,6 +258,12 @@ export const MemorySearchSchema = z
         minScore: z.number().min(0).max(1).optional(),
       })
       .optional(),
+    cache: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxEntries: z.number().int().positive().optional(),
+      })
+      .optional(),
   })
   .optional();
 export const AgentModelSchema = z.union([

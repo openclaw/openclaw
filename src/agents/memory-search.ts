@@ -54,6 +54,10 @@ export type ResolvedMemorySearchConfig = {
     maxResults: number;
     minScore: number;
   };
+  cache: {
+    enabled: boolean;
+    maxEntries?: number;
+  };
 };
 
 const DEFAULT_MODEL = "text-embedding-3-small";
@@ -62,6 +66,7 @@ const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
 function normalizeSources(
@@ -152,6 +157,10 @@ function mergeConfig(
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
   };
+  const cache = {
+    enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
+    maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
+  };
 
   const overlap = Math.max(0, Math.min(chunking.overlap, chunking.tokens - 1));
   const minScore = Math.max(0, Math.min(1, query.minScore));
@@ -170,6 +179,13 @@ function mergeConfig(
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
     sync,
     query: { ...query, minScore },
+    cache: {
+      enabled: Boolean(cache.enabled),
+      maxEntries:
+        typeof cache.maxEntries === "number" && Number.isFinite(cache.maxEntries)
+          ? Math.max(1, Math.floor(cache.maxEntries))
+          : undefined,
+    },
   };
 }
 
