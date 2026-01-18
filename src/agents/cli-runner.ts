@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
@@ -25,12 +25,7 @@ import {
   writeCliImages,
 } from "./cli-runner/helpers.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
-import {
-  buildBootstrapContextFiles,
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  resolveBootstrapMaxChars,
-} from "./pi-embedded-helpers.js";
+import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
@@ -72,15 +67,12 @@ export async function runCliAgent(params: {
     .filter(Boolean)
     .join("\n");
 
-  const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
+  const sessionLabel = params.sessionKey ?? params.sessionId;
+  const { contextFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-  });
-  const sessionLabel = params.sessionKey ?? params.sessionId;
-  const contextFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
-    maxChars: resolveBootstrapMaxChars(params.config),
     warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({

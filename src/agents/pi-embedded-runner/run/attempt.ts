@@ -17,10 +17,9 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { resolveBootstrapFilesForRun } from "../../bootstrap-files.js";
+import { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
-  buildBootstrapContextFiles,
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
   validateAnthropicTurns,
@@ -120,17 +119,15 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
-    const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
-      maxChars: resolveBootstrapMaxChars(params.config),
-      warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
-    });
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+      await resolveBootstrapContextForRun({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+      });
 
     const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
 

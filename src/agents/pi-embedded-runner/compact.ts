@@ -16,14 +16,12 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
-  buildBootstrapContextFiles,
-  type EmbeddedContextFile,
   ensureSessionHeader,
   resolveBootstrapMaxChars,
   validateAnthropicTurns,
@@ -178,20 +176,14 @@ export async function compactEmbeddedPiSession(params: {
           workspaceDir: effectiveWorkspace,
         });
 
-        const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
+        const sessionLabel = params.sessionKey ?? params.sessionId;
+        const { contextFiles } = await resolveBootstrapContextForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
+          warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
         });
-        const sessionLabel = params.sessionKey ?? params.sessionId;
-        const contextFiles: EmbeddedContextFile[] = buildBootstrapContextFiles(
-          hookAdjustedBootstrapFiles,
-          {
-            maxChars: resolveBootstrapMaxChars(params.config),
-            warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
-          },
-        );
         const runAbortController = new AbortController();
         const toolsRaw = createClawdbotCodingTools({
           exec: {

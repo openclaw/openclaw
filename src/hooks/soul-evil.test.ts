@@ -128,4 +128,29 @@ describe("applySoulEvilOverride", () => {
     const soul = updated.find((file) => file.name === DEFAULT_SOUL_FILENAME);
     expect(soul?.content).toBe("friendly");
   });
+
+  it("leaves files untouched when SOUL.md is not in bootstrap files", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-soul-"));
+    const evilPath = path.join(tempDir, DEFAULT_SOUL_EVIL_FILENAME);
+    await fs.writeFile(evilPath, "chaotic", "utf-8");
+
+    const files: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: path.join(tempDir, "AGENTS.md"),
+        content: "agents",
+        missing: false,
+      },
+    ];
+
+    const updated = await applySoulEvilOverride({
+      files,
+      workspaceDir: tempDir,
+      config: { chance: 1 },
+      userTimezone: "UTC",
+      random: () => 0,
+    });
+
+    expect(updated).toEqual(files);
+  });
 });
