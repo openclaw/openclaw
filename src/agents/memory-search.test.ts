@@ -67,6 +67,39 @@ describe("memory search config", () => {
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
 
+  it("includes batch defaults for openai without remote overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.remote?.batch).toEqual({
+      enabled: true,
+      wait: true,
+      pollIntervalMs: 5000,
+      timeoutMinutes: 60,
+    });
+  });
+
+  it("keeps remote unset for local provider without overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.remote).toBeUndefined();
+  });
+
   it("merges remote defaults with agent overrides", () => {
     const cfg = {
       agents: {

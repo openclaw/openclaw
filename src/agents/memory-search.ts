@@ -95,6 +95,7 @@ function mergeConfig(
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
   const hasRemote = Boolean(defaults?.remote || overrides?.remote);
+  const includeRemote = hasRemote || provider === "openai";
   const batch = {
     enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
     wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
@@ -107,7 +108,7 @@ function mergeConfig(
       defaults?.remote?.batch?.timeoutMinutes ??
       60,
   };
-  const remote = hasRemote
+  const remote = includeRemote
     ? {
         baseUrl: overrides?.remote?.baseUrl ?? defaults?.remote?.baseUrl,
         apiKey: overrides?.remote?.apiKey ?? defaults?.remote?.apiKey,

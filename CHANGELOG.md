@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
 
+### Fixes
+- Memory: apply OpenAI batch defaults even without explicit remote config.
+
 ## 2026.1.17-3
 
 ### Changes
