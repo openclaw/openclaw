@@ -30,6 +30,8 @@ read_when:
 - **Node identity:** use existing `nodeId`.
 - **Socket auth:** Unix socket + token (cross-platform); split later if needed.
 - **Node host state:** `~/.clawdbot/node.json` (node id + pairing token).
+- **macOS exec host:** run `system.run` inside the macOS app; node service forwards requests over local IPC.
+- **No XPC helper:** stick to Unix socket + token + peer checks.
 
 ## Key concepts
 ### Host
@@ -139,18 +141,29 @@ Notes:
 
 ## UI integration (macOS app)
 ### IPC
-- Unix socket at `~/.clawdbot/exec-approvals.sock`.
-- Runner connects and sends an approval request; UI responds with a decision.
-- Token stored in `exec-approvals.json`.
+- Unix socket at `~/.clawdbot/exec-approvals.sock` (0600).
+- Token stored in `exec-approvals.json` (0600).
+- Peer checks: same-UID only.
+- Challenge/response: nonce + HMAC(token, request-hash) to prevent replay.
+- Short TTL (e.g., 10s) + max payload + rate limit.
 
-### Ask flow
-1) Runner receives `system.run` from gateway.
-2) If ask required, runner connects to the socket and sends a prompt request.
-3) UI shows dialog; returns decision.
-4) Runner enforces decision and proceeds.
+### Ask flow (macOS app exec host)
+1) Node service receives `system.run` from gateway.
+2) Node service connects to the local socket and sends the prompt/exec request.
+3) App validates peer + token + HMAC + TTL, then shows dialog if needed.
+4) App executes the command in UI context and returns output.
+5) Node service returns output to gateway.
 
 If UI missing:
 - Apply `askFallback` (`deny|allowlist|full`).
+
+### Diagram (SCI)
+```
+Agent -> Gateway -> Bridge -> Node Service (TS)
+                         |  IPC (UDS + token + HMAC + TTL)
+                         v
+                     Mac App (UI + TCC + system.run)
+```
 
 ## Node identity + binding
 - Use existing `nodeId` from Bridge pairing.

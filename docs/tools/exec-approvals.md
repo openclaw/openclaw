@@ -22,6 +22,10 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `clawdbot` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
+Planned macOS split:
+- **node service** forwards `system.run` to the **macOS app** over local IPC.
+- **macOS app** enforces approvals + executes the command in UI context.
+
 ## Settings and storage
 
 Approvals live in a local JSON file on the execution host:
@@ -127,6 +131,19 @@ Actions:
 - **Allow once** → run now
 - **Always allow** → add to allowlist + run
 - **Deny** → block
+
+### macOS IPC flow (planned)
+```
+Gateway -> Bridge -> Node Service (TS)
+                    |  IPC (UDS + token + HMAC + TTL)
+                    v
+                Mac App (UI + approvals + system.run)
+```
+
+Security notes:
+- Unix socket mode `0600`, token stored in `exec-approvals.json`.
+- Same-UID peer check.
+- Challenge/response (nonce + HMAC token + request hash) + short TTL.
 
 ## System events
 
