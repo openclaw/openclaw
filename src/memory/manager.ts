@@ -91,6 +91,11 @@ type OpenAiBatchStatus = {
   status?: string;
   output_file_id?: string | null;
   error_file_id?: string | null;
+  request_counts?: {
+    total?: number;
+    completed?: number;
+    failed?: number;
+  };
 };
 
 type OpenAiBatchOutputLine = {
@@ -1649,7 +1654,11 @@ export class MemoryIndexManager {
       const state = status.status ?? "unknown";
       if (state === "completed") {
         log.debug(`openai batch ${batchId} ${state}`, {
-          consoleMessage: this.formatOpenAiBatchConsoleMessage({ batchId, state }),
+          consoleMessage: this.formatOpenAiBatchConsoleMessage({
+            batchId,
+            state,
+            counts: status.request_counts,
+          }),
         });
         if (!status.output_file_id) {
           throw new Error(`openai batch ${batchId} completed without output file`);
@@ -1677,6 +1686,7 @@ export class MemoryIndexManager {
           batchId,
           state,
           waitMs: this.batch.pollIntervalMs,
+          counts: status.request_counts,
         }),
       });
       await new Promise((resolve) => setTimeout(resolve, this.batch.pollIntervalMs));
@@ -1688,6 +1698,7 @@ export class MemoryIndexManager {
     batchId: string;
     state: string;
     waitMs?: number;
+    counts?: OpenAiBatchStatus["request_counts"];
   }): string {
     const rich = isRich();
     const normalized = params.state.toLowerCase();
@@ -1699,8 +1710,23 @@ export class MemoryIndexManager {
     else if (errorStates.has(normalized)) color = theme.error;
     else if (warnStates.has(normalized)) color = theme.warn;
     const status = colorize(rich, color, params.state);
+    const progress = this.formatOpenAiBatchProgress(params.counts);
     const suffix = typeof params.waitMs === "number" ? `; waiting ${params.waitMs}ms` : "";
-    return `openai batch ${params.batchId} ${status}${suffix}`;
+    const progressText = progress ? ` ${progress}` : "";
+    return `openai batch ${params.batchId} ${status}${progressText}${suffix}`;
+  }
+
+  private formatOpenAiBatchProgress(
+    counts?: OpenAiBatchStatus["request_counts"],
+  ): string | undefined {
+    if (!counts) return undefined;
+    const total = counts.total ?? 0;
+    if (!Number.isFinite(total) || total <= 0) return undefined;
+    const completed = Math.max(0, counts.completed ?? 0);
+    const failed = Math.max(0, counts.failed ?? 0);
+    const percent = Math.min(100, Math.max(0, Math.round((completed / total) * 100)));
+    const failureSuffix = failed > 0 ? `, ${failed} failed` : "";
+    return `(${completed}/${total} ${percent}%${failureSuffix})`;
   }
 
   private async embedChunksWithBatch(
