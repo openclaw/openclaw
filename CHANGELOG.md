@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
 - Agents: make inbound message envelopes configurable (timezone/timestamp/elapsed) and surface elapsed gaps; time design is actively being explored. See https://docs.clawd.bot/date-time. (#1150) — thanks @shiv19.
+- TUI: add animated waiting shimmer status in the terminal UI. (#1196) — thanks @vignesh07.
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.

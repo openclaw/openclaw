@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -43,6 +43,10 @@ vi.mock("./queue.js", async () => {
 });
 
 import { runReplyAgent } from "./agent-runner.js";
+
+beforeEach(() => {
+  runEmbeddedPiAgentMock.mockReset();
+});
 
 function createMinimalRun(params?: {
   opts?: GetReplyOptions;
@@ -137,18 +141,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
       await fs.writeFile(transcriptPath, "ok", "utf-8");
 
-      runEmbeddedPiAgentMock
-        .mockImplementationOnce(async () => {
-          throw new Error(
-            'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-          );
-        })
-        .mockImplementationOnce(async () => ({
-          payloads: [{ text: "ok" }],
-          meta: {},
-        }));
+      runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error(
+          'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        ),
+      );
 
-      const callsBefore = runEmbeddedPiAgentMock.mock.calls.length;
       const { run } = createMinimalRun({
         sessionEntry,
         sessionStore,
@@ -157,9 +155,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
 
-      expect(runEmbeddedPiAgentMock.mock.calls.length - callsBefore).toBe(2);
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const payload = Array.isArray(res) ? res[0] : res;
-      expect(payload).toMatchObject({ text: "ok" });
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Context limit exceeded during compaction"),
+      });
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
@@ -188,24 +188,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
       await fs.writeFile(transcriptPath, "ok", "utf-8");
 
-      runEmbeddedPiAgentMock
-        .mockImplementationOnce(async () => ({
-          payloads: [{ text: "Context overflow: prompt too large", isError: true }],
-          meta: {
-            durationMs: 1,
-            error: {
-              kind: "context_overflow",
-              message:
-                'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
-            },
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "Context overflow: prompt too large", isError: true }],
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "context_overflow",
+            message:
+              'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
           },
-        }))
-        .mockImplementationOnce(async () => ({
-          payloads: [{ text: "ok" }],
-          meta: { durationMs: 1 },
-        }));
+        },
+      });
 
-      const callsBefore = runEmbeddedPiAgentMock.mock.calls.length;
       const { run } = createMinimalRun({
         sessionEntry,
         sessionStore,
@@ -214,9 +208,11 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
       const res = await run();
 
-      expect(runEmbeddedPiAgentMock.mock.calls.length - callsBefore).toBe(2);
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const payload = Array.isArray(res) ? res[0] : res;
-      expect(payload).toMatchObject({ text: "ok" });
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Context limit exceeded."),
+      });
       expect(sessionStore.main.sessionId).not.toBe(sessionId);
 
       const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));

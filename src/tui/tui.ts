@@ -22,6 +22,10 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
+import {
+  buildWaitingStatusMessage,
+  defaultWaitingPhrases,
+} from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
@@ -286,9 +290,28 @@ export async function runTui(opts: TuiOptions) {
     statusContainer.addChild(statusLoader);
   };
 
+  let waitingTick = 0;
+  let waitingTimer: NodeJS.Timeout | null = null;
+  let waitingPhrase: string | null = null;
+
   const updateBusyStatusMessage = () => {
     if (!statusLoader || !statusStartedAt) return;
     const elapsed = formatElapsed(statusStartedAt);
+
+    if (activityStatus === "waiting") {
+      waitingTick++;
+      statusLoader.setMessage(
+        buildWaitingStatusMessage({
+          theme,
+          tick: waitingTick,
+          elapsed,
+          connectionStatus,
+          phrases: waitingPhrase ? [waitingPhrase] : undefined,
+        }),
+      );
+      return;
+    }
+
     statusLoader.setMessage(`${activityStatus} • ${elapsed} | ${connectionStatus}`);
   };
 
@@ -306,6 +329,31 @@ export async function runTui(opts: TuiOptions) {
     statusTimer = null;
   };
 
+  const startWaitingTimer = () => {
+    if (waitingTimer) return;
+
+    // Pick a phrase once per waiting session.
+    if (!waitingPhrase) {
+      const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
+      waitingPhrase =
+        defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+    }
+
+    waitingTick = 0;
+
+    waitingTimer = setInterval(() => {
+      if (activityStatus !== "waiting") return;
+      updateBusyStatusMessage();
+    }, 120);
+  };
+
+  const stopWaitingTimer = () => {
+    if (!waitingTimer) return;
+    clearInterval(waitingTimer);
+    waitingTimer = null;
+    waitingPhrase = null;
+  };
+
   const renderStatus = () => {
     const isBusy = busyStates.has(activityStatus);
     if (isBusy) {
@@ -313,11 +361,18 @@ export async function runTui(opts: TuiOptions) {
         statusStartedAt = Date.now();
       }
       ensureStatusLoader();
+      if (activityStatus === "waiting") {
+        stopStatusTimer();
+        startWaitingTimer();
+      } else {
+        stopWaitingTimer();
+        startStatusTimer();
+      }
       updateBusyStatusMessage();
-      startStatusTimer();
     } else {
       statusStartedAt = null;
       stopStatusTimer();
+      stopWaitingTimer();
       statusLoader?.stop();
       statusLoader = null;
       ensureStatusText();
