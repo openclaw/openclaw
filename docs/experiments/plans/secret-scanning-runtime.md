@@ -1,7 +1,7 @@
 ---
 summary: "Runtime secret scanning plan (off/redact/block + overflow handling)"
 owner: "clawdbot"
-status: "draft"
+status: "in_progress"
 last_updated: "2026-01-18"
 ---
 
@@ -15,13 +15,18 @@ last_updated: "2026-01-18"
 - Use **RE2** for regex safety with untrusted input.
 - Keep scanner warm (compile once, minimal per-call allocations).
 
-## Decisions Needed (confirm)
-- Default scan cap (e.g., 32k vs 64k chars).
-- Whether to include a hard max cap beyond configurable cap.
-- Overflow policy default: **truncate** or **block**.
-- Error message copy for “blocked due to size” and “blocked due to secret detection”.
+## Current Status
+- Core module + detectors are implemented.
+- Tests are in place (scan orchestration + entropy + regex families).
+- Runtime wiring + user-facing errors are still pending.
 
-## Proposed Config Surface
+## Decisions (confirmed)
+- Default scan cap: **32,768 chars**.
+- Hard max cap beyond configurable cap: **none**.
+- Overflow default: **truncate**.
+- Error message copy for size/secret blocks: **TBD** (needs decision).
+
+## Config Surface (implemented)
 - New config section: `security.secretScanning`.
   - `mode: "off" | "redact" | "block"` (default: "off").
   - `maxChars: number` (cap; block if exceeded). **Default: 32768**.
@@ -30,8 +35,8 @@ last_updated: "2026-01-18"
   - **Warning**: when `overflow: "truncate"` and input exceeds `maxChars`, emit a warning
     like “Secret scan truncated to ${maxChars} chars (set security.secretScanning.maxChars to increase).”
 
-## Core Module (PR 1)
-- New module: `src/security/secret-scan/`.
+## Core Module (implemented)
+- Module: `src/security/secret-scan/`.
   - `scanText(text, opts)` returns `{ blocked: boolean; reason; matches; truncated: boolean; redactedText; }`.
   - **Overflow behavior**:
     - `overflow: "block"`: if `text.length > maxChars` ⇒ `blocked: true`, `reason: "too_long"`.
@@ -47,13 +52,12 @@ last_updated: "2026-01-18"
     - Keep `src/logging/redact.ts` as a thin wrapper so existing config
       (`logging.redactSensitive`, `logging.redactPatterns`) keeps working.
 - Tests (`*.test.ts`):
-  - Format detector coverage.
-  - Entropy thresholds (positive/negative cases).
-  - Overflow blocking.
-  - Redaction output stability.
+  - `scan.test.ts`: mode + overflow + redaction.
+  - `entropy.test.ts`: entropy thresholds (positive/negative cases).
+  - `regex.test.ts`: format + heuristic + keyword detectors.
 - Micro-benchmark (optional): scan typical payloads + adversarial inputs.
 
-## Integration (PR 2)
+## Integration (pending)
 - Apply scan at the **runtime boundaries** where user-controlled text enters or leaves:
   - Inbound messages before they are sent to providers / LLM calls.
   - Outbound tool messages before they hit logs / consoles / replies.
@@ -68,5 +72,5 @@ last_updated: "2026-01-18"
 - Document config in `docs/gateway/security.md` + `docs/gateway/configuration.md`.
 
 ## Deliverables
-- PR 1: core module + tests + config schema.
-- PR 2: wiring + errors + docs.
+- Core module + tests + config schema: **done**.
+- Wiring + errors + docs: **pending**.
