@@ -3,7 +3,7 @@ import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 
 type SkillsChangeEvent = {

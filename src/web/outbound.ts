@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { createSubsystemLogger, getChildLogger } from "../logging.js";
+import { getChildLogger } from "../logging/logger.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";

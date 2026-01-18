@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { STATE_DIR_CLAWDBOT } from "../config/paths.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "./registry.js";
 
 const log = createSubsystemLogger("plugins");

@@ -1,6 +1,6 @@
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadClawdbotPlugins } from "./loader.js";
 import type { ClawdbotPluginToolContext } from "./types.js";
 

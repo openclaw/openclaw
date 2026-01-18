@@ -1,5 +1,5 @@
 import type { WebSocketServer } from "ws";
-import type { createSubsystemLogger } from "../logging.js";
+import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import type { GatewayWsClient } from "./server/ws-types.js";

@@ -8,7 +8,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { hasBinary } from "../agents/skills.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildGogWatchServeArgs,

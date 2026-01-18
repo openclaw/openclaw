@@ -1,3 +1,3 @@
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 export const log = createSubsystemLogger("agent/embedded");

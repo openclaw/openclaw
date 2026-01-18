@@ -9,7 +9,7 @@ import {
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-duration.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   normalizeDiscordSlug,
@@ -22,7 +22,7 @@ import { resolveDiscordChannelInfo } from "./message-utils.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
-type Logger = ReturnType<typeof import("../../logging.js").createSubsystemLogger>;
+type Logger = ReturnType<typeof import("../../logging/subsystem.js").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 

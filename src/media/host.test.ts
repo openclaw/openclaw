@@ -3,11 +3,15 @@ import type { Server } from "node:http";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const saveMediaSource = vi.fn();
-const getTailnetHostname = vi.fn();
-const ensurePortAvailable = vi.fn();
-const startMediaServer = vi.fn();
-const logInfo = vi.fn();
+const mocks = vi.hoisted(() => ({
+  saveMediaSource: vi.fn(),
+  getTailnetHostname: vi.fn(),
+  ensurePortAvailable: vi.fn(),
+  startMediaServer: vi.fn(),
+  logInfo: vi.fn(),
+}));
+const { saveMediaSource, getTailnetHostname, ensurePortAvailable, startMediaServer, logInfo } =
+  mocks;
 
 vi.mock("./store.js", () => ({ saveMediaSource }));
 vi.mock("../infra/tailscale.js", () => ({ getTailnetHostname }));
@@ -16,7 +20,10 @@ vi.mock("../infra/ports.js", async () => {
   return { ensurePortAvailable, PortInUseError: actual.PortInUseError };
 });
 vi.mock("./server.js", () => ({ startMediaServer }));
-vi.mock("../logger.js", () => ({ logInfo }));
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return { ...actual, logInfo };
+});
 
 const { ensureMediaHosted } = await import("./host.js");
 const { PortInUseError } = await import("../infra/ports.js");

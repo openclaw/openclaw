@@ -4,7 +4,7 @@ import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
-import type { createSubsystemLogger } from "../logging.js";
+import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 
