@@ -20,8 +20,12 @@ function buildSkillsSection(params: {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed || params.isMinimal) return [];
   return [
-    "## Skills",
-    `Skills provide task-specific instructions. Use \`${params.readToolName}\` to load the SKILL.md at the location listed for that skill.`,
+    "## Skills (mandatory)",
+    "Before replying: scan <available_skills> <description> entries.",
+    `- If exactly one skill clearly applies: read its SKILL.md at <location> with \`${params.readToolName}\`, then follow it.`,
+    "- If multiple could apply: choose the most specific one, then read/follow it.",
+    "- If none clearly apply: do not read any SKILL.md.",
+    "Constraints: never read more than one skill up front; only read after selecting.",
     trimmed,
     "",
   ];
