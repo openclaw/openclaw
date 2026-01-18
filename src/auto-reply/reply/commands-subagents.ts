@@ -15,7 +15,13 @@ import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { truncateUtf16Safe } from "../../utils.js";
+import {
+  formatAgeShort,
+  formatDurationShort,
+  formatRunLabel,
+  formatRunStatus,
+  sortSubagentRuns,
+} from "./subagents-utils.js";
 import { stopSubagentsForRequester } from "./abort.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
@@ -28,28 +34,6 @@ type SubagentTargetResolution = {
 const COMMAND = "/subagents";
 const ACTIONS = new Set(["list", "stop", "log", "send", "info", "help"]);
 
-function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m${seconds}s`;
-  return `${seconds}s`;
-}
-
-function formatAgeShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
-  const minutes = Math.round(valueMs / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
 function formatTimestamp(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
   return new Date(valueMs).toISOString();
@@ -58,25 +42,6 @@ function formatTimestamp(valueMs?: number) {
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return "n/a";
   return `${formatTimestamp(valueMs)} (${formatAgeShort(Date.now() - valueMs)})`;
-}
-
-function formatRunStatus(entry: SubagentRunRecord) {
-  if (!entry.endedAt) return "running";
-  const status = entry.outcome?.status ?? "done";
-  return status === "ok" ? "done" : status;
-}
-
-function formatRunLabel(entry: SubagentRunRecord) {
-  const raw = entry.label?.trim() || entry.task?.trim() || "subagent";
-  return raw.length > 72 ? `${truncateUtf16Safe(raw, 72).trimEnd()}…` : raw;
-}
-
-function sortRuns(runs: SubagentRunRecord[]) {
-  return [...runs].sort((a, b) => {
-    const aTime = a.startedAt ?? a.createdAt ?? 0;
-    const bTime = b.startedAt ?? b.createdAt ?? 0;
-    return bTime - aTime;
-  });
 }
 
 function resolveRequesterSessionKey(params: Parameters<CommandHandler>[0]): string | undefined {
@@ -93,7 +58,7 @@ function resolveSubagentTarget(
   const trimmed = token?.trim();
   if (!trimmed) return { error: "Missing subagent id." };
   if (trimmed === "last") {
-    const sorted = sortRuns(runs);
+    const sorted = sortSubagentRuns(runs);
     return { entry: sorted[0] };
   }
   const sorted = sortRuns(runs);
@@ -212,7 +177,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
     if (runs.length === 0) {
       return { shouldContinue: false, reply: { text: "🧭 Subagents: none for this session." } };
     }
-    const sorted = sortRuns(runs);
+    const sorted = sortSubagentRuns(runs);
     const active = sorted.filter((entry) => !entry.endedAt);
     const done = sorted.length - active.length;
     const lines = [
