@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {

@@ -74,7 +74,7 @@ const createStubChannelPlugin = (params: {
   status: {
     buildChannelSummary: async () => ({
       configured: false,
-      ...(params.summary ?? {}),
+      ...params.summary,
     }),
   },
   gateway: {
