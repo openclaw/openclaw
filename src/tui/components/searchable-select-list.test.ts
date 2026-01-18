@@ -92,6 +92,21 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toContain("gpt");
   });
 
+  it("preserves fuzzy ranking when only fuzzy matches exist", () => {
+    const items = [
+      { value: "xg---4", label: "xg---4", description: "Worse fuzzy match" },
+      { value: "gpt-4", label: "gpt-4", description: "Better fuzzy match" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "g4") {
+      list.handleInput(ch);
+    }
+
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe("gpt-4");
+  });
+
   it("shows no match message when filter yields no results", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 

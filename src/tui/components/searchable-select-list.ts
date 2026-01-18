@@ -25,7 +25,6 @@ export class SearchableSelectList implements Component {
   private maxVisible: number;
   private theme: SearchableSelectListTheme;
   private searchInput: Input;
-  private searchQuery = "";
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
@@ -41,7 +40,6 @@ export class SearchableSelectList implements Component {
 
   private updateFilter() {
     const query = this.searchInput.getValue().trim();
-    this.searchQuery = query;
 
     if (!query) {
       this.filteredItems = this.items;
@@ -63,45 +61,45 @@ export class SearchableSelectList implements Component {
    */
   private smartFilter(query: string): SelectItem[] {
     const q = query.toLowerCase();
-    
     type ScoredItem = { item: SelectItem; score: number };
-    const scored: ScoredItem[] = [];
+    const exactLabel: ScoredItem[] = [];
+    const wordBoundary: SelectItem[] = [];
+    const descriptionMatches: SelectItem[] = [];
+    const fuzzyCandidates: SelectItem[] = [];
 
     for (const item of this.items) {
       const label = item.label.toLowerCase();
       const desc = (item.description ?? "").toLowerCase();
-      let score = Infinity;
 
       // Tier 1: Exact substring in label (score 0-99)
       const labelIndex = label.indexOf(q);
       if (labelIndex !== -1) {
         // Earlier match = better score
-        score = labelIndex;
+        exactLabel.push({ item, score: labelIndex });
+        continue;
       }
       // Tier 2: Word-boundary prefix in label (score 100-199)
-      else if (this.matchesWordBoundary(label, q)) {
-        score = 100;
+      if (this.matchesWordBoundary(label, q)) {
+        wordBoundary.push(item);
+        continue;
       }
       // Tier 3: Exact substring in description (score 200-299)
-      else if (desc.indexOf(q) !== -1) {
-        score = 200;
+      if (desc.indexOf(q) !== -1) {
+        descriptionMatches.push(item);
+        continue;
       }
       // Tier 4: Fuzzy match (score 300+)
-      else {
-        const fuzzyResult = fuzzyFilter([item], query, (i) => `${i.label} ${i.description ?? ""}`);
-        if (fuzzyResult.length > 0) {
-          score = 300;
-        }
-      }
-
-      if (score !== Infinity) {
-        scored.push({ item, score });
-      }
+      fuzzyCandidates.push(item);
     }
 
-    // Sort by score (lower = better)
-    scored.sort((a, b) => a.score - b.score);
-    return scored.map((s) => s.item);
+    exactLabel.sort((a, b) => a.score - b.score);
+    const fuzzyMatches = fuzzyFilter(fuzzyCandidates, query, (i) => `${i.label} ${i.description ?? ""}`);
+    return [
+      ...exactLabel.map((s) => s.item),
+      ...wordBoundary,
+      ...descriptionMatches,
+      ...fuzzyMatches,
+    ];
   }
 
   /**
@@ -130,7 +128,8 @@ export class SearchableSelectList implements Component {
 
     // Search input line
     const prompt = this.theme.searchPrompt("search: ");
-    const inputLines = this.searchInput.render(width - 8);
+    const inputWidth = Math.max(1, width - 8);
+    const inputLines = this.searchInput.render(inputWidth);
     const inputText = inputLines[0] ?? "";
     lines.push(`${prompt}${this.theme.searchInput(inputText)}`);
     lines.push(""); // Spacer
