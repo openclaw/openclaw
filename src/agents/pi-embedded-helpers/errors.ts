@@ -339,7 +339,6 @@ const ERROR_PATTERNS = {
     "no api key found",
   ],
   format: [
-    "invalid_request_error",
     "string should match pattern",
     "tool_use.id",
     "tool_use_id",
@@ -347,6 +346,10 @@ const ERROR_PATTERNS = {
     "invalid request format",
   ],
 } as const;
+
+const IMAGE_DIMENSION_ERROR_RE =
+  /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
+const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 
 function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): boolean {
   if (!raw) return false;
@@ -390,8 +393,31 @@ export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }
 
+export function parseImageDimensionError(raw: string): {
+  maxDimensionPx?: number;
+  messageIndex?: number;
+  contentIndex?: number;
+  raw: string;
+} | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (!lower.includes("image dimensions exceed max allowed size")) return null;
+  const limitMatch = raw.match(IMAGE_DIMENSION_ERROR_RE);
+  const pathMatch = raw.match(IMAGE_DIMENSION_PATH_RE);
+  return {
+    maxDimensionPx: limitMatch?.[1] ? Number.parseInt(limitMatch[1], 10) : undefined,
+    messageIndex: pathMatch?.[1] ? Number.parseInt(pathMatch[1], 10) : undefined,
+    contentIndex: pathMatch?.[2] ? Number.parseInt(pathMatch[2], 10) : undefined,
+    raw,
+  };
+}
+
+export function isImageDimensionErrorMessage(raw: string): boolean {
+  return Boolean(parseImageDimensionError(raw));
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
+  return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
@@ -400,6 +426,7 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
 }
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
+  if (isImageDimensionErrorMessage(raw)) return null;
   if (isRateLimitErrorMessage(raw)) return "rate_limit";
   if (isOverloadedErrorMessage(raw)) return "rate_limit";
   if (isCloudCodeAssistFormatError(raw)) return "format";

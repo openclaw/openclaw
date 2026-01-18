@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
 
 import { assertSandboxPath } from "../../sandbox-paths.js";
+import { sanitizeImageBlocks } from "../../tool-images.js";
 import { extractTextFromMessage } from "../../../tui/tui-formatters.js";
 import { loadWebMedia } from "../../../web/media.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -46,6 +47,17 @@ export interface DetectedImageRef {
 function isImageExtension(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return IMAGE_EXTENSIONS.has(ext);
+}
+
+async function sanitizeImagesWithLog(
+  images: ImageContent[],
+  label: string,
+): Promise<ImageContent[]> {
+  const { images: sanitized, dropped } = await sanitizeImageBlocks(images, label);
+  if (dropped > 0) {
+    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
+  }
+  return sanitized;
 }
 
 /**
@@ -392,9 +404,18 @@ export async function detectAndLoadPromptImages(params: {
     }
   }
 
+  const sanitizedPromptImages = await sanitizeImagesWithLog(promptImages, "prompt:images");
+  const sanitizedHistoryImagesByIndex = new Map<number, ImageContent[]>();
+  for (const [index, images] of historyImagesByIndex) {
+    const sanitized = await sanitizeImagesWithLog(images, `history:images:${index}`);
+    if (sanitized.length > 0) {
+      sanitizedHistoryImagesByIndex.set(index, sanitized);
+    }
+  }
+
   return {
-    images: promptImages,
-    historyImagesByIndex,
+    images: sanitizedPromptImages,
+    historyImagesByIndex: sanitizedHistoryImagesByIndex,
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,

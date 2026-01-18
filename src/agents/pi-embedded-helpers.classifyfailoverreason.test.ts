@@ -26,6 +26,11 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
     expect(classifyFailoverReason("string should match pattern")).toBe("format");
     expect(classifyFailoverReason("bad request")).toBeNull();
+    expect(
+      classifyFailoverReason(
+        "messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels",
+      ),
+    ).toBeNull();
   });
   it("classifies OpenAI usage limit errors as rate_limit", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
