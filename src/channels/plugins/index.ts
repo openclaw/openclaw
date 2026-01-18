@@ -87,6 +87,8 @@ export {
 export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
+  resolveChannelEntryMatchWithFallback,
   type ChannelEntryMatch,
+  type ChannelMatchSource,
 } from "./channel-config.js";
 export type { ChannelId, ChannelPlugin } from "./types.js";

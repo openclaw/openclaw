@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
+- Channels: unify thread/topic allowlist matching + command/mention gating helpers across core providers.
 - Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
 
 ### Fixes

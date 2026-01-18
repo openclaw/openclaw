@@ -18,8 +18,8 @@ import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../conf
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveMentionGating } from "../channels/mention-gating.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -269,10 +269,16 @@ export const buildTelegramMessageContext = async ({
     senderUsername,
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+  const hasControlCommandInMessage = hasControlCommand(msg.text ?? msg.caption ?? "", cfg, {
+    botUsername,
+  });
+  const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommandInMessage,
   });
+  const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = "";
@@ -300,11 +306,7 @@ export const buildTelegramMessageContext = async ({
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
-  if (
-    isGroup &&
-    hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername }) &&
-    !commandAuthorized
-  ) {
+  if (isGroup && commandGate.shouldBlock) {
     logVerbose(`telegram: drop control command from unauthorized sender ${senderId ?? "unknown"}`);
     return null;
   }
@@ -325,20 +327,17 @@ export const buildTelegramMessageContext = async ({
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
   const implicitMention = botId != null && replyFromId === botId;
-  const shouldBypassMention =
-    isGroup &&
-    requireMention &&
-    !wasMentioned &&
-    !hasAnyMention &&
-    commandAuthorized &&
-    hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername });
   const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-  const mentionGate = resolveMentionGating({
+  const mentionGate = resolveMentionGatingWithBypass({
+    isGroup,
     requireMention: Boolean(requireMention),
     canDetectMention,
     wasMentioned,
     implicitMention: isGroup && Boolean(requireMention) && implicitMention,
-    shouldBypassMention,
+    hasAnyMention,
+    allowTextCommands: true,
+    hasControlCommand: hasControlCommandInMessage,
+    commandAuthorized,
   });
   const effectiveWasMentioned = mentionGate.effectiveWasMentioned;
   if (isGroup && requireMention && canDetectMention) {

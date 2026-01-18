@@ -13,6 +13,8 @@ export type MSTeamsResolvedRouteConfig = {
   allowed: boolean;
   teamKey?: string;
   channelKey?: string;
+  channelMatchKey?: string;
+  channelMatchSource?: "direct" | "wildcard";
 };
 
 export function resolveMSTeamsRouteConfig(params: {
@@ -75,6 +77,8 @@ export function resolveMSTeamsRouteConfig(params: {
     allowed,
     teamKey,
     channelKey,
+    channelMatchKey: channelKey,
+    channelMatchSource: channelKey ? (channelKey === "*" ? "wildcard" : "direct") : undefined,
   };
 }
 
