@@ -110,7 +110,9 @@ export function registerMemoryCli(program: Command) {
             return;
           }
           if (opts.index) {
-            const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
+            const line = indexError
+              ? `Memory index failed: ${indexError}`
+              : "Memory index complete.";
             defaultRuntime.log(line);
           }
           const rich = isRich();
@@ -127,7 +129,9 @@ export function registerMemoryCli(program: Command) {
               `(requested: ${status.requestedProvider})`,
             )}`,
             `${label("Model")} ${info(status.model)}`,
-            status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
+            status.sources?.length
+              ? `${label("Sources")} ${info(status.sources.join(", "))}`
+              : null,
             `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
             `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
             `${label("Store")} ${info(status.dbPath)}`,

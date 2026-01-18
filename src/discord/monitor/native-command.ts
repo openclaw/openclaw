@@ -535,7 +535,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadChannel: {
         id: rawChannelId,
         name: channelName,
-        parentId: "parentId" in channel ? channel.parentId ?? undefined : undefined,
+        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
         parent: undefined,
       },
       channelInfo,

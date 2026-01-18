@@ -71,10 +71,7 @@ describe("memory embedding batches", () => {
     await manager.sync({ force: true });
 
     const status = manager.status();
-    const totalTexts = embedBatch.mock.calls.reduce(
-      (sum, call) => sum + (call[0]?.length ?? 0),
-      0,
-    );
+    const totalTexts = embedBatch.mock.calls.reduce((sum, call) => sum + (call[0]?.length ?? 0), 0);
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
   });

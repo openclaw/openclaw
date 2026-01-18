@@ -180,7 +180,9 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       } catch (err) {
         installError = err instanceof Error ? err.message : String(err);
       } finally {
-        progress.stop(installError ? "Gateway daemon install failed." : "Gateway daemon installed.");
+        progress.stop(
+          installError ? "Gateway daemon install failed." : "Gateway daemon installed.",
+        );
       }
       if (installError) {
         await prompter.note(`Gateway daemon install failed: ${installError}`, "Gateway");

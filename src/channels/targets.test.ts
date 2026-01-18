@@ -31,9 +31,9 @@ describe("requireTargetKind", () => {
   });
 
   it("throws when the kind is missing or mismatched", () => {
-    expect(() => requireTargetKind({ platform: "Slack", target: undefined, kind: "channel" })).toThrow(
-      /Slack channel id is required/,
-    );
+    expect(() =>
+      requireTargetKind({ platform: "Slack", target: undefined, kind: "channel" }),
+    ).toThrow(/Slack channel id is required/);
     const target = buildMessagingTarget("user", "U123", "U123");
     expect(() => requireTargetKind({ platform: "Slack", target, kind: "channel" })).toThrow(
       /Slack channel id is required/,

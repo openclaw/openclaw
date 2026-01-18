@@ -34,9 +34,10 @@ afterEach(() => {
 
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
-    expect(
-      resolveGatewayDevMode(["node", "/Users/me/clawdbot/src/cli/index.ts"]),
-    ).toBe(true);
+    expect(resolveGatewayDevMode(["node", "/Users/me/clawdbot/src/cli/index.ts"])).toBe(true);
+    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\clawdbot\\src\\cli\\index.ts"])).toBe(
+      true,
+    );
     expect(resolveGatewayDevMode(["node", "/Users/me/clawdbot/dist/cli/index.js"])).toBe(false);
   });
 });

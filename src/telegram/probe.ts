@@ -70,9 +70,7 @@ export async function probeTelegram(
       id: meJson.result?.id ?? null,
       username: meJson.result?.username ?? null,
       canJoinGroups:
-        typeof meJson.result?.can_join_groups === "boolean"
-          ? meJson.result?.can_join_groups
-          : null,
+        typeof meJson.result?.can_join_groups === "boolean" ? meJson.result?.can_join_groups : null,
       canReadAllGroupMessages:
         typeof meJson.result?.can_read_all_group_messages === "boolean"
           ? meJson.result?.can_read_all_group_messages

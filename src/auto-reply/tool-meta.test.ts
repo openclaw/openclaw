@@ -44,11 +44,9 @@ describe("tool meta formatting", () => {
 
   it("keeps exec flags outside markdown and moves them to the front", () => {
     vi.stubEnv("HOME", "/Users/test");
-    const out = formatToolAggregate(
-      "exec",
-      ["cd /Users/test/dir && gemini 2>&1 · elevated"],
-      { markdown: true },
-    );
+    const out = formatToolAggregate("exec", ["cd /Users/test/dir && gemini 2>&1 · elevated"], {
+      markdown: true,
+    });
     expect(out).toBe("🛠️ exec: elevated · `cd ~/dir && gemini 2>&1`");
   });
 

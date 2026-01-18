@@ -1,6 +1,9 @@
 import type { SlackReactionNotificationMode } from "../../config/config.js";
 import type { SlackMessageEvent } from "../types.js";
-import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "../../channels/channel-config.js";
+import {
+  buildChannelKeyCandidates,
+  resolveChannelEntryMatch,
+} from "../../channels/channel-config.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {

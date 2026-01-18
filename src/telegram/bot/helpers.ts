@@ -121,10 +121,7 @@ type TelegramTextLinkEntity = {
   url?: string;
 };
 
-export function expandTextLinks(
-  text: string,
-  entities?: TelegramTextLinkEntity[] | null,
-): string {
+export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[] | null): string {
   if (!text || !entities?.length) return text;
 
   const textLinks = entities
@@ -140,7 +137,8 @@ export function expandTextLinks(
   for (const entity of textLinks) {
     const linkText = text.slice(entity.offset, entity.offset + entity.length);
     const markdown = `[${linkText}](${entity.url})`;
-    result = result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
+    result =
+      result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
   }
   return result;
 }

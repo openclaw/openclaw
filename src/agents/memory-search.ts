@@ -100,13 +100,9 @@ function mergeConfig(
     enabled: overrides?.remote?.batch?.enabled ?? defaults?.remote?.batch?.enabled ?? true,
     wait: overrides?.remote?.batch?.wait ?? defaults?.remote?.batch?.wait ?? true,
     pollIntervalMs:
-      overrides?.remote?.batch?.pollIntervalMs ??
-      defaults?.remote?.batch?.pollIntervalMs ??
-      5000,
+      overrides?.remote?.batch?.pollIntervalMs ?? defaults?.remote?.batch?.pollIntervalMs ?? 5000,
     timeoutMinutes:
-      overrides?.remote?.batch?.timeoutMinutes ??
-      defaults?.remote?.batch?.timeoutMinutes ??
-      60,
+      overrides?.remote?.batch?.timeoutMinutes ?? defaults?.remote?.batch?.timeoutMinutes ?? 60,
   };
   const remote = includeRemote
     ? {
