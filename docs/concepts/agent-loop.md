@@ -5,13 +5,19 @@ read_when:
 ---
 # Agent Loop (Clawdbot)
 
-Short, exact flow of one agent run, plus the important internal stages.
+An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
+tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
+into actions and a final reply, while keeping session state consistent.
+
+In Clawdbot, a loop is a single, serialized run per session that emits lifecycle and stream events
+as the model thinks, calls tools, and streams output. This doc explains how that authentic loop is
+wired end-to-end.
 
 ## Entry points
 - Gateway RPC: `agent` and `agent.wait`.
 - CLI: `agent` command.
 
-## High-level flow
+## How it works (high-level)
 1) `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2) `agentCommand` runs the agent:
    - resolves model + thinking/verbose defaults
@@ -48,6 +54,30 @@ Short, exact flow of one agent run, plus the important internal stages.
 - System prompt is built from Clawdbot’s base prompt, skills prompt, bootstrap context, and per-run overrides.
 - Model-specific limits and compaction reserve tokens are enforced.
 - See [System prompt](/concepts/system-prompt) for what the model sees.
+
+## Hook points (where you can intercept)
+Clawdbot has two hook systems:
+- **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
+- **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
+
+### Internal hooks (Gateway hooks)
+- **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized.
+  Use this to add/remove bootstrap context files.
+- **Command hooks**: `/new`, `/reset`, `/stop`, and other command events (see Hooks doc).
+
+See [Hooks](/hooks) for setup and examples.
+
+### Plugin hooks (agent + gateway lifecycle)
+These run inside the agent loop or gateway pipeline:
+- **`before_agent_start`**: inject context or override system prompt before the run starts.
+- **`agent_end`**: inspect the final message list and run metadata after completion.
+- **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
+- **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
+- **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
+- **`session_start` / `session_end`**: session lifecycle boundaries.
+- **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+
+See [Plugins](/plugin#plugin-hooks) for the hook API and registration details.
 
 ## Streaming + partial replies
 - Assistant deltas are streamed from pi-agent-core and emitted as `assistant` events.
