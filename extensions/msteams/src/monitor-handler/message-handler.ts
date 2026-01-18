@@ -15,6 +15,7 @@ import {
 } from "../../../../src/auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../../src/channels/mention-gating.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channels/command-gating.js";
+import { formatAllowlistMatchMeta } from "../../../../src/channels/plugins/allowlist-match.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
 import {
@@ -41,6 +42,7 @@ import {
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
+  resolveMSTeamsAllowlistMatch,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "../policy.js";
@@ -141,19 +143,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
 
       if (dmPolicy !== "open") {
-        const effectiveAllowFrom = [
-          ...allowFrom.map((v) => String(v).toLowerCase()),
-          ...storedAllowFrom,
-        ];
+        const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
+        const allowMatch = resolveMSTeamsAllowlistMatch({
+          allowFrom: effectiveAllowFrom,
+          senderId,
+          senderName,
+        });
 
-        const senderLower = senderId.toLowerCase();
-        const senderNameLower = senderName.toLowerCase();
-        const allowed =
-          effectiveAllowFrom.includes("*") ||
-          effectiveAllowFrom.includes(senderLower) ||
-          effectiveAllowFrom.includes(senderNameLower);
-
-        if (!allowed) {
+        if (!allowMatch.allowed) {
           if (dmPolicy === "pairing") {
             const request = await upsertChannelPairingRequest({
               channel: "msteams",
@@ -170,6 +167,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           log.debug("dropping dm (not allowlisted)", {
             sender: senderId,
             label: senderName,
+            allowlistMatch: formatAllowlistMatchMeta(allowMatch),
           });
           return;
         }
@@ -213,6 +211,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (channelGate.allowlistConfigured && !channelGate.allowed) {
           log.debug("dropping group message (not in team/channel allowlist)", {
             conversationId,
+            teamKey: channelGate.teamKey ?? "none",
+            channelKey: channelGate.channelKey ?? "none",
+            channelMatchKey: channelGate.channelMatchKey ?? "none",
+            channelMatchSource: channelGate.channelMatchSource ?? "none",
           });
           return;
         }
@@ -223,16 +225,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
         if (effectiveGroupAllowFrom.length > 0) {
-          const allowed = isMSTeamsGroupAllowed({
+          const allowMatch = resolveMSTeamsAllowlistMatch({
             groupPolicy,
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
           });
-          if (!allowed) {
+          if (!allowMatch.allowed) {
             log.debug("dropping group message (not in groupAllowFrom)", {
               sender: senderId,
               label: senderName,
+              allowlistMatch: formatAllowlistMatchMeta(allowMatch),
             });
             return;
           }

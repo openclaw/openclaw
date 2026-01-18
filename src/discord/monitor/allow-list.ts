@@ -4,6 +4,7 @@ import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
 } from "../../channels/channel-config.js";
+import type { AllowlistMatch } from "../../channels/allowlist-match.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -12,11 +13,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-export type DiscordAllowListMatch = {
-  allowed: boolean;
-  matchKey?: string;
-  matchSource?: "wildcard" | "id" | "name" | "tag";
-};
+export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 export type DiscordGuildEntryResolved = {
   id?: string;
