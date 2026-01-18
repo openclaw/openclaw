@@ -8,9 +8,11 @@ read_when:
 # `clawdbot memory`
 
 Memory search tools (semantic memory status/index/search).
+Provided by the active memory plugin (default: `memory-core`; use `plugins.slots.memory = "none"` to disable).
 
 Related:
 - Memory concept: [Memory](/concepts/memory)
+ - Plugins: [Plugins](/plugins)
 
 ## Examples
 

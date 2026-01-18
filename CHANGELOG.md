@@ -2,6 +2,13 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-3
+
+### Changes
+- Plugins: add exclusive plugin slots with a dedicated memory slot selector.
+- Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
+- Docs: document plugin slots and memory plugin behavior.
+
 ## 2026.1.18-2
 
 ### Changes
@@ -25,6 +32,7 @@ Docs: https://docs.clawd.bot
 - macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
 - Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
 - Discord: only emit slow listener warnings after 30s.
+
 ## 2026.1.17-3
 
 ### Changes

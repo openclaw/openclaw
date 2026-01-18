@@ -19,6 +19,7 @@ import type {
   PluginDiagnostic,
   PluginLogger,
   PluginOrigin,
+  PluginKind,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -65,6 +66,7 @@ export type PluginRecord = {
   name: string;
   version?: string;
   description?: string;
+  kind?: PluginKind;
   source: string;
   origin: PluginOrigin;
   workspaceDir?: string;

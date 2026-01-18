@@ -277,6 +277,8 @@ const FIELD_LABELS: Record<string, string> = {
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
   "plugins.load.paths": "Plugin Load Paths",
+  "plugins.slots": "Plugin Slots",
+  "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.config": "Plugin Config",
@@ -413,6 +415,9 @@ const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
+  "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
+  "plugins.slots.memory":
+    'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.entries": "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
   "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
   "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",

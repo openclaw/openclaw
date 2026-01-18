@@ -27,6 +27,8 @@ export type PluginConfigUiHint = {
   placeholder?: string;
 };
 
+export type PluginKind = "memory";
+
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
@@ -144,6 +146,7 @@ export type ClawdbotPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
+  kind?: PluginKind;
   configSchema?: ClawdbotPluginConfigSchema;
   register?: (api: ClawdbotPluginApi) => void | Promise<void>;
   activate?: (api: ClawdbotPluginApi) => void | Promise<void>;
