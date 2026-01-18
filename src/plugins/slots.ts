@@ -47,7 +47,7 @@ export function applyExclusiveSlotSelection(params: {
   const pluginsConfig = params.config.plugins ?? {};
   const prevSlot = pluginsConfig.slots?.[slotKey];
   const slots = {
-    ...(pluginsConfig.slots ?? {}),
+    ...pluginsConfig.slots,
     [slotKey]: params.selectedId,
   };
 
@@ -58,7 +58,7 @@ export function applyExclusiveSlotSelection(params: {
     );
   }
 
-  const entries = { ...(pluginsConfig.entries ?? {}) };
+  const entries = { ...pluginsConfig.entries };
   const disabledIds: string[] = [];
   if (params.registry) {
     for (const plugin of params.registry.plugins) {
@@ -67,7 +67,7 @@ export function applyExclusiveSlotSelection(params: {
       const entry = entries[plugin.id];
       if (!entry || entry.enabled !== false) {
         entries[plugin.id] = {
-          ...(entry ?? {}),
+          ...entry,
           enabled: false,
         };
         disabledIds.push(plugin.id);
