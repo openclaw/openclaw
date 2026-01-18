@@ -58,7 +58,6 @@ async function resolveContextReport(
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
-  const bootstrapFiles: WorkspaceBootstrapFile[] = hookAdjustedBootstrapFiles;
   const injectedFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
     maxChars: bootstrapMaxChars,
   });

@@ -73,11 +73,7 @@ function timeOfDayMsInTimezone(date: Date, timeZone: string): number | null {
     const hour = Number.parseInt(map.hour, 10);
     const minute = Number.parseInt(map.minute, 10);
     const second = Number.parseInt(map.second, 10);
-    if (
-      !Number.isFinite(hour) ||
-      !Number.isFinite(minute) ||
-      !Number.isFinite(second)
-    ) {
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || !Number.isFinite(second)) {
       return null;
     }
     return (hour * 3600 + minute * 60 + second) * 1000 + date.getMilliseconds();

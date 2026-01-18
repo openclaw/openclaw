@@ -2,10 +2,7 @@ import type { ClawdbotConfig } from "../../../config/config.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
 import type { AgentBootstrapHookContext, HookHandler } from "../../hooks.js";
-import {
-  applySoulEvilOverride,
-  type SoulEvilConfig,
-} from "../../soul-evil.js";
+import { applySoulEvilOverride, type SoulEvilConfig } from "../../soul-evil.js";
 
 const HOOK_KEY = "soul-evil";
 
@@ -16,9 +13,10 @@ function resolveSoulEvilConfig(entry: Record<string, unknown> | undefined): Soul
   const purge =
     entry.purge && typeof entry.purge === "object"
       ? {
-          at: typeof (entry.purge as { at?: unknown }).at === "string"
-            ? (entry.purge as { at?: string }).at
-            : undefined,
+          at:
+            typeof (entry.purge as { at?: unknown }).at === "string"
+              ? (entry.purge as { at?: string }).at
+              : undefined,
           duration:
             typeof (entry.purge as { duration?: unknown }).duration === "string"
               ? (entry.purge as { duration?: string }).duration
