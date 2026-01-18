@@ -68,6 +68,11 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     { key: "CLAWDBOT_BRIDGE_PORT", value: process.env.CLAWDBOT_BRIDGE_PORT },
     { key: "CLAWDBOT_CANVAS_HOST_PORT", value: process.env.CLAWDBOT_CANVAS_HOST_PORT },
     { key: "CLAWDBOT_TEST_HOME", value: process.env.CLAWDBOT_TEST_HOME },
+    { key: "TELEGRAM_BOT_TOKEN", value: process.env.TELEGRAM_BOT_TOKEN },
+    { key: "DISCORD_BOT_TOKEN", value: process.env.DISCORD_BOT_TOKEN },
+    { key: "SLACK_BOT_TOKEN", value: process.env.SLACK_BOT_TOKEN },
+    { key: "SLACK_APP_TOKEN", value: process.env.SLACK_APP_TOKEN },
+    { key: "SLACK_USER_TOKEN", value: process.env.SLACK_USER_TOKEN },
     { key: "COPILOT_GITHUB_TOKEN", value: process.env.COPILOT_GITHUB_TOKEN },
     { key: "GH_TOKEN", value: process.env.GH_TOKEN },
     { key: "GITHUB_TOKEN", value: process.env.GITHUB_TOKEN },
@@ -91,6 +96,11 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   delete process.env.CLAWDBOT_BRIDGE_PORT;
   delete process.env.CLAWDBOT_CANVAS_HOST_PORT;
   // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
+  delete process.env.TELEGRAM_BOT_TOKEN;
+  delete process.env.DISCORD_BOT_TOKEN;
+  delete process.env.SLACK_BOT_TOKEN;
+  delete process.env.SLACK_APP_TOKEN;
+  delete process.env.SLACK_USER_TOKEN;
   delete process.env.COPILOT_GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
   delete process.env.GITHUB_TOKEN;
