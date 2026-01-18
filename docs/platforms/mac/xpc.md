@@ -7,6 +7,8 @@ read_when:
 
 **Current model:** there is **no local control socket** and no `clawdbot-mac` CLI. All agent actions go through the Gateway WebSocket and `node.invoke`. UI automation still uses PeekabooBridge.
 
+**Planned model:** add a local Unix socket between the **node service** and the **macOS app**. The app owns `system.run` (UI/TCC context); the node service forwards exec requests over IPC.
+
 ## Goals
 - Single GUI app instance that owns all TCC-facing work (notifications, screen recording, mic, speech, AppleScript).
 - A small surface for automation: Gateway + node commands, plus PeekabooBridge for UI automation.
@@ -17,6 +19,19 @@ read_when:
 - The app runs the Gateway (local mode) and connects to it as a node.
 - Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
 
+### Node service + app IPC (planned)
+- A headless node service connects to the Gateway bridge.
+- `system.run` requests are forwarded to the macOS app over a local Unix socket.
+- The app performs the exec in UI context, prompts if needed, and returns output.
+
+Diagram (SCI):
+```
+Agent -> Gateway -> Bridge -> Node Service (TS)
+                         |  IPC (UDS + token + HMAC + TTL)
+                         v
+                     Mac App (UI + TCC + system.run)
+```
+
 ### PeekabooBridge (UI automation)
 - UI automation uses a separate UNIX socket named `bridge.sock` and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app → Claude.app → Clawdbot.app → local execution.
@@ -25,6 +40,7 @@ read_when:
 
 ### Mach/XPC
 - Not required for automation; `node.invoke` + PeekabooBridge cover current needs.
+- Planned IPC keeps Unix sockets (no XPC helper).
 
 ## Operational flows
 - Restart/rebuild: `SIGN_IDENTITY="Apple Development: <Developer Name> (<TEAMID>)" scripts/restart-mac.sh`
@@ -38,3 +54,4 @@ read_when:
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; keep the signed bundle ID stable across rebuilds.
+- Planned IPC hardening: socket mode `0600`, token, peer-UID checks, HMAC challenge/response, short TTL.
