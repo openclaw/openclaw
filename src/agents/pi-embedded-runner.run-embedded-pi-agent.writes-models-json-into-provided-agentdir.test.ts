@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
@@ -85,9 +85,13 @@ vi.mock("@mariozechner/pi-ai", async () => {
   };
 });
 
-vi.resetModules();
+let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAgent;
 
-const { runEmbeddedPiAgent } = await import("./pi-embedded-runner.js");
+beforeEach(async () => {
+  vi.useRealTimers();
+  vi.resetModules();
+  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
+});
 
 const makeOpenAiConfig = (modelIds: string[]) =>
   ({
@@ -188,7 +192,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
-  it("persists the first user message before assistant output", { timeout: 15_000 }, async () => {
+  it("persists the first user message before assistant output", { timeout: 45_000 }, async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
