@@ -162,3 +162,5 @@ export { createMemoryGetTool, createMemorySearchTool } from "../agents/tools/mem
 export { registerMemoryCli } from "../cli/memory-cli.js";
 
 export { formatDocsLink } from "../terminal/links.js";
+export type { HookEntry } from "../hooks/types.js";
+export { registerPluginHooksFromDir } from "../hooks/plugin-hooks.js";

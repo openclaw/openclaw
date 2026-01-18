@@ -215,6 +215,27 @@ Plugins export either:
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
 
+## Plugin hooks
+
+Plugins can ship hooks and register them at runtime. This lets a plugin bundle
+event-driven automation without a separate hook pack install.
+
+### Example
+
+```
+import { registerPluginHooksFromDir } from "clawdbot/plugin-sdk";
+
+export default function register(api) {
+  registerPluginHooksFromDir(api, "./hooks");
+}
+```
+
+Notes:
+- Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
+- Hook eligibility rules still apply (OS/bins/env/config requirements).
+- Plugin-managed hooks show up in `clawdbot hooks list` with `plugin:<id>`.
+- You cannot enable/disable plugin-managed hooks via `clawdbot hooks`; enable/disable the plugin instead.
+
 ## Provider plugins (model auth)
 
 Plugins can register **model provider auth** flows so users can run OAuth or

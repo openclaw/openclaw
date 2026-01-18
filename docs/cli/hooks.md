@@ -11,6 +11,7 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 
 Related:
 - Hooks: [Hooks](/hooks)
+- Plugin hooks: [Plugins](/plugin#plugin-hooks)
 
 ## List All Hooks
 
@@ -117,6 +118,9 @@ clawdbot hooks enable <name>
 ```
 
 Enable a specific hook by adding it to your config (`~/.clawdbot/config.json`).
+
+**Note:** Hooks managed by plugins show `plugin:<id>` in `clawdbot hooks list` and
+can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
 - `<name>`: Hook name (e.g., `session-memory`)

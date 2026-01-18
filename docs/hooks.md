@@ -14,6 +14,8 @@ Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Hooks** (this page): run inside the Gateway when agent events fire, like `/new`, `/reset`, `/stop`, or lifecycle events.
 - **Webhooks**: external HTTP webhooks that let other systems trigger work in Clawdbot. See [Webhook Hooks](/automation/webhook) or use `clawdbot webhooks` for Gmail helper commands.
+  
+Hooks can also be bundled inside plugins; see [Plugins](/plugin#plugin-hooks).
 
 Common uses:
 - Save a memory snapshot when you reset a session
