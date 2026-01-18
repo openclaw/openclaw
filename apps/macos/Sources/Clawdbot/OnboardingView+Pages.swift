@@ -695,7 +695,8 @@ extension OnboardingView {
                 self.featureActionRow(
                     title: "Connect WhatsApp or Telegram",
                     subtitle: "Open Settings → Channels to link channels and monitor status.",
-                    systemImage: "link")
+                    systemImage: "link",
+                    buttonTitle: "Open Settings → Channels")
                 {
                     self.openSettings(tab: .channels)
                 }
@@ -711,7 +712,8 @@ extension OnboardingView {
                 self.featureActionRow(
                     title: "Give your agent more powers",
                     subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
-                    systemImage: "sparkles")
+                    systemImage: "sparkles",
+                    buttonTitle: "Open Settings → Skills")
                 {
                     self.openSettings(tab: .skills)
                 }
