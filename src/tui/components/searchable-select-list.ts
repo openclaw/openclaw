@@ -46,12 +46,75 @@ export class SearchableSelectList implements Component {
     if (!query) {
       this.filteredItems = this.items;
     } else {
-      this.filteredItems = fuzzyFilter(this.items, query, (item) => `${item.label} ${item.description ?? ""}`);
+      this.filteredItems = this.smartFilter(query);
     }
 
     // Reset selection when filter changes
     this.selectedIndex = 0;
     this.notifySelectionChange();
+  }
+
+  /**
+   * Smart filtering that prioritizes:
+   * 1. Exact substring match in label (highest priority)
+   * 2. Word-boundary prefix match in label
+   * 3. Exact substring match in description
+   * 4. Fuzzy match (lowest priority)
+   */
+  private smartFilter(query: string): SelectItem[] {
+    const q = query.toLowerCase();
+    
+    type ScoredItem = { item: SelectItem; score: number };
+    const scored: ScoredItem[] = [];
+
+    for (const item of this.items) {
+      const label = item.label.toLowerCase();
+      const desc = (item.description ?? "").toLowerCase();
+      let score = Infinity;
+
+      // Tier 1: Exact substring in label (score 0-99)
+      const labelIndex = label.indexOf(q);
+      if (labelIndex !== -1) {
+        // Earlier match = better score
+        score = labelIndex;
+      }
+      // Tier 2: Word-boundary prefix in label (score 100-199)
+      else if (this.matchesWordBoundary(label, q)) {
+        score = 100;
+      }
+      // Tier 3: Exact substring in description (score 200-299)
+      else if (desc.indexOf(q) !== -1) {
+        score = 200;
+      }
+      // Tier 4: Fuzzy match (score 300+)
+      else {
+        const fuzzyResult = fuzzyFilter([item], query, (i) => `${i.label} ${i.description ?? ""}`);
+        if (fuzzyResult.length > 0) {
+          score = 300;
+        }
+      }
+
+      if (score !== Infinity) {
+        scored.push({ item, score });
+      }
+    }
+
+    // Sort by score (lower = better)
+    scored.sort((a, b) => a.score - b.score);
+    return scored.map((s) => s.item);
+  }
+
+  /**
+   * Check if query matches at a word boundary in text.
+   * E.g., "gpt" matches "openai/gpt-4" at the "gpt" word boundary.
+   */
+  private matchesWordBoundary(text: string, query: string): boolean {
+    const wordBoundaryRegex = new RegExp(`(?:^|[\\s\\-_./:])(${this.escapeRegex(query)})`, "i");
+    return wordBoundaryRegex.test(text);
+  }
+
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   setSelectedIndex(index: number) {
