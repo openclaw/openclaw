@@ -1,39 +1,88 @@
 ---
-summary: "Exec approvals, allowlists, and sandbox escape prompts in the macOS app"
+summary: "Exec approvals, allowlists, and sandbox escape prompts"
 read_when:
   - Configuring exec approvals or allowlists
   - Implementing exec approval UX in the macOS app
   - Reviewing sandbox escape prompts and implications
 ---
 
-# Exec approvals (macOS app)
+# Exec approvals
 
-Exec approvals are the **macOS companion app** guardrail for running host
-commands from sandboxed agents. Think of it as a per-agent “run this on my Mac”
-approval layer: the agent asks, the app decides, and the command runs (or not).
-This is **in addition** to tool policy and elevated gating; all of those checks
-must pass before a command can run.
+Exec approvals are the **companion app guardrail** for letting a sandboxed agent run
+commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
+commands are allowed only when policy + allowlist + (optional) user approval all agree.
+Exec approvals are **in addition** to tool policy and elevated gating.
 
-If you are **not** running the macOS companion app, exec approvals are
-unavailable and `system.run` requests will be rejected with a message that a
-companion app is required.
+If the companion app UI is **not available**, any request that requires a prompt is
+resolved by the **ask fallback** (default: deny).
 
-## Settings
+## Where it applies
 
-In the macOS app, each agent has an **Exec approvals** setting:
+Exec approvals are enforced locally on the execution host:
+- **gateway host** → `clawdbot` process on the gateway machine
+- **node host** → node runner (macOS companion app or headless node)
 
-- **Deny**: block all host exec requests from the agent.
-- **Always ask**: show a confirmation dialog for each host exec request.
-- **Always allow**: run host exec requests without prompting.
+## Settings and storage
 
-Optional toggles:
-- **Auto-allow skill CLIs**: when enabled, CLIs referenced by known skills are
-  treated as allowlisted (see below).
+Approvals live in a local JSON file:
+
+`~/.clawdbot/exec-approvals.json`
+
+Example schema:
+```json
+{
+  "version": 1,
+  "socket": {
+    "path": "~/.clawdbot/exec-approvals.sock",
+    "token": "base64url-token"
+  },
+  "defaults": {
+    "security": "deny",
+    "ask": "on-miss",
+    "askFallback": "deny",
+    "autoAllowSkills": false
+  },
+  "agents": {
+    "main": {
+      "security": "allowlist",
+      "ask": "on-miss",
+      "askFallback": "deny",
+      "autoAllowSkills": true,
+      "allowlist": [
+        {
+          "pattern": "~/Projects/**/bin/rg",
+          "lastUsedAt": 1737150000000,
+          "lastUsedCommand": "rg -n TODO",
+          "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
+        }
+      ]
+    }
+  }
+}
+```
+
+## Policy knobs
+
+### Security (`exec.security`)
+- **deny**: block all host exec requests.
+- **allowlist**: allow only allowlisted commands.
+- **full**: allow everything (equivalent to elevated).
+
+### Ask (`exec.ask`)
+- **off**: never prompt.
+- **on-miss**: prompt only when allowlist does not match.
+- **always**: prompt on every command.
+
+### Ask fallback (`askFallback`)
+If a prompt is required but no UI is reachable, fallback decides:
+- **deny**: block.
+- **allowlist**: allow only if allowlist matches.
+- **full**: allow.
 
 ## Allowlist (per agent)
 
-The allowlist is **per agent**. If multiple agents exist, you can switch which
-agent’s allowlist you’re editing. Entries are path-based and support **globs**.
+Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
+editing in the macOS app. Patterns are **case-insensitive glob matches**.
 
 Examples:
 - `~/Projects/**/bin/bird`
@@ -41,66 +90,44 @@ Examples:
 - `/opt/homebrew/bin/rg`
 
 Each allowlist entry tracks:
-- **last used** (timestamp)
+- **last used** timestamp
 - **last used command**
-- **last used path** (resolved absolute path)
-- **last seen metadata** (hash/version/mtime when available)
+- **last resolved path**
 
-## How matching works
+## Auto-allow skill CLIs
 
-1) Parse the command to determine the executable (first token).
-2) Resolve the executable to an absolute path using `PATH`.
-3) Match against denylist (if present) → **deny**.
-4) Match against allowlist → **allow**.
-5) Otherwise follow the Exec approvals policy (deny/ask/allow).
-
-If **auto-allow skill CLIs** is enabled, each installed skill can contribute one
-or more allowlist entries. A skill-based allowlist entry only auto-allows when:
-- the resolved path matches, and
-- the binary hash/version matches the last approved record (if tracked).
-
-If the binary changes (new hash/version), the command falls back to **Ask** so
-the user can re-approve.
+When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
+are treated as allowlisted (node hosts only). Disable this if you want strict
+manual allowlists.
 
 ## Approval flow
 
-When the policy is **Always ask** (or when a binary has changed), the macOS app
-shows a confirmation dialog. The dialog should include:
+When a prompt is required, the companion app displays a confirmation dialog with:
 - command + args
 - cwd
-- environment overrides (diff)
-- policy + rule that matched (if any)
+- agent id
+- resolved executable path
+- host + policy metadata
 
 Actions:
 - **Allow once** → run now
-- **Always allow** → add/update allowlist entry + run
+- **Always allow** → add to allowlist + run
 - **Deny** → block
-
-When approved, the command runs **in the background** and the agent receives
-system events as it starts and completes.
 
 ## System events
 
-The agent receives system messages for observability and recovery:
+Exec lifecycle is surfaced as system messages:
+- `exec.started`
+- `exec.finished`
+- `exec.denied`
 
-- `exec.started` — command accepted and launched
-- `exec.finished` — command completed (exit code + output)
-- `exec.denied` — command blocked (policy or denylist)
-
-These are **system messages**; no extra agent tool call is required to resume.
+These are posted to the agent’s session after the node reports the event.
 
 ## Implications
 
-- **Always allow** is powerful: the agent can run any host command without a
-  prompt. Prefer allowlisting trusted CLIs instead.
-- **Ask** keeps you in the loop while still allowing fast approvals.
-- Per-agent allowlists prevent one agent’s approval set from leaking into others.
-
-## Storage
-
-Allowlists and approval settings are stored **locally in the macOS app** (SQLite
-is a good fit). The Markdown docs describe behavior; they are not the storage
-mechanism.
+- **full** is powerful; prefer allowlists when possible.
+- **ask** keeps you in the loop while still allowing fast approvals.
+- Per-agent allowlists prevent one agent’s approvals from leaking into others.
 
 Related:
 - [Exec tool](/tools/exec)

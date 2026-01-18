@@ -339,6 +339,14 @@ export type ToolsConfig = {
   };
   /** Exec tool defaults. */
   exec?: {
+    /** Exec host routing (default: sandbox). */
+    host?: "sandbox" | "gateway" | "node";
+    /** Exec security mode (default: deny). */
+    security?: "deny" | "allowlist" | "full";
+    /** Exec ask mode (default: on-miss). */
+    ask?: "off" | "on-miss" | "always";
+    /** Default node binding for exec.host=node (node id/name). */
+    node?: string;
     /** Default time (ms) before an exec command auto-backgrounds. */
     backgroundMs?: number;
     /** Default timeout (seconds) before auto-killing exec commands. */

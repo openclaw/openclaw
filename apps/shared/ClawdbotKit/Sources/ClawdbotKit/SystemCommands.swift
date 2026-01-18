@@ -25,6 +25,7 @@ public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
     public var timeoutMs: Int?
     public var needsScreenRecording: Bool?
     public var agentId: String?
+    public var sessionKey: String?
 
     public init(
         command: [String],
@@ -32,7 +33,8 @@ public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
         env: [String: String]? = nil,
         timeoutMs: Int? = nil,
         needsScreenRecording: Bool? = nil,
-        agentId: String? = nil)
+        agentId: String? = nil,
+        sessionKey: String? = nil)
     {
         self.command = command
         self.cwd = cwd
@@ -40,6 +42,7 @@ public struct ClawdbotSystemRunParams: Codable, Sendable, Equatable {
         self.timeoutMs = timeoutMs
         self.needsScreenRecording = needsScreenRecording
         self.agentId = agentId
+        self.sessionKey = sessionKey
     }
 }
 
