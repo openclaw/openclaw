@@ -168,6 +168,31 @@ Notes:
   Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - On headless node host, `system.run` is gated by exec approvals (`~/.clawdbot/exec-approvals.json`).
 
+## Exec node binding
+
+When multiple nodes are available, you can bind exec to a specific node.
+This sets the default node for `exec host=node` (and can be overridden per agent).
+
+Global default:
+
+```bash
+clawdbot config set tools.exec.node "node-id-or-name"
+```
+
+Per-agent override:
+
+```bash
+clawdbot config get agents.list
+clawdbot config set agents.list[0].tools.exec.node "node-id-or-name"
+```
+
+Unset to allow any node:
+
+```bash
+clawdbot config unset tools.exec.node
+clawdbot config unset agents.list[0].tools.exec.node
+```
+
 ## Permissions map
 
 Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by permission name (e.g. `screenRecording`, `accessibility`) with boolean values (`true` = granted).
