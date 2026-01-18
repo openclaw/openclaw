@@ -91,13 +91,13 @@ export class BridgeClient {
     socket.on("connect", () => {
       this.sendHello();
     });
-    socket.on("error", (err) => {
+    socket.on("error", (err: Error) => {
       this.handleDisconnect(err);
     });
     socket.on("close", () => {
       this.handleDisconnect();
     });
-    socket.on("data", (chunk) => {
+    socket.on("data", (chunk: Buffer) => {
       this.buffer += chunk.toString("utf8");
       this.flush();
     });
@@ -124,7 +124,7 @@ export class BridgeClient {
     }
     this.connected = false;
     this.pendingRpc.forEach((pending) => {
-      pending.timer && clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error("bridge client closed"));
     });
     this.pendingRpc.clear();
@@ -213,7 +213,7 @@ export class BridgeClient {
     this.connected = false;
     this.socket = null;
     this.pendingRpc.forEach((pending) => {
-      pending.timer && clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(err ?? new Error("bridge connection closed"));
     });
     this.pendingRpc.clear();
@@ -286,7 +286,7 @@ export class BridgeClient {
         const res = frame as BridgeRPCResponseFrame;
         const pending = this.pendingRpc.get(res.id);
         if (pending) {
-          pending.timer && clearTimeout(pending.timer);
+          if (pending.timer) clearTimeout(pending.timer);
           this.pendingRpc.delete(res.id);
           pending.resolve(res);
         }

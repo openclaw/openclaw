@@ -10,6 +10,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { resolveIsNixMode } from "../../config/paths.js";
@@ -492,7 +493,11 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   const [loaded, command, runtime] = await Promise.all([
     service.isLoaded({ env: process.env }).catch(() => false),
     service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch((err) => ({ status: "unknown", detail: String(err) })),
+    service
+      .readRuntime(process.env)
+      .catch(
+        (err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) }),
+      ),
   ]);
 
   const payload = {

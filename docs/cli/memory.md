@@ -28,3 +28,5 @@ clawdbot memory search "release checklist"
 ## Options
 
 - `--verbose`: emit debug logs during memory probes and indexing.
+- `--index-mode auto|batch|direct`: override batch usage when indexing (`direct` favors speed; `batch` favors OpenAI Batch pricing).
+- `--progress auto|line|log|none`: progress output mode (`log` prints updates even without a TTY).
