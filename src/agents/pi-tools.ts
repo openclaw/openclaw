@@ -39,7 +39,12 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
-import { normalizeToolName, resolveToolProfilePolicy } from "./tool-policy.js";
+import {
+  buildPluginToolGroups,
+  collectExplicitAllowlist,
+  expandPolicyWithPluginGroups,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 
 function isOpenAIProvider(provider?: string) {
@@ -67,77 +72,6 @@ function isApplyPatchAllowedForModel(params: {
     if (!normalized) return false;
     return normalized === normalizedModelId || normalized === normalizedFull;
   });
-}
-
-type ToolPolicyLike = {
-  allow?: string[];
-  deny?: string[];
-};
-
-function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
-  const entries: string[] = [];
-  for (const policy of policies) {
-    if (!policy?.allow) continue;
-    for (const value of policy.allow) {
-      if (typeof value !== "string") continue;
-      const trimmed = value.trim();
-      if (trimmed) entries.push(trimmed);
-    }
-  }
-  return entries;
-}
-
-function buildPluginToolGroups(tools: AnyAgentTool[]) {
-  const all: string[] = [];
-  const byPlugin = new Map<string, string[]>();
-  for (const tool of tools) {
-    const meta = getPluginToolMeta(tool);
-    if (!meta) continue;
-    const name = normalizeToolName(tool.name);
-    all.push(name);
-    const pluginId = meta.pluginId.toLowerCase();
-    const list = byPlugin.get(pluginId) ?? [];
-    list.push(name);
-    byPlugin.set(pluginId, list);
-  }
-  return { all, byPlugin };
-}
-
-function expandPluginGroups(
-  list: string[] | undefined,
-  groups: { all: string[]; byPlugin: Map<string, string[]> },
-): string[] | undefined {
-  if (!list || list.length === 0) return list;
-  const expanded: string[] = [];
-  for (const entry of list) {
-    const normalized = normalizeToolName(entry);
-    if (normalized === "group:plugins") {
-      if (groups.all.length > 0) {
-        expanded.push(...groups.all);
-      } else {
-        expanded.push(normalized);
-      }
-      continue;
-    }
-    const tools = groups.byPlugin.get(normalized);
-    if (tools && tools.length > 0) {
-      expanded.push(...tools);
-      continue;
-    }
-    expanded.push(normalized);
-  }
-  return Array.from(new Set(expanded));
-}
-
-function expandPolicyWithPluginGroups(
-  policy: ToolPolicyLike | undefined,
-  groups: { all: string[]; byPlugin: Map<string, string[]> },
-): ToolPolicyLike | undefined {
-  if (!policy) return undefined;
-  return {
-    allow: expandPluginGroups(policy.allow, groups),
-    deny: expandPluginGroups(policy.deny, groups),
-  };
 }
 
 export const __testing = {
@@ -323,7 +257,10 @@ export function createClawdbotCodingTools(options?: {
       hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
-  const pluginGroups = buildPluginToolGroups(tools);
+  const pluginGroups = buildPluginToolGroups({
+    tools,
+    toolMeta: (tool) => getPluginToolMeta(tool),
+  });
   const profilePolicyExpanded = expandPolicyWithPluginGroups(profilePolicy, pluginGroups);
   const providerProfileExpanded = expandPolicyWithPluginGroups(
     providerProfilePolicy,

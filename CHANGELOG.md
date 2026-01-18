@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
 - CLI: surface FTS + embedding cache state in `clawdbot memory status`.
 - Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
+- Tools: centralize plugin tool policy helpers.
 
 ## 2026.1.18-1
 
