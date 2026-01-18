@@ -1,11 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { applySoulEvilOverride, decideSoulEvil, DEFAULT_SOUL_EVIL_FILENAME } from "./soul-evil.js";
 import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "../agents/workspace.js";
+import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 
 const makeFiles = (overrides?: Partial<WorkspaceBootstrapFile>) => [
   {
@@ -91,9 +90,12 @@ describe("decideSoulEvil", () => {
 
 describe("applySoulEvilOverride", () => {
   it("replaces SOUL content when evil is active and file exists", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-soul-"));
-    const evilPath = path.join(tempDir, DEFAULT_SOUL_EVIL_FILENAME);
-    await fs.writeFile(evilPath, "chaotic", "utf-8");
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_SOUL_EVIL_FILENAME,
+      content: "chaotic",
+    });
 
     const files = makeFiles({
       path: path.join(tempDir, DEFAULT_SOUL_FILENAME),
@@ -112,7 +114,7 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("leaves SOUL content when evil file is missing", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-soul-"));
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
     const files = makeFiles({
       path: path.join(tempDir, DEFAULT_SOUL_FILENAME),
     });
@@ -130,9 +132,12 @@ describe("applySoulEvilOverride", () => {
   });
 
   it("leaves files untouched when SOUL.md is not in bootstrap files", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-soul-"));
-    const evilPath = path.join(tempDir, DEFAULT_SOUL_EVIL_FILENAME);
-    await fs.writeFile(evilPath, "chaotic", "utf-8");
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_SOUL_EVIL_FILENAME,
+      content: "chaotic",
+    });
 
     const files: WorkspaceBootstrapFile[] = [
       {

@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
@@ -73,7 +73,7 @@ export async function runCliAgent(params: {
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
   });
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,

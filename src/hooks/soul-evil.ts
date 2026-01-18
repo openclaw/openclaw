@@ -40,6 +40,50 @@ type SoulEvilLog = {
   warn?: (message: string) => void;
 };
 
+export function resolveSoulEvilConfigFromHook(
+  entry: Record<string, unknown> | undefined,
+  log?: SoulEvilLog,
+): SoulEvilConfig | null {
+  if (!entry) return null;
+  const file = typeof entry.file === "string" ? entry.file : undefined;
+  if (entry.file !== undefined && !file) {
+    log?.warn?.("soul-evil config: file must be a string");
+  }
+
+  let chance: number | undefined;
+  if (entry.chance !== undefined) {
+    if (typeof entry.chance === "number" && Number.isFinite(entry.chance)) {
+      chance = entry.chance;
+    } else {
+      log?.warn?.("soul-evil config: chance must be a number");
+    }
+  }
+
+  let purge: SoulEvilConfig["purge"];
+  if (entry.purge && typeof entry.purge === "object") {
+    const at =
+      typeof (entry.purge as { at?: unknown }).at === "string"
+        ? (entry.purge as { at?: string }).at
+        : undefined;
+    const duration =
+      typeof (entry.purge as { duration?: unknown }).duration === "string"
+        ? (entry.purge as { duration?: string }).duration
+        : undefined;
+    if ((entry.purge as { at?: unknown }).at !== undefined && !at) {
+      log?.warn?.("soul-evil config: purge.at must be a string");
+    }
+    if ((entry.purge as { duration?: unknown }).duration !== undefined && !duration) {
+      log?.warn?.("soul-evil config: purge.duration must be a string");
+    }
+    purge = { at, duration };
+  } else if (entry.purge !== undefined) {
+    log?.warn?.("soul-evil config: purge must be an object");
+  }
+
+  if (!file && chance === undefined && !purge) return null;
+  return { file, chance, purge };
+}
+
 function clampChance(value?: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));

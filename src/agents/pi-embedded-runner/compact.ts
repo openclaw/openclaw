@@ -16,7 +16,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -181,7 +181,7 @@ export async function compactEmbeddedPiSession(params: {
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
-          warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         });
         const runAbortController = new AbortController();
         const toolsRaw = createClawdbotCodingTools({

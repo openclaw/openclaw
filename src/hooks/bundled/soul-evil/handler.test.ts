@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -8,11 +6,16 @@ import handler from "./handler.js";
 import { createHookEvent } from "../../hooks.js";
 import type { AgentBootstrapHookContext } from "../../hooks.js";
 import type { ClawdbotConfig } from "../../../config/config.js";
+import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 
 describe("soul-evil hook", () => {
   it("skips subagent sessions", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-soul-"));
-    await fs.writeFile(path.join(tempDir, "SOUL_EVIL.md"), "chaotic", "utf-8");
+    const tempDir = await makeTempWorkspace("clawdbot-soul-");
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: "SOUL_EVIL.md",
+      content: "chaotic",
+    });
 
     const cfg: ClawdbotConfig = {
       hooks: {

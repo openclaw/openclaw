@@ -17,7 +17,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
   isCloudCodeAssistFormatError,
@@ -126,7 +126,7 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
-        warn: (message) => log.warn(`${message} (sessionKey=${sessionLabel})`),
+        warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
       });
 
     const agentDir = params.agentDir ?? resolveClawdbotAgentDir();

@@ -1,10 +1,12 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import {
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "./bootstrap-files.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -29,7 +31,7 @@ describe("resolveBootstrapFilesForRun", () => {
       ];
     });
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-bootstrap-"));
+    const workspaceDir = await makeTempWorkspace("clawdbot-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.name === "EXTRA.md")).toBe(true);
@@ -54,7 +56,7 @@ describe("resolveBootstrapContextForRun", () => {
       ];
     });
 
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-bootstrap-"));
+    const workspaceDir = await makeTempWorkspace("clawdbot-bootstrap-");
     const result = await resolveBootstrapContextForRun({ workspaceDir });
     const extra = result.contextFiles.find((file) => file.path === "EXTRA.md");
 
