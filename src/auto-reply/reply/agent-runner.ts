@@ -20,7 +20,7 @@ import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
@@ -460,12 +460,7 @@ export async function runReplyAgent(params: {
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageMode =
-      responseUsageRaw === "full"
-        ? "full"
-        : responseUsageRaw === "tokens" || responseUsageRaw === "on"
-          ? "tokens"
-          : "off";
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";

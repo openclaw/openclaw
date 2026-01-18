@@ -103,6 +103,10 @@ export function normalizeUsageDisplay(raw?: string | null): UsageDisplayLevel | 
   return undefined;
 }
 
+export function resolveResponseUsageMode(raw?: string | null): UsageDisplayLevel {
+  return normalizeUsageDisplay(raw) ?? "off";
+}
+
 // Normalize elevated flags used to toggle elevated bash permissions.
 export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | undefined {
   if (!raw) return undefined;
