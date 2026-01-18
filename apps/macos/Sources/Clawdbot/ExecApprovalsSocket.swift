@@ -157,9 +157,10 @@ final class ExecApprovalsPromptServer {
     }
 }
 
-private enum ExecApprovalsPromptPresenter {
+enum ExecApprovalsPromptPresenter {
     @MainActor
     static func prompt(_ request: ExecApprovalPromptRequest) -> ExecApprovalDecision {
+        NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Allow this command?"

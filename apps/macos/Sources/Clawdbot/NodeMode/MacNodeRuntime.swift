@@ -485,10 +485,8 @@ actor MacNodeRuntime {
 
         var approvedByAsk = false
         if requiresAsk {
-            let decision = await ExecApprovalsSocketClient.requestDecision(
-                socketPath: approvals.socketPath,
-                token: approvals.token,
-                request: ExecApprovalPromptRequest(
+            let decision: ExecApprovalDecision? = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(
                     command: displayCommand,
                     cwd: params.cwd,
                     host: "node",
