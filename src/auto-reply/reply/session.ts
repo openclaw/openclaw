@@ -4,13 +4,11 @@ import path from "node:path";
 
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  buildGroupDisplayName,
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
+  deriveSessionMetaPatch,
   type GroupKeyResolution,
   loadSessionStore,
   resolveGroupSessionKey,
@@ -237,39 +235,16 @@ export async function initSessionState(params: {
     lastTo,
     lastAccountId,
   };
-  if (groupResolution?.channel) {
-    const channel = groupResolution.channel;
-    const subject = ctx.GroupSubject?.trim();
-    const space = ctx.GroupSpace?.trim();
-    const explicitChannel = ctx.GroupChannel?.trim();
-    const normalizedChannel = normalizeChannelId(channel);
-    const isChannelProvider = Boolean(
-      normalizedChannel &&
-      getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
-    );
-    const nextGroupChannel =
-      explicitChannel ??
-      ((groupResolution.chatType === "channel" || isChannelProvider) &&
-      subject &&
-      subject.startsWith("#")
-        ? subject
-        : undefined);
-    const nextSubject = nextGroupChannel ? undefined : subject;
-    sessionEntry.chatType = groupResolution.chatType ?? "group";
-    sessionEntry.channel = channel;
-    sessionEntry.groupId = groupResolution.id;
-    if (nextSubject) sessionEntry.subject = nextSubject;
-    if (nextGroupChannel) sessionEntry.groupChannel = nextGroupChannel;
-    if (space) sessionEntry.space = space;
-    sessionEntry.displayName = buildGroupDisplayName({
-      provider: sessionEntry.channel,
-      subject: sessionEntry.subject,
-      groupChannel: sessionEntry.groupChannel,
-      space: sessionEntry.space,
-      id: groupResolution.id,
-      key: sessionKey,
-    });
-  } else if (!sessionEntry.chatType) {
+  const metaPatch = deriveSessionMetaPatch({
+    ctx: sessionCtxForState,
+    sessionKey,
+    existing: sessionEntry,
+    groupResolution,
+  });
+  if (metaPatch) {
+    sessionEntry = { ...sessionEntry, ...metaPatch };
+  }
+  if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
   }
   const threadLabel = ctx.ThreadLabel?.trim();

@@ -20,6 +20,7 @@ import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-dete
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
+import { recordSessionMetaFromInbound, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
@@ -33,7 +34,7 @@ import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
-import { updateLastRouteInBackground } from "./last-route.js";
+import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
 import { buildInboundLine } from "./message-line.js";
 
 export type GroupHistoryEntry = {
@@ -249,8 +250,7 @@ export async function processMessage(params: {
     identityName: resolveIdentityName(params.cfg, params.route.agentId),
   };
 
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: finalizeInboundContext({
+  const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
       RawBody: params.msg.body,
       CommandBody: params.msg.body,
@@ -283,7 +283,29 @@ export async function processMessage(params: {
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: params.msg.from,
-    }),
+    });
+
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const metaTask = recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: params.route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    params.replyLogger.warn(
+      {
+        error: formatError(err),
+        storePath,
+        sessionKey: params.route.sessionKey,
+      },
+      "failed updating session meta",
+    );
+  });
+  trackBackgroundTask(params.backgroundTasks, metaTask);
+
+  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {

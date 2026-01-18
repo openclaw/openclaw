@@ -18,6 +18,7 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../../../../src/channel
 import { formatAllowlistMatchMeta } from "../../../../src/channels/plugins/allowlist-match.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../src/globals.js";
 import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
+import { recordSessionMetaFromInbound, resolveStorePath } from "../../../../src/config/sessions.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
@@ -458,6 +459,17 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 	      OriginatingTo: teamsTo,
 	      ...mediaPayload,
 	    });
+
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    void recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+      ctx: ctxPayload,
+    }).catch((err) => {
+      logVerbose(`msteams: failed updating session meta: ${String(err)}`);
+    });
 
     if (shouldLogVerbose()) {
       logVerbose(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);

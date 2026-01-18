@@ -11,6 +11,8 @@ import {
   normalizeSessionDeliveryFields,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { deriveSessionMetaPatch } from "./metadata.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 // ============================================================================
@@ -330,6 +332,31 @@ export async function updateSessionStoreEntry(params: {
     const next = mergeSessionEntry(existing, patch);
     store[sessionKey] = next;
     await saveSessionStoreUnlocked(storePath, store);
+    return next;
+  });
+}
+
+export async function recordSessionMetaFromInbound(params: {
+  storePath: string;
+  sessionKey: string;
+  ctx: MsgContext;
+  groupResolution?: import("./types.js").GroupKeyResolution | null;
+  createIfMissing?: boolean;
+}): Promise<SessionEntry | null> {
+  const { storePath, sessionKey, ctx } = params;
+  const createIfMissing = params.createIfMissing ?? true;
+  return await updateSessionStore(storePath, (store) => {
+    const existing = store[sessionKey];
+    const patch = deriveSessionMetaPatch({
+      ctx,
+      sessionKey,
+      existing,
+      groupResolution: params.groupResolution,
+    });
+    if (!patch) return existing ?? null;
+    if (!existing && !createIfMissing) return null;
+    const next = mergeSessionEntry(existing, patch);
+    store[sessionKey] = next;
     return next;
   });
 }

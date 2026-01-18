@@ -18,7 +18,11 @@ import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../../../src/channels/command-gating.js";
 import { formatAllowlistMatchMeta } from "../../../../../src/channels/plugins/allowlist-match.js";
 import { loadConfig } from "../../../../../src/config/config.js";
-import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../../../../../src/config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
 import { enqueueSystemEvent } from "../../../../../src/infra/system-events.js";
 import { getChildLogger } from "../../../../../src/logging.js";
@@ -494,7 +498,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       });
 
       const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
-	      const ctxPayload = finalizeInboundContext({
+      const ctxPayload = finalizeInboundContext({
 	        Body: body,
 	        RawBody: bodyText,
 	        CommandBody: bodyText,
@@ -526,10 +530,21 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 	        OriginatingTo: `room:${roomId}`,
 	      });
 
+      const storePath = resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      void recordSessionMetaFromInbound({
+        storePath,
+        sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+        ctx: ctxPayload,
+      }).catch((err) => {
+        logger.warn(
+          { error: String(err), storePath, sessionKey: ctxPayload.SessionKey ?? route.sessionKey },
+          "failed updating session meta",
+        );
+      });
+
       if (isDirectMessage) {
-        const storePath = resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,

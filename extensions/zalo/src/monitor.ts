@@ -7,6 +7,7 @@ import {
 } from "../../../src/auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
+import { recordSessionMetaFromInbound, resolveStorePath } from "../../../src/config/sessions.js";
 import {
   ZaloApiError,
   deleteWebhook,
@@ -550,6 +551,17 @@ async function processMessageWithPipeline(params: {
     MediaUrl: mediaPath,
     OriginatingChannel: "zalo",
     OriginatingTo: `zalo:${chatId}`,
+  });
+
+  const storePath = resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
   });
 
   await deps.dispatchReplyWithBufferedBlockDispatcher({

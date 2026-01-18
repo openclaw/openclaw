@@ -18,6 +18,7 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: NormalizedChatType;
+  origin?: SessionEntry["origin"];
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;

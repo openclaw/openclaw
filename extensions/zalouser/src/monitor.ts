@@ -8,6 +8,7 @@ import {
 import { mergeAllowlist, summarizeMapping } from "../../../src/channels/allowlists/resolve-utils.js";
 import { finalizeInboundContext } from "../../../src/auto-reply/reply/inbound-context.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../src/channels/command-gating.js";
+import { recordSessionMetaFromInbound, resolveStorePath } from "../../../src/config/sessions.js";
 import { loadCoreChannelDeps, type CoreChannelDeps } from "./core-bridge.js";
 import { sendMessageZalouser } from "./send.js";
 import type {
@@ -297,6 +298,17 @@ async function processMessage(
     MessageSid: message.msgId ?? `${timestamp}`,
     OriginatingChannel: "zalouser",
     OriginatingTo: `zalouser:${chatId}`,
+  });
+
+  const storePath = resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
   });
 
   await deps.dispatchReplyWithBufferedBlockDispatcher({
