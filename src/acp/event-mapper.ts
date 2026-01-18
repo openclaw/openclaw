@@ -57,7 +57,7 @@ export function formatToolTitle(
   return `${base}: ${parts.join(", ")}`;
 }
 
-export function inferToolKind(name?: string): ToolKind | undefined {
+export function inferToolKind(name?: string): ToolKind {
   if (!name) return "other";
   const normalized = name.toLowerCase();
   if (normalized.includes("read")) return "read";

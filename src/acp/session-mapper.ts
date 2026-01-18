@@ -35,10 +35,9 @@ export async function resolveSessionKey(params: {
     params.meta.requireExisting ?? params.opts.requireExistingSession ?? false;
 
   if (params.meta.sessionLabel) {
-    const resolved = await params.gateway.request<{ ok: true; key: string }>(
-      "sessions.resolve",
-      { label: params.meta.sessionLabel },
-    );
+    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+      label: params.meta.sessionLabel,
+    });
     if (!resolved?.key) {
       throw new Error(`Unable to resolve session label: ${params.meta.sessionLabel}`);
     }
@@ -47,10 +46,9 @@ export async function resolveSessionKey(params: {
 
   if (params.meta.sessionKey) {
     if (!requireExisting) return params.meta.sessionKey;
-    const resolved = await params.gateway.request<{ ok: true; key: string }>(
-      "sessions.resolve",
-      { key: params.meta.sessionKey },
-    );
+    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+      key: params.meta.sessionKey,
+    });
     if (!resolved?.key) {
       throw new Error(`Session key not found: ${params.meta.sessionKey}`);
     }
@@ -58,10 +56,9 @@ export async function resolveSessionKey(params: {
   }
 
   if (requestedLabel) {
-    const resolved = await params.gateway.request<{ ok: true; key: string }>(
-      "sessions.resolve",
-      { label: requestedLabel },
-    );
+    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+      label: requestedLabel,
+    });
     if (!resolved?.key) {
       throw new Error(`Unable to resolve session label: ${requestedLabel}`);
     }
@@ -70,10 +67,9 @@ export async function resolveSessionKey(params: {
 
   if (requestedKey) {
     if (!requireExisting) return requestedKey;
-    const resolved = await params.gateway.request<{ ok: true; key: string }>(
-      "sessions.resolve",
-      { key: requestedKey },
-    );
+    const resolved = await params.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+      key: requestedKey,
+    });
     if (!resolved?.key) {
       throw new Error(`Session key not found: ${requestedKey}`);
     }

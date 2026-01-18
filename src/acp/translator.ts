@@ -68,9 +68,7 @@ export class AcpGatewayAgent implements Agent {
     this.connection = connection;
     this.gateway = gateway;
     this.opts = opts;
-    this.log = opts.verbose
-      ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`)
-      : () => {};
+    this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
   }
 
@@ -207,9 +205,7 @@ export class AcpGatewayAgent implements Agent {
     return {};
   }
 
-  async setSessionMode(
-    params: SetSessionModeRequest,
-  ): Promise<SetSessionModeResponse | void> {
+  async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
     const session = this.sessionStore.getSession(params.sessionId);
     if (!session) {
       throw new Error(`Session ${params.sessionId} not found`);
@@ -403,11 +399,7 @@ export class AcpGatewayAgent implements Agent {
     });
   }
 
-  private finishPrompt(
-    sessionId: string,
-    pending: PendingPrompt,
-    stopReason: StopReason,
-  ): void {
+  private finishPrompt(sessionId: string, pending: PendingPrompt, stopReason: StopReason): void {
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     pending.resolve({ stopReason });
@@ -429,5 +421,4 @@ export class AcpGatewayAgent implements Agent {
       },
     });
   }
-
 }

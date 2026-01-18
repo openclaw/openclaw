@@ -129,7 +129,9 @@ describe("image tool implicit imageModel config", () => {
     });
     const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
     expect(tool).not.toBeNull();
-    expect(tool?.description).toContain("Only use this tool when the image was NOT already provided");
+    expect(tool?.description).toContain(
+      "Only use this tool when the image was NOT already provided",
+    );
   });
 
   it("sandboxes image paths like the read tool", async () => {

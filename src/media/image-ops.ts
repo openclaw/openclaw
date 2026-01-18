@@ -237,11 +237,10 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
     const input = path.join(dir, "in.jpg");
     const output = path.join(dir, "out.jpg");
     await fs.writeFile(input, buffer);
-    await runExec(
-      "/usr/bin/sips",
-      [...ops, input, "--out", output],
-      { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
-    );
+    await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
+      timeoutMs: 20_000,
+      maxBuffer: 1024 * 1024,
+    });
     return await fs.readFile(output);
   });
 }

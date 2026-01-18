@@ -1,7 +1,4 @@
-import {
-  parseAgentSessionKey,
-  type ParsedAgentSessionKey,
-} from "../sessions/session-key-utils.js";
+import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export {
   isAcpSessionKey,

@@ -11,9 +11,7 @@ describe("acp event mapper", () => {
       { type: "image", data: "abc", mimeType: "image/png" },
     ]);
 
-    expect(text).toBe(
-      "Hello\nFile contents\n[Resource link (Spec)] https://example.com",
-    );
+    expect(text).toBe("Hello\nFile contents\n[Resource link (Spec)] https://example.com");
   });
 
   it("extracts image blocks into gateway attachments", () => {

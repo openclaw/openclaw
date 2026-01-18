@@ -81,7 +81,10 @@ function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
   return [];
 }
 
-function resolveNodeDefaults(opts: NodeDaemonInstallOptions, config: Awaited<ReturnType<typeof loadNodeHostConfig>>) {
+function resolveNodeDefaults(
+  opts: NodeDaemonInstallOptions,
+  config: Awaited<ReturnType<typeof loadNodeHostConfig>>,
+) {
   const host = opts.host?.trim() || config?.gateway?.host || "127.0.0.1";
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -171,10 +174,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const tlsFingerprint = opts.tlsFingerprint?.trim() || config?.gateway?.tlsFingerprint;
-  const tls =
-    Boolean(opts.tls) ||
-    Boolean(tlsFingerprint) ||
-    Boolean(config?.gateway?.tls);
+  const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
   const { programArguments, workingDirectory, environment, description } =
     await buildNodeInstallPlan({
       env: process.env,
@@ -495,9 +495,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
-      .catch(
-        (err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) }),
-      ),
+      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
   const payload = {

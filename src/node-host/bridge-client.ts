@@ -47,7 +47,6 @@ type PendingRpc = {
   timer?: NodeJS.Timeout;
 };
 
-
 function normalizeFingerprint(input: string): string {
   return input.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
 }
@@ -237,10 +236,7 @@ export class BridgeClient {
     }
   }
 
-  private handleFrame(frame: {
-    type?: string;
-    [key: string]: unknown;
-  }) {
+  private handleFrame(frame: { type?: string; [key: string]: unknown }) {
     const type = String(frame.type ?? "");
     switch (type) {
       case "hello-ok": {

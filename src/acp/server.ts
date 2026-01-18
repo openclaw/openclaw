@@ -9,10 +9,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { isMainModule } from "../infra/is-main.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { AcpGatewayAgent } from "./translator.js";
 import type { AcpServerOptions } from "./types.js";
 
@@ -59,10 +56,10 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): void {
   });
 
   const input = Writable.toWeb(process.stdout);
-  const output = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
+  const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
-  new AgentSideConnection((conn) => {
+  new AgentSideConnection((conn: AgentSideConnection) => {
     agent = new AcpGatewayAgent(conn, gateway, opts);
     agent.start();
     return agent;

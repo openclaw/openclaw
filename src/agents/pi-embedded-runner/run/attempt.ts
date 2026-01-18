@@ -565,8 +565,12 @@ export async function runEmbeddedAttempt(
                   // Check for existing image content to avoid duplicates across turns
                   const existingImageData = new Set(
                     msg.content
-                      .filter((c): c is ImageContent =>
-                        c != null && typeof c === "object" && c.type === "image" && typeof c.data === "string",
+                      .filter(
+                        (c): c is ImageContent =>
+                          c != null &&
+                          typeof c === "object" &&
+                          c.type === "image" &&
+                          typeof c.data === "string",
                       )
                       .map((c) => c.data),
                   );

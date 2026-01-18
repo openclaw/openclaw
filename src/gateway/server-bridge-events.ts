@@ -206,7 +206,7 @@ export const handleBridgeEvent = async (
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
-        if (output) text += `\\n${output}`;
+        if (output) text += `\n${output}`;
       } else {
         text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;
         if (command) text += `: ${command}`;
