@@ -1,28 +1,17 @@
-export type SlackTargetKind = "user" | "channel";
+import {
+  buildMessagingTarget,
+  ensureTargetId,
+  requireTargetKind,
+  type MessagingTarget,
+  type MessagingTargetKind,
+  type MessagingTargetParseOptions,
+} from "../channels/targets.js";
 
-export type SlackTarget = {
-  kind: SlackTargetKind;
-  id: string;
-  raw: string;
-  normalized: string;
-};
+export type SlackTargetKind = MessagingTargetKind;
 
-type SlackTargetParseOptions = {
-  defaultKind?: SlackTargetKind;
-};
+export type SlackTarget = MessagingTarget;
 
-function normalizeTargetId(kind: SlackTargetKind, id: string) {
-  return `${kind}:${id}`.toLowerCase();
-}
-
-function buildTarget(kind: SlackTargetKind, id: string, raw: string): SlackTarget {
-  return {
-    kind,
-    id,
-    raw,
-    normalized: normalizeTargetId(kind, id),
-  };
-}
+type SlackTargetParseOptions = MessagingTargetParseOptions;
 
 export function parseSlackTarget(
   raw: string,
@@ -32,47 +21,45 @@ export function parseSlackTarget(
   if (!trimmed) return undefined;
   const mentionMatch = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mentionMatch) {
-    return buildTarget("user", mentionMatch[1], trimmed);
+    return buildMessagingTarget("user", mentionMatch[1], trimmed);
   }
   if (trimmed.startsWith("user:")) {
     const id = trimmed.slice("user:".length).trim();
-    return id ? buildTarget("user", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
-    return id ? buildTarget("channel", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("channel", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("slack:")) {
     const id = trimmed.slice("slack:".length).trim();
-    return id ? buildTarget("user", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("@")) {
     const candidate = trimmed.slice(1).trim();
-    if (!/^[A-Z0-9]+$/i.test(candidate)) {
-      throw new Error("Slack DMs require a user id (use user:<id> or <@id>)");
-    }
-    return buildTarget("user", candidate, trimmed);
+    const id = ensureTargetId({
+      candidate,
+      pattern: /^[A-Z0-9]+$/i,
+      errorMessage: "Slack DMs require a user id (use user:<id> or <@id>)",
+    });
+    return buildMessagingTarget("user", id, trimmed);
   }
   if (trimmed.startsWith("#")) {
     const candidate = trimmed.slice(1).trim();
-    if (!/^[A-Z0-9]+$/i.test(candidate)) {
-      throw new Error("Slack channels require a channel id (use channel:<id>)");
-    }
-    return buildTarget("channel", candidate, trimmed);
+    const id = ensureTargetId({
+      candidate,
+      pattern: /^[A-Z0-9]+$/i,
+      errorMessage: "Slack channels require a channel id (use channel:<id>)",
+    });
+    return buildMessagingTarget("channel", id, trimmed);
   }
   if (options.defaultKind) {
-    return buildTarget(options.defaultKind, trimmed, trimmed);
+    return buildMessagingTarget(options.defaultKind, trimmed, trimmed);
   }
-  return buildTarget("channel", trimmed, trimmed);
+  return buildMessagingTarget("channel", trimmed, trimmed);
 }
 
 export function resolveSlackChannelId(raw: string): string {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  if (!target) {
-    throw new Error("Slack channel id is required.");
-  }
-  if (target.kind !== "channel") {
-    throw new Error("Slack channel id is required (use channel:<id>).");
-  }
-  return target.id;
+  return requireTargetKind({ platform: "Slack", target, kind: "channel" });
 }

@@ -20,7 +20,7 @@ import {
 } from "./config-helpers.js";
 import { resolveSlackGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./normalize-target.js";
+import { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import { slackOnboardingAdapter } from "./onboarding/slack.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {

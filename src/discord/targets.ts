@@ -1,29 +1,17 @@
-export type DiscordTargetKind = "user" | "channel";
+import {
+  buildMessagingTarget,
+  ensureTargetId,
+  requireTargetKind,
+  type MessagingTarget,
+  type MessagingTargetKind,
+  type MessagingTargetParseOptions,
+} from "../channels/targets.js";
 
-export type DiscordTarget = {
-  kind: DiscordTargetKind;
-  id: string;
-  raw: string;
-  normalized: string;
-};
+export type DiscordTargetKind = MessagingTargetKind;
 
-type DiscordTargetParseOptions = {
-  defaultKind?: DiscordTargetKind;
-  ambiguousMessage?: string;
-};
+export type DiscordTarget = MessagingTarget;
 
-function normalizeTargetId(kind: DiscordTargetKind, id: string) {
-  return `${kind}:${id}`.toLowerCase();
-}
-
-function buildTarget(kind: DiscordTargetKind, id: string, raw: string): DiscordTarget {
-  return {
-    kind,
-    id,
-    raw,
-    normalized: normalizeTargetId(kind, id),
-  };
-}
+type DiscordTargetParseOptions = MessagingTargetParseOptions;
 
 export function parseDiscordTarget(
   raw: string,
@@ -33,46 +21,42 @@ export function parseDiscordTarget(
   if (!trimmed) return undefined;
   const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
   if (mentionMatch) {
-    return buildTarget("user", mentionMatch[1], trimmed);
+    return buildMessagingTarget("user", mentionMatch[1], trimmed);
   }
   if (trimmed.startsWith("user:")) {
     const id = trimmed.slice("user:".length).trim();
-    return id ? buildTarget("user", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("channel:")) {
     const id = trimmed.slice("channel:".length).trim();
-    return id ? buildTarget("channel", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("channel", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("discord:")) {
     const id = trimmed.slice("discord:".length).trim();
-    return id ? buildTarget("user", id, trimmed) : undefined;
+    return id ? buildMessagingTarget("user", id, trimmed) : undefined;
   }
   if (trimmed.startsWith("@")) {
     const candidate = trimmed.slice(1).trim();
-    if (!/^\d+$/.test(candidate)) {
-      throw new Error("Discord DMs require a user id (use user:<id> or a <@id> mention)");
-    }
-    return buildTarget("user", candidate, trimmed);
+    const id = ensureTargetId({
+      candidate,
+      pattern: /^\d+$/,
+      errorMessage: "Discord DMs require a user id (use user:<id> or a <@id> mention)",
+    });
+    return buildMessagingTarget("user", id, trimmed);
   }
   if (/^\d+$/.test(trimmed)) {
     if (options.defaultKind) {
-      return buildTarget(options.defaultKind, trimmed, trimmed);
+      return buildMessagingTarget(options.defaultKind, trimmed, trimmed);
     }
     throw new Error(
       options.ambiguousMessage ??
         `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
     );
   }
-  return buildTarget("channel", trimmed, trimmed);
+  return buildMessagingTarget("channel", trimmed, trimmed);
 }
 
 export function resolveDiscordChannelId(raw: string): string {
   const target = parseDiscordTarget(raw, { defaultKind: "channel" });
-  if (!target) {
-    throw new Error("Discord channel id is required.");
-  }
-  if (target.kind !== "channel") {
-    throw new Error("Discord channel id is required (use channel:<id>).");
-  }
-  return target.id;
+  return requireTargetKind({ platform: "Discord", target, kind: "channel" });
 }

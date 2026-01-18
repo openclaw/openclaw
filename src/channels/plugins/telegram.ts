@@ -26,7 +26,10 @@ import {
 } from "./config-helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeTelegramTargetId,
+  normalizeTelegramMessagingTarget,
+} from "./normalize/telegram.js";
 import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {

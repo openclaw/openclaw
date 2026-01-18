@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeDiscordMessagingTarget } from "../channels/plugins/normalize-target.js";
+import { normalizeDiscordMessagingTarget } from "../channels/plugins/normalize/discord.js";
 import { parseDiscordTarget, resolveDiscordChannelId } from "./targets.js";
 
 describe("parseDiscordTarget", () => {

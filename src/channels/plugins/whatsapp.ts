@@ -26,7 +26,10 @@ import { buildChannelConfigSchema } from "./config-schema.js";
 import { createWhatsAppLoginTool } from "./agent-tools/whatsapp-login.js";
 import { resolveWhatsAppGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { looksLikeWhatsAppTargetId, normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeWhatsAppTargetId,
+  normalizeWhatsAppMessagingTarget,
+} from "./normalize/whatsapp.js";
 import { whatsappOnboardingAdapter } from "./onboarding/whatsapp.js";
 import {
   applyAccountNameToChannelSection,
