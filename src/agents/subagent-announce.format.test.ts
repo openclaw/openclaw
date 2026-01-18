@@ -39,6 +39,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions.json",
   resolveMainSessionKey: () => "agent:main:main",
+  readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 

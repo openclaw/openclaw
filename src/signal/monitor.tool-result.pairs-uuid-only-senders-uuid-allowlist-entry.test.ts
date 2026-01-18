@@ -35,6 +35,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
+  readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 

@@ -75,6 +75,26 @@ describe("loadClawdbotPlugins", () => {
     expect(enabled?.status).toBe("loaded");
   });
 
+  it("loads bundled telegram plugin when enabled", () => {
+    process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = path.join(process.cwd(), "extensions");
+
+    const registry = loadClawdbotPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+    expect(telegram?.status).toBe("loaded");
+    expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+  });
+
   it("enables bundled memory plugin when selected by slot", () => {
     const bundledDir = makeTempDir();
     const bundledPath = path.join(bundledDir, "memory-core.ts");

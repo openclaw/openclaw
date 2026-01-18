@@ -1,4 +1,8 @@
-import { loadConfig } from "../config/config.js";
+import { createRequire } from "node:module";
+
+import type { ClawdbotConfig } from "../config/config.js";
+
+const requireConfig = createRequire(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -93,7 +97,15 @@ function redactText(text: string, patterns: RegExp[]): string {
 }
 
 function resolveConfigRedaction(): RedactOptions {
-  const cfg = loadConfig().logging;
+  let cfg: ClawdbotConfig["logging"] | undefined;
+  try {
+    const loaded = requireConfig("../config/config.js") as {
+      loadConfig?: () => ClawdbotConfig;
+    };
+    cfg = loaded.loadConfig?.().logging;
+  } catch {
+    cfg = undefined;
+  }
   return {
     mode: normalizeMode(cfg?.redactSensitive),
     patterns: cfg?.redactPatterns,

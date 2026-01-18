@@ -39,6 +39,19 @@ vi.mock("../config/config.js", () => ({
 }));
 
 describe("pairing cli", () => {
+  it("evaluates pairing channels when registering the CLI (not at import)", async () => {
+    listPairingChannels.mockClear();
+
+    const { registerPairingCli } = await import("./pairing-cli.js");
+    expect(listPairingChannels).not.toHaveBeenCalled();
+
+    const program = new Command();
+    program.name("test");
+    registerPairingCli(program);
+
+    expect(listPairingChannels).toHaveBeenCalledTimes(1);
+  });
+
   it("labels Telegram ids as telegramUserId", async () => {
     const { registerPairingCli } = await import("./pairing-cli.js");
     listChannelPairingRequests.mockResolvedValueOnce([
