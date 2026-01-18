@@ -11,6 +11,9 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
+export type { PluginRuntime } from "./runtime/types.js";
 
 export type PluginLogger = {
   debug?: (message: string) => void;
@@ -164,6 +167,7 @@ export type ClawdbotPluginApi = {
   source: string;
   config: ClawdbotConfig;
   pluginConfig?: Record<string, unknown>;
+  runtime: PluginRuntime;
   logger: PluginLogger;
   registerTool: (
     tool: AnyAgentTool | ClawdbotPluginToolFactory,

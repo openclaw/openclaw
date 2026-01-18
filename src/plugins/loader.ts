@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverClawdbotPlugins } from "./discovery.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type {
   ClawdbotPluginConfigSchema,
@@ -275,8 +276,10 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
   }
 
+  const runtime = createPluginRuntime();
   const { registry, createApi } = createPluginRegistry({
     logger,
+    runtime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
 
