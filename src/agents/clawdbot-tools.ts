@@ -32,6 +32,7 @@ export function createClawdbotTools(options?: {
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
+  pluginToolAllowlist?: string[];
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -130,6 +131,7 @@ export function createClawdbotTools(options?: {
       sandboxed: options?.sandboxed,
     },
     existingToolNames: new Set(tools.map((tool) => tool.name)),
+    toolAllowlist: options?.pluginToolAllowlist,
   });
 
   return [...tools, ...pluginTools];

@@ -27,6 +27,7 @@ export type PluginToolRegistration = {
   pluginId: string;
   factory: ClawdbotPluginToolFactory;
   names: string[];
+  optional: boolean;
   source: string;
 };
 
@@ -125,9 +126,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerTool = (
     record: PluginRecord,
     tool: AnyAgentTool | ClawdbotPluginToolFactory,
-    opts?: { name?: string; names?: string[] },
+    opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
+    const optional = opts?.optional === true;
     const factory: ClawdbotPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: ClawdbotPluginToolContext) => tool;
 
@@ -143,6 +145,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       factory,
       names: normalized,
+      optional,
       source: record.source,
     });
   };

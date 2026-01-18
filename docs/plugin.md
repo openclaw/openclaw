@@ -58,6 +58,7 @@ register:
 - Optional config validation
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 ## Discovery & precedence
 
@@ -379,24 +380,9 @@ export default function (api) {
 Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
 then configure `channels.<id>` in your config.
 
-### Register a tool
+### Agent tools
 
-```ts
-import { Type } from "@sinclair/typebox";
-
-export default function (api) {
-  api.registerTool({
-    name: "my_tool",
-    description: "Do a thing",
-    parameters: Type.Object({
-      input: Type.String(),
-    }),
-    async execute(_id, params) {
-      return { content: [{ type: "text", text: params.input }] };
-    },
-  });
-}
-```
+See the dedicated guide: [Plugin agent tools](/plugins/agent-tools).
 
 ### Register a gateway RPC method
 
