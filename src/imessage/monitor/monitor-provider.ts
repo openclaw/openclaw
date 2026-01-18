@@ -308,9 +308,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const messageText = (message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     // Filter to valid attachments with paths
-    const validAttachments = attachments.filter(
-      (entry) => entry?.original_path && !entry?.missing,
-    );
+    const validAttachments = attachments.filter((entry) => entry?.original_path && !entry?.missing);
     const firstAttachment = validAttachments[0];
     const mediaPath = firstAttachment?.original_path ?? undefined;
     const mediaType = firstAttachment?.mime_type ?? undefined;

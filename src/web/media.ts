@@ -63,7 +63,10 @@ async function loadWebMediaInternal(
     kind: MediaKind;
     fileName?: string;
   }): Promise<WebMediaResult> => {
-    const cap = maxBytes !== undefined ? Math.min(maxBytes, maxBytesForKind(params.kind)) : maxBytesForKind(params.kind);
+    const cap =
+      maxBytes !== undefined
+        ? Math.min(maxBytes, maxBytesForKind(params.kind))
+        : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
       if (isGif || !optimizeImages) {

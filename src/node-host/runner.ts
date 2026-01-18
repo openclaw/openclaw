@@ -17,11 +17,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 
 import { BridgeClient } from "./bridge-client.js";
-import {
-  ensureNodeHostConfig,
-  saveNodeHostConfig,
-  type NodeHostGatewayConfig,
-} from "./config.js";
+import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -114,7 +110,9 @@ class SkillBinsCache {
   }
 }
 
-function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> | undefined {
+function sanitizeEnv(
+  overrides?: Record<string, string> | null,
+): Record<string, string> | undefined {
   if (!overrides) return undefined;
   const merged = { ...process.env } as Record<string, string>;
   for (const [rawKey, value] of Object.entries(overrides)) {
@@ -132,7 +130,7 @@ function formatCommand(argv: string[]): string {
   return argv
     .map((arg) => {
       const trimmed = arg.trim();
-      if (!trimmed) return "\"\"";
+      if (!trimmed) return '""';
       const needsQuotes = /\s|"/.test(trimmed);
       if (!needsQuotes) return trimmed;
       return `"${trimmed.replace(/"/g, '\\"')}"`;
@@ -247,9 +245,7 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
 }
 
 async function handleSystemWhich(params: SystemWhichParams, env?: Record<string, string>) {
-  const bins = params.bins
-    .map((bin) => bin.trim())
-    .filter(Boolean);
+  const bins = params.bins.map((bin) => bin.trim()).filter(Boolean);
   const found: Record<string, string> = {};
   for (const bin of bins) {
     const path = resolveExecutable(bin, env);
@@ -334,10 +330,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
 
   const skillBins = new SkillBinsCache(async () => {
-    const res = await client.request("skills.bins", {});
-    const bins = Array.isArray(res?.bins)
-      ? res.bins.map((bin: unknown) => String(bin))
-      : [];
+    const res = (await client.request("skills.bins", {})) as
+      | { bins?: unknown[] }
+      | null
+      | undefined;
+    const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
     return bins;
   });
 

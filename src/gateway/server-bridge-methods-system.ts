@@ -84,9 +84,7 @@ export const handleSystemBridgeMethods: BridgeMethodHandler = async (
         eligibility: { remote: getRemoteSkillEligibility() },
       });
       const bins = Array.from(
-        new Set(
-          report.skills.flatMap((skill) => skill.requirements?.bins ?? []).filter(Boolean),
-        ),
+        new Set(report.skills.flatMap((skill) => skill.requirements?.bins ?? []).filter(Boolean)),
       );
       return { ok: true, payloadJSON: JSON.stringify({ bins }) };
     }

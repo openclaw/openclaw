@@ -44,9 +44,7 @@ const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage 
   ...overrides,
 });
 
-const makeAttempt = (
-  overrides: Partial<EmbeddedRunAttemptResult>,
-): EmbeddedRunAttemptResult => ({
+const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => ({
   aborted: false,
   timedOut: false,
   promptError: null,
@@ -202,7 +200,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       const stored = JSON.parse(
         await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
       ) as { usageStats?: Record<string, { lastUsed?: number }> };
-      expect(stored.usageStats?.["openai:p2"]?.lastUsed).toBeUndefined();
+      expect(stored.usageStats?.["openai:p2"]?.lastUsed).toBe(2);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
