@@ -138,4 +138,16 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(options.some((opt) => opt.value === "chutes")).toBe(true);
   });
+
+  it("includes Qwen auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "darwin",
+    });
+
+    expect(options.some((opt) => opt.value === "qwen-portal")).toBe(true);
+  });
 });
