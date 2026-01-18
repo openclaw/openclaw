@@ -45,14 +45,18 @@ export const PollParamsSchema = Type.Object(
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     to: Type.Optional(Type.String()),
+    replyTo: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     channel: Type.Optional(Type.String()),
+    replyChannel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
+    replyAccountId: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),

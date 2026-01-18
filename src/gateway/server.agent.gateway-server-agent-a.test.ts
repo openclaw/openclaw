@@ -214,6 +214,83 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
+  test("agent derives sessionKey from agentId", async () => {
+    registryState.registry = defaultRegistry;
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.agentsConfig = { list: [{ id: "ops" }] };
+    await writeSessionStore({
+      agentId: "ops",
+      entries: {
+        main: {
+          sessionId: "sess-ops",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      agentId: "ops",
+      idempotencyKey: "idem-agent-id",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.sessionKey).toBe("agent:ops:main");
+    expect(call.sessionId).toBe("sess-ops");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent rejects unknown reply channel", async () => {
+    registryState.registry = defaultRegistry;
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      replyChannel: "unknown-channel",
+      idempotencyKey: "idem-agent-reply-unknown",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("unknown channel");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent rejects mismatched agentId and sessionKey", async () => {
+    registryState.registry = defaultRegistry;
+    testState.agentsConfig = { list: [{ id: "ops" }] };
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      agentId: "ops",
+      sessionKey: "agent:main:main",
+      idempotencyKey: "idem-agent-mismatch",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message).toContain("does not match session key agent");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).not.toHaveBeenCalled();
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent forwards accountId to agentCommand", async () => {
     registryState.registry = defaultRegistry;
     testState.allowFrom = ["+1555"];

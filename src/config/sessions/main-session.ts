@@ -35,6 +35,15 @@ export function resolveAgentMainSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+export function resolveExplicitAgentSessionKey(params: {
+  cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
+  agentId?: string | null;
+}): string | undefined {
+  const agentId = params.agentId?.trim();
+  if (!agentId) return undefined;
+  return resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+}
+
 export function canonicalizeMainSessionAlias(params: {
   cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
   agentId: string;
