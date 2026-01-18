@@ -200,6 +200,12 @@ export type ClawdbotPluginApi = {
   registerService: (service: ClawdbotPluginService) => void;
   registerProvider: (provider: ProviderPlugin) => void;
   resolvePath: (input: string) => string;
+  /** Register a lifecycle hook handler */
+  on: <K extends PluginHookName>(
+    hookName: K,
+    handler: PluginHookHandlerMap[K],
+    opts?: { priority?: number },
+  ) => void;
 };
 
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
@@ -209,4 +215,220 @@ export type PluginDiagnostic = {
   message: string;
   pluginId?: string;
   source?: string;
+};
+
+// ============================================================================
+// Plugin Hooks
+// ============================================================================
+
+export type PluginHookName =
+  | "before_agent_start"
+  | "agent_end"
+  | "before_compaction"
+  | "after_compaction"
+  | "message_received"
+  | "message_sending"
+  | "message_sent"
+  | "before_tool_call"
+  | "after_tool_call"
+  | "session_start"
+  | "session_end"
+  | "gateway_start"
+  | "gateway_stop";
+
+// Agent context shared across agent hooks
+export type PluginHookAgentContext = {
+  agentId?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  messageProvider?: string;
+};
+
+// before_agent_start hook
+export type PluginHookBeforeAgentStartEvent = {
+  prompt: string;
+  messages?: unknown[];
+};
+
+export type PluginHookBeforeAgentStartResult = {
+  systemPrompt?: string;
+  prependContext?: string;
+};
+
+// agent_end hook
+export type PluginHookAgentEndEvent = {
+  messages: unknown[];
+  success: boolean;
+  error?: string;
+  durationMs?: number;
+};
+
+// Compaction hooks
+export type PluginHookBeforeCompactionEvent = {
+  messageCount: number;
+  tokenCount?: number;
+};
+
+export type PluginHookAfterCompactionEvent = {
+  messageCount: number;
+  tokenCount?: number;
+  compactedCount: number;
+};
+
+// Message context
+export type PluginHookMessageContext = {
+  channelId: string;
+  accountId?: string;
+  conversationId?: string;
+};
+
+// message_received hook
+export type PluginHookMessageReceivedEvent = {
+  from: string;
+  content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
+// message_sending hook
+export type PluginHookMessageSendingEvent = {
+  to: string;
+  content: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookMessageSendingResult = {
+  content?: string;
+  cancel?: boolean;
+};
+
+// message_sent hook
+export type PluginHookMessageSentEvent = {
+  to: string;
+  content: string;
+  success: boolean;
+  error?: string;
+};
+
+// Tool context
+export type PluginHookToolContext = {
+  agentId?: string;
+  sessionKey?: string;
+  toolName: string;
+};
+
+// before_tool_call hook
+export type PluginHookBeforeToolCallEvent = {
+  toolName: string;
+  params: Record<string, unknown>;
+};
+
+export type PluginHookBeforeToolCallResult = {
+  params?: Record<string, unknown>;
+  block?: boolean;
+  blockReason?: string;
+};
+
+// after_tool_call hook
+export type PluginHookAfterToolCallEvent = {
+  toolName: string;
+  params: Record<string, unknown>;
+  result?: unknown;
+  error?: string;
+  durationMs?: number;
+};
+
+// Session context
+export type PluginHookSessionContext = {
+  agentId?: string;
+  sessionId: string;
+};
+
+// session_start hook
+export type PluginHookSessionStartEvent = {
+  sessionId: string;
+  resumedFrom?: string;
+};
+
+// session_end hook
+export type PluginHookSessionEndEvent = {
+  sessionId: string;
+  messageCount: number;
+  durationMs?: number;
+};
+
+// Gateway context
+export type PluginHookGatewayContext = {
+  port?: number;
+};
+
+// gateway_start hook
+export type PluginHookGatewayStartEvent = {
+  port: number;
+};
+
+// gateway_stop hook
+export type PluginHookGatewayStopEvent = {
+  reason?: string;
+};
+
+// Hook handler types mapped by hook name
+export type PluginHookHandlerMap = {
+  before_agent_start: (
+    event: PluginHookBeforeAgentStartEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentStartResult | void> | PluginHookBeforeAgentStartResult | void;
+  agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  before_compaction: (
+    event: PluginHookBeforeCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  after_compaction: (
+    event: PluginHookAfterCompactionEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  message_received: (
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  message_sending: (
+    event: PluginHookMessageSendingEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookMessageSendingResult | void> | PluginHookMessageSendingResult | void;
+  message_sent: (
+    event: PluginHookMessageSentEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  before_tool_call: (
+    event: PluginHookBeforeToolCallEvent,
+    ctx: PluginHookToolContext,
+  ) => Promise<PluginHookBeforeToolCallResult | void> | PluginHookBeforeToolCallResult | void;
+  after_tool_call: (
+    event: PluginHookAfterToolCallEvent,
+    ctx: PluginHookToolContext,
+  ) => Promise<void> | void;
+  session_start: (
+    event: PluginHookSessionStartEvent,
+    ctx: PluginHookSessionContext,
+  ) => Promise<void> | void;
+  session_end: (
+    event: PluginHookSessionEndEvent,
+    ctx: PluginHookSessionContext,
+  ) => Promise<void> | void;
+  gateway_start: (
+    event: PluginHookGatewayStartEvent,
+    ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  gateway_stop: (
+    event: PluginHookGatewayStopEvent,
+    ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+};
+
+export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
+  pluginId: string;
+  hookName: K;
+  handler: PluginHookHandlerMap[K];
+  priority?: number;
+  source: string;
 };

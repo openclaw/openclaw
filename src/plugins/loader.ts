@@ -8,6 +8,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverClawdbotPlugins } from "./discovery.js";
+import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -271,6 +272,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     httpHandlers: 0,
+    hookCount: 0,
     configSchema: params.configSchema,
     configUiHints: undefined,
     configJsonSchema: undefined,
@@ -521,5 +523,6 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     registryCache.set(cacheKey, registry);
   }
   setActivePluginRegistry(registry, cacheKey);
+  initializeGlobalHookRunner(registry);
   return registry;
 }
