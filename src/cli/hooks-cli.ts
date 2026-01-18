@@ -45,10 +45,7 @@ export type HooksUpdateOptions = {
   dryRun?: boolean;
 };
 
-function mergeHookEntries(
-  pluginEntries: HookEntry[],
-  workspaceEntries: HookEntry[],
-): HookEntry[] {
+function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntry[]): HookEntry[] {
   const merged = new Map<string, HookEntry>();
   for (const entry of pluginEntries) {
     merged.set(entry.hook.name, entry);
