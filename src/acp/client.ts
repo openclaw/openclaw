@@ -6,6 +6,7 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
+  type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 
@@ -90,7 +91,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   }
 
   const input = Writable.toWeb(agent.stdin);
-  const output = Readable.toWeb(agent.stdout) as ReadableStream<Uint8Array>;
+  const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
 
   const client = new ClientSideConnection(
@@ -98,7 +99,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       sessionUpdate: async (params: SessionNotification) => {
         printSessionUpdate(params);
       },
-      requestPermission: async (params) => {
+      requestPermission: async (params: RequestPermissionRequest) => {
         console.log("\n[permission requested]", params.toolCall?.title ?? "tool");
         const allowOnce = params.options.find((option) => option.kind === "allow_once");
         const fallback = params.options[0];

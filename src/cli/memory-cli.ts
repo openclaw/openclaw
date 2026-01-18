@@ -117,11 +117,7 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .option("--deep", "Probe embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
-    .option(
-      "--index-mode <mode>",
-      "Index mode (auto|batch|direct) when indexing",
-      "auto",
-    )
+    .option("--index-mode <mode>", "Index mode (auto|batch|direct) when indexing", "auto")
     .option("--progress <mode>", "Progress output (auto|line|log|none)", "auto")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
@@ -148,12 +144,12 @@ export function registerMemoryCli(program: Command) {
             await withProgress(
               { label: "Checking memory…", total: 2, ...progressOptions },
               async (progress) => {
-              progress.setLabel("Probing vector…");
-              await manager.probeVectorAvailability();
-              progress.tick();
-              progress.setLabel("Probing embeddings…");
-              embeddingProbe = await manager.probeEmbeddingAvailability();
-              progress.tick();
+                progress.setLabel("Probing vector…");
+                await manager.probeVectorAvailability();
+                progress.tick();
+                progress.setLabel("Probing embeddings…");
+                embeddingProbe = await manager.probeEmbeddingAvailability();
+                progress.tick();
               },
             );
             if (opts.index) {
@@ -304,11 +300,7 @@ export function registerMemoryCli(program: Command) {
     .description("Reindex memory files")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--force", "Force full reindex", false)
-    .option(
-      "--index-mode <mode>",
-      "Index mode (auto|batch|direct) when indexing",
-      "auto",
-    )
+    .option("--index-mode <mode>", "Index mode (auto|batch|direct) when indexing", "auto")
     .option("--progress <mode>", "Progress output (auto|line|log|none)", "auto")
     .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
       const rawCfg = loadConfig();
