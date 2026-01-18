@@ -245,9 +245,13 @@ importers:
 
   extensions/copilot-proxy: {}
 
+  extensions/discord: {}
+
   extensions/google-antigravity-auth: {}
 
   extensions/google-gemini-cli-auth: {}
+
+  extensions/imessage: {}
 
   extensions/matrix:
     dependencies:
@@ -300,6 +304,12 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2
 
+  extensions/signal: {}
+
+  extensions/slack: {}
+
+  extensions/telegram: {}
+
   extensions/voice-call:
     dependencies:
       '@sinclair/typebox':
@@ -311,6 +321,8 @@ importers:
       zod:
         specifier: ^4.3.5
         version: 4.3.5
+
+  extensions/whatsapp: {}
 
   extensions/zalo:
     dependencies:

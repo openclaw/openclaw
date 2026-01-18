@@ -13,6 +13,8 @@ export const createTestRegistry = (
 ): PluginRegistry => ({
   plugins: [],
   tools: [],
+  hooks: [],
+  typedHooks: [],
   channels,
   providers: [],
   gatewayHandlers: {},
