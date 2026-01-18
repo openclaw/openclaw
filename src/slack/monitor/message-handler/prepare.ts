@@ -404,18 +404,18 @@ export async function prepareSlackMessage(params: {
       limit: ctx.historyLimit,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-          formatInboundEnvelope({
-            channel: "Slack",
-            from: roomLabel,
-            timestamp: entry.timestamp,
-            body: `${entry.body}${
-              entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
-            }`,
-            chatType: "channel",
-            senderLabel: entry.sender,
-            envelope: envelopeOptions,
-          }),
-      });
+        formatInboundEnvelope({
+          channel: "Slack",
+          from: roomLabel,
+          timestamp: entry.timestamp,
+          body: `${entry.body}${
+            entry.messageId ? ` [id:${entry.messageId} channel:${message.channel}]` : ""
+          }`,
+          chatType: "channel",
+          senderLabel: entry.sender,
+          envelope: envelopeOptions,
+        }),
+    });
   }
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;

@@ -60,8 +60,8 @@ describe("promptDefaultModel", () => {
 
     const options = select.mock.calls[0]?.[0]?.options ?? [];
     expect(options.some((opt) => opt.value === "openrouter/auto")).toBe(false);
-    expect(
-      options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free"),
-    ).toBe(true);
+    expect(options.some((opt) => opt.value === "openrouter/meta-llama/llama-3.3-70b:free")).toBe(
+      true,
+    );
   });
 });

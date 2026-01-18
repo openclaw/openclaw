@@ -25,8 +25,7 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const id = rest.join(":").trim();
   if (!id) return null;
   if (!channelRaw) return null;
-  const normalizedChannel =
-    normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
+  const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
   const kindTarget = (() => {
     if (!normalizedChannel) return id;

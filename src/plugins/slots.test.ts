@@ -33,9 +33,7 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.warnings).toContain(
       'Exclusive slot "memory" switched from "memory-core" to "memory".',
     );
-    expect(result.warnings).toContain(
-      'Disabled other "memory" slot plugins: memory-core.',
-    );
+    expect(result.warnings).toContain('Disabled other "memory" slot plugins: memory-core.');
   });
 
   it("does nothing when the slot already matches", () => {

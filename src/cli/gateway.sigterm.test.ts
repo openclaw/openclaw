@@ -93,7 +93,15 @@ describe("gateway SIGTERM", () => {
 
     child = spawn(
       bunBin,
-      ["src/entry.ts", "gateway", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
+      [
+        "src/entry.ts",
+        "gateway",
+        "--port",
+        String(port),
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
       {
         cwd: process.cwd(),
         env: {

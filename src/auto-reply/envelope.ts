@@ -122,7 +122,10 @@ function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined
   return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
 }
 
-function formatTimestamp(ts: number | Date | undefined, options?: EnvelopeFormatOptions): string | undefined {
+function formatTimestamp(
+  ts: number | Date | undefined,
+  options?: EnvelopeFormatOptions,
+): string | undefined {
   if (!ts) return undefined;
   const resolved = normalizeEnvelopeOptions(options);
   if (!resolved.includeTimestamp) return undefined;
