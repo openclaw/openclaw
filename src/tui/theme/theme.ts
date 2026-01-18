@@ -106,6 +106,12 @@ export const selectListTheme: SelectListTheme = {
   noMatch: (text) => fg(palette.dim)(text),
 };
 
+export const filterableSelectListTheme = {
+  ...selectListTheme,
+  filterLabel: (text: string) => fg(palette.dim)(text),
+  filterInput: (text: string) => fg(palette.text)(text),
+};
+
 export const settingsListTheme: SettingsListTheme = {
   label: (text, selected) =>
     selected ? chalk.bold(fg(palette.accent)(text)) : fg(palette.text)(text),
