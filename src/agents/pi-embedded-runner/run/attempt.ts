@@ -17,7 +17,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveClawdbotAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
-import { applyBootstrapHookOverrides } from "../../bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "../../bootstrap-files.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import {
   buildBootstrapContextFiles,
@@ -42,7 +42,6 @@ import {
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../../workspace.js";
 
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -121,12 +120,7 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
     });
 
-    const bootstrapFiles = filterBootstrapFilesForSession(
-      await loadWorkspaceBootstrapFiles(effectiveWorkspace),
-      params.sessionKey ?? params.sessionId,
-    );
-    const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
-      files: bootstrapFiles,
+    const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       sessionKey: params.sessionKey,
