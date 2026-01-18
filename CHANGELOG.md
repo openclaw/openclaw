@@ -8,7 +8,7 @@ Docs: https://docs.clawd.bot
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
 
 ### Fixes
-- macOS: load menu session previews asynchronously so items populate while the menu is open.
+- Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
 
 ## 2026.1.18-4
 
