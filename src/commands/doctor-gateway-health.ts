@@ -12,7 +12,8 @@ export async function checkGatewayHealth(params: {
   timeoutMs?: number;
 }) {
   const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
-  const timeoutMs = typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
+  const timeoutMs =
+    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
   try {
     await healthCommand({ json: false, timeoutMs }, params.runtime);

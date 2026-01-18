@@ -4,8 +4,8 @@ import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js"
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
-    expect(buildFtsQuery("hello world")).toBe("\"hello\" AND \"world\"");
-    expect(buildFtsQuery("FOO_bar baz-1")).toBe("\"FOO_bar\" AND \"baz\" AND \"1\"");
+    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
+    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
@@ -84,4 +84,3 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1.0);
   });
 });
-

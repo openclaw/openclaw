@@ -92,4 +92,3 @@ function ensureColumn(
   if (rows.some((row) => row.name === column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-

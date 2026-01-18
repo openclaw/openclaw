@@ -23,7 +23,6 @@ import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
   ensureSessionHeader,
-  resolveBootstrapMaxChars,
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";

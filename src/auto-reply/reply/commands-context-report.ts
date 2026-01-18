@@ -136,7 +136,7 @@ async function resolveContextReport(
     bootstrapMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles: hookAdjustedBootstrapFiles,
+    bootstrapFiles,
     injectedFiles,
     skillsPrompt,
     tools,

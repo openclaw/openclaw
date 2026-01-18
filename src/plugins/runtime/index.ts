@@ -11,7 +11,10 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { resolveChannelGroupPolicy, resolveChannelGroupRequireMention } from "../../config/group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "../../config/group-policy.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { getChildLogger } from "../../logging.js";

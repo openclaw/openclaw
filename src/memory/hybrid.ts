@@ -21,9 +21,13 @@ export type HybridKeywordResult = {
 };
 
 export function buildFtsQuery(raw: string): string | null {
-  const tokens = raw.match(/[A-Za-z0-9_]+/g)?.map((t) => t.trim()).filter(Boolean) ?? [];
+  const tokens =
+    raw
+      .match(/[A-Za-z0-9_]+/g)
+      ?.map((t) => t.trim())
+      .filter(Boolean) ?? [];
   if (tokens.length === 0) return null;
-  const quoted = tokens.map((t) => `"${t.replaceAll("\"", "")}"`);
+  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" AND ");
 }
 
@@ -105,4 +109,3 @@ export function mergeHybridResults(params: {
 
   return merged.sort((a, b) => b.score - a.score);
 }
-

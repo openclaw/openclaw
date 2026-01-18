@@ -156,7 +156,10 @@ async function readOpenAiBatchError(params: {
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    const content = await fetchOpenAiFileContent({ openAi: params.openAi, fileId: params.errorFileId });
+    const content = await fetchOpenAiFileContent({
+      openAi: params.openAi,
+      fileId: params.errorFileId,
+    });
     const lines = parseOpenAiBatchOutput(content);
     const first = lines.find((line) => line.error?.message || line.response?.body?.error);
     const message =
@@ -357,4 +360,3 @@ export async function runOpenAiEmbeddingBatches(params: {
   await runWithConcurrency(tasks, params.concurrency);
   return byCustomId;
 }
-

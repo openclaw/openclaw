@@ -63,9 +63,9 @@ export async function getDeterministicFreePortBlock(params?: {
   for (let attempt = 0; attempt < usable; attempt += 1) {
     const start = base + ((nextTestPortOffset + attempt) % usable);
     // eslint-disable-next-line no-await-in-loop
-    const ok = (
-      await Promise.all(offsets.map((offset) => isPortFree(start + offset)))
-    ).every(Boolean);
+    const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(
+      Boolean,
+    );
     if (!ok) continue;
     nextTestPortOffset = (nextTestPortOffset + attempt + blockSize) % usable;
     return start;
