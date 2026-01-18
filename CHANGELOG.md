@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
+- macOS: avoid touching launchd in Remote over SSH so quitting the app no longer disables the remote gateway. (#1105)
 
 ## 2026.1.18-3
 

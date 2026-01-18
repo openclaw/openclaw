@@ -134,4 +134,27 @@ import Testing
             #expect(script.contains("CLI="))
         }
     }
+
+    @Test func configRootLocalOverridesRemoteDefaults() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set("clawd@example.com:2222", forKey: remoteTargetKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let clawdbotPath = tmp.appendingPathComponent("node_modules/.bin/clawdbot")
+        try self.makeExec(at: clawdbotPath)
+
+        let cmd = CommandResolver.clawdbotCommand(
+            subcommand: "daemon",
+            defaults: defaults,
+            configRoot: ["gateway": ["mode": "local"]])
+
+        #expect(cmd.first == clawdbotPath.path)
+        #expect(cmd.count >= 2)
+        if cmd.count >= 2 {
+            #expect(cmd[1] == "daemon")
+        }
+    }
 }
