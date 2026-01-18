@@ -1,10 +1,10 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 process.stdout.on('error', (error) => {
-  if ((error as NodeJS.ErrnoException).code === 'EPIPE') {
+  if (error?.code === 'EPIPE') {
     process.exit(0);
   }
   throw error;

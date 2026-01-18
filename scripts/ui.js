@@ -45,19 +45,8 @@ function which(cmd) {
 }
 
 function resolveRunner() {
-  // CLAWDBOT_PREFER_PNPM=1 forces pnpm (useful in Docker on architectures where Bun fails)
-  const preferPnpm = process.env.CLAWDBOT_PREFER_PNPM === "1";
-  if (!preferPnpm) {
-    const bun = which("bun");
-    if (bun) return { cmd: bun, kind: "bun" };
-  }
   const pnpm = which("pnpm");
   if (pnpm) return { cmd: pnpm, kind: "pnpm" };
-  if (preferPnpm) {
-    // Fallback to bun if pnpm not found even when preferring pnpm
-    const bun = which("bun");
-    if (bun) return { cmd: bun, kind: "bun" };
-  }
   return null;
 }
 
@@ -107,9 +96,7 @@ if (!action) {
 
 const runner = resolveRunner();
 if (!runner) {
-  process.stderr.write(
-    "Missing UI runner: install bun or pnpm, then retry.\n",
-  );
+  process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
   process.exit(1);
 }
 
@@ -129,32 +116,16 @@ if (action !== "install" && !script) {
   process.exit(2);
 }
 
-if (runner.kind === "bun") {
-  if (action === "install") run(runner.cmd, ["install", ...rest]);
-  else {
-    if (!depsInstalled(action === "test" ? "test" : "build")) {
-      const installEnv =
-        action === "build"
-          ? { ...process.env, NODE_ENV: "production" }
-          : process.env;
-      const installArgs =
-        action === "build" ? ["install", "--production"] : ["install"];
-      runSync(runner.cmd, installArgs, installEnv);
-    }
-    run(runner.cmd, ["run", script, ...rest]);
+if (action === "install") run(runner.cmd, ["install", ...rest]);
+else {
+  if (!depsInstalled(action === "test" ? "test" : "build")) {
+    const installEnv =
+      action === "build"
+        ? { ...process.env, NODE_ENV: "production" }
+        : process.env;
+    const installArgs =
+      action === "build" ? ["install", "--prod"] : ["install"];
+    runSync(runner.cmd, installArgs, installEnv);
   }
-} else {
-  if (action === "install") run(runner.cmd, ["install", ...rest]);
-  else {
-    if (!depsInstalled(action === "test" ? "test" : "build")) {
-      const installEnv =
-        action === "build"
-          ? { ...process.env, NODE_ENV: "production" }
-          : process.env;
-      const installArgs =
-        action === "build" ? ["install", "--prod"] : ["install"];
-      runSync(runner.cmd, installArgs, installEnv);
-    }
-    run(runner.cmd, ["run", script, ...rest]);
-  }
+  run(runner.cmd, ["run", script, ...rest]);
 }
