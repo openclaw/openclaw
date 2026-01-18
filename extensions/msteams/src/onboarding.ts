@@ -11,7 +11,10 @@ import { promptChannelAccessConfig } from "../../../src/channels/plugins/onboard
 import { addWildcardAllowFrom } from "../../../src/channels/plugins/onboarding/helpers.js";
 
 import { resolveMSTeamsCredentials } from "./token.js";
-import { resolveMSTeamsChannelAllowlist } from "./resolve-allowlist.js";
+import {
+  parseMSTeamsTeamEntry,
+  resolveMSTeamsChannelAllowlist,
+} from "./resolve-allowlist.js";
 
 const channel = "msteams" as const;
 
@@ -92,18 +95,6 @@ function setMSTeamsTeamsAllowlist(
       },
     },
   };
-}
-
-function parseMSTeamsTeamEntry(raw: string): { teamKey: string; channelKey?: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const parts = trimmed.split("/");
-  const teamPart = parts[0]?.trim();
-  if (!teamPart) return null;
-  const channelPart = parts.length > 1 ? parts.slice(1).join("/").trim() : undefined;
-  const teamKey = teamPart.replace(/^team:/i, "").trim();
-  const channelKey = channelPart ? channelPart.replace(/^#/, "").trim() : undefined;
-  return { teamKey, ...(channelKey ? { channelKey } : {}) };
 }
 
 const dmPolicy: ChannelOnboardingDmPolicy = {

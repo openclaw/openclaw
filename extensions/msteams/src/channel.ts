@@ -9,6 +9,10 @@ import { msteamsOnboardingAdapter } from "./onboarding.js";
 import { msteamsOutbound } from "./outbound.js";
 import { probeMSTeams } from "./probe.js";
 import {
+  normalizeMSTeamsMessagingTarget,
+  normalizeMSTeamsUserInput,
+  parseMSTeamsConversationId,
+  parseMSTeamsTeamChannelInput,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
@@ -35,21 +39,6 @@ const meta = {
   aliases: ["teams"],
   order: 60,
 } as const;
-
-function normalizeMSTeamsMessagingTarget(raw: string): string | undefined {
-  let trimmed = raw.trim();
-  if (!trimmed) return undefined;
-  if (/^(msteams|teams):/i.test(trimmed)) {
-    trimmed = trimmed.replace(/^(msteams|teams):/i, "");
-  }
-  if (/^conversation:/i.test(trimmed)) {
-    return `conversation:${trimmed.slice("conversation:".length).trim()}`;
-  }
-  if (/^user:/i.test(trimmed)) {
-    return `user:${trimmed.slice("user:".length).trim()}`;
-  }
-  return trimmed;
-}
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   id: "msteams",
@@ -214,10 +203,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
       }));
 
       const stripPrefix = (value: string) =>
-        value
-          .replace(/^(msteams|teams):/i, "")
-          .replace(/^(user|conversation):/i, "")
-          .trim();
+        normalizeMSTeamsUserInput(value);
 
       if (kind === "user") {
         const pending: Array<{ input: string; query: string; index: number }> = [];
@@ -269,25 +255,20 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
           entry.note = "empty input";
           return;
         }
-        if (/^conversation:/i.test(trimmed)) {
-          const id = trimmed.replace(/^conversation:/i, "").trim();
-          if (id) {
-            entry.resolved = true;
-            entry.id = id;
-            entry.note = "conversation id";
-          } else {
-            entry.note = "empty conversation id";
-          }
+        const conversationId = parseMSTeamsConversationId(trimmed);
+        if (conversationId !== null) {
+          entry.resolved = Boolean(conversationId);
+          entry.id = conversationId || undefined;
+          entry.note = conversationId ? "conversation id" : "empty conversation id";
           return;
         }
-        pending.push({
-          input: entry.input,
-          query: trimmed
-            .replace(/^(msteams|teams):/i, "")
-            .replace(/^team:/i, "")
-            .trim(),
-          index,
-        });
+        const parsed = parseMSTeamsTeamChannelInput(trimmed);
+        if (!parsed.team) {
+          entry.note = "missing team";
+          return;
+        }
+        const query = parsed.channel ? `${parsed.team}/${parsed.channel}` : parsed.team;
+        pending.push({ input: entry.input, query, index });
       });
 
       if (pending.length > 0) {
