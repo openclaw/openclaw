@@ -274,10 +274,20 @@ async function processMessage(
   });
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
+  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: timestamp ? timestamp * 1000 : undefined,
+    previousTimestamp,
+    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -301,9 +311,6 @@ async function processMessage(
     OriginatingTo: `zalouser:${chatId}`,
   });
 
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
   void core.channel.session.recordSessionMetaFromInbound({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,

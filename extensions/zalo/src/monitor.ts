@@ -530,10 +530,20 @@ async function processMessageWithPipeline(params: {
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
+  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
+    previousTimestamp,
+    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -560,9 +570,6 @@ async function processMessageWithPipeline(params: {
     OriginatingTo: `zalo:${chatId}`,
   });
 
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
   void core.channel.session.recordSessionMetaFromInbound({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,

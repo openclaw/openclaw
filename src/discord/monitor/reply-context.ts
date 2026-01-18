@@ -1,11 +1,12 @@
 import type { Guild, Message, User } from "@buape/carbon";
 
-import { formatAgentEnvelope } from "../../auto-reply/envelope.js";
+import { formatAgentEnvelope, type EnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { formatDiscordUserTag, resolveTimestampMs } from "./format.js";
 
 export function resolveReplyContext(
   message: Message,
   resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
+  options?: { envelope?: EnvelopeFormatOptions },
 ): string | null {
   const referenced = message.referencedMessage;
   if (!referenced?.author) return null;
@@ -20,6 +21,7 @@ export function resolveReplyContext(
     from: fromLabel,
     timestamp: resolveTimestampMs(referenced.timestamp),
     body,
+    envelope: options?.envelope,
   });
 }
 

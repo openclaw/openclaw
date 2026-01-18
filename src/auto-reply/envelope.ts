@@ -1,5 +1,7 @@
+import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -8,31 +10,162 @@ export type AgentEnvelopeParams = {
   host?: string;
   ip?: string;
   body: string;
+  previousTimestamp?: number | Date;
+  envelope?: EnvelopeFormatOptions;
 };
 
-function formatTimestamp(ts?: number | Date): string | undefined {
-  if (!ts) return undefined;
-  const date = ts instanceof Date ? ts : new Date(ts);
-  if (Number.isNaN(date.getTime())) return undefined;
+export type EnvelopeFormatOptions = {
+  /**
+   * "utc" (default), "local", "user", or an explicit IANA timezone string.
+   */
+  timezone?: string;
+  /**
+   * Include absolute timestamps in the envelope (default: true).
+   */
+  includeTimestamp?: boolean;
+  /**
+   * Include elapsed time suffix when previousTimestamp is provided (default: true).
+   */
+  includeElapsed?: boolean;
+  /**
+   * Optional user timezone used when timezone="user".
+   */
+  userTimezone?: string;
+};
 
+type ResolvedEnvelopeTimezone =
+  | { mode: "utc" }
+  | { mode: "local" }
+  | { mode: "iana"; timeZone: string };
+
+export function resolveEnvelopeFormatOptions(cfg?: ClawdbotConfig): EnvelopeFormatOptions {
+  const defaults = cfg?.agents?.defaults;
+  return {
+    timezone: defaults?.envelopeTimezone,
+    includeTimestamp: defaults?.envelopeTimestamp !== "off",
+    includeElapsed: defaults?.envelopeElapsed !== "off",
+    userTimezone: defaults?.userTimezone,
+  };
+}
+
+function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): Required<EnvelopeFormatOptions> {
+  const includeTimestamp = options?.includeTimestamp !== false;
+  const includeElapsed = options?.includeElapsed !== false;
+  return {
+    timezone: options?.timezone?.trim() || "utc",
+    includeTimestamp,
+    includeElapsed,
+    userTimezone: options?.userTimezone,
+  };
+}
+
+function resolveExplicitTimezone(value: string): string | undefined {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveEnvelopeTimezone(options: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+  const trimmed = options.timezone?.trim();
+  if (!trimmed) return { mode: "utc" };
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "utc" || lowered === "gmt") return { mode: "utc" };
+  if (lowered === "local" || lowered === "host") return { mode: "local" };
+  if (lowered === "user") {
+    return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
+  }
+  const explicit = resolveExplicitTimezone(trimmed);
+  return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
+}
+
+function formatUtcTimestamp(date: Date): string {
   const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
   const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(date.getUTCDate()).padStart(2, "0");
   const hh = String(date.getUTCHours()).padStart(2, "0");
   const min = String(date.getUTCMinutes()).padStart(2, "0");
-
-  // Compact ISO-like UTC timestamp with minutes precision.
-  // Example: 2025-01-02T03:04Z
   return `${yyyy}-${mm}-${dd}T${hh}:${min}Z`;
+}
+
+function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "short",
+  }).formatToParts(date);
+  const pick = (type: string) => parts.find((part) => part.type === type)?.value;
+  const yyyy = pick("year");
+  const mm = pick("month");
+  const dd = pick("day");
+  const hh = pick("hour");
+  const min = pick("minute");
+  const tz = [...parts]
+    .reverse()
+    .find((part) => part.type === "timeZoneName")
+    ?.value?.trim();
+  if (!yyyy || !mm || !dd || !hh || !min) return undefined;
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
+}
+
+function formatTimestamp(ts: number | Date | undefined, options?: EnvelopeFormatOptions): string | undefined {
+  if (!ts) return undefined;
+  const resolved = normalizeEnvelopeOptions(options);
+  if (!resolved.includeTimestamp) return undefined;
+  const date = ts instanceof Date ? ts : new Date(ts);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const zone = resolveEnvelopeTimezone(resolved);
+  if (zone.mode === "utc") return formatUtcTimestamp(date);
+  if (zone.mode === "local") return formatZonedTimestamp(date);
+  return formatZonedTimestamp(date, zone.timeZone);
+}
+
+function formatElapsedTime(currentMs: number, previousMs: number): string | undefined {
+  const elapsedMs = currentMs - previousMs;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return undefined;
+
+  const seconds = Math.floor(elapsedMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const channel = params.channel?.trim() || "Channel";
   const parts: string[] = [channel];
-  if (params.from?.trim()) parts.push(params.from.trim());
+  const resolved = normalizeEnvelopeOptions(params.envelope);
+  const elapsed =
+    resolved.includeElapsed && params.timestamp && params.previousTimestamp
+      ? formatElapsedTime(
+          params.timestamp instanceof Date ? params.timestamp.getTime() : params.timestamp,
+          params.previousTimestamp instanceof Date
+            ? params.previousTimestamp.getTime()
+            : params.previousTimestamp,
+        )
+      : undefined;
+  if (params.from?.trim()) {
+    const from = params.from.trim();
+    parts.push(elapsed ? `${from} +${elapsed}` : from);
+  } else if (elapsed) {
+    parts.push(`+${elapsed}`);
+  }
   if (params.host?.trim()) parts.push(params.host.trim());
   if (params.ip?.trim()) parts.push(params.ip.trim());
-  const ts = formatTimestamp(params.timestamp);
+  const ts = formatTimestamp(params.timestamp, resolved);
   if (ts) parts.push(ts);
   const header = `[${parts.join(" ")}]`;
   return `${header} ${params.body}`;
@@ -46,6 +179,8 @@ export function formatInboundEnvelope(params: {
   chatType?: string;
   senderLabel?: string;
   sender?: SenderLabelParams;
+  previousTimestamp?: number | Date;
+  envelope?: EnvelopeFormatOptions;
 }): string {
   const chatType = normalizeChatType(params.chatType);
   const isDirect = !chatType || chatType === "direct";
@@ -55,6 +190,8 @@ export function formatInboundEnvelope(params: {
     channel: params.channel,
     from: params.from,
     timestamp: params.timestamp,
+    previousTimestamp: params.previousTimestamp,
+    envelope: params.envelope,
     body,
   });
 }
@@ -85,11 +222,13 @@ export function formatThreadStarterEnvelope(params: {
   author?: string;
   timestamp?: number | Date;
   body: string;
+  envelope?: EnvelopeFormatOptions;
 }): string {
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.author,
     timestamp: params.timestamp,
+    envelope: params.envelope,
     body: params.body,
   });
 }

@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { agentCommand } from "../../commands/agent.js";
 import { mergeSessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -300,10 +301,20 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+      const envelopedMessage = formatInboundEnvelope({
+        channel: "WebChat",
+        from: p.sessionKey,
+        timestamp: now,
+        body: parsedMessage,
+        chatType: "direct",
+        previousTimestamp: entry?.updatedAt,
+        envelope: envelopeOptions,
+      });
       const lane = isAcpSessionKey(p.sessionKey) ? p.sessionKey : undefined;
       void agentCommand(
         {
-          message: parsedMessage,
+          message: envelopedMessage,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           sessionId,
           sessionKey: p.sessionKey,

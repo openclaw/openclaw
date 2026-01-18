@@ -172,6 +172,9 @@ const FIELD_LABELS: Record<string, string> = {
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
+  "agents.defaults.envelopeTimezone": "Envelope Timezone",
+  "agents.defaults.envelopeTimestamp": "Envelope Timestamp",
+  "agents.defaults.envelopeElapsed": "Envelope Elapsed",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
@@ -371,6 +374,12 @@ const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+  "agents.defaults.envelopeTimezone":
+    'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
+  "agents.defaults.envelopeTimestamp":
+    'Include absolute timestamps in message envelopes ("on" or "off").',
+  "agents.defaults.envelopeElapsed":
+    'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",

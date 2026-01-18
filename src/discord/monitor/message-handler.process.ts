@@ -8,7 +8,11 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import { formatInboundEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  formatThreadStarterEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import {
   buildPendingHistoryContextFromMap,
@@ -18,6 +22,7 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
+  readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
   updateLastRoute,
@@ -137,6 +142,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const previousTimestamp = readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -144,6 +157,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     body: text,
     chatType: isDirectMessage ? "direct" : "channel",
     senderLabel,
+    previousTimestamp,
+    envelope: envelopeOptions,
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
@@ -161,10 +176,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
           chatType: "channel",
           senderLabel: entry.sender,
+          envelope: envelopeOptions,
         }),
     });
   }
-  const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
+  const replyContext = resolveReplyContext(message, resolveDiscordMessageText, {
+    envelope: envelopeOptions,
+  });
   if (replyContext) {
     combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
   }
@@ -186,6 +204,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         author: starter.author,
         timestamp: starter.timestamp,
         body: starter.text,
+        envelope: envelopeOptions,
       });
       threadStarterBody = starterEnvelope;
     }
@@ -268,9 +287,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
   });
 
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId: route.agentId,
-  });
   void recordSessionMetaFromInbound({
     storePath,
     sessionKey: ctxPayload.SessionKey ?? route.sessionKey,

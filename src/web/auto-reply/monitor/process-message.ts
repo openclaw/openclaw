@@ -8,7 +8,10 @@ import {
   type ResponsePrefixContext,
 } from "../../../auto-reply/reply/response-prefix-template.js";
 import { resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
-import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
+import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "../../../auto-reply/envelope.js";
 import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
@@ -20,7 +23,11 @@ import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-dete
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
 import { toLocationContext } from "../../../channels/location.js";
 import type { loadConfig } from "../../../config/config.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../../config/sessions.js";
+import {
+  readSessionUpdatedAt,
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+} from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
@@ -121,10 +128,20 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.route.agentId,
+  });
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
+  const previousTimestamp = readSessionUpdatedAt({
+    storePath,
+    sessionKey: params.route.sessionKey,
+  });
   let combinedBody = buildInboundLine({
     cfg: params.cfg,
     msg: params.msg,
     agentId: params.route.agentId,
+    previousTimestamp,
+    envelope: envelopeOptions,
   });
   let shouldClearGroupHistory = false;
 
@@ -152,6 +169,7 @@ export async function processMessage(params: {
             body: bodyWithId,
             chatType: "group",
             senderLabel: entry.sender,
+            envelope: envelopeOptions,
           });
         },
       });
@@ -288,9 +306,6 @@ export async function processMessage(params: {
     });
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.route.agentId,
-  });
   const metaTask = recordSessionMetaFromInbound({
     storePath,
     sessionKey: params.route.sessionKey,

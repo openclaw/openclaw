@@ -176,7 +176,7 @@ describe("createTelegramBot", () => {
     expect(payload.WasMentioned).toBe(true);
     expect(payload.SenderName).toBe("Ada");
     expect(payload.SenderId).toBe("9");
-    expect(payload.Body).toMatch(/^\[Telegram Test Group id:7 2025-01-09T00:00Z\]/);
+    expect(payload.Body).toMatch(/^\[Telegram Test Group id:7 (\+\d+[smhd] )?2025-01-09T00:00Z\]/);
   });
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
     onSpy.mockReset();
@@ -217,7 +217,7 @@ describe("createTelegramBot", () => {
     expect(payload.SenderName).toBe("Ada Lovelace");
     expect(payload.SenderId).toBe("99");
     expect(payload.SenderUsername).toBe("ada");
-    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 2025-01-09T00:00Z\]/);
+    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 (\+\d+[smhd] )?2025-01-09T00:00Z\]/);
   });
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
     onSpy.mockReset();

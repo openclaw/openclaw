@@ -836,10 +836,20 @@ async function processMessage(
   const fromLabel = message.isGroup
     ? `group:${peerId}`
     : message.senderName || `user:${message.senderId}`;
+  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
+  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+    storePath,
+    sessionKey: route.sessionKey,
+  });
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "BlueBubbles",
     from: fromLabel,
     timestamp: message.timestamp,
+    previousTimestamp,
+    envelope: envelopeOptions,
     body: rawBody,
   });
   let chatGuidForActions = chatGuid;

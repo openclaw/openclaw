@@ -155,6 +155,18 @@ export function loadSessionStore(
   return structuredClone(store);
 }
 
+export function readSessionUpdatedAt(params: {
+  storePath: string;
+  sessionKey: string;
+}): number | undefined {
+  try {
+    const store = loadSessionStore(params.storePath);
+    return store[params.sessionKey]?.updatedAt;
+  } catch {
+    return undefined;
+  }
+}
+
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
