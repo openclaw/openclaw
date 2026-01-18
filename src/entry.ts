@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
+import { isTruthyEnvValue } from "./infra/env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 process.title = "clawdbot";
@@ -20,7 +21,8 @@ function hasExperimentalWarningSuppressed(nodeOptions: string): boolean {
 }
 
 function ensureExperimentalWarningSuppressed(): boolean {
-  if (process.env.CLAWDBOT_NODE_OPTIONS_READY === "1") return false;
+  if (isTruthyEnvValue(process.env.CLAWDBOT_NO_RESPAWN)) return false;
+  if (isTruthyEnvValue(process.env.CLAWDBOT_NODE_OPTIONS_READY)) return false;
   const nodeOptions = process.env.NODE_OPTIONS ?? "";
   if (hasExperimentalWarningSuppressed(nodeOptions)) return false;
 

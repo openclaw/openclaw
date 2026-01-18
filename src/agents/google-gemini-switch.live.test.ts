@@ -1,8 +1,10 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { isTruthyEnvValue } from "../infra/env.js";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
-const LIVE = process.env.GEMINI_LIVE_TEST === "1" || process.env.LIVE === "1";
+const LIVE =
+  isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && GEMINI_KEY ? describe : describe.skip;
 

@@ -1,6 +1,7 @@
 import type express from "express";
 
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 
 /**
  * Extract profile name from query string or body and get profile context.
@@ -54,13 +55,10 @@ export function toNumber(value: unknown) {
 }
 
 export function toBoolean(value: unknown) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const v = value.trim().toLowerCase();
-    if (v === "true" || v === "1" || v === "yes") return true;
-    if (v === "false" || v === "0" || v === "no") return false;
-  }
-  return undefined;
+  return parseBooleanValue(value, {
+    truthy: ["true", "1", "yes"],
+    falsy: ["false", "0", "no"],
+  });
 }
 
 export function toStringArray(value: unknown): string[] | undefined {

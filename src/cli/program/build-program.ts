@@ -16,6 +16,7 @@ import { registerSubCliCommands } from "./register.subclis.js";
 export function buildProgram() {
   const program = new Command();
   const ctx = createProgramContext();
+  const argv = process.argv;
 
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
@@ -29,7 +30,7 @@ export function buildProgram() {
   registerAgentCommands(program, {
     agentChannelOptions: ctx.agentChannelOptions,
   });
-  registerSubCliCommands(program);
+  registerSubCliCommands(program, argv);
   registerStatusHealthSessionsCommands(program);
   registerBrowserCli(program);
 

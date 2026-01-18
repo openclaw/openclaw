@@ -3,6 +3,7 @@ import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-age
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
@@ -14,9 +15,10 @@ import { getApiKeyForModel } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
 
-const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
+const LIVE =
+  isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.CLAWDBOT_LIVE_TEST);
 const DIRECT_ENABLED = Boolean(process.env.CLAWDBOT_LIVE_MODELS?.trim());
-const REQUIRE_PROFILE_KEYS = process.env.CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS === "1";
+const REQUIRE_PROFILE_KEYS = isTruthyEnvValue(process.env.CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS);
 
 const describeLive = LIVE ? describe : describe.skip;
 

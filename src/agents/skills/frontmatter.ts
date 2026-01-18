@@ -2,6 +2,7 @@ import JSON5 from "json5";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
 import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 import type {
   ClawdbotSkillMetadata,
   ParsedSkillFrontmatter,
@@ -59,16 +60,8 @@ function getFrontmatterValue(frontmatter: ParsedSkillFrontmatter, key: string): 
 }
 
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  if (!value) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return fallback;
+  const parsed = parseBooleanValue(value);
+  return parsed === undefined ? fallback : parsed;
 }
 
 export function resolveClawdbotMetadata(

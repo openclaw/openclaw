@@ -1,11 +1,13 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { isTruthyEnvValue } from "../infra/env.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
-const LIVE = process.env.OPENAI_LIVE_TEST === "1" || process.env.LIVE === "1";
+const LIVE =
+  isTruthyEnvValue(process.env.OPENAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
 
 const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 

@@ -8,6 +8,8 @@ import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { installUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { enableConsoleCapture } from "../logging.js";
+import { hasHelpOrVersion } from "./argv.js";
+import { tryRouteCli } from "./route.js";
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -28,6 +30,8 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
+
+  if (await tryRouteCli(argv)) return;
 
   const { buildProgram } = await import("./program.js");
   const program = buildProgram();

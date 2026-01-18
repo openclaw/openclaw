@@ -1,6 +1,7 @@
 import JSON5 from "json5";
 
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import type {
   ClawdbotHookMetadata,
   HookEntry,
@@ -57,16 +58,8 @@ function getFrontmatterValue(frontmatter: ParsedHookFrontmatter, key: string): s
 }
 
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
-  if (!value) return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
-    return false;
-  }
-  return fallback;
+  const parsed = parseBooleanValue(value);
+  return parsed === undefined ? fallback : parsed;
 }
 
 export function resolveClawdbotMetadata(
