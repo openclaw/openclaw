@@ -212,11 +212,11 @@ export {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "../discord/accounts.js";
+export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "../discord/audit.js";
 export {
-  auditDiscordChannelPermissions,
-  collectDiscordAuditChannelIds,
-} from "../discord/audit.js";
-export { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "../discord/directory-live.js";
+  listDiscordDirectoryGroupsLive,
+  listDiscordDirectoryPeersLive,
+} from "../discord/directory-live.js";
 export { probeDiscord } from "../discord/probe.js";
 export { resolveDiscordChannelAllowlist } from "../discord/resolve-channels.js";
 export { resolveDiscordUserAllowlist } from "../discord/resolve-users.js";
@@ -238,7 +238,10 @@ export {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "../slack/accounts.js";
-export { listSlackDirectoryGroupsLive, listSlackDirectoryPeersLive } from "../slack/directory-live.js";
+export {
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+} from "../slack/directory-live.js";
 export { probeSlack } from "../slack/probe.js";
 export { resolveSlackChannelAllowlist } from "../slack/resolve-channels.js";
 export { resolveSlackUserAllowlist } from "../slack/resolve-users.js";

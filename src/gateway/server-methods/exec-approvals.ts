@@ -130,9 +130,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     const currentSocketPath = snapshot.file.socket?.path?.trim();
     const currentToken = snapshot.file.socket?.token?.trim();
     const socketPath =
-      normalized.socket?.path?.trim() ??
-      currentSocketPath ??
-      resolveExecApprovalsSocketPath();
+      normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
     const token = normalized.socket?.token?.trim() ?? currentToken ?? "";
     const next: ExecApprovalsFile = {
       ...normalized,
