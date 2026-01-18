@@ -205,7 +205,7 @@ private enum ExecApprovalsPromptPresenter {
     }
 }
 
-private final class ExecApprovalsSocketServer {
+private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private let logger = Logger(subsystem: "com.clawdbot", category: "exec-approvals.socket")
     private let socketPath: String
     private let token: String
