@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, vi } from "vitest";
 
-import type { ChannelId, ChannelOutboundAdapter, ChannelPlugin } from "../src/channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+} from "../src/channels/plugins/types.js";
 import type { ClawdbotConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -97,8 +101,16 @@ const createStubPlugin = (params: {
 
 const createDefaultRegistry = () =>
   createTestRegistry([
-    { pluginId: "discord", plugin: createStubPlugin({ id: "discord", label: "Discord" }), source: "test" },
-    { pluginId: "slack", plugin: createStubPlugin({ id: "slack", label: "Slack" }), source: "test" },
+    {
+      pluginId: "discord",
+      plugin: createStubPlugin({ id: "discord", label: "Discord" }),
+      source: "test",
+    },
+    {
+      pluginId: "slack",
+      plugin: createStubPlugin({ id: "slack", label: "Slack" }),
+      source: "test",
+    },
     {
       pluginId: "telegram",
       plugin: {
@@ -122,7 +134,11 @@ const createDefaultRegistry = () =>
       }),
       source: "test",
     },
-    { pluginId: "signal", plugin: createStubPlugin({ id: "signal", label: "Signal" }), source: "test" },
+    {
+      pluginId: "signal",
+      plugin: createStubPlugin({ id: "signal", label: "Signal" }),
+      source: "test",
+    },
     {
       pluginId: "imessage",
       plugin: createStubPlugin({ id: "imessage", label: "iMessage", aliases: ["imsg"] }),

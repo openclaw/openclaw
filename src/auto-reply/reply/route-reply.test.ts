@@ -352,7 +352,11 @@ const emptyRegistry = createRegistry([]);
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "discord",
-    plugin: createOutboundTestPlugin({ id: "discord", outbound: discordOutbound, label: "Discord" }),
+    plugin: createOutboundTestPlugin({
+      id: "discord",
+      outbound: discordOutbound,
+      label: "Discord",
+    }),
     source: "test",
   },
   {

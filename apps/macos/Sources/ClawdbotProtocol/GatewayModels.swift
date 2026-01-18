@@ -1632,6 +1632,51 @@ public struct LogsTailResult: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsGetParams: Codable, Sendable {
+}
+
+public struct ExecApprovalsSetParams: Codable, Sendable {
+    public let file: [String: AnyCodable]
+    public let basehash: String?
+
+    public init(
+        file: [String: AnyCodable],
+        basehash: String?
+    ) {
+        self.file = file
+        self.basehash = basehash
+    }
+    private enum CodingKeys: String, CodingKey {
+        case file
+        case basehash = "baseHash"
+    }
+}
+
+public struct ExecApprovalsSnapshot: Codable, Sendable {
+    public let path: String
+    public let exists: Bool
+    public let hash: String
+    public let file: [String: AnyCodable]
+
+    public init(
+        path: String,
+        exists: Bool,
+        hash: String,
+        file: [String: AnyCodable]
+    ) {
+        self.path = path
+        self.exists = exists
+        self.hash = hash
+        self.file = file
+    }
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case exists
+        case hash
+        case file
+    }
+}
+
 public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?

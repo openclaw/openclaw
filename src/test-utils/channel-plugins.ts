@@ -8,9 +8,7 @@ import type {
 import type { PluginRegistry } from "../plugins/registry.js";
 import { normalizeIMessageHandle } from "../imessage/targets.js";
 
-export const createTestRegistry = (
-  channels: PluginRegistry["channels"] = [],
-): PluginRegistry => ({
+export const createTestRegistry = (channels: PluginRegistry["channels"] = []): PluginRegistry => ({
   plugins: [],
   tools: [],
   hooks: [],

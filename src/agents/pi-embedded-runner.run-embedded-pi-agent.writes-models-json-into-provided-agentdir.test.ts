@@ -56,9 +56,8 @@ const buildAssistantErrorMessage = (model: { api: string; provider: string; id: 
 
 const mockPiAi = () => {
   vi.doMock("@mariozechner/pi-ai", async () => {
-    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
-      "@mariozechner/pi-ai",
-    );
+    const actual =
+      await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
     return {
       ...actual,
       complete: async (model: { api: string; provider: string; id: string }) => {
