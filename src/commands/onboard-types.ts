@@ -26,6 +26,7 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "opencode-zen"
   | "github-copilot"
+  | "qwen-portal"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
