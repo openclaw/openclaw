@@ -42,6 +42,8 @@ describe("memory cli", () => {
           provider: "openai",
           model: "text-embedding-3-small",
           requestedProvider: "openai",
+          cache: { enabled: true, entries: 123, maxEntries: 50000 },
+          fts: { enabled: true, available: true },
           vector: {
             enabled: true,
             available: true,
@@ -62,6 +64,8 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embedding cache: enabled (123 entries)"));
     expect(close).toHaveBeenCalled();
   });
 
