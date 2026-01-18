@@ -511,6 +511,8 @@ Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by
 
 **Events**: `agent:bootstrap`
 
+**Docs**: [SOUL Evil Hook](/hooks/soul-evil)
+
 **Output**: No files written; swaps happen in-memory only.
 
 **Enable**:

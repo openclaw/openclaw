@@ -271,4 +271,4 @@ Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by
 clawdbot hooks enable soul-evil
 ```
 
-**See:** [soul-evil documentation](/hooks#soul-evil)
+**See:** [SOUL Evil Hook](/hooks/soul-evil)

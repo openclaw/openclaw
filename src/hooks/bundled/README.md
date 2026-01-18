@@ -39,6 +39,7 @@ Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by
 **Events**: `agent:bootstrap`
 **What it does**: Overrides the injected SOUL content before the system prompt is built.
 **Output**: No files written; swaps happen in-memory only.
+**Docs**: https://docs.clawd.bot/hooks/soul-evil
 
 **Enable**:
 
