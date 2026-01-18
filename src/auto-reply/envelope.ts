@@ -33,6 +33,13 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
+type NormalizedEnvelopeOptions = {
+  timezone: string;
+  includeTimestamp: boolean;
+  includeElapsed: boolean;
+  userTimezone?: string;
+};
+
 type ResolvedEnvelopeTimezone =
   | { mode: "utc" }
   | { mode: "local" }
@@ -48,7 +55,7 @@ export function resolveEnvelopeFormatOptions(cfg?: ClawdbotConfig): EnvelopeForm
   };
 }
 
-function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): Required<EnvelopeFormatOptions> {
+function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEnvelopeOptions {
   const includeTimestamp = options?.includeTimestamp !== false;
   const includeElapsed = options?.includeElapsed !== false;
   return {
@@ -68,7 +75,7 @@ function resolveExplicitTimezone(value: string): string | undefined {
   }
 }
 
-function resolveEnvelopeTimezone(options: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
   const trimmed = options.timezone?.trim();
   if (!trimmed) return { mode: "utc" };
   const lowered = trimmed.toLowerCase();
