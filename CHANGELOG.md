@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Memory: apply OpenAI batch defaults even without explicit remote config.
+- macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
 
 ## 2026.1.17-3
 
