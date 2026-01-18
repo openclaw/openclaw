@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
+- CLI: show Telegram bot username in channel status (probe/runtime).
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
