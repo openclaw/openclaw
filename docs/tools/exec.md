@@ -26,6 +26,11 @@ Note: `elevated` is ignored when sandboxing is off (exec already runs on the hos
 
 - `tools.exec.notifyOnExit` (default: true): when true, backgrounded exec sessions enqueue a system event and request a heartbeat on exit.
 
+## Exec approvals (macOS app)
+
+Sandboxed agents can require per-request approval before `exec` runs on the host.
+See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
+
 ## Examples
 
 Foreground:

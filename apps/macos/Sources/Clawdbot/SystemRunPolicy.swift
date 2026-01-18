@@ -18,7 +18,10 @@ enum SystemRunPolicy: String, CaseIterable, Identifiable {
         }
     }
 
-    static func load(from defaults: UserDefaults = .standard) -> SystemRunPolicy {
+    static func load(agentId: String? = nil, from defaults: UserDefaults = .standard) -> SystemRunPolicy {
+        if let policy = MacNodeConfigFile.systemRunPolicy(agentId: agentId) {
+            return policy
+        }
         if let policy = MacNodeConfigFile.systemRunPolicy() {
             return policy
         }
@@ -40,7 +43,7 @@ enum SystemRunPolicy: String, CaseIterable, Identifiable {
 }
 
 enum SystemRunAllowlist {
-    static func key(for argv: [String]) -> String {
+    static func legacyKey(for argv: [String]) -> String {
         let trimmed = argv.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard !trimmed.isEmpty else { return "" }
         if let data = try? JSONEncoder().encode(trimmed),
@@ -62,28 +65,14 @@ enum SystemRunAllowlist {
         }.joined(separator: " ")
     }
 
-    static func load(from defaults: UserDefaults = .standard) -> Set<String> {
-        if let allowlist = MacNodeConfigFile.systemRunAllowlist() {
+    static func loadLegacy(from defaults: UserDefaults = .standard) -> Set<String> {
+        if let allowlist = MacNodeConfigFile.systemRunAllowlistStrings() {
             return Set(allowlist)
         }
         if let legacy = defaults.stringArray(forKey: systemRunAllowlistKey), !legacy.isEmpty {
-            MacNodeConfigFile.setSystemRunAllowlist(legacy)
+            MacNodeConfigFile.setSystemRunAllowlistStrings(legacy)
             return Set(legacy)
         }
         return []
-    }
-
-    static func contains(_ argv: [String], defaults: UserDefaults = .standard) -> Bool {
-        let key = key(for: argv)
-        return self.load(from: defaults).contains(key)
-    }
-
-    static func add(_ argv: [String], defaults: UserDefaults = .standard) {
-        let key = key(for: argv)
-        guard !key.isEmpty else { return }
-        var allowlist = self.load(from: defaults)
-        if allowlist.insert(key).inserted {
-            MacNodeConfigFile.setSystemRunAllowlist(Array(allowlist).sorted())
-        }
     }
 }

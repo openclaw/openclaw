@@ -177,6 +177,7 @@ Notes:
 - If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - `elevated` is gated by `tools.elevated` plus any `agents.list[].tools.elevated` override (both must allow) and runs on the host.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
+- macOS app approvals/allowlists: [Exec approvals](/tools/exec-approvals).
 
 ### `process`
 Manage background exec sessions.

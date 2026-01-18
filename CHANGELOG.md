@@ -10,11 +10,13 @@ Docs: https://docs.clawd.bot
 - Models: add Qwen Portal OAuth provider support. (#1120) — thanks @mukhtharcm.
 - Memory: add `--verbose` logging for memory status + batch indexing details.
 - Memory: allow parallel OpenAI batch indexing jobs (default concurrency: 2).
+- macOS: add per-agent exec approvals with allowlists, skill CLI auto-allow, and settings UI.
+- Docs: add exec approvals guide and link from tools index. https://docs.clawd.bot/tools/exec-approvals
 
 ### Fixes
 - Memory: apply OpenAI batch defaults even without explicit remote config.
 - macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
-
+- Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
 ## 2026.1.17-3
 
 ### Changes

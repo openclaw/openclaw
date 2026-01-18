@@ -9,6 +9,13 @@ enum SystemRunDecision: Sendable {
     case deny
 }
 
+struct SystemRunPromptContext: Sendable {
+    let command: String
+    let cwd: String?
+    let agentId: String?
+    let executablePath: String?
+}
+
 @MainActor
 protocol MacNodeRuntimeMainActorServices: Sendable {
     func recordScreen(
@@ -25,7 +32,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
 
-    func confirmSystemRun(command: String, cwd: String?) async -> SystemRunDecision
+    func confirmSystemRun(context: SystemRunPromptContext) async -> SystemRunDecision
 }
 
 @MainActor
@@ -67,15 +74,23 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             timeoutMs: timeoutMs)
     }
 
-    func confirmSystemRun(command: String, cwd: String?) async -> SystemRunDecision {
+    func confirmSystemRun(context: SystemRunPromptContext) async -> SystemRunDecision {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Allow this command?"
 
-        var details = "Clawdbot wants to run:\n\n\(command)"
-        let trimmedCwd = cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var details = "Clawdbot wants to run:\n\n\(context.command)"
+        let trimmedCwd = context.cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedCwd.isEmpty {
             details += "\n\nWorking directory:\n\(trimmedCwd)"
+        }
+        let trimmedAgent = context.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedAgent.isEmpty {
+            details += "\n\nAgent:\n\(trimmedAgent)"
+        }
+        let trimmedPath = context.executablePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPath.isEmpty {
+            details += "\n\nExecutable:\n\(trimmedPath)"
         }
         details += "\n\nThis runs on this Mac via node mode."
         alert.informativeText = details

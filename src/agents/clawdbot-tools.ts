@@ -74,7 +74,10 @@ export function createClawdbotTools(options?: {
       allowedControlPorts: options?.allowedControlPorts,
     }),
     createCanvasTool(),
-    createNodesTool(),
+    createNodesTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),

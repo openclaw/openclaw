@@ -428,8 +428,32 @@ actor MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
         }
 
-        let wasAllowlisted = SystemRunAllowlist.contains(command)
-        switch Self.systemRunPolicy() {
+        let trimmedAgent = params.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let agentId = trimmedAgent.isEmpty ? nil : trimmedAgent
+        let policy = SystemRunPolicy.load(agentId: agentId)
+        let allowlistEntries = SystemRunAllowlistStore.load(agentId: agentId)
+        let resolution = SystemRunCommandResolution.resolve(command: command, cwd: params.cwd)
+        let allowlistMatch = SystemRunAllowlistStore.match(
+            command: command,
+            resolution: resolution,
+            entries: allowlistEntries)
+        let autoAllowSkills = MacNodeConfigFile.systemRunAutoAllowSkills(agentId: agentId) ?? false
+        let skillAllow: Bool
+        if autoAllowSkills, let name = resolution?.executableName {
+            let bins = await SkillBinsCache.shared.currentBins()
+            skillAllow = bins.contains(name)
+        } else {
+            skillAllow = false
+        }
+
+        let shouldPrompt: Bool = {
+            if policy == .never { return false }
+            if allowlistMatch != nil { return false }
+            if skillAllow { return false }
+            return policy == .ask
+        }()
+
+        switch policy {
         case .never:
             return Self.errorResponse(
                 req,
@@ -438,16 +462,24 @@ actor MacNodeRuntime {
         case .always:
             break
         case .ask:
-            if !wasAllowlisted {
+            if shouldPrompt {
                 let services = await self.mainActorServices()
-                let decision = await services.confirmSystemRun(
+                let decision = await services.confirmSystemRun(context: SystemRunPromptContext(
                     command: SystemRunAllowlist.displayString(for: command),
-                    cwd: params.cwd)
+                    cwd: params.cwd,
+                    agentId: agentId,
+                    executablePath: resolution?.resolvedPath))
                 switch decision {
                 case .allowOnce:
                     break
                 case .allowAlways:
-                    SystemRunAllowlist.add(command)
+                    if let resolvedPath = resolution?.resolvedPath, !resolvedPath.isEmpty {
+                        _ = SystemRunAllowlistStore.add(pattern: resolvedPath, agentId: agentId)
+                    } else if let raw = command.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !raw.isEmpty
+                    {
+                        _ = SystemRunAllowlistStore.add(pattern: raw, agentId: agentId)
+                    }
                 case .deny:
                     return Self.errorResponse(
                         req,
@@ -455,6 +487,14 @@ actor MacNodeRuntime {
                         message: "SYSTEM_RUN_DENIED: user denied")
                 }
             }
+        }
+
+        if let match = allowlistMatch {
+            SystemRunAllowlistStore.markUsed(
+                entryId: match.id,
+                command: command,
+                resolvedPath: resolution?.resolvedPath,
+                agentId: agentId)
         }
 
         let env = Self.sanitizedEnv(params.env)
