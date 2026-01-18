@@ -95,6 +95,8 @@ actor MacNodeBridgePairingClient {
                     displayName: hello.displayName,
                     platform: hello.platform,
                     version: hello.version,
+                    coreVersion: hello.coreVersion,
+                    uiVersion: hello.uiVersion,
                     deviceFamily: hello.deviceFamily,
                     modelIdentifier: hello.modelIdentifier,
                     caps: hello.caps,

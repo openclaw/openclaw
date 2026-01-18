@@ -8,6 +8,8 @@ struct BridgeNodeInfo: Sendable {
     var displayName: String?
     var platform: String?
     var version: String?
+    var coreVersion: String?
+    var uiVersion: String?
     var deviceFamily: String?
     var modelIdentifier: String?
     var remoteAddress: String?
@@ -147,6 +149,8 @@ actor BridgeConnectionHandler {
                         displayName: hello.displayName,
                         platform: hello.platform,
                         version: hello.version,
+                        coreVersion: hello.coreVersion,
+                        uiVersion: hello.uiVersion,
                         deviceFamily: hello.deviceFamily,
                         modelIdentifier: hello.modelIdentifier,
                         remoteAddress: self.remoteAddressString(),
@@ -171,6 +175,8 @@ actor BridgeConnectionHandler {
                 displayName: req.displayName,
                 platform: req.platform,
                 version: req.version,
+                coreVersion: req.coreVersion,
+                uiVersion: req.uiVersion,
                 deviceFamily: req.deviceFamily,
                 modelIdentifier: req.modelIdentifier,
                 caps: req.caps,
@@ -186,6 +192,8 @@ actor BridgeConnectionHandler {
                         displayName: enriched.displayName,
                         platform: enriched.platform,
                         version: enriched.version,
+                        coreVersion: enriched.coreVersion,
+                        uiVersion: enriched.uiVersion,
                         deviceFamily: enriched.deviceFamily,
                         modelIdentifier: enriched.modelIdentifier,
                         remoteAddress: enriched.remoteAddress,

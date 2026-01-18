@@ -249,6 +249,13 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func cachedGatewayVersion() -> String? {
+        guard let snapshot = self.lastSnapshot else { return nil }
+        let raw = snapshot.server["version"]?.value as? String
+        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func snapshotPaths() -> (configPath: String?, stateDir: String?) {
         guard let snapshot = self.lastSnapshot else { return (nil, nil) }
         let configPath = snapshot.snapshot.configpath?.trimmingCharacters(in: .whitespacesAndNewlines)

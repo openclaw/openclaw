@@ -35,8 +35,9 @@ struct NodeMenuEntryFormatter {
         if let platform = self.platformText(entry) {
             parts.append("platform \(platform)")
         }
-        if let version = entry.version?.nonEmpty {
-            parts.append("app \(self.compactVersion(version))")
+        let versionLabels = self.versionLabels(entry)
+        if !versionLabels.isEmpty {
+            parts.append(versionLabels.joined(separator: " · "))
         }
         parts.append("status \(self.roleText(entry))")
         return parts.joined(separator: " · ")
@@ -60,8 +61,9 @@ struct NodeMenuEntryFormatter {
     }
 
     static func detailRightVersion(_ entry: NodeInfo) -> String? {
-        guard let version = entry.version?.nonEmpty else { return nil }
-        return self.shortVersionLabel(version)
+        let labels = self.versionLabels(entry, compact: false)
+        if labels.isEmpty { return nil }
+        return labels.joined(separator: " · ")
     }
 
     static func platformText(_ entry: NodeInfo) -> String? {
@@ -125,6 +127,39 @@ struct NodeMenuEntryFormatter {
             return "v\(compact)"
         }
         return compact
+    }
+
+    private static func versionLabels(_ entry: NodeInfo, compact: Bool = true) -> [String] {
+        let (core, ui) = self.resolveVersions(entry)
+        var labels: [String] = []
+        if let core {
+            let label = compact ? self.compactVersion(core) : self.shortVersionLabel(core)
+            labels.append("core \(label)")
+        }
+        if let ui {
+            let label = compact ? self.compactVersion(ui) : self.shortVersionLabel(ui)
+            labels.append("ui \(label)")
+        }
+        return labels
+    }
+
+    private static func resolveVersions(_ entry: NodeInfo) -> (core: String?, ui: String?) {
+        let core = entry.coreVersion?.nonEmpty
+        let ui = entry.uiVersion?.nonEmpty
+        if core != nil || ui != nil {
+            return (core, ui)
+        }
+        guard let legacy = entry.version?.nonEmpty else { return (nil, nil) }
+        if self.isHeadlessPlatform(entry) {
+            return (legacy, nil)
+        }
+        return (nil, legacy)
+    }
+
+    private static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
+        let raw = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows" { return true }
+        return false
     }
 
     static func leadingSymbol(_ entry: NodeInfo) -> String {

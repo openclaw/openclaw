@@ -7,6 +7,8 @@ struct NodeInfo: Identifiable, Codable {
     let displayName: String?
     let platform: String?
     let version: String?
+    let coreVersion: String?
+    let uiVersion: String?
     let deviceFamily: String?
     let modelIdentifier: String?
     let remoteIp: String?
