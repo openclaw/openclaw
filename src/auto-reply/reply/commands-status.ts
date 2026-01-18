@@ -27,6 +27,7 @@ import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { resolveSubagentLabel } from "./subagents-utils.js";
 
 function formatApiKeySnippet(apiKey: string): string {
   const compact = apiKey.replace(/\s+/g, "");
@@ -187,7 +188,7 @@ export async function buildStatusReply(params: {
       const done = runs.length - active.length;
       if (verboseEnabled) {
         const labels = active
-          .map((entry) => entry.label?.trim() || entry.task?.trim() || "")
+          .map((entry) => resolveSubagentLabel(entry, ""))
           .filter(Boolean)
           .slice(0, 3);
         const labelText = labels.length ? ` (${labels.join(", ")})` : "";
