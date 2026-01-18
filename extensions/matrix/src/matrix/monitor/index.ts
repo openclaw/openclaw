@@ -16,6 +16,7 @@ import {
 import { createReplyDispatcherWithTyping } from "../../../../../src/auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../../../../src/channels/command-gating.js";
+import { formatAllowlistMatchMeta } from "../../../../../src/channels/plugins/allowlist-match.js";
 import { loadConfig } from "../../../../../src/config/config.js";
 import { resolveStorePath, updateLastRoute } from "../../../../../src/config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
@@ -326,9 +327,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
             userId: senderId,
             userName: senderName,
           });
-          const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
-            allowMatch.matchSource ?? "none"
-          }`;
+          const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
           if (!allowMatch.allowed) {
             if (dmPolicy === "pairing") {
               const { code, created } = await upsertChannelPairingRequest({
@@ -369,14 +368,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       }
 
       if (isRoom && roomConfigInfo.config?.users?.length) {
-        const userAllowed = resolveMatrixAllowListMatches({
+        const userMatch = resolveMatrixAllowListMatch({
           allowList: normalizeAllowListLower(roomConfigInfo.config.users),
           userId: senderId,
           userName: senderName,
         });
-        if (!userAllowed) {
+        if (!userMatch.allowed) {
           logVerbose(
-            `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta})`,
+            `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
+              userMatch,
+            )})`,
           );
           return;
         }

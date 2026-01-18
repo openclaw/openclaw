@@ -11,6 +11,7 @@ import {
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
 } from "../../../src/channels/plugins/channel-config.js";
+import type { AllowlistMatch } from "../../../src/channels/plugins/allowlist-match.js";
 
 export type MSTeamsResolvedRouteConfig = {
   teamConfig?: MSTeamsTeamConfig;
@@ -90,6 +91,31 @@ export type MSTeamsReplyPolicy = {
   replyStyle: MSTeamsReplyStyle;
 };
 
+export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+
+export function resolveMSTeamsAllowlistMatch(params: {
+  allowFrom: Array<string | number>;
+  senderId: string;
+  senderName?: string | null;
+}): MSTeamsAllowlistMatch {
+  const allowFrom = params.allowFrom
+    .map((entry) => String(entry).trim().toLowerCase())
+    .filter(Boolean);
+  if (allowFrom.length === 0) return { allowed: false };
+  if (allowFrom.includes("*")) {
+    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
+  }
+  const senderId = params.senderId.toLowerCase();
+  if (allowFrom.includes(senderId)) {
+    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  }
+  const senderName = params.senderName?.toLowerCase();
+  if (senderName && allowFrom.includes(senderName)) {
+    return { allowed: true, matchKey: senderName, matchSource: "name" };
+  }
+  return { allowed: false };
+}
+
 export function resolveMSTeamsReplyPolicy(params: {
   isDirectMessage: boolean;
   globalConfig?: MSTeamsConfig;
@@ -126,12 +152,5 @@ export function isMSTeamsGroupAllowed(params: {
   const { groupPolicy } = params;
   if (groupPolicy === "disabled") return false;
   if (groupPolicy === "open") return true;
-  const allowFrom = params.allowFrom
-    .map((entry) => String(entry).trim().toLowerCase())
-    .filter(Boolean);
-  if (allowFrom.length === 0) return false;
-  if (allowFrom.includes("*")) return true;
-  const senderId = params.senderId.toLowerCase();
-  const senderName = params.senderName?.toLowerCase();
-  return allowFrom.includes(senderId) || (senderName ? allowFrom.includes(senderName) : false);
+  return resolveMSTeamsAllowlistMatch(params).allowed;
 }
