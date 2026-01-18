@@ -29,6 +29,10 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.mocks.js";
 
+// Preload the gateway server module once per worker.
+// Important: `test-helpers.mocks` must run before importing the server so vi.mock hooks apply.
+const serverModulePromise = import("./server.js");
+
 let previousHome: string | undefined;
 let previousUserProfile: string | undefined;
 let previousStateDir: string | undefined;
@@ -105,7 +109,7 @@ export function installGatewayTestHooks() {
     embeddedRunMock.waitResults.clear();
     drainSystemEvents(resolveMainSessionKeyFromConfig());
     resetAgentRunContextForTest();
-    const mod = await import("./server.js");
+    const mod = await serverModulePromise;
     mod.__resetModelCatalogCacheForTest();
     piSdkMock.enabled = false;
     piSdkMock.discoverCalls = 0;
@@ -184,7 +188,7 @@ export function onceMessage<T = unknown>(
 }
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
-  const mod = await import("./server.js");
+  const mod = await serverModulePromise;
   return await mod.startGatewayServer(port, opts);
 }
 

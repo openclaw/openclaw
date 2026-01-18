@@ -1,4 +1,5 @@
 import { type AddressInfo, createServer } from "node:net";
+import { isMainThread, threadId } from "node:worker_threads";
 
 async function isPortFree(port: number): Promise<boolean> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
@@ -45,7 +46,11 @@ export async function getDeterministicFreePortBlock(params?: {
 
   const workerIdRaw = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
   const workerId = Number.parseInt(workerIdRaw, 10);
-  const shard = Number.isFinite(workerId) ? Math.max(0, workerId) : Math.abs(process.pid);
+  const shard = Number.isFinite(workerId)
+    ? Math.max(0, workerId)
+    : isMainThread
+      ? Math.abs(process.pid)
+      : Math.abs(threadId);
 
   const rangeSize = 1000;
   const shardCount = 30;
@@ -79,4 +84,3 @@ export async function getDeterministicFreePortBlock(params?: {
 
   throw new Error("failed to acquire a free port block");
 }
-
