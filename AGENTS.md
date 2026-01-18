@@ -1,6 +1,6 @@
 # Repository Guidelines
 - Repo: https://github.com/clawdbot/clawdbot
-- GitHub issues: use literal multiline strings or $'...' for newlines; avoid "\\n" escapes in `gh issue create/edit`.
+- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 
 ## Project Structure & Module Organization
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
