@@ -5,6 +5,7 @@ import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.j
 import type { ClawdbotConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { recordPluginInstall } from "../../plugins/installs.js";
+import { enablePluginInConfig } from "../../plugins/enable.js";
 import { loadClawdbotPlugins } from "../../plugins/loader.js";
 import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -46,37 +47,6 @@ function resolveLocalPath(
     if (fs.existsSync(candidate)) return candidate;
   }
   return null;
-}
-
-function ensurePluginEnabled(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfig {
-  const entries = {
-    ...cfg.plugins?.entries,
-    [pluginId]: {
-      ...(cfg.plugins?.entries?.[pluginId] as Record<string, unknown> | undefined),
-      enabled: true,
-    },
-  };
-  const next: ClawdbotConfig = {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      ...(cfg.plugins?.enabled === false ? { enabled: true } : {}),
-      entries,
-    },
-  };
-  return ensurePluginAllowlist(next, pluginId);
-}
-
-function ensurePluginAllowlist(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfig {
-  const allow = cfg.plugins?.allow;
-  if (!allow || allow.includes(pluginId)) return cfg;
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: [...allow, pluginId],
-    },
-  };
 }
 
 function addPluginLoadPath(cfg: ClawdbotConfig, pluginPath: string): ClawdbotConfig {
@@ -145,7 +115,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   if (choice === "local" && localPath) {
     next = addPluginLoadPath(next, localPath);
-    next = ensurePluginEnabled(next, entry.id);
+    next = enablePluginInConfig(next, entry.id).config;
     return { cfg: next, installed: true };
   }
 
@@ -158,7 +128,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   });
 
   if (result.ok) {
-    next = ensurePluginEnabled(next, result.pluginId);
+    next = enablePluginInConfig(next, result.pluginId).config;
     next = recordPluginInstall(next, {
       pluginId: result.pluginId,
       source: "npm",
@@ -181,7 +151,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     });
     if (fallback) {
       next = addPluginLoadPath(next, localPath);
-      next = ensurePluginEnabled(next, entry.id);
+      next = enablePluginInConfig(next, entry.id).config;
       return { cfg: next, installed: true };
     }
   }
