@@ -17,6 +17,11 @@ const KEEP_VALUE = "__keep__";
 const MANUAL_VALUE = "__manual__";
 const PROVIDER_FILTER_THRESHOLD = 30;
 
+// Models that are internal routing features and should not be shown in selection lists.
+// These may be valid as defaults (e.g., set automatically during auth flow) but are not
+// directly callable via API and would cause "Unknown model" errors if selected manually.
+const HIDDEN_ROUTER_MODELS = new Set(["openrouter/auto"]);
+
 type PromptDefaultModelParams = {
   config: ClawdbotConfig;
   prompter: WizardPrompter;
@@ -183,6 +188,8 @@ export async function promptDefaultModel(
   }) => {
     const key = modelKey(entry.provider, entry.id);
     if (seen.has(key)) return;
+    // Skip internal router models that can't be directly called via API.
+    if (HIDDEN_ROUTER_MODELS.has(key)) return;
     const hints: string[] = [];
     if (entry.name && entry.name !== entry.id) hints.push(entry.name);
     if (entry.contextWindow) hints.push(`ctx ${formatTokenK(entry.contextWindow)}`);
