@@ -17,12 +17,16 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-id <id>", "Use an explicit session id")
+    .option("--agent <id>", "Agent id (overrides routing bindings)")
     .option("--thinking <level>", "Thinking level: off | minimal | low | medium | high")
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",
       `Delivery channel: ${args.agentChannelOptions} (default: ${DEFAULT_CHAT_CHANNEL})`,
     )
+    .option("--reply-to <target>", "Delivery target override (separate from session routing)")
+    .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
+    .option("--reply-account <id>", "Delivery account id override")
     .option(
       "--local",
       "Run the embedded agent locally (requires model provider API keys in your shell)",
@@ -30,7 +34,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     )
     .option(
       "--deliver",
-      "Send the agent's reply back to the selected channel (requires --to)",
+      "Send the agent's reply back to the selected channel",
       false,
     )
     .option("--json", "Output result as JSON", false)
@@ -44,9 +48,11 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
         `
 Examples:
   clawdbot agent --to +15555550123 --message "status update"
+  clawdbot agent --agent ops --message "Summarize logs"
   clawdbot agent --session-id 1234 --message "Summarize inbox" --thinking medium
   clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
   clawdbot agent --to +15555550123 --message "Summon reply" --deliver
+  clawdbot agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
     )

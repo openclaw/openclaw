@@ -220,6 +220,46 @@ describe("deliverAgentCommandResult", () => {
     );
   });
 
+  it("uses reply overrides for delivery routing", async () => {
+    const cfg = {} as ClawdbotConfig;
+    const deps = {} as CliDeps;
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    } as unknown as RuntimeEnv;
+    const sessionEntry = {
+      lastChannel: "telegram",
+      lastTo: "123",
+      lastAccountId: "legacy",
+    } as SessionEntry;
+    const result = {
+      payloads: [{ text: "hi" }],
+      meta: {},
+    };
+
+    const { deliverAgentCommandResult } = await import("./agent/delivery.js");
+    await deliverAgentCommandResult({
+      cfg,
+      deps,
+      runtime,
+      opts: {
+        message: "hello",
+        deliver: true,
+        to: "+15551234567",
+        replyTo: "#reports",
+        replyChannel: "slack",
+        replyAccountId: "ops",
+      },
+      sessionEntry,
+      result,
+      payloads: result.payloads,
+    });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "slack", to: "#reports", accountId: "ops" }),
+    );
+  });
+
   it("prefixes nested agent outputs with context", async () => {
     const cfg = {} as ClawdbotConfig;
     const deps = {} as CliDeps;

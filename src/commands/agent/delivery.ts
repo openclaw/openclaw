@@ -59,9 +59,9 @@ export async function deliverAgentCommandResult(params: {
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const deliveryPlan = resolveAgentDeliveryPlan({
     sessionEntry,
-    requestedChannel: opts.channel,
-    explicitTo: opts.to,
-    accountId: opts.accountId,
+    requestedChannel: opts.replyChannel ?? opts.channel,
+    explicitTo: opts.replyTo ?? opts.to,
+    accountId: opts.replyAccountId ?? opts.accountId,
     wantsDelivery: deliver,
   });
   const deliveryChannel = deliveryPlan.resolvedChannel;

@@ -2,9 +2,10 @@ import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveSessionKey, resolveStorePath } from "../config/sessions.js";
+import { resolveSessionKeyForRequest } from "./agent/session.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
-import { normalizeMainKey } from "../routing/session-key.js";
+import { listAgentIds } from "../agents/agent-scope.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -31,6 +32,7 @@ type GatewayAgentResponse = {
 
 export type AgentCliOpts = {
   message: string;
+  agent?: string;
   to?: string;
   sessionId?: string;
   thinking?: string;
@@ -39,6 +41,9 @@ export type AgentCliOpts = {
   timeout?: string;
   deliver?: boolean;
   channel?: string;
+  replyTo?: string;
+  replyChannel?: string;
+  replyAccount?: string;
   bestEffortDeliver?: boolean;
   lane?: string;
   runId?: string;
@@ -46,27 +51,6 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
-function resolveGatewaySessionKey(opts: {
-  cfg: ReturnType<typeof loadConfig>;
-  to?: string;
-  sessionId?: string;
-}): string | undefined {
-  const sessionCfg = opts.cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const storePath = resolveStorePath(sessionCfg?.store);
-  const store = loadSessionStore(storePath);
-
-  const ctx = opts.to?.trim() ? ({ From: opts.to } as { From: string }) : null;
-  let sessionKey: string | undefined = ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined;
-
-  if (opts.sessionId && (!sessionKey || store[sessionKey]?.sessionId !== opts.sessionId)) {
-    const foundKey = Object.keys(store).find((key) => store[key]?.sessionId === opts.sessionId);
-    if (foundKey) sessionKey = foundKey;
-  }
-
-  return sessionKey;
-}
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
   const raw =
@@ -98,19 +82,30 @@ function formatPayloadForLog(payload: {
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const body = (opts.message ?? "").trim();
   if (!body) throw new Error("Message (--message) is required");
-  if (!opts.to && !opts.sessionId) {
-    throw new Error("Pass --to <E.164> or --session-id to choose a session");
+  if (!opts.to && !opts.sessionId && !opts.agent) {
+    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
   const cfg = loadConfig();
+  const agentIdRaw = opts.agent?.trim();
+  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+  if (agentId) {
+    const knownAgents = listAgentIds(cfg);
+    if (!knownAgents.includes(agentId)) {
+      throw new Error(
+        `Unknown agent id "${agentIdRaw}". Use "clawdbot agents list" to see configured agents.`,
+      );
+    }
+  }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = Math.max(10_000, (timeoutSeconds + 30) * 1000);
 
-  const sessionKey = resolveGatewaySessionKey({
+  const sessionKey = resolveSessionKeyForRequest({
     cfg,
+    agentId,
     to: opts.to,
     sessionId: opts.sessionId,
-  });
+  }).sessionKey;
 
   const channel = normalizeMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
@@ -126,12 +121,16 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
         method: "agent",
         params: {
           message: body,
+          agentId,
           to: opts.to,
+          replyTo: opts.replyTo,
           sessionId: opts.sessionId,
           sessionKey,
           thinking: opts.thinking,
           deliver: Boolean(opts.deliver),
           channel,
+          replyChannel: opts.replyChannel,
+          replyAccountId: opts.replyAccount,
           timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
@@ -166,14 +165,19 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  const localOpts = {
+    ...opts,
+    agentId: opts.agent,
+    replyAccountId: opts.replyAccount,
+  };
   if (opts.local === true) {
-    return await agentCommand(opts, runtime, deps);
+    return await agentCommand(localOpts, runtime, deps);
   }
 
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
-    return await agentCommand(opts, runtime, deps);
+    return await agentCommand(localOpts, runtime, deps);
   }
 }

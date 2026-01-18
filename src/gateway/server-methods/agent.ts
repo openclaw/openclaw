@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { agentCommand } from "../../commands/agent.js";
+import { listAgentIds } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
+  resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
   type SessionEntry,
   updateSessionStore,
@@ -21,6 +23,7 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import {
   type AgentWaitParams,
@@ -51,7 +54,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     const request = p as {
       message: string;
+      agentId?: string;
       to?: string;
+      replyTo?: string;
       sessionId?: string;
       sessionKey?: string;
       thinking?: string;
@@ -63,7 +68,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       channel?: string;
+      replyChannel?: string;
       accountId?: string;
+      replyAccountId?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -71,6 +78,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       label?: string;
       spawnedBy?: string;
     };
+    const cfg = loadConfig();
     const idem = request.idempotencyKey;
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
@@ -113,9 +121,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const rawChannel = typeof request.channel === "string" ? request.channel.trim() : "";
-    if (rawChannel) {
-      const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const channelHints = [request.channel, request.replyChannel]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    for (const rawChannel of channelHints) {
       const normalized = normalizeMessageChannel(rawChannel);
       if (normalized && normalized !== "last" && !isKnownGatewayChannel(normalized)) {
         respond(
@@ -130,10 +141,47 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const requestedSessionKey =
+    const agentIdRaw = typeof request.agentId === "string" ? request.agentId.trim() : "";
+    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+    if (agentId) {
+      const knownAgents = listAgentIds(cfg);
+      if (!knownAgents.includes(agentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: unknown agent id "${request.agentId}"`,
+          ),
+        );
+        return;
+      }
+    }
+
+    const requestedSessionKeyRaw =
       typeof request.sessionKey === "string" && request.sessionKey.trim()
         ? request.sessionKey.trim()
         : undefined;
+    const requestedSessionKey =
+      requestedSessionKeyRaw ??
+      resolveExplicitAgentSessionKey({
+        cfg,
+        agentId,
+      });
+    if (agentId && requestedSessionKeyRaw) {
+      const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+      if (sessionAgentId !== agentId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
+          ),
+        );
+        return;
+      }
+    }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = false;
@@ -204,12 +252,16 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const wantsDelivery = request.deliver === true;
     const explicitTo =
-      typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
+      typeof request.replyTo === "string" && request.replyTo.trim()
+        ? request.replyTo.trim()
+        : typeof request.to === "string" && request.to.trim()
+          ? request.to.trim()
+          : undefined;
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
-      requestedChannel: request.channel,
+      requestedChannel: request.replyChannel ?? request.channel,
       explicitTo,
-      accountId: request.accountId,
+      accountId: request.replyAccountId ?? request.accountId,
       wantsDelivery,
     });
 
@@ -219,9 +271,9 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedTo = deliveryPlan.resolvedTo;
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
-      const cfg = cfgForAgent ?? loadConfig();
+      const cfgResolved = cfgForAgent ?? cfg;
       const fallback = resolveAgentOutboundTarget({
-        cfg,
+        cfg: cfgResolved,
         plan: deliveryPlan,
         targetMode: "implicit",
         validateExplicitTarget: false,

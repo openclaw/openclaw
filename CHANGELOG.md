@@ -6,13 +6,11 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
-- Agents: make inbound message envelopes configurable (timezone/timestamp/elapsed) and surface elapsed gaps; time design is actively being explored. See https://docs.clawd.bot/date-time. (#1150) — thanks @shiv19.
-- TUI: add animated waiting shimmer status in the terminal UI. (#1196) — thanks @vignesh07.
+- CLI: show Telegram bot username in channel status (probe/runtime).
+- CLI: add agent targeting and reply routing overrides for `clawdbot agent`. (#1165)
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.
-- macOS: load menu session previews asynchronously so items populate while the menu is open.
-- macOS: use label colors for session preview text so previews render in menu subviews.
 
 ## 2026.1.18-4
 
