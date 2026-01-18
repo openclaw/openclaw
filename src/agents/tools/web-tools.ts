@@ -5,7 +5,7 @@ import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
-const SEARCH_PROVIDERS = ["brave"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_SEARCH_COUNT = 5;
@@ -20,6 +20,8 @@ const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 
 type WebSearchConfig = NonNullable<ClawdbotConfig["tools"]>["web"] extends infer Web
   ? Web extends { search?: infer Search }
@@ -196,7 +198,15 @@ function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): nu
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
 }
 
-function missingSearchKeyPayload() {
+function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+  if (provider === "perplexity") {
+    return {
+      error: "missing_perplexity_api_key",
+      message:
+        "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
+      docs: "https://docs.clawd.bot/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message:
@@ -210,8 +220,48 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
+  if (raw === "perplexity") return "perplexity";
   if (raw === "brave") return "brave";
   return "brave";
+}
+
+type PerplexityConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+};
+
+function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
+  if (!search || typeof search !== "object") return {};
+  const perplexity = "perplexity" in search ? search.perplexity : undefined;
+  if (!perplexity || typeof perplexity !== "object") return {};
+  return perplexity as PerplexityConfig;
+}
+
+function resolvePerplexityApiKey(perplexity?: PerplexityConfig): string | undefined {
+  const fromConfig =
+    perplexity && "apiKey" in perplexity && typeof perplexity.apiKey === "string"
+      ? perplexity.apiKey.trim()
+      : "";
+  const fromEnvPerplexity = (process.env.PERPLEXITY_API_KEY ?? "").trim();
+  const fromEnvOpenRouter = (process.env.OPENROUTER_API_KEY ?? "").trim();
+  return fromConfig || fromEnvPerplexity || fromEnvOpenRouter || undefined;
+}
+
+function resolvePerplexityBaseUrl(perplexity?: PerplexityConfig): string {
+  const fromConfig =
+    perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
+      ? perplexity.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_PERPLEXITY_BASE_URL;
+}
+
+function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
+  const fromConfig =
+    perplexity && "model" in perplexity && typeof perplexity.model === "string"
+      ? perplexity.model.trim()
+      : "";
+  return fromConfig || DEFAULT_PERPLEXITY_MODEL;
 }
 
 function resolveTimeoutSeconds(value: unknown, fallback: number): number {
@@ -486,6 +536,56 @@ export async function fetchFirecrawlContent(params: {
   };
 }
 
+type PerplexitySearchResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
+  citations?: string[];
+};
+
+async function runPerplexitySearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: string[] }> {
+  const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
+
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${params.apiKey}`,
+      "HTTP-Referer": "https://clawdbot.com",
+      "X-Title": "Clawdbot Web Search",
+    },
+    body: JSON.stringify({
+      model: params.model,
+      messages: [
+        {
+          role: "user",
+          content: params.query,
+        },
+      ],
+    }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`Perplexity API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as PerplexitySearchResponse;
+  const content = data.choices?.[0]?.message?.content ?? "No response";
+  const citations = data.citations ?? [];
+
+  return { content, citations };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -496,6 +596,8 @@ async function runWebSearch(params: {
   country?: string;
   search_lang?: string;
   ui_lang?: string;
+  perplexityBaseUrl?: string;
+  perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
@@ -504,6 +606,28 @@ async function runWebSearch(params: {
   if (cached) return { ...cached.value, cached: true };
 
   const start = Date.now();
+
+  if (params.provider === "perplexity") {
+    const { content, citations } = await runPerplexitySearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
+      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
+      tookMs: Date.now() - start,
+      content,
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -772,16 +896,30 @@ export function createWebSearchTool(options?: {
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) return null;
+
+  const provider = resolveSearchProvider(search);
+  const perplexityConfig = resolvePerplexityConfig(search);
+
+  // Determine description based on provider
+  const description =
+    provider === "perplexity"
+      ? "Search the web using Perplexity Sonar (via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
+      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+
   return {
     label: "Web Search",
     name: "web_search",
-    description:
-      "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
+    description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
-      const apiKey = resolveSearchApiKey(search);
+      // Resolve API key based on provider
+      const apiKey =
+        provider === "perplexity"
+          ? resolvePerplexityApiKey(perplexityConfig)
+          : resolveSearchApiKey(search);
+
       if (!apiKey) {
-        return jsonResult(missingSearchKeyPayload());
+        return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
@@ -796,10 +934,12 @@ export function createWebSearchTool(options?: {
         apiKey,
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        provider: resolveSearchProvider(search),
+        provider,
         country,
         search_lang,
         ui_lang,
+        perplexityBaseUrl: resolvePerplexityBaseUrl(perplexityConfig),
+        perplexityModel: resolvePerplexityModel(perplexityConfig),
       });
       return jsonResult(result);
     },
