@@ -3,13 +3,13 @@ import ClawdbotKit
 import OSLog
 import SwiftUI
 
-private struct SessionPreviewItem: Identifiable, Sendable {
+struct SessionPreviewItem: Identifiable, Sendable {
     let id: String
     let role: PreviewRole
     let text: String
 }
 
-private enum PreviewRole: String, Sendable {
+enum PreviewRole: String, Sendable {
     case user
     case assistant
     case tool
@@ -27,7 +27,7 @@ private enum PreviewRole: String, Sendable {
     }
 }
 
-private actor SessionPreviewCache {
+actor SessionPreviewCache {
     static let shared = SessionPreviewCache()
 
     private struct CacheEntry {
@@ -52,25 +52,33 @@ private actor SessionPreviewCache {
     }
 }
 
-struct SessionMenuPreviewView: View {
-    private static let logger = Logger(subsystem: "com.clawdbot", category: "SessionPreview")
-    private static let previewTimeoutSeconds: Double = 4
-
-    let sessionKey: String
-    let width: CGFloat
-    let maxItems: Int
-    let maxLines: Int
-    let title: String
-
-    @Environment(\.menuItemHighlighted) private var isHighlighted
-    @State private var items: [SessionPreviewItem] = []
-    @State private var status: LoadStatus = .loading
-
-    private struct PreviewTimeoutError: LocalizedError {
-        var errorDescription: String? { "preview timeout" }
+#if DEBUG
+extension SessionPreviewCache {
+    func _testSet(items: [SessionPreviewItem], for sessionKey: String, updatedAt: Date = Date()) {
+        self.entries[sessionKey] = CacheEntry(items: items, updatedAt: updatedAt)
     }
 
-    private enum LoadStatus: Equatable {
+    func _testReset() {
+        self.entries = [:]
+    }
+}
+#endif
+
+struct SessionMenuPreviewSnapshot: Sendable {
+    let items: [SessionPreviewItem]
+    let status: SessionMenuPreviewView.LoadStatus
+}
+
+struct SessionMenuPreviewView: View {
+    let width: CGFloat
+    let maxLines: Int
+    let title: String
+    let items: [SessionPreviewItem]
+    let status: LoadStatus
+
+    @Environment(\.menuItemHighlighted) private var isHighlighted
+
+    enum LoadStatus: Equatable {
         case loading
         case ready
         case empty
@@ -83,10 +91,6 @@ struct SessionMenuPreviewView: View {
 
     private var secondaryColor: Color {
         self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
-    }
-
-    private var previewLimit: Int {
-        min(max(self.maxItems * 3, 20), 120)
     }
 
     var body: some View {
@@ -123,9 +127,6 @@ struct SessionMenuPreviewView: View {
         .padding(.leading, 16)
         .padding(.trailing, 11)
         .frame(width: max(1, self.width), alignment: .leading)
-        .task(id: self.sessionKey) {
-            await self.loadPreview()
-        }
     }
 
     @ViewBuilder
@@ -157,53 +158,57 @@ struct SessionMenuPreviewView: View {
         }
     }
 
-    private func loadPreview() async {
-        if let cached = await SessionPreviewCache.shared.cachedItems(for: self.sessionKey, maxAge: 12) {
-            await MainActor.run {
-                self.items = cached
-                self.status = cached.isEmpty ? .empty : .ready
-            }
-            return
-        }
+}
 
-        await MainActor.run {
-            self.status = .loading
+enum SessionMenuPreviewLoader {
+    private static let logger = Logger(subsystem: "com.clawdbot", category: "SessionPreview")
+    private static let previewTimeoutSeconds: Double = 4
+    private static let cacheMaxAgeSeconds: TimeInterval = 30
+
+    private struct PreviewTimeoutError: LocalizedError {
+        var errorDescription: String? { "preview timeout" }
+    }
+
+    static func load(sessionKey: String, maxItems: Int) async -> SessionMenuPreviewSnapshot {
+        if let cached = await SessionPreviewCache.shared.cachedItems(for: sessionKey, maxAge: cacheMaxAgeSeconds) {
+            return Self.snapshot(from: cached)
         }
 
         do {
-            let timeoutMs = Int(Self.previewTimeoutSeconds * 1000)
+            let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
             let payload = try await AsyncTimeout.withTimeout(
-                seconds: Self.previewTimeoutSeconds,
+                seconds: self.previewTimeoutSeconds,
                 onTimeout: { PreviewTimeoutError() },
                 operation: {
                     try await GatewayConnection.shared.chatHistory(
-                        sessionKey: self.sessionKey,
-                        limit: self.previewLimit,
+                        sessionKey: sessionKey,
+                        limit: self.previewLimit(for: maxItems),
                         timeoutMs: timeoutMs)
                 })
-            let built = Self.previewItems(from: payload, maxItems: self.maxItems)
-            await SessionPreviewCache.shared.store(items: built, for: self.sessionKey)
-            await MainActor.run {
-                self.items = built
-                self.status = built.isEmpty ? .empty : .ready
-            }
+            let built = Self.previewItems(from: payload, maxItems: maxItems)
+            await SessionPreviewCache.shared.store(items: built, for: sessionKey)
+            return Self.snapshot(from: built)
         } catch is CancellationError {
-            return
+            return SessionMenuPreviewSnapshot(items: [], status: .loading)
         } catch {
-            let fallback = await SessionPreviewCache.shared.lastItems(for: self.sessionKey)
-            await MainActor.run {
-                if let fallback {
-                    self.items = fallback
-                    self.status = fallback.isEmpty ? .empty : .ready
-                } else {
-                    self.status = .error("Preview unavailable")
-                }
+            let fallback = await SessionPreviewCache.shared.lastItems(for: sessionKey)
+            if let fallback {
+                return Self.snapshot(from: fallback)
             }
             let errorDescription = String(describing: error)
             Self.logger.warning(
-                "Session preview failed session=\(self.sessionKey, privacy: .public) " +
+                "Session preview failed session=\(sessionKey, privacy: .public) " +
                     "error=\(errorDescription, privacy: .public)")
+            return SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
         }
+    }
+
+    private static func snapshot(from items: [SessionPreviewItem]) -> SessionMenuPreviewSnapshot {
+        SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
+    }
+
+    private static func previewLimit(for maxItems: Int) -> Int {
+        min(max(maxItems * 3, 20), 120)
     }
 
     private static func previewItems(

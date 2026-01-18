@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Dependencies: update core + plugin deps (grammy, vitest, openai, Microsoft agents hosting, etc.).
 
+### Fixes
+- macOS: load menu session previews asynchronously so items populate while the menu is open.
+
 ## 2026.1.18-4
 
 ### Changes
