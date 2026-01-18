@@ -1,18 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-import { resolveAnnounceTarget } from "./sessions-announce-target.js";
+const loadResolveAnnounceTarget = async () => await import("./sessions-announce-target.js");
+
+const installRegistry = async () => {
+  const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          id: "whatsapp",
+          meta: {
+            id: "whatsapp",
+            label: "WhatsApp",
+            selectionLabel: "WhatsApp",
+            docsPath: "/channels/whatsapp",
+            blurb: "WhatsApp test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+    ]),
+  );
+};
 
 describe("resolveAnnounceTarget", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     callGatewayMock.mockReset();
+    vi.resetModules();
+    await installRegistry();
   });
 
   it("derives non-WhatsApp announce targets from the session key", async () => {
+    const { resolveAnnounceTarget } = await loadResolveAnnounceTarget();
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
@@ -22,6 +55,7 @@ describe("resolveAnnounceTarget", () => {
   });
 
   it("hydrates WhatsApp accountId from sessions.list when available", async () => {
+    const { resolveAnnounceTarget } = await loadResolveAnnounceTarget();
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {

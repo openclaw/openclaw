@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -50,6 +50,7 @@ describe("onboard (non-interactive): remote gateway config", () => {
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
+    vi.resetModules();
 
     const port = await getFreePort();
     const token = "tok_remote_123";

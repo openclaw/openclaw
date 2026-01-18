@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildGatewayReloadPlan,
   diffConfigPaths,
@@ -23,6 +26,52 @@ describe("diffConfigPaths", () => {
 });
 
 describe("buildGatewayReloadPlan", () => {
+  const emptyRegistry = createTestRegistry([]);
+  const telegramPlugin: ChannelPlugin = {
+    id: "telegram",
+    meta: {
+      id: "telegram",
+      label: "Telegram",
+      selectionLabel: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["channels.telegram"] },
+  };
+  const whatsappPlugin: ChannelPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
+  };
+  const registry = createTestRegistry([
+    { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+  ]);
+
+  beforeEach(() => {
+    setActivePluginRegistry(registry);
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(emptyRegistry);
+  });
+
   it("marks gateway changes as restart required", () => {
     const plan = buildGatewayReloadPlan(["gateway.port"]);
     expect(plan.restartGateway).toBe(true);

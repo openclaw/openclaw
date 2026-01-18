@@ -1,5 +1,6 @@
 import chokidar from "chokidar";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { ClawdbotConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
 
 export type GatewayReloadSettings = {
@@ -85,8 +86,14 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
+let cachedRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 
 function listReloadRules(): ReloadRule[] {
+  const registry = getActivePluginRegistry();
+  if (registry !== cachedRegistry) {
+    cachedReloadRules = null;
+    cachedRegistry = registry;
+  }
   if (cachedReloadRules) return cachedReloadRules;
   // Channel docking: plugins contribute hot reload/no-op prefixes here.
   const channelReloadRules: ReloadRule[] = listChannelPlugins().flatMap((plugin) => [

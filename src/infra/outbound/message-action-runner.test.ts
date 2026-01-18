@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const slackConfig = {
@@ -21,6 +26,36 @@ const whatsappConfig = {
 } as ClawdbotConfig;
 
 describe("runMessageAction context isolation", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: slackPlugin,
+        },
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: whatsappPlugin,
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: telegramPlugin,
+        },
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
   it("allows send when target matches current channel", async () => {
     const result = await runMessageAction({
       cfg: slackConfig,

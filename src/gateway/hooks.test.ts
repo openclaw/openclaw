@@ -2,8 +2,8 @@ import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   extractHookToken,
   normalizeAgentPayload,
@@ -85,6 +85,15 @@ describe("gateway hooks helpers", () => {
       expect(explicitNoDeliver.value.deliver).toBe(false);
     }
 
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
     const imsg = normalizeAgentPayload(
       { message: "yo", channel: "imsg" },
       { idFactory: () => "x" },
@@ -95,7 +104,7 @@ describe("gateway hooks helpers", () => {
     }
 
     setActivePluginRegistry(
-      createRegistry([
+      createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -117,19 +126,7 @@ describe("gateway hooks helpers", () => {
   });
 });
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
-
-const emptyRegistry = createRegistry([]);
+const emptyRegistry = createTestRegistry([]);
 
 const createMSTeamsPlugin = (params: { aliases?: string[] }): ChannelPlugin => ({
   id: "msteams",

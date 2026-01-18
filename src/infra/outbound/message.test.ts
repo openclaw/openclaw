@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { sendMessage, sendPoll } from "./message.js";
+import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+const loadMessage = async () => await import("./message.js");
+
+const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
+  const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
+  setActivePluginRegistry(registry);
+};
 
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -12,22 +16,24 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 describe("sendMessage channel normalization", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     callGatewayMock.mockReset();
-    setActivePluginRegistry(emptyRegistry);
+    vi.resetModules();
+    await setRegistry(emptyRegistry);
   });
 
-  afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
+  afterEach(async () => {
+    await setRegistry(emptyRegistry);
   });
 
   it("normalizes Teams alias", async () => {
+    const { sendMessage } = await loadMessage();
     const sendMSTeams = vi.fn(async () => ({
       messageId: "m1",
       conversationId: "c1",
     }));
-    setActivePluginRegistry(
-      createRegistry([
+    await setRegistry(
+      createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -51,7 +57,17 @@ describe("sendMessage channel normalization", () => {
   });
 
   it("normalizes iMessage alias", async () => {
+    const { sendMessage } = await loadMessage();
     const sendIMessage = vi.fn(async () => ({ messageId: "i1" }));
+    await setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createIMessageTestPlugin(),
+        },
+      ]),
+    );
     const result = await sendMessage({
       cfg: {},
       to: "someone@example.com",
@@ -66,19 +82,21 @@ describe("sendMessage channel normalization", () => {
 });
 
 describe("sendPoll channel normalization", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     callGatewayMock.mockReset();
-    setActivePluginRegistry(emptyRegistry);
+    vi.resetModules();
+    await setRegistry(emptyRegistry);
   });
 
-  afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
+  afterEach(async () => {
+    await setRegistry(emptyRegistry);
   });
 
   it("normalizes Teams alias for polls", async () => {
+    const { sendPoll } = await loadMessage();
     callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
-    setActivePluginRegistry(
-      createRegistry([
+    await setRegistry(
+      createTestRegistry([
         {
           pluginId: "msteams",
           source: "test",
@@ -106,19 +124,7 @@ describe("sendPoll channel normalization", () => {
   });
 });
 
-const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
-  plugins: [],
-  tools: [],
-  channels,
-  providers: [],
-  gatewayHandlers: {},
-  httpHandlers: [],
-  cliRegistrars: [],
-  services: [],
-  diagnostics: [],
-});
-
-const emptyRegistry = createRegistry([]);
+const emptyRegistry = createTestRegistry([]);
 
 const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",

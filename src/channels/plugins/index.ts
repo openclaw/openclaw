@@ -1,11 +1,5 @@
 import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeChatChannelId } from "../registry.js";
-import { discordPlugin } from "./discord.js";
-import { imessagePlugin } from "./imessage.js";
-import { signalPlugin } from "./signal.js";
-import { slackPlugin } from "./slack.js";
-import { telegramPlugin } from "./telegram.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
-import { whatsappPlugin } from "./whatsapp.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 
 // Channel plugins registry (runtime).
@@ -14,14 +8,7 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 // Shared code paths (reply flow, command auth, sandbox explain) should depend on `src/channels/dock.ts`
 // instead, and only call `getChannelPlugin()` at execution boundaries.
 //
-// Adding a channel:
-// - add `<id>Plugin` import + entry in `resolveChannels()`
-// - add an entry to `src/channels/dock.ts` for shared behavior (capabilities, allowFrom, threading, …)
-// - add ids/aliases in `src/channels/registry.ts`
-function resolveCoreChannels(): ChannelPlugin[] {
-  return [telegramPlugin, whatsappPlugin, discordPlugin, slackPlugin, signalPlugin, imessagePlugin];
-}
-
+// Channel plugins are registered by the plugin loader (extensions/ or configured paths).
 function listPluginChannels(): ChannelPlugin[] {
   const registry = getActivePluginRegistry();
   if (!registry) return [];
@@ -41,7 +28,7 @@ function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
 }
 
 export function listChannelPlugins(): ChannelPlugin[] {
-  const combined = dedupeChannels([...resolveCoreChannels(), ...listPluginChannels()]);
+  const combined = dedupeChannels(listPluginChannels());
   return combined.sort((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
@@ -72,8 +59,6 @@ export function normalizeChannelId(raw?: string | null): ChannelId | null {
   });
   return plugin?.id ?? null;
 }
-
-export { discordPlugin, imessagePlugin, signalPlugin, slackPlugin, telegramPlugin, whatsappPlugin };
 export {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,

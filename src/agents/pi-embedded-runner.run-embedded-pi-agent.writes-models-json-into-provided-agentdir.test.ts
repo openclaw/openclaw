@@ -1,97 +1,101 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-
-  const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "ok" }],
-    stopReason: "stop" as const,
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
-    timestamp: Date.now(),
-  });
-
-  const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
-    role: "assistant" as const,
-    content: [] as const,
-    stopReason: "error" as const,
-    errorMessage: "boom",
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
+const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
+  role: "assistant" as const,
+  content: [{ type: "text" as const, text: "ok" }],
+  stopReason: "stop" as const,
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  usage: {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: {
       input: 0,
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
+      total: 0,
     },
-    timestamp: Date.now(),
-  });
-
-  return {
-    ...actual,
-    complete: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
-      return buildAssistantMessage(model);
-    },
-    completeSimple: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
-      return buildAssistantMessage(model);
-    },
-    streamSimple: (model: { api: string; provider: string; id: string }) => {
-      const stream = new actual.AssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message:
-            model.id === "mock-error"
-              ? buildAssistantErrorMessage(model)
-              : buildAssistantMessage(model),
-        });
-        stream.end();
-      });
-      return stream;
-    },
-  };
+  },
+  timestamp: Date.now(),
 });
+
+const buildAssistantErrorMessage = (model: { api: string; provider: string; id: string }) => ({
+  role: "assistant" as const,
+  content: [] as const,
+  stopReason: "error" as const,
+  errorMessage: "boom",
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  },
+  timestamp: Date.now(),
+});
+
+const mockPiAi = () => {
+  vi.doMock("@mariozechner/pi-ai", async () => {
+    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>(
+      "@mariozechner/pi-ai",
+    );
+    return {
+      ...actual,
+      complete: async (model: { api: string; provider: string; id: string }) => {
+        if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+        return buildAssistantMessage(model);
+      },
+      completeSimple: async (model: { api: string; provider: string; id: string }) => {
+        if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+        return buildAssistantMessage(model);
+      },
+      streamSimple: (model: { api: string; provider: string; id: string }) => {
+        const stream = new actual.AssistantMessageEventStream();
+        queueMicrotask(() => {
+          stream.push({
+            type: "done",
+            reason: "stop",
+            message:
+              model.id === "mock-error"
+                ? buildAssistantErrorMessage(model)
+                : buildAssistantMessage(model),
+          });
+          stream.end();
+        });
+        return stream;
+      },
+    };
+  });
+};
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAgent;
 
-beforeEach(async () => {
+beforeAll(async () => {
   vi.useRealTimers();
   vi.resetModules();
+  mockPiAi();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
-});
+}, 20_000);
 
 const makeOpenAiConfig = (modelIds: string[]) =>
   ({

@@ -1,9 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../../config/config.js";
 
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
 
 describe("resolveOutboundTarget", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
+        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+      ]),
+    );
+  });
+
   it("falls back to whatsapp allowFrom via config", () => {
     const cfg: ClawdbotConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },

@@ -66,6 +66,7 @@ const hoisted = vi.hoisted(() => ({
     waitCalls: [] as string[],
     waitResults: new Map<string, boolean>(),
   },
+  sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
 }));
 
 const testConfigRoot = {
@@ -74,6 +75,7 @@ const testConfigRoot = {
 
 export const setTestConfigRoot = (root: string) => {
   testConfigRoot.value = root;
+  process.env.CLAWDBOT_CONFIG_PATH = path.join(root, "clawdbot.json");
 };
 
 export const bridgeStartCalls = hoisted.bridgeStartCalls;
@@ -342,10 +344,33 @@ vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../web/outbound.js", () => ({
-  sendMessageWhatsApp: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+  sendMessageWhatsApp: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
+vi.mock("../channels/web/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
+    "../channels/web/index.js",
+  );
+  return {
+    ...actual,
+    sendMessageWhatsApp: (...args: unknown[]) =>
+      (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+  };
+});
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
 }));
+vi.mock("../cli/deps.js", async () => {
+  const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
+  const base = actual.createDefaultDeps();
+  return {
+    ...actual,
+    createDefaultDeps: () => ({
+      ...base,
+      sendMessageWhatsApp: (...args: unknown[]) =>
+        (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+    }),
+  };
+});
 
 process.env.CLAWDBOT_SKIP_CHANNELS = "1";

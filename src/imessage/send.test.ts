@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sendMessageIMessage } from "./send.js";
+const loadSendMessageIMessage = async () => await import("./send.js");
 
 const requestMock = vi.fn();
 const stopMock = vi.fn();
@@ -38,9 +38,11 @@ describe("sendMessageIMessage", () => {
   beforeEach(() => {
     requestMock.mockReset().mockResolvedValue({ ok: true });
     stopMock.mockReset().mockResolvedValue(undefined);
+    vi.resetModules();
   });
 
   it("sends to chat_id targets", async () => {
+    const { sendMessageIMessage } = await loadSendMessageIMessage();
     await sendMessageIMessage("chat_id:123", "hi");
     const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(requestMock).toHaveBeenCalledWith("send", expect.any(Object), expect.any(Object));
@@ -49,6 +51,7 @@ describe("sendMessageIMessage", () => {
   });
 
   it("applies sms service prefix", async () => {
+    const { sendMessageIMessage } = await loadSendMessageIMessage();
     await sendMessageIMessage("sms:+1555", "hello");
     const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(params.service).toBe("sms");
@@ -56,6 +59,7 @@ describe("sendMessageIMessage", () => {
   });
 
   it("adds file attachment with placeholder text", async () => {
+    const { sendMessageIMessage } = await loadSendMessageIMessage();
     await sendMessageIMessage("chat_id:7", "", { mediaUrl: "http://x/y.jpg" });
     const params = requestMock.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(params.file).toBe("/tmp/imessage-media.jpg");
