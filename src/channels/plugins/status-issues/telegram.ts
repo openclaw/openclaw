@@ -17,6 +17,8 @@ type TelegramGroupMembershipAuditSummary = {
     ok?: boolean;
     status?: string | null;
     error?: string | null;
+    matchKey?: string;
+    matchSource?: string;
   }>;
 };
 
@@ -53,7 +55,9 @@ function readTelegramGroupMembershipAuditSummary(
           const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
           const status = asString(entry.status) ?? null;
           const error = asString(entry.error) ?? null;
-          return { chatId, ok, status, error };
+          const matchKey = asString(entry.matchKey) ?? undefined;
+          const matchSource = asString(entry.matchSource) ?? undefined;
+          return { chatId, ok, status, error, matchKey, matchSource };
         })
         .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])
     : undefined;
@@ -107,11 +111,15 @@ export function collectTelegramStatusIssues(
       if (group.ok === true) continue;
       const status = group.status ? ` status=${group.status}` : "";
       const err = group.error ? `: ${group.error}` : "";
+      const matchMeta =
+        group.matchKey || group.matchSource
+          ? ` (matchKey=${group.matchKey ?? "none"} matchSource=${group.matchSource ?? "none"})`
+          : "";
       issues.push({
         channel: "telegram",
         accountId,
         kind: "runtime",
-        message: `Group ${group.chatId} not reachable by bot.${status}${err}`,
+        message: `Group ${group.chatId} not reachable by bot.${status}${err}${matchMeta}`,
         fix: "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
       });
     }
