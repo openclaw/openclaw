@@ -11,6 +11,7 @@ Docs: https://docs.clawd.bot
 - Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
 - Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
 - Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
+- Sessions: persist origin metadata for last-route updates so DM/channel/group sessions keep explainers. (#1133) — thanks @adam91holt.
 
 ## 2026.1.17-5
 

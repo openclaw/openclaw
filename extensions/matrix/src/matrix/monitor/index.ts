@@ -552,6 +552,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           channel: "matrix",
           to: `room:${roomId}`,
           accountId: route.accountId,
+          ctx: ctxPayload,
         });
       }
 

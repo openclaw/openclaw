@@ -122,3 +122,10 @@ Each session entry records where it came from (best-effort) in `origin`:
 - `from`/`to`: raw routing ids from the inbound envelope
 - `accountId`: provider account id (when multi-account)
 - `threadId`: thread/topic id when the channel supports it
+The origin fields are populated for direct messages, channels, and groups. If a
+connector only updates delivery routing (for example, to keep a DM main session
+fresh), it should still provide inbound context so the session keeps its
+explainer metadata. Extensions can do this by sending `ConversationLabel`,
+`GroupSubject`, `GroupChannel`, `GroupSpace`, and `SenderName` in the inbound
+context and calling `recordSessionMetaFromInbound` (or passing the same context
+to `updateLastRoute`).

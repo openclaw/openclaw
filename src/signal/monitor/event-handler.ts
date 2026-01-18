@@ -164,6 +164,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           to: entry.senderRecipient,
           accountId: route.accountId,
         },
+        ctx: ctxPayload,
       });
     }
 

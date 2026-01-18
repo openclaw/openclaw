@@ -176,6 +176,36 @@ describe("sessions", () => {
     });
   });
 
+  it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
+    const sessionKey = "agent:main:whatsapp:group:[redacted-email]";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(storePath, "{}", "utf-8");
+
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "whatsapp",
+        to: "[redacted-email]",
+      },
+      ctx: {
+        Provider: "whatsapp",
+        ChatType: "group",
+        GroupSubject: "Family",
+        From: "[redacted-email]",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.subject).toBe("Family");
+    expect(store[sessionKey]?.channel).toBe("whatsapp");
+    expect(store[sessionKey]?.groupId).toBe("[redacted-email]");
+    expect(store[sessionKey]?.origin?.label).toBe("Family id:[redacted-email]");
+    expect(store[sessionKey]?.origin?.provider).toBe("whatsapp");
+    expect(store[sessionKey]?.origin?.chatType).toBe("group");
+  });
+
   it("updateSessionStore preserves concurrent additions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
