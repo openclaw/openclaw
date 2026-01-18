@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 - Docs: make docs:list fail fast with a clear error if the docs directory is missing.
 - macOS: load menu session previews asynchronously so items populate while the menu is open.
 - macOS: use label colors for session preview text so previews render in menu subviews.
+- macOS: suppress usage error text in the menubar cost view.
 - Telegram: honor pairing allowlists for native slash commands.
 
 ## 2026.1.18-4

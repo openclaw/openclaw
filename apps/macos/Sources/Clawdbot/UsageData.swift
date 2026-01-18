@@ -75,18 +75,6 @@ struct UsageRow: Identifiable {
 extension GatewayUsageSummary {
     func primaryRows() -> [UsageRow] {
         self.providers.compactMap { provider in
-            if let error = provider.error, provider.windows.isEmpty {
-                return UsageRow(
-                    id: provider.provider,
-                    providerId: provider.provider,
-                    displayName: provider.displayName,
-                    plan: provider.plan,
-                    windowLabel: nil,
-                    usedPercent: nil,
-                    resetAt: nil,
-                    error: error)
-            }
-
             guard let window = provider.windows.max(by: { $0.usedPercent < $1.usedPercent }) else {
                 return nil
             }
@@ -99,7 +87,7 @@ extension GatewayUsageSummary {
                 windowLabel: window.label,
                 usedPercent: window.usedPercent,
                 resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
-                error: provider.error)
+                error: nil)
         }
     }
 }
