@@ -17,6 +17,7 @@ Docs: https://docs.clawd.bot
 - Memory: apply OpenAI batch defaults even without explicit remote config.
 - macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
 - Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
+- Discord: only emit slow listener warnings after 30s.
 ## 2026.1.17-3
 
 ### Changes
