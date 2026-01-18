@@ -213,6 +213,102 @@ describe("memory index", () => {
     expect(results[0]?.path).toContain("memory/2026-01-12.md");
   });
 
+  it("hybrid weights can favor vector-only matches over keyword-only matches", async () => {
+    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "vector-only.md"),
+      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "keyword-only.md"),
+      `${manyAlpha} beta id123.`,
+    );
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: {
+              minScore: 0,
+              maxResults: 200,
+              hybrid: { enabled: true, vectorWeight: 0.99, textWeight: 0.01, candidateMultiplier: 10 },
+            },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+
+    const status = manager.status();
+    if (!status.fts?.available) return;
+
+    const results = await manager.search("alpha beta id123");
+    expect(results.length).toBeGreaterThan(0);
+    const paths = results.map((r) => r.path);
+    expect(paths).toContain("memory/vector-only.md");
+    expect(paths).toContain("memory/keyword-only.md");
+    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
+    expect((vectorOnly?.score ?? 0) > (keywordOnly?.score ?? 0)).toBe(true);
+  });
+
+  it("hybrid weights can favor keyword matches when text weight dominates", async () => {
+    const manyAlpha = Array.from({ length: 200 }, () => "Alpha").join(" ");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "vector-only.md"),
+      "Alpha beta. Alpha beta. Alpha beta. Alpha beta.",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "keyword-only.md"),
+      `${manyAlpha} beta id123.`,
+    );
+
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: {
+              minScore: 0,
+              maxResults: 200,
+              hybrid: { enabled: true, vectorWeight: 0.01, textWeight: 0.99, candidateMultiplier: 10 },
+            },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+
+    const status = manager.status();
+    if (!status.fts?.available) return;
+
+    const results = await manager.search("alpha beta id123");
+    expect(results.length).toBeGreaterThan(0);
+    const paths = results.map((r) => r.path);
+    expect(paths).toContain("memory/vector-only.md");
+    expect(paths).toContain("memory/keyword-only.md");
+    const vectorOnly = results.find((r) => r.path === "memory/vector-only.md");
+    const keywordOnly = results.find((r) => r.path === "memory/keyword-only.md");
+    expect((keywordOnly?.score ?? 0) > (vectorOnly?.score ?? 0)).toBe(true);
+  });
+
   it("reports vector availability after probe", async () => {
     const cfg = {
       agents: {
