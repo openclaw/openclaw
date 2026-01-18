@@ -92,13 +92,13 @@ under `hooks.transformsDir` (see [Webhooks](/automation/webhook)).
 Use the Clawdbot helper to wire everything together (installs deps on macOS via brew):
 
 ```bash
-clawdbot hooks gmail setup \
+clawdbot webhooks gmail setup \
   --account clawdbot@gmail.com
 ```
 
 Defaults:
 - Uses Tailscale Funnel for the public push endpoint.
-- Writes `hooks.gmail` config for `clawdbot hooks gmail run`.
+- Writes `hooks.gmail` config for `clawdbot webhooks gmail run`.
 - Enables the Gmail hook preset (`hooks.presets: ["gmail"]`).
 
 Path note: when `tailscale.mode` is enabled, Clawdbot automatically sets
@@ -124,7 +124,7 @@ Gateway auto-start (recommended):
 Manual daemon (starts `gog gmail watch serve` + auto-renew):
 
 ```bash
-clawdbot hooks gmail run
+clawdbot webhooks gmail run
 ```
 
 ## One-time setup
@@ -191,7 +191,7 @@ Notes:
 - `--hook-url` points to Clawdbot `/hooks/gmail` (mapped; isolated run + summary to main).
 - `--include-body` and `--max-bytes` control the body snippet sent to Clawdbot.
 
-Recommended: `clawdbot hooks gmail run` wraps the same flow and auto-renews the watch.
+Recommended: `clawdbot webhooks gmail run` wraps the same flow and auto-renews the watch.
 
 ## Expose the handler (advanced, unsupported)
 

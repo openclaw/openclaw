@@ -45,3 +45,24 @@ export function isControlCommandMessage(
   const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
   return isAbortTrigger(normalized);
 }
+
+/**
+ * Coarse detection for inline directives/shortcuts (e.g. "hey /status") so channel monitors
+ * can decide whether to compute CommandAuthorized for a message.
+ *
+ * This intentionally errs on the side of false positives; CommandAuthorized only gates
+ * command/directive execution, not normal chat replies.
+ */
+export function hasInlineCommandTokens(text?: string): boolean {
+  const body = text ?? "";
+  if (!body.trim()) return false;
+  return /(?:^|\s)[/!][a-z]/i.test(body);
+}
+
+export function shouldComputeCommandAuthorized(
+  text?: string,
+  cfg?: ClawdbotConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);
+}

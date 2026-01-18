@@ -9,6 +9,17 @@ read_when:
 
 Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel.
 
+## Slash command
+
+Use `/subagents` to inspect or control sub-agent runs for the **current session**:
+- `/subagents list`
+- `/subagents stop <id|#|all>`
+- `/subagents log <id|#> [limit] [tools]`
+- `/subagents info <id|#>`
+- `/subagents send <id|#> <message>`
+
+`/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
+
 Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
 - Keep sub-agents isolated by default (session separation + optional sandboxing).
@@ -27,6 +38,7 @@ Tool params:
 - `label?` (optional)
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
+- `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
 
@@ -42,6 +54,15 @@ Auto-archive:
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
+
+## Authentication
+
+Sub-agent auth is resolved by **agent id**, not by session type:
+- The sub-agent session key is `agent:<agentId>:subagent:<uuid>`.
+- The auth store is loaded from that agent’s `agentDir`.
+- The main agent’s auth profiles are merged in as a **fallback**; agent profiles override main profiles on conflicts.
+
+Note: the merge is additive, so main profiles are always available as fallbacks. Fully isolated auth per agent is not supported yet.
 
 ## Announce
 
@@ -98,6 +119,10 @@ Override via config:
 Sub-agents use a dedicated in-process queue lane:
 - Lane name: `subagent`
 - Concurrency: `agents.defaults.subagents.maxConcurrent` (default `1`)
+
+## Stopping
+
+- Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it.
 
 ## Limitations
 

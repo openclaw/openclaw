@@ -9,16 +9,20 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
 } from "../../slack/accounts.js";
+import { resolveSlackChannelAllowlist } from "../../slack/resolve-channels.js";
+import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
 import { probeSlack } from "../../slack/probe.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { getChatChannelMeta } from "../registry.js";
+import { SlackConfigSchema } from "../../config/zod-schema.providers-core.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { resolveSlackGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { normalizeSlackMessagingTarget } from "./normalize-target.js";
+import { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import { slackOnboardingAdapter } from "./onboarding/slack.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -26,6 +30,14 @@ import {
   migrateBaseNameToDefaultAccount,
 } from "./setup-helpers.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "./types.js";
+import {
+  listSlackDirectoryGroupsFromConfig,
+  listSlackDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
+  listSlackDirectoryGroupsLive,
+  listSlackDirectoryPeersLive,
+} from "../../slack/directory-live.js";
 
 const meta = getChatChannelMeta("slack");
 
@@ -80,6 +92,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
   reload: { configPrefixes: ["channels.slack"] },
+  configSchema: buildChannelConfigSchema(SlackConfigSchema),
   config: {
     listAccountIds: (cfg) => listSlackAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSlackAccount({ cfg, accountId }),
@@ -131,19 +144,26 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+    collectWarnings: ({ account, cfg }) => {
+      const warnings: string[] = [];
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open";
       const channelAllowlistConfigured =
         Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
-      if (channelAllowlistConfigured) {
-        return [
-          `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
-        ];
+
+      if (groupPolicy === "open") {
+        if (channelAllowlistConfigured) {
+          warnings.push(
+            `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+          );
+        } else {
+          warnings.push(
+            `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
+          );
+        }
       }
-      return [
-        `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels.`,
-      ];
+
+      return warnings;
     },
   },
   groups: {
@@ -168,6 +188,48 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeSlackMessagingTarget,
+    targetResolver: {
+      looksLikeId: looksLikeSlackTargetId,
+      hint: "<channelId|user:ID|channel:ID>",
+    },
+  },
+  directory: {
+    self: async () => null,
+    listPeers: async (params) => listSlackDirectoryPeersFromConfig(params),
+    listGroups: async (params) => listSlackDirectoryGroupsFromConfig(params),
+    listPeersLive: async (params) => listSlackDirectoryPeersLive(params),
+    listGroupsLive: async (params) => listSlackDirectoryGroupsLive(params),
+  },
+  resolver: {
+    resolveTargets: async ({ cfg, accountId, inputs, kind }) => {
+      const account = resolveSlackAccount({ cfg, accountId });
+      const token = account.config.userToken?.trim() || account.botToken?.trim();
+      if (!token) {
+        return inputs.map((input) => ({
+          input,
+          resolved: false,
+          note: "missing Slack token",
+        }));
+      }
+      if (kind === "group") {
+        const resolved = await resolveSlackChannelAllowlist({ token, entries: inputs });
+        return resolved.map((entry) => ({
+          input: entry.input,
+          resolved: entry.resolved,
+          id: entry.id,
+          name: entry.name,
+          note: entry.archived ? "archived" : undefined,
+        }));
+      }
+      const resolved = await resolveSlackUserAllowlist({ token, entries: inputs });
+      return resolved.map((entry) => ({
+        input: entry.input,
+        resolved: entry.resolved,
+        id: entry.id,
+        name: entry.name,
+        note: entry.note,
+      }));
+    },
   },
   actions: {
     listActions: ({ cfg }) => {
@@ -435,16 +497,6 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     deliveryMode: "direct",
     chunker: null,
     textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("Delivering to Slack requires --to <channelId|user:ID|channel:ID>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ to, text, accountId, deps, replyToId, cfg }) => {
       const send = deps?.sendSlack ?? sendMessageSlack;
       const account = resolveSlackAccount({ cfg, accountId });

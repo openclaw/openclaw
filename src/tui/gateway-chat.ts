@@ -52,12 +52,12 @@ export type GatewaySessionList = {
     inputTokens?: number | null;
     outputTokens?: number | null;
     totalTokens?: number | null;
-    responseUsage?: "on" | "off";
+    responseUsage?: "on" | "off" | "tokens" | "full";
     modelProvider?: string;
     label?: string;
     displayName?: string;
     provider?: string;
-    room?: string;
+    groupChannel?: string;
     space?: string;
     subject?: string;
     chatType?: string;

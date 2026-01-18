@@ -497,6 +497,23 @@ export async function ensureChromeExtensionRelayServer(opts: {
           return;
         }
 
+        // Keep cached tab metadata fresh for /json/list.
+        // After navigation, Chrome updates URL/title via Target.targetInfoChanged.
+        if (method === "Target.targetInfoChanged") {
+          const changed = (params ?? {}) as { targetInfo?: { targetId?: string; type?: string } };
+          const targetInfo = changed?.targetInfo;
+          const targetId = targetInfo?.targetId;
+          if (targetId && (targetInfo?.type ?? "page") === "page") {
+            for (const [sid, target] of connectedTargets) {
+              if (target.targetId !== targetId) continue;
+              connectedTargets.set(sid, {
+                ...target,
+                targetInfo: { ...target.targetInfo, ...(targetInfo as object) },
+              });
+            }
+          }
+        }
+
         broadcastToCdpClients({ method, params, sessionId });
       }
     });

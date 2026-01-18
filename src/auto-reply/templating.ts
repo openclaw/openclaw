@@ -1,12 +1,21 @@
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../media-understanding/types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
 
 export type MsgContext = {
   Body?: string;
+  /**
+   * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
+   * Should use real newlines (`\n`), not escaped `\\n`.
+   */
+  BodyForAgent?: string;
   /**
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
@@ -16,6 +25,11 @@ export type MsgContext = {
    * Prefer for command detection; RawBody is treated as legacy alias.
    */
   CommandBody?: string;
+  /**
+   * Command parsing body. Prefer this over CommandBody/RawBody when set.
+   * Should be the "clean" text (no history/sender context).
+   */
+  BodyForCommands?: string;
   CommandArgs?: CommandArgs;
   From?: string;
   To?: string;
@@ -30,6 +44,13 @@ export type MsgContext = {
   ReplyToId?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ForwardedFrom?: string;
+  ForwardedFromType?: string;
+  ForwardedFromId?: string;
+  ForwardedFromUsername?: string;
+  ForwardedFromTitle?: string;
+  ForwardedFromSignature?: string;
+  ForwardedDate?: number;
   ThreadStarterBody?: string;
   ThreadLabel?: string;
   MediaPath?: string;
@@ -38,10 +59,19 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Remote host for SCP when media lives on a different machine (e.g., clawdbot@192.168.64.3). */
+  MediaRemoteHost?: string;
   Transcript?: string;
+  MediaUnderstanding?: MediaUnderstandingOutput[];
+  MediaUnderstandingDecisions?: MediaUnderstandingDecision[];
+  Prompt?: string;
+  MaxChars?: number;
   ChatType?: string;
+  /** Human label for envelope headers (conversation label, not sender). */
+  ConversationLabel?: string;
   GroupSubject?: string;
-  GroupRoom?: string;
+  /** Human label for channel-like group conversations (e.g. #general, #support). */
+  GroupChannel?: string;
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;
@@ -73,6 +103,19 @@ export type MsgContext = {
    * The chat/channel/user ID where the reply should be sent.
    */
   OriginatingTo?: string;
+  /**
+   * Messages from hooks to be included in the response.
+   * Used for hook confirmation messages like "Session context saved to memory".
+   */
+  HookMessages?: string[];
+};
+
+export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
+  /**
+   * Always set by finalizeInboundContext().
+   * Default-deny: missing/undefined becomes false.
+   */
+  CommandAuthorized: boolean;
 };
 
 export type TemplateContext = MsgContext & {

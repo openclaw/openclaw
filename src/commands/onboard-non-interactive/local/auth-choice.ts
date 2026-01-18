@@ -13,20 +13,24 @@ import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-tok
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyKimiCodeConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
+  applyVercelAiGatewayConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setKimiCodeApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setVercelAiGatewayApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
@@ -191,6 +195,25 @@ export async function applyNonInteractiveAuthChoice(params: {
     return applyOpenrouterConfig(nextConfig);
   }
 
+  if (authChoice === "ai-gateway-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "vercel-ai-gateway",
+      cfg: baseConfig,
+      flagValue: opts.aiGatewayApiKey,
+      flagName: "--ai-gateway-api-key",
+      envVar: "AI_GATEWAY_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setVercelAiGatewayApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "vercel-ai-gateway:default",
+      provider: "vercel-ai-gateway",
+      mode: "api_key",
+    });
+    return applyVercelAiGatewayConfig(nextConfig);
+  }
+
   if (authChoice === "moonshot-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "moonshot",
@@ -208,6 +231,25 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyMoonshotConfig(nextConfig);
+  }
+
+  if (authChoice === "kimi-code-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "kimi-code",
+      cfg: baseConfig,
+      flagValue: opts.kimiCodeApiKey,
+      flagName: "--kimi-code-api-key",
+      envVar: "KIMICODE_API_KEY",
+      runtime,
+    });
+    if (!resolved) return null;
+    if (resolved.source !== "profile") await setKimiCodeApiKey(resolved.key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kimi-code:default",
+      provider: "kimi-code",
+      mode: "api_key",
+    });
+    return applyKimiCodeConfig(nextConfig);
   }
 
   if (authChoice === "synthetic-api-key") {
@@ -314,10 +356,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "oauth" ||
     authChoice === "chutes" ||
     authChoice === "openai-codex" ||
-    authChoice === "antigravity"
+    authChoice === "qwen-portal"
   ) {
-    const label = authChoice === "antigravity" ? "Antigravity" : "OAuth";
-    runtime.error(`${label} requires interactive mode.`);
+    runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);
     return null;
   }

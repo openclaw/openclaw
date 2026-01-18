@@ -2,9 +2,11 @@ import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
+import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
+import { recordPendingHistoryEntry } from "../../../auto-reply/reply/history.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
@@ -64,24 +66,25 @@ export function applyGroupGating(params: {
 
   if (activationCommand.hasCommand && !owner) {
     params.logVerbose(`Ignoring /activation from non-owner in group ${params.conversationId}`);
+    if (params.groupHistoryLimit > 0) {
+      const sender =
+        params.msg.senderName && params.msg.senderE164
+          ? `${params.msg.senderName} (${params.msg.senderE164})`
+          : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+      recordPendingHistoryEntry({
+        historyMap: params.groupHistories,
+        historyKey: params.groupHistoryKey,
+        limit: params.groupHistoryLimit,
+        entry: {
+          sender,
+          body: params.msg.body,
+          timestamp: params.msg.timestamp,
+          id: params.msg.id,
+          senderJid: params.msg.senderJid,
+        },
+      });
+    }
     return { shouldProcess: false };
-  }
-
-  if (!shouldBypassMention) {
-    const history = params.groupHistories.get(params.groupHistoryKey) ?? [];
-    const sender =
-      params.msg.senderName && params.msg.senderE164
-        ? `${params.msg.senderName} (${params.msg.senderE164})`
-        : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
-    history.push({
-      sender,
-      body: params.msg.body,
-      timestamp: params.msg.timestamp,
-      id: params.msg.id,
-      senderJid: params.msg.senderJid,
-    });
-    while (history.length > params.groupHistoryLimit) history.shift();
-    params.groupHistories.set(params.groupHistoryKey, history);
   }
 
   const mentionDebug = debugMention(params.msg, mentionConfig, params.authDir);
@@ -94,7 +97,6 @@ export function applyGroupGating(params: {
     "group mention debug",
   );
   const wasMentioned = mentionDebug.wasMentioned;
-  params.msg.wasMentioned = wasMentioned;
   const activation = resolveGroupActivationFor({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -102,10 +104,46 @@ export function applyGroupGating(params: {
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  if (!shouldBypassMention && requireMention && !wasMentioned) {
+  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
+  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
+  const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
+  const replySenderE164 = params.msg.replyToSenderE164
+    ? normalizeE164(params.msg.replyToSenderE164)
+    : null;
+  const implicitMention = Boolean(
+    (selfJid && replySenderJid && selfJid === replySenderJid) ||
+    (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+  );
+  const mentionGate = resolveMentionGating({
+    requireMention,
+    canDetectMention: true,
+    wasMentioned,
+    implicitMention,
+    shouldBypassMention,
+  });
+  params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
+  if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
     params.logVerbose(
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );
+    if (params.groupHistoryLimit > 0) {
+      const sender =
+        params.msg.senderName && params.msg.senderE164
+          ? `${params.msg.senderName} (${params.msg.senderE164})`
+          : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+      recordPendingHistoryEntry({
+        historyMap: params.groupHistories,
+        historyKey: params.groupHistoryKey,
+        limit: params.groupHistoryLimit,
+        entry: {
+          sender,
+          body: params.msg.body,
+          timestamp: params.msg.timestamp,
+          id: params.msg.id,
+          senderJid: params.msg.senderJid,
+        },
+      });
+    }
     return { shouldProcess: false };
   }
 

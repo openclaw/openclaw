@@ -9,6 +9,29 @@ read_when:
 
 Runtime baseline: **Node >=22**.
 
+If the installer says it succeeded but you later see `clawdbot: command not found`, it’s usually a Node/npm PATH issue (global npm bin dir not on PATH). See the section below.
+
+## Node.js + npm (PATH sanity)
+
+Quick diagnosis:
+
+```bash
+node -v
+npm -v
+npm bin -g
+echo "$PATH"
+```
+
+If the output of `npm bin -g` is **not** present inside `echo "$PATH"`, your shell can’t find global npm binaries (including `clawdbot`).
+
+Fix: add it to your shell startup file (zsh: `~/.zshrc`, bash: `~/.bashrc`):
+
+```bash
+export PATH="/path/from/npm/bin/-g:$PATH"
+```
+
+Then open a new terminal (or `rehash` in zsh / `hash -r` in bash).
+
 ## Recommended (installer script)
 
 ```bash

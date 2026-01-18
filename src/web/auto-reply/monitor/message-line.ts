@@ -1,5 +1,5 @@
 import { resolveMessagePrefix } from "../../../agents/identity.js";
-import { formatAgentEnvelope } from "../../../auto-reply/envelope.js";
+import { formatInboundEnvelope } from "../../../auto-reply/envelope.js";
 import type { loadConfig } from "../../../config/config.js";
 import type { WebInboundMsg } from "../types.js";
 
@@ -22,18 +22,20 @@ export function buildInboundLine(params: {
     hasAllowFrom: (cfg.channels?.whatsapp?.allowFrom?.length ?? 0) > 0,
   });
   const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
-  const senderLabel =
-    msg.chatType === "group" ? `${msg.senderName ?? msg.senderE164 ?? "Someone"}: ` : "";
   const replyContext = formatReplyContext(msg);
-  const baseLine = `${prefixStr}${senderLabel}${msg.body}${
-    replyContext ? `\n\n${replyContext}` : ""
-  }`;
+  const baseLine = `${prefixStr}${msg.body}${replyContext ? `\n\n${replyContext}` : ""}`;
 
   // Wrap with standardized envelope for the agent.
-  return formatAgentEnvelope({
+  return formatInboundEnvelope({
     channel: "WhatsApp",
     from: msg.chatType === "group" ? msg.from : msg.from?.replace(/^whatsapp:/, ""),
     timestamp: msg.timestamp,
     body: baseLine,
+    chatType: msg.chatType,
+    sender: {
+      name: msg.senderName,
+      e164: msg.senderE164,
+      id: msg.senderJid,
+    },
   });
 }

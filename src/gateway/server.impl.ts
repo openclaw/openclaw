@@ -22,6 +22,7 @@ import {
   refreshRemoteBinsForConnectedNodes,
   setSkillsRemoteBridge,
 } from "../infra/skills-remote.js";
+import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -134,7 +135,7 @@ export async function startGatewayServer(
   // Ensure all default port derivations (browser/bridge/canvas) see the actual runtime port.
   process.env.CLAWDBOT_GATEWAY_PORT = String(port);
 
-  const configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
     if (isNixMode) {
       throw new Error(
@@ -155,6 +156,19 @@ export async function startGatewayServer(
           .join("\n")}`,
       );
     }
+  }
+
+  configSnapshot = await readConfigFileSnapshot();
+  if (configSnapshot.exists && !configSnapshot.valid) {
+    const issues =
+      configSnapshot.issues.length > 0
+        ? configSnapshot.issues
+            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+            .join("\n")
+        : "Unknown validation issue.";
+    throw new Error(
+      `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "clawdbot doctor" to repair, then retry.`,
+    );
   }
 
   const cfgAtStart = loadConfig();
@@ -393,6 +407,7 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
+  scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
   const tailscaleCleanup = await startGatewayTailscaleExposure({
     tailscaleMode,
     resetOnExit: tailscaleConfig.resetOnExit,

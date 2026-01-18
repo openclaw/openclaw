@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-profile-script
+  namespace: clawdbot
+data:
+  create-auth-profile.sh: |
+    #!/bin/sh
+    set -e
+
+    AUTH_DIR="/home/node/.clawdbot/agents/main/agent"
+    AUTH_FILE="$AUTH_DIR/auth-profiles.json"
+    PLUGINS_FILE="/home/node/.clawdbot/plugins.json"
+
+    echo "Creating auth profiles directory: $AUTH_DIR"
+    mkdir -p "$AUTH_DIR"
+
+    # Create auth-profiles.json - prioritize CLAUDE_AI_SESSION_KEY (OAuth token)
+    echo "Generating auth-profiles.json..."
+
+    if [ -n "$CLAUDE_AI_SESSION_KEY" ]; then
+      cat > "$AUTH_FILE" <<'EOF'
+    {
+      "profiles": {
+        "anthropic:oauth-session": {
+          "provider": "anthropic",
+          "mode": "oauth"
+        }
+      },
+      "order": {
+        "anthropic": ["anthropic:oauth-session"]
+      }
+    }
+    EOF
+      echo "✅ Auth profile created with Claude AI Session Key (OAuth)"
+    elif [ -n "$ANTHROPIC_API_KEY" ] && [ "$ANTHROPIC_API_KEY" != "sk-ant-placeholder" ]; then
+      cat > "$AUTH_FILE" <<'EOF'
+    {
+      "profiles": {
+        "anthropic:env-key": {
+          "provider": "anthropic",
+          "mode": "api_key"
+        }
+      },
+      "order": {
+        "anthropic": ["anthropic:env-key"]
+      }
+    }
+    EOF
+      echo "✅ Auth profile created with Anthropic API key"
+    elif [ -n "$OPENAI_API_KEY" ]; then
+      cat > "$AUTH_FILE" <<'EOF'
+    {
+      "profiles": {
+        "openai:env-key": {
+          "provider": "openai",
+          "mode": "api_key"
+        }
+      },
+      "order": {
+        "openai": ["openai:env-key"]
+      }
+    }
+    EOF
+      echo "✅ Auth profile created with OpenAI API key"
+    else
+      echo "⚠️ No valid credentials found, creating minimal auth profile"
+      cat > "$AUTH_FILE" <<'EOF'
+    {
+      "profiles": {},
+      "order": {}
+    }
+    EOF
+    fi
+
+    echo "Auth profile file created at: $AUTH_FILE"
+    cat "$AUTH_FILE"
+
+    # Create plugins.json to enable zalo plugin
+    echo "Creating plugins.json to enable zalo..."
+    cat > "$PLUGINS_FILE" <<'EOF'
+    {
+      "enabled": {
+        "zalo": true
+      }
+    }
+    EOF
+    echo "✅ Plugins config created at $PLUGINS_FILE"
+    cat "$PLUGINS_FILE"

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
-import { HookMappingSchema, HooksGmailSchema } from "./zod-schema.hooks.js";
+import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
@@ -59,6 +59,12 @@ export const ClawdbotSchema = z
           .optional(),
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),
+      })
+      .optional(),
+    update: z
+      .object({
+        channel: z.union([z.literal("stable"), z.literal("beta")]).optional(),
+        checkOnStart: z.boolean().optional(),
       })
       .optional(),
     browser: z
@@ -148,6 +154,7 @@ export const ClawdbotSchema = z
         transformsDir: z.string().optional(),
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
+        internal: InternalHooksSchema,
       })
       .optional(),
     web: z
@@ -315,6 +322,11 @@ export const ClawdbotSchema = z
         load: z
           .object({
             paths: z.array(z.string()).optional(),
+          })
+          .optional(),
+        slots: z
+          .object({
+            memory: z.string().optional(),
           })
           .optional(),
         entries: z

@@ -216,6 +216,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
+    expect(prompt).toContain("respond with ONLY: NO_REPLY");
   });
 
   it("includes runtime provider capabilities when present", () => {

@@ -158,6 +158,7 @@ export function createFollowupRunner(params: {
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,
@@ -227,7 +228,7 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
         });
-        if (queued.run.verboseLevel === "on") {
+        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,

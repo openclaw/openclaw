@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { Type } from "@sinclair/typebox";
 
+import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import {
@@ -9,6 +10,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
@@ -28,11 +30,21 @@ const SessionsSpawnToolSchema = Type.Object({
   label: Type.Optional(Type.String()),
   agentId: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  thinking: Type.Optional(Type.String()),
   runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
 });
+
+function splitModelRef(ref?: string) {
+  if (!ref) return { provider: undefined, model: undefined };
+  const trimmed = ref.trim();
+  if (!trimmed) return { provider: undefined, model: undefined };
+  const [provider, model] = trimmed.split("/", 2);
+  if (model) return { provider, model };
+  return { provider: undefined, model: trimmed };
+}
 
 function normalizeModelSelection(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -48,6 +60,7 @@ function normalizeModelSelection(value: unknown): string | undefined {
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -62,10 +75,15 @@ export function createSessionsSpawnTool(opts?: {
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const requestedAgentId = readStringParam(params, "agentId");
       const modelOverride = readStringParam(params, "model");
+      const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
           ? (params.cleanup as "keep" | "delete")
           : "keep";
+      const requesterOrigin = normalizeDeliveryContext({
+        channel: opts?.agentChannel,
+        accountId: opts?.agentAccountId,
+      });
       const runTimeoutSeconds = (() => {
         const explicit =
           typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
@@ -137,6 +155,19 @@ export function createSessionsSpawnTool(opts?: {
         normalizeModelSelection(modelOverride) ??
         normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
         normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+      let thinkingOverride: string | undefined;
+      if (thinkingOverrideRaw) {
+        const normalized = normalizeThinkLevel(thinkingOverrideRaw);
+        if (!normalized) {
+          const { provider, model } = splitModelRef(resolvedModel);
+          const hint = formatThinkingLevels(provider, model);
+          return jsonResult({
+            status: "error",
+            error: `Invalid thinking level "${thinkingOverrideRaw}". Use one of: ${hint}.`,
+          });
+        }
+        thinkingOverride = normalized;
+      }
       if (resolvedModel) {
         try {
           await callGateway({
@@ -162,7 +193,7 @@ export function createSessionsSpawnTool(opts?: {
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
-        requesterChannel: opts?.agentChannel,
+        requesterOrigin,
         childSessionKey,
         label: label || undefined,
         task,
@@ -176,11 +207,12 @@ export function createSessionsSpawnTool(opts?: {
           params: {
             message: task,
             sessionKey: childSessionKey,
-            channel: opts?.agentChannel,
+            channel: requesterOrigin?.channel,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
+            thinking: thinkingOverride,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
             label: label || undefined,
             spawnedBy: shouldPatchSpawnedBy ? requesterInternalKey : undefined,
@@ -205,7 +237,7 @@ export function createSessionsSpawnTool(opts?: {
         runId: childRunId,
         childSessionKey,
         requesterSessionKey: requesterInternalKey,
-        requesterChannel: opts?.agentChannel,
+        requesterOrigin,
         requesterDisplayKey,
         task,
         cleanup,

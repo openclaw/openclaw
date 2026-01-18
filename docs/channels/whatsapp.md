@@ -82,15 +82,13 @@ When the wizard asks for your personal WhatsApp number, enter the phone you will
     "selfChatMode": true,
     "dmPolicy": "allowlist",
     "allowFrom": ["+15551234567"]
-  },
-  "messages": {
-    "responsePrefix": "[clawdbot]"
   }
 }
 ```
 
-Tip: set `messages.responsePrefix` explicitly if you want a consistent bot prefix
-on outbound replies.
+Self-chat replies default to `[{identity.name}]` when set (otherwise `[clawdbot]`)
+if `messages.responsePrefix` is unset. Set it explicitly to customize or disable
+the prefix (use `""` to remove it).
 
 ### Number sourcing tips
 - **Local eSIM** from your country's mobile carrier (most reliable)
@@ -204,9 +202,9 @@ The wizard uses it to set your **allowlist/owner** so your own DMs are permitted
   - `always`: always triggers.
 - `/activation mention|always` is owner-only and must be sent as a standalone message.
 - Owner = `channels.whatsapp.allowFrom` (or self E.164 if unset).
-- **History injection**:
-  - Recent messages (default 50) inserted under:
-    `[Chat messages since your last reply - for context]`
+- **History injection** (pending-only):
+  - Recent *unprocessed* messages (default 50) inserted under:
+    `[Chat messages since your last reply - for context]` (messages already in the session are not re-injected)
   - Current message under:
     `[Current message - respond to this]`
   - Sender suffix appended: `[from: Name (+E164)]`

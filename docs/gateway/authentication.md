@@ -44,7 +44,7 @@ clawdbot doctor
 If you’d rather not manage env vars yourself, the onboarding wizard can store
 API keys for daemon use: `clawdbot onboard`.
 
-See [/start/faq](/start/faq) for details on env inheritance (`env.shellEnv`,
+See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.clawdbot/.env`, systemd/launchd).
 
 ## Anthropic: Claude Code CLI setup-token (supported)

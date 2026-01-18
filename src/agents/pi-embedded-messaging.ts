@@ -31,12 +31,3 @@ export function isMessagingToolSendAction(
   if (!plugin?.actions?.extractToolSend) return false;
   return Boolean(plugin.actions.extractToolSend({ args })?.to);
 }
-
-export function normalizeTargetForProvider(provider: string, raw?: string): string | undefined {
-  if (!raw) return undefined;
-  const providerId = normalizeChannelId(provider);
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const normalized =
-    plugin?.messaging?.normalizeTarget?.(raw) ?? (raw.trim().toLowerCase() || undefined);
-  return normalized || undefined;
-}

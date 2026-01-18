@@ -27,16 +27,6 @@ function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]): Clawdb
   return mergeWhatsAppConfig(cfg, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
 }
 
-function setMessagesResponsePrefix(cfg: ClawdbotConfig, responsePrefix?: string): ClawdbotConfig {
-  return {
-    ...cfg,
-    messages: {
-      ...cfg.messages,
-      responsePrefix,
-    },
-  };
-}
-
 function setWhatsAppSelfChatMode(cfg: ClawdbotConfig, selfChatMode: boolean): ClawdbotConfig {
   return mergeWhatsAppConfig(cfg, { selfChatMode });
 }
@@ -65,7 +55,6 @@ async function promptWhatsAppAllowFrom(
   const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
   const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
-  const existingResponsePrefix = cfg.messages?.responsePrefix;
 
   if (options?.forceAllowlist) {
     await prompter.note(
@@ -96,17 +85,8 @@ async function promptWhatsAppAllowFrom(
     let next = setWhatsAppSelfChatMode(cfg, true);
     next = setWhatsAppDmPolicy(next, "allowlist");
     next = setWhatsAppAllowFrom(next, unique);
-    if (existingResponsePrefix === undefined) {
-      next = setMessagesResponsePrefix(next, "[clawdbot]");
-    }
     await prompter.note(
-      [
-        "Allowlist mode enabled.",
-        `- allowFrom includes ${normalized}`,
-        existingResponsePrefix === undefined
-          ? "- responsePrefix set to [clawdbot]"
-          : "- responsePrefix left unchanged",
-      ].join("\n"),
+      ["Allowlist mode enabled.", `- allowFrom includes ${normalized}`].join("\n"),
       "WhatsApp allowlist",
     );
     return next;
@@ -163,17 +143,11 @@ async function promptWhatsAppAllowFrom(
     let next = setWhatsAppSelfChatMode(cfg, true);
     next = setWhatsAppDmPolicy(next, "allowlist");
     next = setWhatsAppAllowFrom(next, unique);
-    if (existingResponsePrefix === undefined) {
-      next = setMessagesResponsePrefix(next, "[clawdbot]");
-    }
     await prompter.note(
       [
         "Personal phone mode enabled.",
         "- dmPolicy set to allowlist (pairing skipped)",
         `- allowFrom includes ${normalized}`,
-        existingResponsePrefix === undefined
-          ? "- responsePrefix set to [clawdbot]"
-          : "- responsePrefix left unchanged",
       ].join("\n"),
       "WhatsApp personal phone",
     );

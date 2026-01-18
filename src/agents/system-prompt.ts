@@ -95,10 +95,11 @@ function buildMessagingSection(params: {
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
+          `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
             : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to add "inlineButtons" to ${params.runtimeChannel}.capabilities or ${params.runtimeChannel}.accounts.<id>.capabilities.`
+              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
         ]
           .filter(Boolean)
@@ -165,7 +166,7 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    exec: "Run shell commands",
+    exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
     web_search: "Search the web (Brave API)",
     web_fetch: "Fetch and extract readable content from a URL",
@@ -182,7 +183,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
     session_status:
-      "Show a /status-equivalent status card (usage/cost + Reasoning/Verbose/Elevated); optional per-session model override",
+      "Show a /status-equivalent status card (usage + Reasoning/Verbose/Elevated); optional per-session model override",
     image: "Analyze an image with the configured image model",
   };
 
@@ -327,6 +328,11 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
     "",
+    "## Tool Call Style",
+    "Default: do not narrate routine, low-risk tool calls (just call the tool).",
+    "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
+    "Keep narration brief and value-dense; avoid repeating obvious steps.",
+    "",
     "## Clawdbot CLI Quick Reference",
     "Clawdbot is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
@@ -409,9 +415,7 @@ export function buildAgentSystemPrompt(params: {
             ? "You may also send /elevated on|off when needed."
             : "",
           params.sandboxInfo.elevated?.allowed
-            ? `Current elevated level: ${
-                params.sandboxInfo.elevated.defaultLevel
-              } (on runs exec on host; off runs in sandbox).`
+            ? `Current elevated level: ${params.sandboxInfo.elevated.defaultLevel} (on runs exec on host; off runs in sandbox).`
             : "",
         ]
           .filter(Boolean)

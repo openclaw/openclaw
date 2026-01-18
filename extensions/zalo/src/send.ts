@@ -1,4 +1,5 @@
-import type { CoreConfig } from "./types.js";
+import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloAccount } from "./accounts.js";
@@ -8,7 +9,7 @@ import { resolveZaloToken } from "./token.js";
 export type ZaloSendOptions = {
   token?: string;
   accountId?: string;
-  cfg?: CoreConfig;
+  cfg?: ClawdbotConfig;
   mediaUrl?: string;
   caption?: string;
   verbose?: boolean;
@@ -37,7 +38,7 @@ function resolveSendContext(options: ZaloSendOptions): {
 
   const token = options.token ?? resolveZaloToken(undefined, options.accountId).token;
   const proxy = options.proxy;
-  return { token: token || process.env.ZALO_BOT_TOKEN?.trim() || "", fetcher: resolveZaloProxyFetch(proxy) };
+  return { token, fetcher: resolveZaloProxyFetch(proxy) };
 }
 
 export async function sendMessageZalo(

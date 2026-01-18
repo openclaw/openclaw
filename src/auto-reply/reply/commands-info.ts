@@ -1,4 +1,5 @@
 import { logVerbose } from "../../globals.js";
+import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import { buildCommandsMessage, buildHelpMessage } from "../status.js";
 import { buildStatusReply } from "./commands-status.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -28,9 +29,15 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     );
     return { shouldContinue: false };
   }
+  const skillCommands =
+    params.skillCommands ??
+    listSkillCommandsForWorkspace({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+    });
   return {
     shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg) },
+    reply: { text: buildCommandsMessage(params.cfg, skillCommands) },
   };
 };
 
@@ -61,6 +68,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
     isGroup: params.isGroup,
     defaultGroupActivation: params.defaultGroupActivation,
+    mediaDecisions: params.ctx.MediaUnderstandingDecisions,
   });
   return { shouldContinue: false, reply };
 };

@@ -1,0 +1,11 @@
+{
+  "name": "@clawdbot/google-antigravity-auth",
+  "version": "2026.1.17-1",
+  "type": "module",
+  "description": "Clawdbot Google Antigravity OAuth provider plugin",
+  "clawdbot": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

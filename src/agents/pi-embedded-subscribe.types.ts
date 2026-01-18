@@ -1,14 +1,18 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
-import type { ReasoningLevel } from "../auto-reply/thinking.js";
+import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
+
+export type ToolResultFormat = "markdown" | "plain";
 
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
-  verboseLevel?: "off" | "on";
+  verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
+  toolResultFormat?: ToolResultFormat;
   shouldEmitToolResult?: () => boolean;
+  shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onBlockReply?: (payload: {

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
@@ -7,6 +8,17 @@ import { loadSessionStore } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
+
+async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
+  const { workspaceDir, name, description } = params;
+  const skillDir = path.join(workspaceDir, "skills", name);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
+    "utf-8",
+  );
+}
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -69,6 +81,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -78,7 +91,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -96,6 +109,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -105,7 +119,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -123,6 +137,7 @@ describe("directive behavior", () => {
           Body: "/thinking xhigh",
           From: "+1004",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -132,7 +147,7 @@ describe("directive behavior", () => {
               workspace: path.join(home, "clawd"),
             },
           },
-          whatsapp: { allowFrom: ["*"] },
+          channels: { whatsapp: { allowFrom: ["*"] } },
           session: { store: storePath },
         },
       );
@@ -152,6 +167,7 @@ describe("directive behavior", () => {
           Body: "/help",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -174,6 +190,44 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("treats skill commands as reserved for model aliases", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const workspace = path.join(home, "clawd");
+      await writeSkill({
+        workspaceDir: workspace,
+        name: "demo-skill",
+        description: "Demo skill",
+      });
+
+      await getReplyFromConfig(
+        {
+          Body: "/demo_skill",
+          From: "+1222",
+          To: "+1222",
+          CommandAuthorized: true,
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace,
+              models: {
+                "anthropic/claude-opus-4-5": { alias: "demo_skill" },
+              },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain('Use the "demo-skill" skill');
+    });
+  });
   it("errors on invalid queue options", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -183,6 +237,7 @@ describe("directive behavior", () => {
           Body: "/queue collect debounce:bogus cap:zero drop:maybe",
           From: "+1222",
           To: "+1222",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -214,6 +269,7 @@ describe("directive behavior", () => {
           From: "+1222",
           To: "+1222",
           Provider: "whatsapp",
+          CommandAuthorized: true,
         },
         {},
         {
@@ -251,7 +307,7 @@ describe("directive behavior", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
 
       const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222" },
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {

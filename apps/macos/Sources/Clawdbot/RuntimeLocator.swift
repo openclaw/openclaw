@@ -133,8 +133,7 @@ enum RuntimeLocator {
         process.standardError = pipe
 
         do {
-            try process.run()
-            process.waitUntilExit()
+            let data = try process.runAndReadToEnd(from: pipe)
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
@@ -149,7 +148,6 @@ enum RuntimeLocator {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            let data = pipe.fileHandleForReading.readToEndSafely()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)

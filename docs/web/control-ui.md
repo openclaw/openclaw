@@ -30,7 +30,7 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 ## What it can do (today)
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Connections: WhatsApp/Telegram status + QR login + Telegram config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: WhatsApp/Telegram status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
@@ -39,22 +39,10 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 - Config: view/edit `~/.clawdbot/clawdbot.json` (`config.get`, `config.set`)
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
-- Config schema + form rendering (`config.schema`); Raw JSON editor remains available
+- Config schema + form rendering (`config.schema`, including plugin + channel schemas); Raw JSON editor remains available
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
-
-## Model presets (Config tab)
-
-The Config tab includes **Model presets**: one-click inserts to add common model providers and set a default model:
-
-- **MiniMax M2.1 (Anthropic)** → configures MiniMax via `https://api.minimax.io/anthropic` and `anthropic-messages` (see [/providers/minimax](/providers/minimax))
-- **GLM 4.7 (Z.AI)** → adds `ZAI_API_KEY` + sets `zai/glm-4.7` (see [/providers/zai](/providers/zai))
-- **Kimi (Moonshot)** → configures Moonshot + sets `moonshot/kimi-k2-0905-preview` (see [/providers/moonshot](/providers/moonshot))
-
-Notes:
-- Presets **keep existing API keys and per-model params** when present.
-- Use `/model` (see [/tools/slash-commands](/tools/slash-commands)) to switch models from chat without editing config.
 
 ## Chat behavior
 

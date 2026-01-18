@@ -4,30 +4,33 @@ import {
   readStringParam,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
-import type { ClawdbotConfig } from "../../../config/config.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
+import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
-function hasTelegramInlineButtons(cfg: ClawdbotConfig): boolean {
-  const caps = new Set<string>();
-  for (const entry of cfg.channels?.telegram?.capabilities ?? []) {
-    const trimmed = String(entry).trim();
-    if (trimmed) caps.add(trimmed.toLowerCase());
-  }
-  const accounts = cfg.channels?.telegram?.accounts;
-  if (accounts && typeof accounts === "object") {
-    for (const account of Object.values(accounts)) {
-      const accountCaps = (account as { capabilities?: unknown })?.capabilities;
-      if (!Array.isArray(accountCaps)) continue;
-      for (const entry of accountCaps) {
-        const trimmed = String(entry).trim();
-        if (trimmed) caps.add(trimmed.toLowerCase());
-      }
-    }
-  }
-  return caps.has("inlinebuttons");
+function readTelegramSendParams(params: Record<string, unknown>) {
+  const to = readStringParam(params, "to", { required: true });
+  const mediaUrl = readStringParam(params, "media", { trim: false });
+  const content =
+    readStringParam(params, "message", {
+      required: !mediaUrl,
+      allowEmpty: true,
+    }) ?? "";
+  const replyTo = readStringParam(params, "replyTo");
+  const threadId = readStringParam(params, "threadId");
+  const buttons = params.buttons;
+  const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
+  return {
+    to,
+    content,
+    mediaUrl: mediaUrl ?? undefined,
+    replyToMessageId: replyTo ?? undefined,
+    messageThreadId: threadId ?? undefined,
+    buttons,
+    asVoice,
+  };
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
@@ -42,7 +45,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("deleteMessage")) actions.add("delete");
     return Array.from(actions);
   },
-  supportsButtons: ({ cfg }) => hasTelegramInlineButtons(cfg),
+  supportsButtons: ({ cfg }) => {
+    const accounts = listEnabledTelegramAccounts(cfg).filter(
+      (account) => account.tokenSource !== "none",
+    );
+    if (accounts.length === 0) return false;
+    return accounts.some((account) =>
+      isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
+    );
+  },
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action !== "sendMessage") return null;
@@ -53,25 +64,12 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     if (action === "send") {
-      const to = readStringParam(params, "to", { required: true });
-      const content = readStringParam(params, "message", {
-        required: true,
-        allowEmpty: true,
-      });
-      const mediaUrl = readStringParam(params, "media", { trim: false });
-      const replyTo = readStringParam(params, "replyTo");
-      const threadId = readStringParam(params, "threadId");
-      const buttons = params.buttons;
+      const sendParams = readTelegramSendParams(params);
       return await handleTelegramAction(
         {
           action: "sendMessage",
-          to,
-          content,
-          mediaUrl: mediaUrl ?? undefined,
-          replyToMessageId: replyTo ?? undefined,
-          messageThreadId: threadId ?? undefined,
+          ...sendParams,
           accountId: accountId ?? undefined,
-          buttons,
         },
         cfg,
       );

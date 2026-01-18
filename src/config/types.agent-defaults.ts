@@ -118,7 +118,7 @@ export type AgentDefaultsConfig = {
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   /** Default verbose level when no /verbose directive is present. */
-  verboseDefault?: "off" | "on";
+  verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on";
   /** Default block streaming level when no override is present. */

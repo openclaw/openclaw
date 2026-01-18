@@ -17,14 +17,19 @@ import { probeTelegram } from "../../telegram/probe.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getChatChannelMeta } from "../registry.js";
+import { TelegramConfigSchema } from "../../config/zod-schema.providers-core.js";
 import { telegramMessageActions } from "./actions/telegram.js";
+import { buildChannelConfigSchema } from "./config-schema.js";
 import {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 import { resolveTelegramGroupRequireMention } from "./group-mentions.js";
 import { formatPairingApproveHint } from "./helpers.js";
-import { normalizeTelegramMessagingTarget } from "./normalize-target.js";
+import {
+  looksLikeTelegramTargetId,
+  normalizeTelegramMessagingTarget,
+} from "./normalize/telegram.js";
 import { telegramOnboardingAdapter } from "./onboarding/telegram.js";
 import { PAIRING_APPROVED_MESSAGE } from "./pairing-message.js";
 import {
@@ -33,6 +38,10 @@ import {
 } from "./setup-helpers.js";
 import { collectTelegramStatusIssues } from "./status-issues/telegram.js";
 import type { ChannelPlugin } from "./types.js";
+import {
+  listTelegramDirectoryGroupsFromConfig,
+  listTelegramDirectoryPeersFromConfig,
+} from "./directory-config.js";
 
 const meta = getChatChannelMeta("telegram");
 
@@ -77,6 +86,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.telegram"] },
+  configSchema: buildChannelConfigSchema(TelegramConfigSchema),
   config: {
     listAccountIds: (cfg) => listTelegramAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveTelegramAccount({ cfg, accountId }),
@@ -131,8 +141,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
       };
     },
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
@@ -154,6 +165,15 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeTelegramMessagingTarget,
+    targetResolver: {
+      looksLikeId: looksLikeTelegramTargetId,
+      hint: "<chatId>",
+    },
+  },
+  directory: {
+    self: async () => null,
+    listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),
+    listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
   },
   actions: telegramMessageActions,
   setup: {
@@ -170,7 +190,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         return "TELEGRAM_BOT_TOKEN can only be used for the default account.";
       }
       if (!input.useEnv && !input.token && !input.tokenFile) {
-        return "Telegram requires --token or --token-file (or --use-env).";
+        return "Telegram requires token or --token-file (or --use-env).";
       }
       return null;
     },
@@ -235,16 +255,6 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     deliveryMode: "direct",
     chunker: chunkMarkdownText,
     textChunkLimit: 4000,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim();
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("Delivering to Telegram requires --to <chatId>"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
     sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
       const send = deps?.sendTelegram ?? sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);

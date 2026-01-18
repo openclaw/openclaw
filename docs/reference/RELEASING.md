@@ -10,6 +10,12 @@ read_when:
 
 Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
 
+## Operator trigger
+When the operator says “release”, immediately do this preflight (no extra questions unless blocked):
+- Read this doc and `docs/platforms/mac/release.md`.
+- Load env from `~/.profile` and confirm `SPARKLE_PRIVATE_KEY_FILE` + App Store Connect vars are set.
+- Use Sparkle keys from `~/Library/CloudStorage/Dropbox/Backup/Sparkle` if needed.
+
 1) **Version & metadata**
 - [ ] Bump `package.json` version (e.g., `1.1.0`).
 - [ ] Run `pnpm plugins:sync` to align extension package versions + changelogs.
@@ -20,6 +26,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 2) **Build & artifacts**
 - [ ] If A2UI inputs changed, run `pnpm canvas:a2ui:bundle` and commit any updated [`src/canvas-host/a2ui/a2ui.bundle.js`](https://github.com/clawdbot/clawdbot/blob/main/src/canvas-host/a2ui/a2ui.bundle.js).
 - [ ] `pnpm run build` (regenerates `dist/`).
+- [ ] Confirm `dist/build-info.json` exists and includes the expected `commit` hash (CLI banner uses this for npm installs).
 - [ ] Optional: `npm pack --pack-destination /tmp` after the build; inspect the tarball contents and keep it handy for the GitHub release (do **not** commit it).
 
 3) **Changelog & docs**
@@ -51,7 +58,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] `npm login` (verify 2FA) if needed.
 - [ ] `npm publish --access public` (use `--tag beta` for pre-releases).
-- [ ] Verify the registry: `npm view clawdbot version` and `npx -y clawdbot@X.Y.Z --version` (or `--help`).
+- [ ] Verify the registry: `npm view clawdbot version`, `npm view clawdbot dist-tags`, and `npx -y clawdbot@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)
 - **npm pack/publish hangs or produces huge tarball**: the macOS app bundle in `dist/Clawdbot.app` (and release zips) get swept into the package. Fix by whitelisting publish contents via `package.json` `files` (include dist subdirs, docs, skills; exclude app bundles). Confirm with `npm pack --dry-run` that `dist/Clawdbot.app` is not listed.

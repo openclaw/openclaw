@@ -32,9 +32,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
-      channel: "slack",
-      to: `user:${message.user}`,
-      accountId: route.accountId,
+      deliveryContext: {
+        channel: "slack",
+        to: `user:${message.user}`,
+        accountId: route.accountId,
+      },
+      ctx: prepared.ctxPayload,
     });
   }
 
@@ -66,8 +69,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   };
 
-  let didSendReply = false;
-
   // Create mutable context for response prefix template interpolation
   let prefixContext: ResponsePrefixContext = {
     identityName: resolveIdentityName(cfg, route.agentId),
@@ -88,7 +89,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         textLimit: ctx.textLimit,
         replyThreadTs,
       });
-      didSendReply = true;
       replyPlan.markSent();
     },
     onError: (err, info) => {
@@ -136,7 +136,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (!queuedFinal) {
-    if (prepared.isRoomish && ctx.historyLimit > 0 && didSendReply) {
+    if (prepared.isRoomish && ctx.historyLimit > 0) {
       clearHistoryEntries({
         historyMap: ctx.channelHistories,
         historyKey: prepared.historyKey,
@@ -168,7 +168,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   }
 
-  if (prepared.isRoomish && ctx.historyLimit > 0 && didSendReply) {
+  if (prepared.isRoomish && ctx.historyLimit > 0) {
     clearHistoryEntries({
       historyMap: ctx.channelHistories,
       historyKey: prepared.historyKey,

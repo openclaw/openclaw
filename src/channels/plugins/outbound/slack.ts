@@ -5,16 +5,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: 4000,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error("Delivering to Slack requires --to <channelId|user:ID|channel:ID>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ to, text, accountId, deps, replyToId }) => {
     const send = deps?.sendSlack ?? sendMessageSlack;
     const result = await send(to, text, {

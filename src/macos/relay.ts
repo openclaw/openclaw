@@ -70,4 +70,10 @@ async function main() {
   await program.parseAsync(process.argv);
 }
 
-void main();
+void main().catch((err) => {
+  console.error(
+    "[clawdbot] Relay failed:",
+    err instanceof Error ? (err.stack ?? err.message) : err,
+  );
+  process.exit(1);
+});

@@ -239,11 +239,15 @@ Known issue: When you send an image with ONLY a mention (no other text), WhatsAp
 ls -la ~/.clawdbot/agents/<agentId>/sessions/
 ```
 
-**Check 2:** Is `idleMinutes` too short?
+**Check 2:** Is the reset window too short?
 ```json
 {
   "session": {
-    "idleMinutes": 10080  // 7 days
+    "reset": {
+      "mode": "daily",
+      "atHour": 4,
+      "idleMinutes": 10080  // 7 days
+    }
   }
 }
 ```
@@ -365,7 +369,7 @@ clawdbot channels login
 ### npm install fails (allow-build-scripts / missing tar or yargs). What now?
 
 If you’re running from source, use the repo’s package manager: **pnpm** (preferred).
-The repo declares `packageManager: "pnpm@…"`, and pnpm patches are tracked in `pnpm.patchedDependencies`.
+The repo declares `packageManager: "pnpm@…"`.
 
 Typical recovery:
 ```bash
@@ -376,8 +380,7 @@ pnpm clawdbot doctor
 clawdbot daemon restart
 ```
 
-Why: pnpm is the configured package manager for this repo, and the dependency
-patching workflow relies on it.
+Why: pnpm is the configured package manager for this repo.
 
 ### How do I switch between git installs and npm installs?
 

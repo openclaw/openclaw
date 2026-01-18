@@ -1,38 +1,17 @@
+import JSON5 from "json5";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
+import { parseFrontmatterBlock } from "../../markdown/frontmatter.js";
 import type {
   ClawdbotSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
+  SkillInvocationPolicy,
 } from "./types.js";
 
-function stripQuotes(value: string): string {
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
-  const frontmatter: ParsedSkillFrontmatter = {};
-  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) return frontmatter;
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) return frontmatter;
-  const block = normalized.slice(4, endIndex);
-  for (const line of block.split("\n")) {
-    const match = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!match) continue;
-    const key = match[1];
-    const value = stripQuotes(match[2].trim());
-    if (!key || !value) continue;
-    frontmatter[key] = value;
-  }
-  return frontmatter;
+  return parseFrontmatterBlock(content);
 }
 
 function normalizeStringList(input: unknown): string[] {
@@ -79,13 +58,26 @@ function getFrontmatterValue(frontmatter: ParsedSkillFrontmatter, key: string): 
   return typeof raw === "string" ? raw : undefined;
 }
 
+function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
 export function resolveClawdbotMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): ClawdbotSkillMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
   try {
-    const parsed = JSON.parse(raw) as { clawdbot?: unknown };
+    const parsed = JSON5.parse(raw) as { clawdbot?: unknown };
     if (!parsed || typeof parsed !== "object") return undefined;
     const clawdbot = (parsed as { clawdbot?: unknown }).clawdbot;
     if (!clawdbot || typeof clawdbot !== "object") return undefined;
@@ -119,6 +111,18 @@ export function resolveClawdbotMetadata(
   } catch {
     return undefined;
   }
+}
+
+export function resolveSkillInvocationPolicy(
+  frontmatter: ParsedSkillFrontmatter,
+): SkillInvocationPolicy {
+  return {
+    userInvocable: parseFrontmatterBool(getFrontmatterValue(frontmatter, "user-invocable"), true),
+    disableModelInvocation: parseFrontmatterBool(
+      getFrontmatterValue(frontmatter, "disable-model-invocation"),
+      false,
+    ),
+  };
 }
 
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {

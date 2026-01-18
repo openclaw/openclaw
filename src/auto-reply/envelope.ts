@@ -1,3 +1,6 @@
+import { normalizeChatType } from "../channels/chat-type.js";
+import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
+
 export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
@@ -33,6 +36,48 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ts) parts.push(ts);
   const header = `[${parts.join(" ")}]`;
   return `${header} ${params.body}`;
+}
+
+export function formatInboundEnvelope(params: {
+  channel: string;
+  from: string;
+  body: string;
+  timestamp?: number | Date;
+  chatType?: string;
+  senderLabel?: string;
+  sender?: SenderLabelParams;
+}): string {
+  const chatType = normalizeChatType(params.chatType);
+  const isDirect = !chatType || chatType === "direct";
+  const resolvedSender = params.senderLabel?.trim() || resolveSenderLabel(params.sender ?? {});
+  const body = !isDirect && resolvedSender ? `${resolvedSender}: ${params.body}` : params.body;
+  return formatAgentEnvelope({
+    channel: params.channel,
+    from: params.from,
+    timestamp: params.timestamp,
+    body,
+  });
+}
+
+export function formatInboundFromLabel(params: {
+  isGroup: boolean;
+  groupLabel?: string;
+  groupId?: string;
+  directLabel: string;
+  directId?: string;
+  groupFallback?: string;
+}): string {
+  // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
+  if (params.isGroup) {
+    const label = params.groupLabel?.trim() || params.groupFallback || "Group";
+    const id = params.groupId?.trim();
+    return id ? `${label} id:${id}` : label;
+  }
+
+  const directLabel = params.directLabel.trim();
+  const directId = params.directId?.trim();
+  if (!directId || directId === directLabel) return directLabel;
+  return `${directLabel} id:${directId}`;
 }
 
 export function formatThreadStarterEnvelope(params: {

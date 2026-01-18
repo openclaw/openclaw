@@ -49,6 +49,12 @@ export type ClawdbotConfig = {
     lastRunMode?: "local" | "remote";
   };
   logging?: LoggingConfig;
+  update?: {
+    /** Update channel for npm installs ("stable" or "beta"). */
+    channel?: "stable" | "beta";
+    /** Check for updates on gateway start (npm installs only). */
+    checkOnStart?: boolean;
+  };
   browser?: BrowserConfig;
   ui?: {
     /** Accent color for Clawdbot UI chrome (hex). */

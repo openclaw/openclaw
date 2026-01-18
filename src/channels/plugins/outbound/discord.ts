@@ -6,16 +6,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: 2000,
   pollMaxOptions: 10,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error("Delivering to Discord requires --to <channelId|user:ID|channel:ID>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ to, text, accountId, deps, replyToId }) => {
     const send = deps?.sendDiscord ?? sendMessageDiscord;
     const result = await send(to, text, {

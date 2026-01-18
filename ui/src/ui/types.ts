@@ -282,6 +282,7 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   model?: string;
+  modelProvider?: string;
   contextTokens?: number;
 };
 

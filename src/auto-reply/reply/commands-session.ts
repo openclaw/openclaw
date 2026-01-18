@@ -2,12 +2,19 @@ import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import {
+  formatAbortReplyText,
+  isAbortTrigger,
+  setAbortMemory,
+  stopSubagentsForRequester,
+} from "./abort.js";
 import type { CommandHandler } from "./commands-types.js";
+import { clearSessionQueues } from "./queue.js";
 
 function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
@@ -16,11 +23,6 @@ function resolveSessionEntryForKey(
   if (!store || !sessionKey) return {};
   const direct = store[sessionKey];
   if (direct) return { entry: direct, key: sessionKey };
-  const parsed = parseAgentSessionKey(sessionKey);
-  const legacyKey = parsed?.rest;
-  if (legacyKey && store[legacyKey]) {
-    return { entry: store[legacyKey], key: legacyKey };
-  }
   return {};
 }
 
@@ -126,6 +128,52 @@ export const handleSendPolicyCommand: CommandHandler = async (params, allowTextC
   };
 };
 
+export const handleUsageCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) return null;
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/usage" && !normalized.startsWith("/usage ")) return null;
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /usage from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+  if (rawArgs && !requested) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /usage off|tokens|full" },
+    };
+  }
+
+  const currentRaw =
+    params.sessionEntry?.responseUsage ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
+  const current = resolveResponseUsageMode(currentRaw);
+  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+
+  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+    if (next === "off") delete params.sessionEntry.responseUsage;
+    else params.sessionEntry.responseUsage = next;
+    params.sessionEntry.updatedAt = Date.now();
+    params.sessionStore[params.sessionKey] = params.sessionEntry;
+    if (params.storePath) {
+      await updateSessionStore(params.storePath, (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      });
+    }
+  }
+
+  return {
+    shouldContinue: false,
+    reply: {
+      text: `⚙️ Usage footer: ${next}.`,
+    },
+  };
+};
+
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) return null;
   if (params.command.commandBodyNormalized !== "/restart") return null;
@@ -189,6 +237,12 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   if (abortTarget.sessionId) {
     abortEmbeddedPiRun(abortTarget.sessionId);
   }
+  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+    logVerbose(
+      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+    );
+  }
   if (abortTarget.entry && params.sessionStore && abortTarget.key) {
     abortTarget.entry.abortedLastRun = true;
     abortTarget.entry.updatedAt = Date.now();
@@ -201,7 +255,27 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+
+  // Trigger internal hook for stop command
+  const hookEvent = createInternalHookEvent(
+    "command",
+    "stop",
+    abortTarget.key ?? params.sessionKey ?? "",
+    {
+      sessionEntry: abortTarget.entry ?? params.sessionEntry,
+      sessionId: abortTarget.sessionId,
+      commandSource: params.command.surface,
+      senderId: params.command.senderId,
+    },
+  );
+  await triggerInternalHook(hookEvent);
+
+  const { stopped } = stopSubagentsForRequester({
+    cfg: params.cfg,
+    requesterSessionKey: abortTarget.key ?? params.sessionKey,
+  });
+
+  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {

@@ -17,6 +17,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { loadClawdbotPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
@@ -127,11 +128,14 @@ export const configHandlers: GatewayRequestHandlers = {
         name: plugin.name,
         description: plugin.description,
         configUiHints: plugin.configUiHints,
+        configSchema: plugin.configJsonSchema,
       })),
-      channels: pluginRegistry.channels.map((entry) => ({
-        id: entry.plugin.id,
-        label: entry.plugin.meta.label,
-        description: entry.plugin.meta.blurb,
+      channels: listChannelPlugins().map((entry) => ({
+        id: entry.id,
+        label: entry.meta.label,
+        description: entry.meta.blurb,
+        configSchema: entry.configSchema?.schema,
+        configUiHints: entry.configSchema?.uiHints,
       })),
     });
     respond(true, schema, undefined);

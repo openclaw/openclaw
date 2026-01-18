@@ -18,7 +18,7 @@ How to see whether the linked channel is healthy from the menu bar app.
 ## Settings
 - General tab gains a Health card showing: linked auth age, session-store path/count, last check time, last error/status code, and buttons for Run Health Check / Reveal Logs.
 - Uses a cached snapshot so the UI loads instantly and falls back gracefully when offline.
-- **Connections tab** surfaces channel status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
+- **Channels tab** surfaces channel status + controls for WhatsApp/Telegram (login QR, logout, probe, last disconnect/error).
 
 ## How the probe works
 - App runs `clawdbot health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds and reports status without sending messages.

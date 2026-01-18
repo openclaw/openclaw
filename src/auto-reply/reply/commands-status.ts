@@ -3,23 +3,25 @@ import {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
-import { buildAuthHealthSummary, formatRemainingShort } from "../../agents/auth-health.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "../../agents/tools/sessions-helpers.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
-  formatUsageSummaryLine,
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
-  type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import { buildStatusMessage } from "../status.js";
@@ -27,6 +29,8 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "..
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
+import type { MediaUnderstandingDecision } from "../../media-understanding/types.js";
+import { resolveSubagentLabel } from "./subagents-utils.js";
 
 function formatApiKeySnippet(apiKey: string): string {
   const compact = apiKey.replace(/\s+/g, "");
@@ -108,6 +112,7 @@ export async function buildStatusReply(params: {
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
+  mediaDecisions?: MediaUnderstandingDecision[];
 }): Promise<ReplyPayload | undefined> {
   const {
     cfg,
@@ -134,17 +139,6 @@ export async function buildStatusReply(params: {
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
-  const authStore = ensureAuthProfileStore(statusAgentDir, { allowKeychainPrompt: false });
-  const authHealth = buildAuthHealthSummary({ store: authStore, cfg });
-  const oauthProfiles = authHealth.profiles.filter(
-    (profile) => profile.type === "oauth" || profile.type === "token",
-  );
-
-  const usageProviders = new Set<UsageProviderId>();
-  for (const profile of oauthProfiles) {
-    const entry = resolveUsageProviderId(profile.provider);
-    if (entry) usageProviders.add(entry);
-  }
   const currentUsageProvider = (() => {
     try {
       return resolveUsageProviderId(provider);
@@ -152,46 +146,26 @@ export async function buildStatusReply(params: {
       return undefined;
     }
   })();
-  if (usageProviders.size === 0 && currentUsageProvider) {
-    usageProviders.add(currentUsageProvider);
-  }
-  const usageByProvider = new Map<string, string>();
-  let usageSummaryCache: Awaited<ReturnType<typeof loadProviderUsageSummary>> | null | undefined;
-  if (usageProviders.size > 0) {
+  let usageLine: string | null = null;
+  if (currentUsageProvider) {
     try {
-      usageSummaryCache = await loadProviderUsageSummary({
+      const usageSummary = await loadProviderUsageSummary({
         timeoutMs: 3500,
-        providers: Array.from(usageProviders),
+        providers: [currentUsageProvider],
         agentDir: statusAgentDir,
       });
-      for (const snapshot of usageSummaryCache.providers) {
-        const formatted = formatUsageWindowSummary(snapshot, {
+      const usageEntry = usageSummary.providers[0];
+      if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
+        const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
           maxWindows: 2,
           includeResets: true,
         });
-        if (formatted) usageByProvider.set(snapshot.provider, formatted);
+        if (summaryLine) usageLine = `📊 Usage: ${summaryLine}`;
       }
     } catch {
-      // ignore
+      usageLine = null;
     }
-  }
-
-  let usageLine: string | null = null;
-  try {
-    if (oauthProfiles.length === 0 && currentUsageProvider) {
-      const summaryLine = usageSummaryCache
-        ? formatUsageSummaryLine(usageSummaryCache, { now: Date.now(), maxProviders: 1 })
-        : null;
-      if (summaryLine) {
-        usageLine = summaryLine;
-      } else {
-        const usage = usageByProvider.get(currentUsageProvider);
-        if (usage) usageLine = `📊 Usage: ${usage}`;
-      }
-    }
-  } catch {
-    usageLine = null;
   }
   const queueSettings = resolveQueueSettings({
     cfg,
@@ -203,6 +177,30 @@ export async function buildStatusReply(params: {
   const queueOverrides = Boolean(
     sessionEntry?.queueDebounceMs ?? sessionEntry?.queueCap ?? sessionEntry?.queueDrop,
   );
+
+  let subagentsLine: string | undefined;
+  if (sessionKey) {
+    const { mainKey, alias } = resolveMainSessionAlias(cfg);
+    const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+    const runs = listSubagentRunsForRequester(requesterKey);
+    const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
+    if (runs.length === 0) {
+      if (verboseEnabled) subagentsLine = "🤖 Subagents: none";
+    } else {
+      const active = runs.filter((entry) => !entry.endedAt);
+      const done = runs.length - active.length;
+      if (verboseEnabled) {
+        const labels = active
+          .map((entry) => resolveSubagentLabel(entry, ""))
+          .filter(Boolean)
+          .slice(0, 3);
+        const labelText = labels.length ? ` (${labels.join(", ")})` : "";
+        subagentsLine = `🤖 Subagents: ${active.length} active${labelText} · ${done} done`;
+      } else if (active.length > 0) {
+        subagentsLine = `🤖 Subagents: ${active.length} active`;
+      }
+    }
+  }
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -238,47 +236,10 @@ export async function buildStatusReply(params: {
       dropPolicy: queueSettings.dropPolicy,
       showDetails: queueOverrides,
     },
+    subagentsLine,
+    mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
   });
 
-  const authStatusLines = (() => {
-    if (oauthProfiles.length === 0) return [];
-    const formatStatus = (status: string) => {
-      if (status === "ok") return "ok";
-      if (status === "static") return "static";
-      if (status === "expiring") return "expiring";
-      if (status === "missing") return "unknown";
-      return "expired";
-    };
-    const profilesByProvider = new Map<string, typeof oauthProfiles>();
-    for (const profile of oauthProfiles) {
-      const current = profilesByProvider.get(profile.provider);
-      if (current) current.push(profile);
-      else profilesByProvider.set(profile.provider, [profile]);
-    }
-    const lines: string[] = ["OAuth/token status"];
-    for (const [provider, profiles] of profilesByProvider) {
-      const usageKey = resolveUsageProviderId(provider);
-      const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
-      const usageSuffix = usage ? ` — usage: ${usage}` : "";
-      lines.push(`- ${provider}${usageSuffix}`);
-      for (const profile of profiles) {
-        const labelText = profile.label || profile.profileId;
-        const status = formatStatus(profile.status);
-        const expiry =
-          profile.status === "static"
-            ? ""
-            : profile.expiresAt
-              ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
-              : " expires unknown";
-        const source = profile.source !== "store" ? ` (${profile.source})` : "";
-        lines.push(`  - ${labelText} ${status}${expiry}${source}`);
-      }
-    }
-    return lines;
-  })();
-
-  const fullStatusText =
-    authStatusLines.length > 0 ? `${statusText}\n\n${authStatusLines.join("\n")}` : statusText;
-  return { text: fullStatusText };
+  return { text: statusText };
 }

@@ -12,6 +12,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import {
+  isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
@@ -81,6 +82,30 @@ describe("resolveHeartbeatPrompt", () => {
   });
 });
 
+describe("isHeartbeatEnabledForAgent", () => {
+  it("enables only explicit heartbeat agents when configured", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(false);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("falls back to default agent when no explicit heartbeat entries", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(false);
+  });
+});
+
 describe("resolveHeartbeatDeliveryTarget", () => {
   const baseEntry = {
     sessionId: "sid",
@@ -94,6 +119,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "none",
       reason: "target-none",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -107,6 +135,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "+1555",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -122,6 +153,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "whatsapp",
       to: "+555123",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -135,6 +169,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "none",
       reason: "no-target",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -152,6 +189,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       channel: "whatsapp",
       to: "+1555",
       reason: "allowFrom-fallback",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -167,6 +207,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -177,11 +220,14 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const entry = {
       ...baseEntry,
       lastChannel: "whatsapp" as const,
-      lastTo: "whatsapp:group:120363401234567890@G.US",
+      lastTo: "whatsapp:120363401234567890@G.US",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
       channel: "whatsapp",
       to: "120363401234567890@g.us",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 
@@ -192,6 +238,9 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       channel: "telegram",
       to: "123",
+      accountId: undefined,
+      lastChannel: undefined,
+      lastAccountId: undefined,
     });
   });
 
@@ -209,11 +258,29 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     ).toEqual({
       channel: "whatsapp",
       to: "+1555",
+      accountId: undefined,
+      lastChannel: "whatsapp",
+      lastAccountId: undefined,
     });
   });
 });
 
 describe("runHeartbeatOnce", () => {
+  it("skips when agent heartbeat is not enabled", async () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+
+    const res = await runHeartbeatOnce({ cfg, agentId: "main" });
+    expect(res.status).toBe("skipped");
+    if (res.status === "skipped") {
+      expect(res.reason).toBe("disabled");
+    }
+  });
+
   it("uses the last non-empty payload for delivery", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");

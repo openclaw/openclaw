@@ -3,6 +3,36 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
+export type SessionListDeliveryContext = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+};
+
+export type SessionListRow = {
+  key: string;
+  kind: SessionKind;
+  channel: string;
+  label?: string;
+  displayName?: string;
+  deliveryContext?: SessionListDeliveryContext;
+  updatedAt?: number | null;
+  sessionId?: string;
+  model?: string;
+  contextTokens?: number | null;
+  totalTokens?: number | null;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  systemSent?: boolean;
+  abortedLastRun?: boolean;
+  sendPolicy?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  transcriptPath?: string;
+  messages?: unknown[];
+};
+
 function normalizeKey(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -38,7 +68,7 @@ export function classifySessionKind(params: {
   if (key.startsWith("hook:")) return "hook";
   if (key.startsWith("node-") || key.startsWith("node:")) return "node";
   if (params.gatewayKind === "group") return "group";
-  if (key.startsWith("group:") || key.includes(":group:") || key.includes(":channel:")) {
+  if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "other";

@@ -32,6 +32,7 @@ Details: [Plugins](/plugin)
 2) Configure credentials:
    - Env: `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN` (or `MATRIX_PASSWORD`)
    - Or config: `channels.matrix.*`
+   - If both are set, config takes precedence.
 3) Restart the gateway (or finish onboarding).
 4) DM access defaults to pairing; approve the pairing code on first contact.
 
@@ -69,9 +70,10 @@ Matrix is an open messaging protocol. Clawdbot connects as a Matrix user and lis
   - `clawdbot pairing list matrix`
   - `clawdbot pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
+- `channels.matrix.dm.allowFrom` accepts user IDs or display names (resolved at startup when directory search is available).
 
 ## Rooms (groups)
-- Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated).
+- Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Allowlist rooms with `channels.matrix.rooms`:
 ```json5
 {
@@ -85,6 +87,9 @@ Matrix is an open messaging protocol. Clawdbot connects as a Matrix user and lis
 }
 ```
 - `requireMention: false` enables auto-reply in that room.
+- The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names when possible.
+- On startup, Clawdbot resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 
 ## Threads
 - Reply threading is supported.

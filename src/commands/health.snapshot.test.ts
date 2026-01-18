@@ -21,6 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",
   loadSessionStore: () => testStore,
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../web/auth-store.js", () => ({
@@ -28,10 +29,6 @@ vi.mock("../web/auth-store.js", () => ({
   getWebAuthAgeMs: vi.fn(() => 1234),
   readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
   logWebSelfId: vi.fn(),
-}));
-
-vi.mock("../web/reconnect.js", () => ({
-  resolveHeartbeatSeconds: vi.fn(() => 60),
 }));
 
 describe("getHealthSnapshot", () => {
@@ -228,5 +225,33 @@ describe("getHealthSnapshot", () => {
     expect(telegram.configured).toBe(true);
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.error).toMatch(/network down/i);
+  });
+
+  it("disables heartbeat for agents without heartbeat blocks", async () => {
+    testConfig = {
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "30m",
+            target: "last",
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "ops", heartbeat: { every: "1h", target: "whatsapp" } },
+        ],
+      },
+    };
+    testStore = {};
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+    const byAgent = new Map(snap.agents.map((agent) => [agent.agentId, agent] as const));
+    const main = byAgent.get("main");
+    const ops = byAgent.get("ops");
+
+    expect(main?.heartbeat.everyMs).toBeNull();
+    expect(main?.heartbeat.every).toBe("disabled");
+    expect(ops?.heartbeat.everyMs).toBeTruthy();
+    expect(ops?.heartbeat.every).toBe("1h");
   });
 });

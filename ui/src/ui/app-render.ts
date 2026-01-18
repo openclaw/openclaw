@@ -27,18 +27,10 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type {
-  ChatQueueItem,
-  CronFormState,
-  DiscordForm,
-  IMessageForm,
-  SlackForm,
-  SignalForm,
-  TelegramForm,
-} from "./ui-types";
+import type { ChatQueueItem, CronFormState } from "./ui-types";
 import { renderChat } from "./views/chat";
 import { renderConfig } from "./views/config";
-import { renderConnections } from "./views/connections";
+import { renderChannels } from "./views/channels";
 import { renderCron } from "./views/cron";
 import { renderDebug } from "./views/debug";
 import { renderInstances } from "./views/instances";
@@ -48,16 +40,9 @@ import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
 import { renderSkills } from "./views/skills";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
-import {
-  loadChannels,
-  updateDiscordForm,
-  updateIMessageForm,
-  updateSlackForm,
-  updateSignalForm,
-  updateTelegramForm,
-} from "./controllers/connections";
+import { loadChannels } from "./controllers/channels";
 import { loadPresence } from "./controllers/presence";
-import { loadSessions, patchSession } from "./controllers/sessions";
+import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
 import {
   installSkill,
   loadSkills,
@@ -205,8 +190,8 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
 
-        ${state.tab === "connections"
-          ? renderConnections({
+        ${state.tab === "channels"
+          ? renderChannels({
               connected: state.connected,
               loading: state.channelsLoading,
               snapshot: state.channelsSnapshot,
@@ -216,39 +201,19 @@ export function renderApp(state: AppViewState) {
               whatsappQrDataUrl: state.whatsappLoginQrDataUrl,
               whatsappConnected: state.whatsappLoginConnected,
               whatsappBusy: state.whatsappBusy,
-              telegramForm: state.telegramForm,
-              telegramTokenLocked: state.telegramTokenLocked,
-              telegramSaving: state.telegramSaving,
-              telegramStatus: state.telegramConfigStatus,
-              discordForm: state.discordForm,
-              discordTokenLocked: state.discordTokenLocked,
-              discordSaving: state.discordSaving,
-              discordStatus: state.discordConfigStatus,
-              slackForm: state.slackForm,
-              slackTokenLocked: state.slackTokenLocked,
-              slackAppTokenLocked: state.slackAppTokenLocked,
-              slackSaving: state.slackSaving,
-              slackStatus: state.slackConfigStatus,
-              signalForm: state.signalForm,
-              signalSaving: state.signalSaving,
-              signalStatus: state.signalConfigStatus,
-              imessageForm: state.imessageForm,
-              imessageSaving: state.imessageSaving,
-              imessageStatus: state.imessageConfigStatus,
+              configSchema: state.configSchema,
+              configSchemaLoading: state.configSchemaLoading,
+              configForm: state.configForm,
+              configUiHints: state.configUiHints,
+              configSaving: state.configSaving,
+              configFormDirty: state.configFormDirty,
               onRefresh: (probe) => loadChannels(state, probe),
               onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
               onWhatsAppWait: () => state.handleWhatsAppWait(),
               onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-              onTelegramChange: (patch) => updateTelegramForm(state, patch),
-              onTelegramSave: () => state.handleTelegramSave(),
-              onDiscordChange: (patch) => updateDiscordForm(state, patch),
-              onDiscordSave: () => state.handleDiscordSave(),
-              onSlackChange: (patch) => updateSlackForm(state, patch),
-              onSlackSave: () => state.handleSlackSave(),
-              onSignalChange: (patch) => updateSignalForm(state, patch),
-              onSignalSave: () => state.handleSignalSave(),
-              onIMessageChange: (patch) => updateIMessageForm(state, patch),
-              onIMessageSave: () => state.handleIMessageSave(),
+              onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+              onConfigSave: () => state.handleChannelConfigSave(),
+              onConfigReload: () => state.handleChannelConfigReload(),
             })
           : nothing}
 
@@ -277,11 +242,12 @@ export function renderApp(state: AppViewState) {
                 state.sessionsFilterLimit = next.limit;
                 state.sessionsIncludeGlobal = next.includeGlobal;
                 state.sessionsIncludeUnknown = next.includeUnknown;
-              },
-              onRefresh: () => loadSessions(state),
-              onPatch: (key, patch) => patchSession(state, key, patch),
-            })
-          : nothing}
+	              },
+	              onRefresh: () => loadSessions(state),
+	              onPatch: (key, patch) => patchSession(state, key, patch),
+	              onDelete: (key) => deleteSession(state, key),
+	            })
+	          : nothing}
 
         ${state.tab === "cron"
           ? renderCron({

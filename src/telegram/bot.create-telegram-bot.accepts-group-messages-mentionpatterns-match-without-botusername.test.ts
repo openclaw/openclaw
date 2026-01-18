@@ -174,9 +174,11 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.WasMentioned).toBe(true);
-    expect(payload.Body).toMatch(/^\[Telegram Test Group id:7 from Ada id:9 2025-01-09T00:00Z\]/);
+    expect(payload.SenderName).toBe("Ada");
+    expect(payload.SenderId).toBe("9");
+    expect(payload.Body).toMatch(/^\[Telegram Test Group id:7 2025-01-09T00:00Z\]/);
   });
-  it("includes sender identity in group envelope headers", async () => {
+  it("keeps group envelope headers stable (sender identity is separate)", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
@@ -212,9 +214,10 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.Body).toMatch(
-      /^\[Telegram Ops id:42 from Ada Lovelace \(@ada\) id:99 2025-01-09T00:00Z\]/,
-    );
+    expect(payload.SenderName).toBe("Ada Lovelace");
+    expect(payload.SenderId).toBe("99");
+    expect(payload.SenderUsername).toBe("ada");
+    expect(payload.Body).toMatch(/^\[Telegram Ops id:42 2025-01-09T00:00Z\]/);
   });
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
     onSpy.mockReset();

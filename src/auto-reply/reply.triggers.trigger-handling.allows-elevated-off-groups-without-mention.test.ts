@@ -128,10 +128,11 @@ describe("trigger handling", () => {
       const res = await getReplyFromConfig(
         {
           Body: "/elevated off",
-          From: "group:123@g.us",
+          From: "whatsapp:group:123@g.us",
           To: "whatsapp:+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
           ChatType: "group",
           WasMentioned: false,
         },
@@ -171,10 +172,11 @@ describe("trigger handling", () => {
       const res = await getReplyFromConfig(
         {
           Body: "/elevated on",
-          From: "group:123@g.us",
+          From: "whatsapp:group:123@g.us",
           To: "whatsapp:+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
           ChatType: "group",
           WasMentioned: true,
         },
@@ -218,6 +220,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1000",
+          CommandAuthorized: true,
         },
         {},
         cfg,

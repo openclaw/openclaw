@@ -710,6 +710,31 @@ Telegram → Gateway → Agent → `node.*` → Node → Gateway → Telegram
 
 Nodes don’t see inbound provider traffic; they only receive bridge RPC calls.
 
+### How can my agent access my computer if the Gateway is hosted remotely?
+
+Short answer: **pair your computer as a node**. The Gateway runs elsewhere, but it can
+call `node.*` tools (screen, camera, system) on your local machine over the Bridge.
+
+Typical setup:
+1) Run the Gateway on the always‑on host (VPS/home server).
+2) Put the Gateway host + your computer on the same tailnet.
+3) Enable the bridge on the Gateway host:
+   ```json5
+   { bridge: { enabled: true, bind: "auto" } }
+   ```
+4) Open the macOS app locally and connect in **Remote over SSH** mode so it can tunnel
+   the bridge port and register as a node.
+5) Approve the node on the Gateway:
+   ```bash
+   clawdbot nodes pending
+   clawdbot nodes approve <requestId>
+   ```
+
+Security reminder: pairing a macOS node allows `system.run` on that machine. Only
+pair devices you trust, and review [Security](/gateway/security).
+
+Docs: [Nodes](/nodes), [Bridge protocol](/gateway/bridge-protocol), [macOS remote mode](/platforms/mac/remote), [Security](/gateway/security).
+
 ### Do nodes run a gateway daemon?
 
 No. Only **one gateway** should run per host unless you intentionally run isolated profiles (see [Multiple gateways](/gateway/multiple-gateways)). Nodes are peripherals that connect
@@ -855,14 +880,19 @@ Send `/new` or `/reset` as a standalone message. See [Session management](/conce
 
 ### Do sessions reset automatically if I never send `/new`?
 
-Yes. Sessions expire after `session.idleMinutes` (default **60**). The **next**
-message starts a fresh session id for that chat key. This does not delete
-transcripts — it just starts a new session.
+Yes. By default sessions reset daily at **4:00 AM local time** on the gateway host.
+You can also add an idle window; when both daily and idle resets are configured,
+whichever expires first starts a new session id on the next message. This does
+not delete transcripts — it just starts a new session.
 
 ```json5
 {
   session: {
-    idleMinutes: 240
+    reset: {
+      mode: "daily",
+      atHour: 4,
+      idleMinutes: 240
+    }
   }
 }
 ```
@@ -1470,7 +1500,7 @@ Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (o
 CLI sending:
 
 ```bash
-clawdbot message send --to +15555550123 --message "Here you go" --media /path/to/file.png
+clawdbot message send --target +15555550123 --message "Here you go" --media /path/to/file.png
 ```
 
 Also check:

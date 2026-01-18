@@ -10,6 +10,7 @@ import {
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
@@ -47,6 +48,7 @@ import type { TypingController } from "./typing.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
 
 type AgentDefaults = NonNullable<ClawdbotConfig["agents"]>["defaults"];
+type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
@@ -69,6 +71,7 @@ type RunPreparedReplyParams = {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  execOverrides?: ExecOverrides;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   blockStreamingEnabled: boolean;
@@ -87,7 +90,6 @@ type RunPreparedReplyParams = {
     cap?: number;
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
-  transcribedText?: string;
   typing: TypingController;
   opts?: GetReplyOptions;
   defaultModel: string;
@@ -210,7 +212,6 @@ export async function runPreparedReply(
     model,
     perMessageQueueMode,
     perMessageQueueOptions,
-    transcribedText,
     typing,
     opts,
     defaultModel,
@@ -229,6 +230,7 @@ export async function runPreparedReply(
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    execOverrides,
     abortedLastRun,
   } = params;
   let currentSystemSent = systemSent;
@@ -275,8 +277,10 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
+  const isBareNewOrReset = rawBodyTrimmed === "/new" || rawBodyTrimmed === "/reset";
   const isBareSessionReset =
-    isNewSession && baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0;
+    isNewSession &&
+    ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
   const baseBodyTrimmed = baseBodyFinal.trim();
   if (!baseBodyTrimmed) {
@@ -297,7 +301,7 @@ export async function runPreparedReply(
     abortKey: command.abortKey,
     messageId: sessionCtx.MessageSid,
   });
-  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
+  const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   prefixedBodyBase = await prependSystemEvents({
     cfg,
@@ -325,11 +329,7 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  const prefixedBody = transcribedText
-    ? [threadStarterNote, prefixedBodyBase, `Transcript:\n${transcribedText}`]
-        .filter(Boolean)
-        .join("\n\n")
-    : [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
+  const prefixedBody = [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
     ? "To send an image back, add a line like: MEDIA:https://example.com/image.jpg (no spaces). Keep caption in the text body."
@@ -370,11 +370,7 @@ export async function runPreparedReply(
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
-  const queueBodyBase = transcribedText
-    ? [threadStarterNote, baseBodyFinal, `Transcript:\n${transcribedText}`]
-        .filter(Boolean)
-        .join("\n\n")
-    : [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
+  const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
     : queueBodyBase;
@@ -438,6 +434,7 @@ export async function runPreparedReply(
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
+      execOverrides,
       bashElevated: {
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,

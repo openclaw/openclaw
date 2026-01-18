@@ -238,6 +238,8 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   id?: string;
   body: string;
   sender: string;
+  senderJid?: string;
+  senderE164?: string;
 } | null {
   const message = unwrapMessage(rawMessage);
   if (!message) return null;
@@ -265,5 +267,7 @@ export function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,
     body,
     sender,
+    senderJid,
+    senderE164,
   };
 }

@@ -7,15 +7,30 @@ import {
   QueueSchema,
 } from "./zod-schema.core.js";
 
+const SessionResetConfigSchema = z.object({
+  mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
+  atHour: z.number().int().min(0).max(23).optional(),
+  idleMinutes: z.number().int().positive().optional(),
+});
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
     dmScope: z
       .union([z.literal("main"), z.literal("per-peer"), z.literal("per-channel-peer")])
       .optional(),
+    identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
+    reset: SessionResetConfigSchema.optional(),
+    resetByType: z
+      .object({
+        dm: SessionResetConfigSchema.optional(),
+        group: SessionResetConfigSchema.optional(),
+        thread: SessionResetConfigSchema.optional(),
+      })
+      .optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: z
@@ -38,7 +53,7 @@ export const SessionSchema = z
                 .object({
                   channel: z.string().optional(),
                   chatType: z
-                    .union([z.literal("direct"), z.literal("group"), z.literal("room")])
+                    .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
                     .optional(),
                   keyPrefix: z.string().optional(),
                 })
@@ -72,6 +87,7 @@ export const MessagesSchema = z
 export const CommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional().default("auto"),
+    nativeSkills: NativeCommandsSettingSchema.optional().default("auto"),
     text: z.boolean().optional(),
     bash: z.boolean().optional(),
     bashForegroundMs: z.number().int().min(0).max(30_000).optional(),
@@ -81,4 +97,4 @@ export const CommandsSchema = z
     useAccessGroups: z.boolean().optional(),
   })
   .optional()
-  .default({ native: "auto" });
+  .default({ native: "auto", nativeSkills: "auto" });

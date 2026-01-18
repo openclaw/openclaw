@@ -36,11 +36,13 @@ data:
         },
         "zalo": {
           "enabled": true,
-          "botToken": "${ZALO_BOT_TOKEN}",
-          "dmPolicy": "pairing",
-          "allowFrom": [],
+          "dmPolicy": "open",
+          "allowFrom": ["*"],
           "mediaMaxMb": 5
         }
+      },
+      "plugins": {
+        "paths": ["/app/extensions/zalo"]
       },
       "logging": {
         "level": "info",

@@ -76,8 +76,8 @@ function splitLongLine(
     }
     if (breakIdx <= 0) breakIdx = limit;
     out.push(remaining.slice(0, breakIdx));
-    const brokeOnSeparator = breakIdx < remaining.length && /\s/.test(remaining[breakIdx]);
-    remaining = remaining.slice(breakIdx + (brokeOnSeparator ? 1 : 0));
+    // Keep the separator for the next segment so words don't get glued together.
+    remaining = remaining.slice(breakIdx);
   }
   if (remaining.length) out.push(remaining);
   return out;

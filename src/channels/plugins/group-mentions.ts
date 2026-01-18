@@ -6,7 +6,7 @@ import { resolveSlackAccount } from "../../slack/accounts.js";
 type GroupMentionParams = {
   cfg: ClawdbotConfig;
   groupId?: string | null;
-  groupRoom?: string | null;
+  groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
 };
@@ -133,13 +133,14 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
   );
   const channelEntries = guildEntry?.channels;
   if (channelEntries && Object.keys(channelEntries).length > 0) {
-    const channelSlug = normalizeDiscordSlug(params.groupRoom);
+    const groupChannel = params.groupChannel;
+    const channelSlug = normalizeDiscordSlug(groupChannel);
     const entry =
       (params.groupId ? channelEntries[params.groupId] : undefined) ??
       (channelSlug
         ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
         : undefined) ??
-      (params.groupRoom ? channelEntries[normalizeDiscordSlug(params.groupRoom)] : undefined);
+      (groupChannel ? channelEntries[normalizeDiscordSlug(groupChannel)] : undefined);
     if (entry && typeof entry.requireMention === "boolean") {
       return entry.requireMention;
     }
@@ -159,7 +160,8 @@ export function resolveSlackGroupRequireMention(params: GroupMentionParams): boo
   const keys = Object.keys(channels);
   if (keys.length === 0) return true;
   const channelId = params.groupId?.trim();
-  const channelName = params.groupRoom?.replace(/^#/, "");
+  const groupChannel = params.groupChannel;
+  const channelName = groupChannel?.replace(/^#/, "");
   const normalizedName = normalizeSlackSlug(channelName);
   const candidates = [
     channelId ?? "",

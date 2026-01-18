@@ -1,12 +1,15 @@
 {
   "name": "@clawdbot/matrix",
-  "version": "2026.1.15",
+  "version": "2026.1.17-1",
   "type": "module",
   "description": "Clawdbot Matrix channel plugin",
   "clawdbot": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "dependencies": {
+    "clawdbot": "workspace:*",
     "markdown-it": "14.1.0",
     "matrix-js-sdk": "40.0.0"
   }

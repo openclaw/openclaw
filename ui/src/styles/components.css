@@ -537,7 +537,7 @@
 .table-head,
 .table-row {
   display: grid;
-  grid-template-columns: 1.4fr 0.8fr 0.8fr 0.7fr 0.8fr 0.8fr;
+  grid-template-columns: 1.4fr 1fr 0.8fr 0.7fr 0.8fr 0.8fr 0.8fr 0.8fr 0.6fr;
   gap: 12px;
   align-items: center;
 }

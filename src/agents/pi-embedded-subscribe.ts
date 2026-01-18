@@ -23,10 +23,13 @@ const log = createSubsystemLogger("agent/embedded");
 export type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
+  ToolResultFormat,
 } from "./pi-embedded-subscribe.types.js";
 
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
+  const toolResultFormat = params.toolResultFormat ?? "markdown";
+  const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
     toolMetas: [],
@@ -172,11 +175,40 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
-      : params.verboseLevel === "on";
+      : params.verboseLevel === "on" || params.verboseLevel === "full";
+  const shouldEmitToolOutput = () =>
+    typeof params.shouldEmitToolOutput === "function"
+      ? params.shouldEmitToolOutput()
+      : params.verboseLevel === "full";
+  const formatToolOutputBlock = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return "(no output)";
+    if (!useMarkdown) return trimmed;
+    return `\`\`\`txt\n${trimmed}\n\`\`\``;
+  };
   const emitToolSummary = (toolName?: string, meta?: string) => {
     if (!params.onToolResult) return;
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined);
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
     const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg);
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
+    try {
+      void params.onToolResult({
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+      });
+    } catch {
+      // ignore tool result delivery failures
+    }
+  };
+  const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
+    if (!params.onToolResult || !output) return;
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
+    const message = `${agg}\n${formatToolOutputBlock(output)}`;
+    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
     try {
       void params.onToolResult({
@@ -363,7 +395,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunking,
     blockChunker,
     shouldEmitToolResult,
+    shouldEmitToolOutput,
     emitToolSummary,
+    emitToolOutput,
     stripBlockTags,
     emitBlockChunk,
     flushBlockReplyBuffer,

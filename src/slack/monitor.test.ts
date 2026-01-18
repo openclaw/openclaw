@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSlackSlashCommandMatcher,
-  isSlackRoomAllowedByPolicy,
+  isSlackChannelAllowedByPolicy,
   resolveSlackThreadTs,
 } from "./monitor.js";
 
 describe("slack groupPolicy gating", () => {
   it("allows when policy is open", () => {
     expect(
-      isSlackRoomAllowedByPolicy({
+      isSlackChannelAllowedByPolicy({
         groupPolicy: "open",
         channelAllowlistConfigured: false,
         channelAllowed: false,
@@ -19,7 +19,7 @@ describe("slack groupPolicy gating", () => {
 
   it("blocks when policy is disabled", () => {
     expect(
-      isSlackRoomAllowedByPolicy({
+      isSlackChannelAllowedByPolicy({
         groupPolicy: "disabled",
         channelAllowlistConfigured: true,
         channelAllowed: true,
@@ -29,7 +29,7 @@ describe("slack groupPolicy gating", () => {
 
   it("blocks allowlist when no channel allowlist configured", () => {
     expect(
-      isSlackRoomAllowedByPolicy({
+      isSlackChannelAllowedByPolicy({
         groupPolicy: "allowlist",
         channelAllowlistConfigured: false,
         channelAllowed: true,
@@ -39,7 +39,7 @@ describe("slack groupPolicy gating", () => {
 
   it("allows allowlist when channel is allowed", () => {
     expect(
-      isSlackRoomAllowedByPolicy({
+      isSlackChannelAllowedByPolicy({
         groupPolicy: "allowlist",
         channelAllowlistConfigured: true,
         channelAllowed: true,
@@ -49,7 +49,7 @@ describe("slack groupPolicy gating", () => {
 
   it("blocks allowlist when channel is not allowed", () => {
     expect(
-      isSlackRoomAllowedByPolicy({
+      isSlackChannelAllowedByPolicy({
         groupPolicy: "allowlist",
         channelAllowlistConfigured: true,
         channelAllowed: false,

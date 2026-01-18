@@ -26,7 +26,10 @@ import {
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
-import { noteMacLaunchAgentOverrides } from "./doctor-platform-notes.js";
+import {
+  noteMacLaunchAgentOverrides,
+  noteMacLaunchctlGatewayEnvOverrides,
+} from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
@@ -160,6 +163,7 @@ export async function doctorCommand(
   await maybeScanExtraGatewayServices(options);
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
   await noteMacLaunchAgentOverrides();
+  await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
   await noteSecurityWarnings(cfg);
 
@@ -229,7 +233,11 @@ export async function doctorCommand(
 
   noteWorkspaceStatus(cfg);
 
-  const { healthOk } = await checkGatewayHealth({ runtime, cfg });
+  const { healthOk } = await checkGatewayHealth({
+    runtime,
+    cfg,
+    timeoutMs: options.nonInteractive === true ? 3000 : 10_000,
+  });
   await maybeRepairGatewayDaemon({
     cfg,
     runtime,

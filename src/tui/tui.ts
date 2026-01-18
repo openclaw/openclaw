@@ -399,6 +399,7 @@ export async function runTui(opts: TuiOptions) {
     tui,
     state,
     setActivityStatus,
+    refreshSessionInfo,
   });
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =

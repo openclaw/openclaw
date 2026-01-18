@@ -15,6 +15,8 @@ If you installed via **npm/pnpm** (global install, no git metadata), use the pac
 
 ```bash
 clawdbot update
+clawdbot update --channel beta
+clawdbot update --tag beta
 clawdbot update --restart
 clawdbot update --json
 clawdbot --update
@@ -23,8 +25,12 @@ clawdbot --update
 ## Options
 
 - `--restart`: restart the Gateway daemon after a successful update.
+- `--channel <stable|beta>`: set the update channel for npm installs (persisted in config).
+- `--tag <dist-tag|version>`: override the npm dist-tag or version for this update only.
 - `--json`: print machine-readable `UpdateRunResult` JSON.
 - `--timeout <seconds>`: per-step timeout (default is 1200s).
+
+Note: downgrades require confirmation because older versions can break configuration.
 
 ## What it does (git checkout)
 

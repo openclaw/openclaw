@@ -26,9 +26,11 @@ describe("resolveAnnounceTarget", () => {
       sessions: [
         {
           key: "agent:main:whatsapp:group:123@g.us",
-          lastChannel: "whatsapp",
-          lastTo: "123@g.us",
-          lastAccountId: "work",
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "123@g.us",
+            accountId: "work",
+          },
         },
       ],
     });

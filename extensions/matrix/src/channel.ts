@@ -1,14 +1,17 @@
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
+  applyAccountNameToChannelSection,
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
+  formatPairingApproveHint,
+  normalizeAccountId,
+  PAIRING_APPROVED_MESSAGE,
   setAccountEnabledInConfigSection,
-} from "../../../src/channels/plugins/config-helpers.js";
-import { formatPairingApproveHint } from "../../../src/channels/plugins/helpers.js";
-import { PAIRING_APPROVED_MESSAGE } from "../../../src/channels/plugins/pairing-message.js";
-import { applyAccountNameToChannelSection } from "../../../src/channels/plugins/setup-helpers.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+  type ChannelPlugin,
+} from "clawdbot/plugin-sdk";
 
 import { matrixMessageActions } from "./actions.js";
+import { MatrixConfigSchema } from "./config-schema.js";
 import { resolveMatrixGroupRequireMention } from "./group-mentions.js";
 import type { CoreConfig } from "./types.js";
 import {
@@ -23,6 +26,11 @@ import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
+import {
+  listMatrixDirectoryGroupsLive,
+  listMatrixDirectoryPeersLive,
+} from "./directory-live.js";
 
 const meta = {
   id: "matrix",
@@ -95,6 +103,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     media: true,
   },
   reload: { configPrefixes: ["channels.matrix"] },
+  configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
     listAccountIds: (cfg) => listMatrixAccountIds(cfg as CoreConfig),
     resolveAccount: (cfg, accountId) =>
@@ -144,8 +153,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       approveHint: formatPairingApproveHint("matrix"),
       normalizeEntry: (raw) => raw.replace(/^matrix:/i, "").trim().toLowerCase(),
     }),
-    collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+    collectWarnings: ({ account, cfg }) => {
+      const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
         "- Matrix rooms: groupPolicy=\"open\" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy=\"allowlist\" + channels.matrix.rooms to restrict rooms.",
@@ -161,6 +171,84 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   },
   messaging: {
     normalizeTarget: normalizeMatrixMessagingTarget,
+    targetResolver: {
+      looksLikeId: (raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed) return false;
+        if (/^(matrix:)?[!#@]/i.test(trimmed)) return true;
+        return trimmed.includes(":");
+      },
+      hint: "<room|alias|user>",
+    },
+  },
+  directory: {
+    self: async () => null,
+    listPeers: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const ids = new Set<string>();
+
+      for (const entry of account.config.dm?.allowFrom ?? []) {
+        const raw = String(entry).trim();
+        if (!raw || raw === "*") continue;
+        ids.add(raw.replace(/^matrix:/i, ""));
+      }
+
+      for (const room of Object.values(account.config.rooms ?? {})) {
+        for (const entry of room.users ?? []) {
+          const raw = String(entry).trim();
+          if (!raw || raw === "*") continue;
+          ids.add(raw.replace(/^matrix:/i, ""));
+        }
+      }
+
+      return Array.from(ids)
+        .map((raw) => raw.trim())
+        .filter(Boolean)
+        .map((raw) => {
+          const lowered = raw.toLowerCase();
+          const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+          if (cleaned.startsWith("@")) return `user:${cleaned}`;
+          return cleaned;
+        })
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => {
+          const raw = id.startsWith("user:") ? id.slice("user:".length) : id;
+          const incomplete = !raw.startsWith("@") || !raw.includes(":");
+          return {
+            kind: "user",
+            id,
+            ...(incomplete ? { name: "incomplete id; expected @user:server" } : {}),
+          };
+        });
+    },
+    listGroups: async ({ cfg, accountId, query, limit }) => {
+      const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
+      const q = query?.trim().toLowerCase() || "";
+      const ids = Object.keys(account.config.rooms ?? {})
+        .map((raw) => raw.trim())
+        .filter((raw) => Boolean(raw) && raw !== "*")
+        .map((raw) => raw.replace(/^matrix:/i, ""))
+        .map((raw) => {
+          const lowered = raw.toLowerCase();
+          if (lowered.startsWith("room:") || lowered.startsWith("channel:")) return raw;
+          if (raw.startsWith("!")) return `room:${raw}`;
+          return raw;
+        })
+        .filter((id) => (q ? id.toLowerCase().includes(q) : true))
+        .slice(0, limit && limit > 0 ? limit : undefined)
+        .map((id) => ({ kind: "group", id }) as const);
+      return ids;
+    },
+    listPeersLive: async ({ cfg, query, limit }) =>
+      listMatrixDirectoryPeersLive({ cfg, query, limit }),
+    listGroupsLive: async ({ cfg, query, limit }) =>
+      listMatrixDirectoryGroupsLive({ cfg, query, limit }),
+  },
+  resolver: {
+    resolveTargets: async ({ cfg, inputs, kind, runtime }) =>
+      resolveMatrixTargets({ cfg, inputs, kind, runtime }),
   },
   actions: matrixMessageActions,
   setup: {

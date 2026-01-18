@@ -16,19 +16,19 @@ read_when:
 
 ```bash
 # WhatsApp
-clawdbot message poll --to +15555550123 \
+clawdbot message poll --target +15555550123 \
   --poll-question "Lunch today?" --poll-option "Yes" --poll-option "No" --poll-option "Maybe"
-clawdbot message poll --to 123456789@g.us \
+clawdbot message poll --target 123456789@g.us \
   --poll-question "Meeting time?" --poll-option "10am" --poll-option "2pm" --poll-option "4pm" --poll-multi
 
 # Discord
-clawdbot message poll --channel discord --to channel:123456789 \
+clawdbot message poll --channel discord --target channel:123456789 \
   --poll-question "Snack?" --poll-option "Pizza" --poll-option "Sushi"
-clawdbot message poll --channel discord --to channel:123456789 \
+clawdbot message poll --channel discord --target channel:123456789 \
   --poll-question "Plan?" --poll-option "A" --poll-option "B" --poll-duration-hours 48
 
 # MS Teams
-clawdbot message poll --channel msteams --to conversation:19:abc@thread.tacv2 \
+clawdbot message poll --channel msteams --target conversation:19:abc@thread.tacv2 \
   --poll-question "Lunch?" --poll-option "Pizza" --poll-option "Sushi"
 ```
 

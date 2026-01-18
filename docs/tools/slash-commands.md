@@ -12,12 +12,12 @@ The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 There are two related systems:
 
 - **Commands**: standalone `/...` messages.
-- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue`.
+- **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
   - Directives are stripped from the message before the model sees it.
   - In normal chat messages (not directive-only), they are treated as “inline hints” and do **not** persist session settings.
   - In directive-only messages (the message contains only directives), they persist to the session and reply with an acknowledgement.
 
-There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
+There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## Config
@@ -26,6 +26,7 @@ They run immediately, are stripped before the model sees the message, and the re
 {
   commands: {
     native: "auto",
+    nativeSkills: "auto",
     text: true,
     bash: false,
     bashForegroundMs: 2000,
@@ -43,6 +44,9 @@ They run immediately, are stripped before the model sees the message, and the re
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`).
   - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.nativeSkills` (default `"auto"`) registers **skill** commands natively when supported.
+  - Auto: on for Discord/Telegram; off for Slack (Slack requires creating a slash command per skill).
+  - Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 - `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
@@ -54,13 +58,13 @@ They run immediately, are stripped before the model sees the message, and the re
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes provider usage/quota when available, plus OAuth/token status block when OAuth profiles exist)
+- `/status` (show current status; includes provider usage/quota for the current model provider when available)
 - `/context [list|detail|json]` (explain “context”; `detail` shows per-file + per-tool + per-skill + system prompt size)
-- `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)
+- `/subagents list|stop|log|info|send` (inspect, stop, log, or message sub-agent runs for the current session)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
-- `/cost on|off` (toggle per-response usage line)
+- `/usage off|tokens|full` (per-response usage footer)
 - `/stop`
 - `/restart`
 - `/dock-telegram` (alias: `/dock_telegram`) (switch replies to Telegram)
@@ -70,9 +74,10 @@ Text + native (when enabled):
 - `/send on|off|inherit` (owner-only)
 - `/reset` or `/new`
 - `/think <off|minimal|low|medium|high|xhigh>` (dynamic choices by model/provider; aliases: `/thinking`, `/t`)
-- `/verbose on|off` (alias: `/v`)
+- `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
+- `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
@@ -85,8 +90,8 @@ Text-only:
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
-- `/status` and `/usage` show the same status output; for full provider usage breakdown, use `clawdbot status --usage`.
-- `/cost` appends per-response token usage; it only shows dollar cost when the model uses an API key (OAuth hides cost).
+- For full provider usage breakdown, use `clawdbot status --usage`.
+- `/usage` controls the per-response usage footer. It only shows dollar cost when the model uses an API key (OAuth hides cost).
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
@@ -94,14 +99,15 @@ Notes:
 - **Group mention gating:** command-only messages from allowlisted senders bypass mention requirements.
 - **Inline shortcuts (allowlisted senders only):** certain commands also work when embedded in a normal message and are stripped before the model sees the remaining text.
   - Example: `hey /status` triggers a status reply, and the remaining text continues through the normal flow.
-  - Currently: `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`).
+- Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+- **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
-## Usage vs cost (what shows where)
+## Usage surfaces (what shows where)
 
-- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` when provider usage tracking is enabled.
-- **Per-response tokens/cost** is controlled by `/cost on|off` (appended to normal replies).
+- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled.
+- **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 
 ## Model selection (`/model`)

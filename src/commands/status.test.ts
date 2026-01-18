@@ -32,6 +32,12 @@ const mocks = vi.hoisted(() => ({
     configSnapshot: null,
   }),
   callGateway: vi.fn().mockResolvedValue({}),
+  listAgentsForGateway: vi.fn().mockReturnValue({
+    defaultId: "main",
+    mainKey: "agent:main:main",
+    scope: "per-sender",
+    agents: [{ id: "main", name: "Main" }],
+  }),
   runSecurityAudit: vi.fn().mockResolvedValue({
     ts: 0,
     summary: { critical: 1, warn: 1, info: 2 },
@@ -65,10 +71,36 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
+vi.mock("../memory/manager.js", () => ({
+  MemoryIndexManager: {
+    get: vi.fn(async ({ agentId }: { agentId: string }) => ({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => ({
+        files: 2,
+        chunks: 3,
+        dirty: false,
+        workspaceDir: "/tmp/clawd",
+        dbPath: "/tmp/memory.sqlite",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        requestedProvider: "openai",
+        sources: ["memory"],
+        sourceCounts: [{ source: "memory", files: 2, chunks: 3 }],
+        cache: { enabled: true, entries: 10, maxEntries: 500 },
+        fts: { enabled: true, available: true },
+        vector: { enabled: true, available: true, extensionPath: "/opt/vec0.dylib", dims: 1024 },
+      }),
+      close: vi.fn(async () => {}),
+      __agentId: agentId,
+    })),
+  },
+}));
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
   resolveMainSessionKey: mocks.resolveMainSessionKey,
   resolveStorePath: mocks.resolveStorePath,
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () =>
@@ -154,12 +186,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => {
   return { ...actual, callGateway: mocks.callGateway };
 });
 vi.mock("../gateway/session-utils.js", () => ({
-  listAgentsForGateway: () => ({
-    defaultId: "main",
-    mainKey: "agent:main:main",
-    scope: "per-sender",
-    agents: [{ id: "main", name: "Main" }],
-  }),
+  listAgentsForGateway: mocks.listAgentsForGateway,
 }));
 vi.mock("../infra/clawdbot-root.js", () => ({
   resolveClawdbotPackageRoot: vi.fn().mockResolvedValue("/tmp/clawdbot"),
@@ -233,8 +260,12 @@ describe("statusCommand", () => {
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse((runtime.log as vi.Mock).mock.calls[0][0]);
     expect(payload.linkChannel.linked).toBe(true);
+    expect(payload.memory.agentId).toBe("main");
+    expect(payload.memoryPlugin.enabled).toBe(true);
+    expect(payload.memoryPlugin.slot).toBe("memory-core");
+    expect(payload.memory.vector.available).toBe(true);
     expect(payload.sessions.count).toBe(1);
-    expect(payload.sessions.path).toBe("/tmp/sessions.json");
+    expect(payload.sessions.paths).toContain("/tmp/sessions.json");
     expect(payload.sessions.defaults.model).toBeTruthy();
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
@@ -255,6 +286,7 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("CRITICAL"))).toBe(true);
     expect(logs.some((l) => l.includes("Dashboard"))).toBe(true);
     expect(logs.some((l) => l.includes("macos 14.0 (arm64)"))).toBe(true);
+    expect(logs.some((l) => l.includes("Memory"))).toBe(true);
     expect(logs.some((l) => l.includes("Channels"))).toBe(true);
     expect(logs.some((l) => l.includes("WhatsApp"))).toBe(true);
     expect(logs.some((l) => l.includes("Sessions"))).toBe(true);
@@ -334,5 +366,64 @@ describe("statusCommand", () => {
     expect(logs.join("\n")).toMatch(/iMessage/i);
     expect(logs.join("\n")).toMatch(/gateway:/i);
     expect(logs.join("\n")).toMatch(/WARN/);
+  });
+
+  it("includes sessions across agents in JSON output", async () => {
+    const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
+    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
+    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+
+    mocks.listAgentsForGateway.mockReturnValue({
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", name: "Main" },
+        { id: "ops", name: "Ops" },
+      ],
+    });
+    mocks.resolveStorePath.mockImplementation((_store, opts) =>
+      opts?.agentId === "ops" ? "/tmp/ops.json" : "/tmp/main.json",
+    );
+    mocks.loadSessionStore.mockImplementation((storePath) => {
+      if (storePath === "/tmp/ops.json") {
+        return {
+          "agent:ops:main": {
+            updatedAt: Date.now() - 120_000,
+            inputTokens: 1_000,
+            outputTokens: 1_000,
+            contextTokens: 10_000,
+            model: "pi:opus",
+          },
+        };
+      }
+      return {
+        "+1000": {
+          updatedAt: Date.now() - 60_000,
+          verboseLevel: "on",
+          thinkingLevel: "low",
+          inputTokens: 2_000,
+          outputTokens: 3_000,
+          contextTokens: 10_000,
+          model: "pi:opus",
+          sessionId: "abc123",
+          systemSent: true,
+        },
+      };
+    });
+
+    await statusCommand({ json: true }, runtime as never);
+    const payload = JSON.parse((runtime.log as vi.Mock).mock.calls.at(-1)?.[0]);
+    expect(payload.sessions.count).toBe(2);
+    expect(payload.sessions.paths.length).toBe(2);
+    expect(
+      payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
+    ).toBe(true);
+
+    if (originalAgents) mocks.listAgentsForGateway.mockImplementation(originalAgents);
+    if (originalResolveStorePath)
+      mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
+    if (originalLoadSessionStore)
+      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
   });
 });

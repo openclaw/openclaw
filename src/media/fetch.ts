@@ -8,12 +8,25 @@ type FetchMediaResult = {
   fileName?: string;
 };
 
+export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
+
+export class MediaFetchError extends Error {
+  readonly code: MediaFetchErrorCode;
+
+  constructor(code: MediaFetchErrorCode, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "MediaFetchError";
+  }
+}
+
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type FetchMediaOptions = {
   url: string;
   fetchImpl?: FetchLike;
   filePathHint?: string;
+  maxBytes?: number;
 };
 
 function stripQuotes(value: string): string {
@@ -51,7 +64,7 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
 }
 
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-  const { url, fetchImpl, filePathHint } = options;
+  const { url, fetchImpl, filePathHint, maxBytes } = options;
   const fetcher: FetchLike | undefined = fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
     throw new Error("fetch is not available");
@@ -61,7 +74,7 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
   try {
     res = await fetcher(url);
   } catch (err) {
-    throw new Error(`Failed to fetch media from ${url}: ${String(err)}`);
+    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
   }
 
   if (!res.ok) {
@@ -74,10 +87,26 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
       const snippet = await readErrorBodySnippet(res);
       if (snippet) detail += `; body: ${snippet}`;
     }
-    throw new Error(`Failed to fetch media from ${url}${redirected}: ${detail}`);
+    throw new MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${url}${redirected}: ${detail}`,
+    );
   }
 
-  const buffer = Buffer.from(await res.arrayBuffer());
+  const contentLength = res.headers.get("content-length");
+  if (maxBytes && contentLength) {
+    const length = Number(contentLength);
+    if (Number.isFinite(length) && length > maxBytes) {
+      throw new MediaFetchError(
+        "max_bytes",
+        `Failed to fetch media from ${url}: content length ${length} exceeds maxBytes ${maxBytes}`,
+      );
+    }
+  }
+
+  const buffer = maxBytes
+    ? await readResponseWithLimit(res, maxBytes)
+    : Buffer.from(await res.arrayBuffer());
   let fileNameFromUrl: string | undefined;
   try {
     const parsed = new URL(url);
@@ -108,4 +137,50 @@ export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<Fetc
     contentType: contentType ?? undefined,
     fileName,
   };
+}
+
+async function readResponseWithLimit(res: Response, maxBytes: number): Promise<Buffer> {
+  const body = res.body;
+  if (!body || typeof body.getReader !== "function") {
+    const fallback = Buffer.from(await res.arrayBuffer());
+    if (fallback.length > maxBytes) {
+      throw new MediaFetchError(
+        "max_bytes",
+        `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
+      );
+    }
+    return fallback;
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value?.length) {
+        total += value.length;
+        if (total > maxBytes) {
+          try {
+            await reader.cancel();
+          } catch {}
+          throw new MediaFetchError(
+            "max_bytes",
+            `Failed to fetch media from ${res.url || "response"}: payload exceeds maxBytes ${maxBytes}`,
+          );
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  return Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  );
 }

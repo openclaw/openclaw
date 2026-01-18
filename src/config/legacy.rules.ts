@@ -69,7 +69,7 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "transcribeAudio"],
     message:
-      "routing.transcribeAudio was moved; use tools.audio.transcription instead (auto-migrated on load).",
+      "routing.transcribeAudio was moved; use tools.media.audio.models instead (auto-migrated on load).",
   },
   {
     path: ["telegram", "requireMention"],
@@ -84,6 +84,10 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["agent"],
     message:
       "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/exec settings) instead (auto-migrated on load).",
+  },
+  {
+    path: ["tools", "bash"],
+    message: "tools.bash was removed; use tools.exec instead (auto-migrated on load).",
   },
   {
     path: ["agent", "model"],

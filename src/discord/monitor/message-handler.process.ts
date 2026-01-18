@@ -8,12 +8,20 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import { formatAgentEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
+import { formatInboundEnvelope, formatThreadStarterEnvelope } from "../../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import { buildHistoryContextFromMap, clearHistoryEntries } from "../../auto-reply/reply/history.js";
+import {
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntries,
+} from "../../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveStorePath, updateLastRoute } from "../../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -56,12 +64,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     isGroupDm,
     baseText,
     messageText,
-    wasMentioned,
     shouldRequireMention,
     canDetectMention,
-    shouldBypassMention,
     effectiveWasMentioned,
-    historyEntry,
     threadChannel,
     threadParentId,
     threadParentName,
@@ -94,7 +99,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       if (!isGuildMessage) return false;
       if (!shouldRequireMention) return false;
       if (!canDetectMention) return false;
-      return wasMentioned || shouldBypassMention;
+      return effectiveWasMentioned;
     }
     return false;
   };
@@ -117,8 +122,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channelName: channelName ?? message.channelId,
         channelId: message.channelId,
       });
-  const groupRoom = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
-  const groupSubject = isDirectMessage ? undefined : groupRoom;
+  const senderTag = formatDiscordUserTag(author);
+  const senderDisplay = data.member?.nickname ?? author.globalName ?? author.username;
+  const senderLabel =
+    senderDisplay && senderTag && senderDisplay !== senderTag
+      ? `${senderDisplay} (${senderTag})`
+      : (senderDisplay ?? senderTag ?? author.id);
+  const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
+  const groupSubject = isDirectMessage ? undefined : groupChannel;
   const channelDescription = channelInfo?.topic?.trim();
   const systemPromptParts = [
     channelDescription ? `Channel topic: ${channelDescription}` : null,
@@ -126,36 +137,32 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  let combinedBody = formatAgentEnvelope({
+  let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(message.timestamp),
     body: text,
+    chatType: isDirectMessage ? "direct" : "channel",
+    senderLabel,
   });
-  let shouldClearHistory = false;
   const shouldIncludeChannelHistory =
     !isDirectMessage && !(isGuildMessage && channelConfig?.autoThread && !threadChannel);
   if (shouldIncludeChannelHistory) {
-    combinedBody = buildHistoryContextFromMap({
+    combinedBody = buildPendingHistoryContextFromMap({
       historyMap: guildHistories,
       historyKey: message.channelId,
       limit: historyLimit,
-      entry: historyEntry,
       currentMessage: combinedBody,
       formatEntry: (entry) =>
-        formatAgentEnvelope({
+        formatInboundEnvelope({
           channel: "Discord",
           from: fromLabel,
           timestamp: entry.timestamp,
-          body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
+          body: `${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
+          chatType: "channel",
+          senderLabel: entry.sender,
         }),
     });
-    shouldClearHistory = true;
-  }
-  if (!isDirectMessage) {
-    const name = formatDiscordUserTag(author);
-    const id = author.id;
-    combinedBody = `${combinedBody}\n[from: ${name} user id:${id}]`;
   }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
   if (replyContext) {
@@ -220,14 +227,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
-    : (autoThreadContext?.From ?? `group:${message.channelId}`);
+    : (autoThreadContext?.From ?? `discord:channel:${message.channelId}`);
   const effectiveTo = autoThreadContext?.To ?? replyTarget;
   if (!effectiveTo) {
     runtime.error?.(danger("discord: missing reply target"));
     return;
   }
 
-  const ctxPayload = {
+  const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     RawBody: baseText,
     CommandBody: baseText,
@@ -235,13 +242,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     To: effectiveTo,
     SessionKey: autoThreadContext?.SessionKey ?? threadKeys.sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "group",
+    ChatType: isDirectMessage ? "direct" : "channel",
+    ConversationLabel: fromLabel,
     SenderName: data.member?.nickname ?? author.globalName ?? author.username,
     SenderId: author.id,
     SenderUsername: author.username,
     SenderTag: formatDiscordUserTag(author),
     GroupSubject: groupSubject,
-    GroupRoom: groupRoom,
+    GroupChannel: groupChannel,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     Provider: "discord" as const,
@@ -258,19 +266,29 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     // Originating channel for reply routing.
     OriginatingChannel: "discord" as const,
     OriginatingTo: autoThreadContext?.OriginatingTo ?? replyTarget,
-  };
+  });
+
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: route.agentId,
+  });
+  void recordSessionMetaFromInbound({
+    storePath,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    ctx: ctxPayload,
+  }).catch((err) => {
+    logVerbose(`discord: failed updating session meta: ${String(err)}`);
+  });
 
   if (isDirectMessage) {
-    const sessionCfg = cfg.session;
-    const storePath = resolveStorePath(sessionCfg?.store, {
-      agentId: route.agentId,
-    });
     await updateLastRoute({
       storePath,
       sessionKey: route.mainSessionKey,
-      channel: "discord",
-      to: `user:${author.id}`,
-      accountId: route.accountId,
+      deliveryContext: {
+        channel: "discord",
+        to: `user:${author.id}`,
+        accountId: route.accountId,
+      },
+      ctx: ctxPayload,
     });
   }
 
@@ -281,7 +299,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     );
   }
 
-  let didSendReply = false;
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : message.channelId;
@@ -308,7 +325,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         textLimit,
         maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
       });
-      didSendReply = true;
       replyReference.markSent();
     },
     onError: (err, info) => {
@@ -339,7 +355,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   });
   markDispatchIdle();
   if (!queuedFinal) {
-    if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
+    if (isGuildMessage && historyLimit > 0) {
       clearHistoryEntries({
         historyMap: guildHistories,
         historyKey: message.channelId,
@@ -347,7 +363,6 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }
     return;
   }
-  didSendReply = true;
   if (shouldLogVerbose()) {
     const finalCount = counts.final;
     logVerbose(
@@ -367,7 +382,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     });
   }
-  if (isGuildMessage && shouldClearHistory && historyLimit > 0 && didSendReply) {
+  if (isGuildMessage && historyLimit > 0) {
     clearHistoryEntries({
       historyMap: guildHistories,
       historyKey: message.channelId,

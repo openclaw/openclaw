@@ -580,11 +580,10 @@ final class NodePairingApprovalPrompter {
             process.standardError = pipe
 
             do {
-                try process.run()
+                _ = try process.runAndReadToEnd(from: pipe)
             } catch {
                 return false
             }
-            process.waitUntilExit()
             return process.terminationStatus == 0
         }.value
     }

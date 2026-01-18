@@ -347,6 +347,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let sessionkey: String?
     public let idempotencykey: String
 
     public init(
@@ -356,6 +357,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        sessionkey: String?,
         idempotencykey: String
     ) {
         self.to = to
@@ -364,6 +366,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
@@ -373,6 +376,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
     }
 }
@@ -427,6 +431,7 @@ public struct AgentParams: Codable, Sendable {
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let channel: String?
+    public let accountid: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -443,6 +448,7 @@ public struct AgentParams: Codable, Sendable {
         deliver: Bool?,
         attachments: [AnyCodable]?,
         channel: String?,
+        accountid: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -458,6 +464,7 @@ public struct AgentParams: Codable, Sendable {
         self.deliver = deliver
         self.attachments = attachments
         self.channel = channel
+        self.accountid = accountid
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -474,6 +481,7 @@ public struct AgentParams: Codable, Sendable {
         case deliver
         case attachments
         case channel
+        case accountid = "accountId"
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"
@@ -752,6 +760,10 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let reasoninglevel: AnyCodable?
     public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
+    public let exechost: AnyCodable?
+    public let execsecurity: AnyCodable?
+    public let execask: AnyCodable?
+    public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
     public let sendpolicy: AnyCodable?
@@ -765,6 +777,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         reasoninglevel: AnyCodable?,
         responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
+        exechost: AnyCodable?,
+        execsecurity: AnyCodable?,
+        execask: AnyCodable?,
+        execnode: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
         sendpolicy: AnyCodable?,
@@ -777,6 +793,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.reasoninglevel = reasoninglevel
         self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
+        self.exechost = exechost
+        self.execsecurity = execsecurity
+        self.execask = execask
+        self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
         self.sendpolicy = sendpolicy
@@ -790,6 +810,10 @@ public struct SessionsPatchParams: Codable, Sendable {
         case reasoninglevel = "reasoningLevel"
         case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
+        case exechost = "execHost"
+        case execsecurity = "execSecurity"
+        case execask = "execAsk"
+        case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
         case sendpolicy = "sendPolicy"

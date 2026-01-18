@@ -19,6 +19,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
@@ -30,6 +31,7 @@ import { ClawdbotSchema } from "./zod-schema.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
+export { MissingEnvVarError } from "./env-substitution.js";
 
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
@@ -38,6 +40,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "GEMINI_API_KEY",
   "ZAI_API_KEY",
   "OPENROUTER_API_KEY",
+  "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
   "SYNTHETIC_API_KEY",
   "ELEVENLABS_API_KEY",
@@ -48,6 +51,8 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "CLAWDBOT_GATEWAY_TOKEN",
   "CLAWDBOT_GATEWAY_PASSWORD",
 ];
+
+const CONFIG_BACKUP_COUNT = 5;
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
@@ -68,6 +73,53 @@ export function resolveConfigSnapshotHash(snapshot: {
   }
   if (typeof snapshot.raw !== "string") return null;
   return hashConfigRaw(snapshot.raw);
+}
+
+function coerceConfig(value: unknown): ClawdbotConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as ClawdbotConfig;
+}
+
+function rotateConfigBackupsSync(configPath: string, ioFs: typeof fs): void {
+  if (CONFIG_BACKUP_COUNT <= 1) return;
+  const backupBase = `${configPath}.bak`;
+  const maxIndex = CONFIG_BACKUP_COUNT - 1;
+  try {
+    ioFs.unlinkSync(`${backupBase}.${maxIndex}`);
+  } catch {
+    // best-effort
+  }
+  for (let index = maxIndex - 1; index >= 1; index -= 1) {
+    try {
+      ioFs.renameSync(`${backupBase}.${index}`, `${backupBase}.${index + 1}`);
+    } catch {
+      // best-effort
+    }
+  }
+  try {
+    ioFs.renameSync(backupBase, `${backupBase}.1`);
+  } catch {
+    // best-effort
+  }
+}
+
+async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
+  if (CONFIG_BACKUP_COUNT <= 1) return;
+  const backupBase = `${configPath}.bak`;
+  const maxIndex = CONFIG_BACKUP_COUNT - 1;
+  await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
+    // best-effort
+  });
+  for (let index = maxIndex - 1; index >= 1; index -= 1) {
+    await ioFs.rename(`${backupBase}.${index}`, `${backupBase}.${index + 1}`).catch(() => {
+      // best-effort
+    });
+  }
+  await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
+    // best-effort
+  });
 }
 
 export type ConfigIoDeps = {
@@ -162,10 +214,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     deps.fs.writeFileSync(tmp, json, { encoding: "utf-8", mode: 0o600 });
 
-    try {
-      deps.fs.copyFileSync(configPath, `${configPath}.bak`);
-    } catch {
-      // best-effort
+    if (deps.fs.existsSync(configPath)) {
+      rotateConfigBackupsSync(configPath, deps.fs);
+      try {
+        deps.fs.copyFileSync(configPath, `${configPath}.bak`);
+      } catch {
+        // best-effort
+      }
     }
 
     try {
@@ -218,8 +273,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parseJson: (raw) => deps.json5.parse(raw),
       });
 
-      const migrated = applyLegacyMigrations(resolved);
-      const resolvedConfig = migrated.next ?? resolved;
+      // Substitute ${VAR} env var references
+      const substituted = resolveConfigEnvVars(resolved, deps.env);
+
+      const migrated = applyLegacyMigrations(substituted);
+      const resolvedConfig = migrated.next ?? substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) return {};
       const validated = ClawdbotSchema.safeParse(resolvedConfig);
@@ -338,30 +396,48 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: {},
+          config: coerceConfig(parsedRes.parsed),
           hash,
           issues: [{ path: "", message }],
           legacyIssues: [],
         };
       }
 
-      const migrated = applyLegacyMigrations(resolved);
-      const resolvedConfigRaw = migrated.next ?? resolved;
-      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
-
-      const validated = validateConfigObject(resolvedConfigRaw);
-      if (!validated.ok) {
-        const resolvedConfig =
-          typeof resolvedConfigRaw === "object" && resolvedConfigRaw !== null
-            ? (resolvedConfigRaw as ClawdbotConfig)
-            : {};
+      // Substitute ${VAR} env var references
+      let substituted: unknown;
+      try {
+        substituted = resolveConfigEnvVars(resolved, deps.env);
+      } catch (err) {
+        const message =
+          err instanceof MissingEnvVarError
+            ? err.message
+            : `Env var substitution failed: ${String(err)}`;
         return {
           path: configPath,
           exists: true,
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: resolvedConfig,
+          config: coerceConfig(resolved),
+          hash,
+          issues: [{ path: "", message }],
+          legacyIssues: [],
+        };
+      }
+
+      const migrated = applyLegacyMigrations(substituted);
+      const resolvedConfigRaw = migrated.next ?? substituted;
+      const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
+
+      const validated = validateConfigObject(resolvedConfigRaw);
+      if (!validated.ok) {
+        return {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed: parsedRes.parsed,
+          valid: false,
+          config: coerceConfig(resolvedConfigRaw),
           hash,
           issues: validated.issues,
           legacyIssues,
@@ -422,9 +498,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       mode: 0o600,
     });
 
-    await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-      // best-effort
-    });
+    if (deps.fs.existsSync(configPath)) {
+      await rotateConfigBackups(configPath, deps.fs.promises);
+      await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
+        // best-effort
+      });
+    }
 
     try {
       await deps.fs.promises.rename(tmp, configPath);

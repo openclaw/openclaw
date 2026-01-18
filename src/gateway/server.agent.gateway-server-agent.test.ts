@@ -11,6 +11,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -66,21 +67,15 @@ describe("gateway server agent", () => {
   test("suppresses tool stream events when verbose is off", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
-    await fs.writeFile(
-      testState.sessionStorePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-            verboseLevel: "off",
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          verboseLevel: "off",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {

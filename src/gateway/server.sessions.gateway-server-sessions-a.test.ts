@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   connectOk,
   embeddedRunMock,
@@ -10,12 +10,43 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+
+const sessionCleanupMocks = vi.hoisted(() => ({
+  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+  stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+}));
+
+vi.mock("../auto-reply/reply/queue.js", async () => {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
+    "../auto-reply/reply/queue.js",
+  );
+  return {
+    ...actual,
+    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+  };
+});
+
+vi.mock("../auto-reply/reply/abort.js", async () => {
+  const actual = await vi.importActual<typeof import("../auto-reply/reply/abort.js")>(
+    "../auto-reply/reply/abort.js",
+  );
+  return {
+    ...actual,
+    stopSubagentsForRequester: sessionCleanupMocks.stopSubagentsForRequester,
+  };
+});
 
 installGatewayTestHooks();
 
 describe("gateway server sessions", () => {
+  beforeEach(() => {
+    sessionCleanupMocks.clearSessionQueues.mockClear();
+    sessionCleanupMocks.stopSubagentsForRequester.mockClear();
+  });
+
   test("lists and patches session store via sessions.* RPC", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
@@ -35,41 +66,35 @@ describe("gateway server sessions", () => {
       "utf-8",
     );
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            sessionId: "sess-main",
-            updatedAt: now - 30_000,
-            inputTokens: 10,
-            outputTokens: 20,
-            thinkingLevel: "low",
-            verboseLevel: "on",
-            lastProvider: "whatsapp",
-            lastTo: "+1555",
-            lastAccountId: "work",
-          },
-          "agent:main:discord:group:dev": {
-            sessionId: "sess-group",
-            updatedAt: now - 120_000,
-            totalTokens: 50,
-          },
-          "agent:main:subagent:one": {
-            sessionId: "sess-subagent",
-            updatedAt: now - 120_000,
-            spawnedBy: "agent:main:main",
-          },
-          global: {
-            sessionId: "sess-global",
-            updatedAt: now - 10_000,
-          },
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: now - 30_000,
+          inputTokens: 10,
+          outputTokens: 20,
+          thinkingLevel: "low",
+          verboseLevel: "on",
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
+          lastAccountId: "work",
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+        "discord:group:dev": {
+          sessionId: "sess-group",
+          updatedAt: now - 120_000,
+          totalTokens: 50,
+        },
+        "agent:main:subagent:one": {
+          sessionId: "sess-subagent",
+          updatedAt: now - 120_000,
+          spawnedBy: "agent:main:main",
+        },
+        global: {
+          sessionId: "sess-global",
+          updatedAt: now - 10_000,
+        },
+      },
+    });
 
     const { server, ws } = await startServerWithClient();
     const hello = await connectOk(ws);
@@ -98,6 +123,7 @@ describe("gateway server sessions", () => {
         thinkingLevel?: string;
         verboseLevel?: string;
         lastAccountId?: string;
+        deliveryContext?: { channel?: string; to?: string; accountId?: string };
       }>;
     }>(ws, "sessions.list", { includeGlobal: false, includeUnknown: false });
 
@@ -110,6 +136,11 @@ describe("gateway server sessions", () => {
     expect(main?.thinkingLevel).toBe("low");
     expect(main?.verboseLevel).toBe("on");
     expect(main?.lastAccountId).toBe("work");
+    expect(main?.deliveryContext).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "work",
+    });
 
     const active = await rpcReq<{
       sessions: Array<{ key: string }>;
@@ -171,6 +202,7 @@ describe("gateway server sessions", () => {
         verboseLevel?: string;
         sendPolicy?: string;
         label?: string;
+        displayName?: string;
       }>;
     }>(ws, "sessions.list", {});
     expect(list2.ok).toBe(true);
@@ -180,6 +212,7 @@ describe("gateway server sessions", () => {
     expect(main2?.sendPolicy).toBe("deny");
     const subagent = list2.payload?.sessions.find((s) => s.key === "agent:main:subagent:one");
     expect(subagent?.label).toBe("Briefing");
+    expect(subagent?.displayName).toBe("Briefing");
 
     const clearedVerbose = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
       key: "agent:main:main",
@@ -319,21 +352,15 @@ describe("gateway server sessions", () => {
       "utf-8",
     );
 
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          main: { sessionId: "sess-main", updatedAt: Date.now() },
-          "discord:group:dev": {
-            sessionId: "sess-active",
-            updatedAt: Date.now(),
-          },
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:dev": {
+          sessionId: "sess-active",
+          updatedAt: Date.now(),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+      },
+    });
 
     embeddedRunMock.activeIds.add("sess-active");
     embeddedRunMock.waitResults.set("sess-active", true);
@@ -349,6 +376,15 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
+    expect(sessionCleanupMocks.stopSubagentsForRequester).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      requesterSessionKey: "agent:main:discord:group:dev",
+    });
+    expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
+    const clearedKeys = sessionCleanupMocks.clearSessionQueues.mock.calls[0]?.[0] as string[];
+    expect(clearedKeys).toEqual(
+      expect.arrayContaining(["discord:group:dev", "agent:main:discord:group:dev", "sess-active"]),
+    );
     expect(embeddedRunMock.abortCalls).toEqual(["sess-active"]);
     expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
 

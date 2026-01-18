@@ -9,15 +9,6 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("whatsapp:120363401234567890@g.us")).toBe(
       "120363401234567890@g.us",
     );
-    expect(normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us")).toBe(
-      "120363401234567890@g.us",
-    );
-    expect(normalizeWhatsAppTarget("group:123456789-987654321@g.us")).toBe(
-      "123456789-987654321@g.us",
-    );
-    expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBe(
-      "123456789-987654321@g.us",
-    );
   });
 
   it("normalizes direct JIDs to E.164", () => {
@@ -43,12 +34,15 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("whatsapp:")).toBeNull();
     expect(normalizeWhatsAppTarget("@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget("whatsapp:group:@g.us")).toBeNull();
+    expect(normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us")).toBeNull();
+    expect(normalizeWhatsAppTarget("group:123456789-987654321@g.us")).toBeNull();
+    expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
   });
 
   it("handles repeated prefixes", () => {
     expect(normalizeWhatsAppTarget("whatsapp:whatsapp:+1555")).toBe("+1555");
-    expect(normalizeWhatsAppTarget("group:group:120@g.us")).toBe("120@g.us");
+    expect(normalizeWhatsAppTarget("group:group:120@g.us")).toBeNull();
   });
 });
 
@@ -70,7 +64,7 @@ describe("isWhatsAppGroupJid", () => {
     expect(isWhatsAppGroupJid("120363401234567890@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("123456789-987654321@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("whatsapp:120363401234567890@g.us")).toBe(true);
-    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(true);
+    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("x@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("120@g.usx")).toBe(false);

@@ -20,10 +20,11 @@ import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
+  createShouldEmitToolOutput,
   createShouldEmitToolResult,
   finalizeWithFollowup,
   isAudioPayload,
@@ -112,6 +113,11 @@ export async function runReplyAgent(params: {
   });
 
   const shouldEmitToolResult = createShouldEmitToolResult({
+    sessionKey,
+    storePath,
+    resolvedVerboseLevel,
+  });
+  const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
     resolvedVerboseLevel,
@@ -296,6 +302,7 @@ export async function runReplyAgent(params: {
       resolvedBlockStreamingBreak,
       applyReplyToMode,
       shouldEmitToolResult,
+      shouldEmitToolOutput,
       pendingToolTasks,
       resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict,
@@ -450,10 +457,11 @@ export async function runReplyAgent(params: {
       }
     }
 
-    const responseUsageEnabled =
-      (activeSessionEntry?.responseUsage ??
-        (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined)) === "on";
-    if (responseUsageEnabled && hasNonzeroUsage(usage)) {
+    const responseUsageRaw =
+      activeSessionEntry?.responseUsage ??
+      (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost
@@ -463,16 +471,20 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
-      const formatted = formatResponseUsageLine({
+      let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
       });
+      if (formatted && responseUsageMode === "full" && sessionKey) {
+        formatted = `${formatted} · session ${sessionKey}`;
+      }
       if (formatted) responseUsageLine = formatted;
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = replyPayloads;
+    const verboseEnabled = resolvedVerboseLevel !== "off";
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -480,12 +492,12 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
-      if (resolvedVerboseLevel === "on") {
+      if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
       }
     }
-    if (resolvedVerboseLevel === "on" && activeIsNewSession) {
+    if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
     }
     if (responseUsageLine) {

@@ -7,6 +7,7 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorSignalProvider } from "./monitor.js";
 
+const waitForTransportReadyMock = vi.hoisted(() => vi.fn());
 const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
@@ -38,6 +39,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 
 const streamMock = vi.fn();
@@ -52,6 +54,10 @@ vi.mock("./client.js", () => ({
 
 vi.mock("./daemon.js", () => ({
   spawnSignalDaemon: vi.fn(() => ({ stop: vi.fn() })),
+}));
+
+vi.mock("../infra/transport-ready.js", () => ({
+  waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
 }));
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -72,10 +78,51 @@ beforeEach(() => {
   signalRpcRequestMock.mockReset().mockResolvedValue({});
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
+  waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
   resetSystemEventsForTest();
 });
 
 describe("monitorSignalProvider tool results", () => {
+  it("uses bounded readiness checks when auto-starting the daemon", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: ((code: number): never => {
+        throw new Error(`exit ${code}`);
+      }) as (code: number) => never,
+    };
+    config = {
+      ...config,
+      channels: {
+        ...config.channels,
+        signal: { autoStart: true, dmPolicy: "open", allowFrom: ["*"] },
+      },
+    };
+    const abortController = new AbortController();
+    streamMock.mockImplementation(async () => {
+      abortController.abort();
+      return;
+    });
+    await monitorSignalProvider({
+      autoStart: true,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(waitForTransportReadyMock).toHaveBeenCalledTimes(1);
+    expect(waitForTransportReadyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "signal daemon",
+        timeoutMs: 30_000,
+        logAfterMs: 10_000,
+        logIntervalMs: 10_000,
+        pollIntervalMs: 150,
+        runtime,
+        abortSignal: abortController.signal,
+      }),
+    );
+  });
   it("sends tool summaries with responsePrefix", async () => {
     const abortController = new AbortController();
     replyMock.mockImplementation(async (_ctx, opts) => {

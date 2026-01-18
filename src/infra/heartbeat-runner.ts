@@ -8,7 +8,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -26,7 +26,6 @@ import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -58,6 +57,35 @@ type HeartbeatAgent = {
   heartbeat?: HeartbeatConfig;
 };
 
+export type HeartbeatSummary = {
+  enabled: boolean;
+  every: string;
+  everyMs: number | null;
+  prompt: string;
+  target: string;
+  model?: string;
+  ackMaxChars: number;
+};
+
+const DEFAULT_HEARTBEAT_TARGET = "last";
+
+function hasExplicitHeartbeatAgents(cfg: ClawdbotConfig) {
+  const list = cfg.agents?.list ?? [];
+  return list.some((entry) => Boolean(entry?.heartbeat));
+}
+
+export function isHeartbeatEnabledForAgent(cfg: ClawdbotConfig, agentId?: string): boolean {
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
+  const list = cfg.agents?.list ?? [];
+  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
+  if (hasExplicit) {
+    return list.some(
+      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+    );
+  }
+  return resolvedAgentId === resolveDefaultAgentId(cfg);
+}
+
 function resolveHeartbeatConfig(
   cfg: ClawdbotConfig,
   agentId?: string,
@@ -69,11 +97,59 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+export function resolveHeartbeatSummaryForAgent(
+  cfg: ClawdbotConfig,
+  agentId?: string,
+): HeartbeatSummary {
+  const defaults = cfg.agents?.defaults?.heartbeat;
+  const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
+  const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
+
+  if (!enabled) {
+    return {
+      enabled: false,
+      every: "disabled",
+      everyMs: null,
+      prompt: resolveHeartbeatPromptText(defaults?.prompt),
+      target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
+      model: defaults?.model,
+      ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
+    };
+  }
+
+  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
+  const every = merged?.every ?? defaults?.every ?? overrides?.every ?? DEFAULT_HEARTBEAT_EVERY;
+  const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
+  const prompt = resolveHeartbeatPromptText(
+    merged?.prompt ?? defaults?.prompt ?? overrides?.prompt,
+  );
+  const target =
+    merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
+  const model = merged?.model ?? defaults?.model ?? overrides?.model;
+  const ackMaxChars = Math.max(
+    0,
+    merged?.ackMaxChars ??
+      defaults?.ackMaxChars ??
+      overrides?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
+
+  return {
+    enabled: true,
+    every,
+    everyMs,
+    prompt,
+    target,
+    model,
+    ackMaxChars,
+  };
+}
+
 function resolveHeartbeatAgents(cfg: ClawdbotConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
-  const explicit = list.filter((entry) => entry?.heartbeat);
-  if (explicit.length > 0) {
-    return explicit
+  if (hasExplicitHeartbeatAgents(cfg)) {
+    return list
+      .filter((entry) => entry?.heartbeat)
       .map((entry) => {
         const id = normalizeAgentId(entry.id);
         return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
@@ -244,6 +320,9 @@ export async function runHeartbeatOnce(opts: {
   if (!heartbeatsEnabled) {
     return { status: "skipped", reason: "disabled" };
   }
+  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+    return { status: "skipped", reason: "disabled" };
+  }
   if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -257,15 +336,13 @@ export async function runHeartbeatOnce(opts: {
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
-  const lastChannel =
-    entry?.lastChannel && entry.lastChannel !== INTERNAL_MESSAGE_CHANNEL
-      ? normalizeChannelId(entry.lastChannel)
-      : undefined;
+  const lastChannel = delivery.lastChannel;
+  const lastAccountId = delivery.lastAccountId;
   const senderProvider = delivery.channel !== "none" ? delivery.channel : lastChannel;
   const senderAllowFrom = senderProvider
     ? (getChannelPlugin(senderProvider)?.config.resolveAllowFrom?.({
         cfg,
-        accountId: senderProvider === lastChannel ? entry?.lastAccountId : undefined,
+        accountId: senderProvider === lastChannel ? lastAccountId : undefined,
       }) ?? [])
     : [];
   const sender = resolveHeartbeatSender({
@@ -380,7 +457,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId = delivery.channel === lastChannel ? entry?.lastAccountId : undefined;
+    const deliveryAccountId = delivery.accountId;
     const heartbeatPlugin = getChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({

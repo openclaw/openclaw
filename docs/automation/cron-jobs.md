@@ -78,6 +78,7 @@ Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
 
 Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
+- Each run starts a **fresh session id** (no prior conversation carry-over).
 - A summary is posted to the main session (prefix `Cron`, configurable).
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
 - If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.
@@ -100,7 +101,9 @@ Common `agentTurn` fields:
 - `bestEffortDeliver`: avoid failing the job if delivery fails.
 
 Isolation options (only for `session=isolated`):
-- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the summary system event in main.
+- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the system event in main.
+- `postToMainMode`: `summary` (default) or `full`.
+- `postToMainMaxChars`: max chars when `postToMainMode=full` (default 8000).
 
 ### Model and thinking overrides
 Isolated jobs (`agentTurn`) can override the model and thinking level:

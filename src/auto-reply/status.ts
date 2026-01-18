@@ -22,7 +22,9 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry.js";
+import type { SkillCommandSpec } from "../agents/skills.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
+import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 
 type AgentConfig = Partial<NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>>;
 
@@ -51,6 +53,8 @@ type StatusArgs = {
   modelAuth?: string;
   usageLine?: string;
   queue?: QueueStatus;
+  mediaDecisions?: MediaUnderstandingDecision[];
+  subagentsLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -166,6 +170,42 @@ const formatUsagePair = (input?: number | null, output?: number | null) => {
   return `🧮 Tokens: ${inputLabel} in / ${outputLabel} out`;
 };
 
+const formatMediaUnderstandingLine = (decisions?: MediaUnderstandingDecision[]) => {
+  if (!decisions || decisions.length === 0) return null;
+  const parts = decisions
+    .map((decision) => {
+      const count = decision.attachments.length;
+      const countLabel = count > 1 ? ` x${count}` : "";
+      if (decision.outcome === "success") {
+        const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
+        const provider = chosen?.provider?.trim();
+        const model = chosen?.model?.trim();
+        const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : null;
+        return `${decision.capability}${countLabel} ok${modelLabel ? ` (${modelLabel})` : ""}`;
+      }
+      if (decision.outcome === "no-attachment") {
+        return `${decision.capability} none`;
+      }
+      if (decision.outcome === "disabled") {
+        return `${decision.capability} off`;
+      }
+      if (decision.outcome === "scope-deny") {
+        return `${decision.capability} denied`;
+      }
+      if (decision.outcome === "skipped") {
+        const reason = decision.attachments
+          .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+          .find(Boolean);
+        const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+        return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
+      }
+      return null;
+    })
+    .filter(Boolean);
+  if (parts.length === 0) return null;
+  return `📎 Media: ${parts.join(" · ")}`;
+};
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -252,10 +292,9 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const isGroupSession =
     entry?.chatType === "group" ||
-    entry?.chatType === "room" ||
+    entry?.chatType === "channel" ||
     Boolean(args.sessionKey?.includes(":group:")) ||
-    Boolean(args.sessionKey?.includes(":channel:")) ||
-    Boolean(args.sessionKey?.startsWith("group:"));
+    Boolean(args.sessionKey?.includes(":channel:"));
   const groupActivationValue = isGroupSession
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
@@ -269,7 +308,8 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
-  const verboseLabel = verboseLevel === "on" ? "verbose" : null;
+  const verboseLabel =
+    verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
   const elevatedLabel = elevatedLevel === "on" ? "elevated" : null;
   const optionParts = [
     `Runtime: ${runtime.label}`,
@@ -318,14 +358,17 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
+  const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
 
   return [
     versionLine,
     modelLine,
     usageCostLine,
     `📚 ${contextLine}`,
+    mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,
+    args.subagentsLine,
     `⚙️ ${optionsLine}`,
     activationLine,
   ]
@@ -336,11 +379,11 @@ export function buildStatusMessage(args: StatusArgs): string {
 export function buildHelpMessage(cfg?: ClawdbotConfig): string {
   const options = [
     "/think <level>",
-    "/verbose on|off",
+    "/verbose on|full|off",
     "/reasoning on|off",
     "/elevated on|off",
     "/model <id>",
-    "/cost on|off",
+    "/usage off|tokens|full",
   ];
   if (cfg?.commands?.config === true) options.push("/config show");
   if (cfg?.commands?.debug === true) options.push("/debug show");
@@ -352,9 +395,14 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
   ].join("\n");
 }
 
-export function buildCommandsMessage(cfg?: ClawdbotConfig): string {
+export function buildCommandsMessage(
+  cfg?: ClawdbotConfig,
+  skillCommands?: SkillCommandSpec[],
+): string {
   const lines = ["ℹ️ Slash commands"];
-  const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
+  const commands = cfg
+    ? listChatCommandsForConfig(cfg, { skillCommands })
+    : listChatCommands({ skillCommands });
   for (const command of commands) {
     const primary = command.nativeName
       ? `/${command.nativeName}`

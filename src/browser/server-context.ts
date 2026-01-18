@@ -22,6 +22,8 @@ import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -100,6 +102,21 @@ function createProfileContext(
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
+    // For remote profiles, use Playwright's persistent connection to avoid ephemeral sessions
+    if (!profile.cdpIsLoopback) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const listPagesViaPlaywright = (mod as Partial<PwAiModule> | null)?.listPagesViaPlaywright;
+      if (typeof listPagesViaPlaywright === "function") {
+        const pages = await listPagesViaPlaywright({ cdpUrl: profile.cdpUrl });
+        return pages.map((p) => ({
+          targetId: p.targetId,
+          title: p.title,
+          url: p.url,
+          type: p.type,
+        }));
+      }
+    }
+
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -121,6 +138,24 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    // For remote profiles, use Playwright's persistent connection to create tabs
+    // This ensures the tab persists beyond a single request
+    if (!profile.cdpIsLoopback) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const createPageViaPlaywright = (mod as Partial<PwAiModule> | null)?.createPageViaPlaywright;
+      if (typeof createPageViaPlaywright === "function") {
+        const page = await createPageViaPlaywright({ cdpUrl: profile.cdpUrl, url });
+        const profileState = getProfileState();
+        profileState.lastTargetId = page.targetId;
+        return {
+          targetId: page.targetId,
+          title: page.title,
+          url: page.url,
+          type: page.type,
+        };
+      }
+    }
+
     const createdViaCdp = await createTargetViaCdp({
       cdpUrl: profile.cdpUrl,
       url,
@@ -129,6 +164,8 @@ function createProfileContext(
       .catch(() => null);
 
     if (createdViaCdp) {
+      const profileState = getProfileState();
+      profileState.lastTargetId = createdViaCdp;
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
@@ -321,7 +358,12 @@ function createProfileContext(
     }
 
     const tabs = await listTabs();
-    const candidates = profile.driver === "extension" ? tabs : tabs.filter((t) => Boolean(t.wsUrl));
+    // For remote profiles using Playwright's persistent connection, we don't need wsUrl
+    // because we access pages directly through Playwright, not via individual WebSocket URLs.
+    const candidates =
+      profile.driver === "extension" || !profile.cdpIsLoopback
+        ? tabs
+        : tabs.filter((t) => Boolean(t.wsUrl));
 
     const resolveById = (raw: string) => {
       const resolved = resolveTargetIdFromTabs(raw, candidates);
@@ -365,6 +407,22 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
+
+    if (!profile.cdpIsLoopback) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const focusPageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
+        ?.focusPageByTargetIdViaPlaywright;
+      if (typeof focusPageByTargetIdViaPlaywright === "function") {
+        await focusPageByTargetIdViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          targetId: resolved.targetId,
+        });
+        const profileState = getProfileState();
+        profileState.lastTargetId = resolved.targetId;
+        return;
+      }
+    }
+
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/activate/${resolved.targetId}`));
     const profileState = getProfileState();
     profileState.lastTargetId = resolved.targetId;
@@ -379,6 +437,21 @@ function createProfileContext(
       }
       throw new Error("tab not found");
     }
+
+    // For remote profiles, use Playwright's persistent connection to close tabs
+    if (!profile.cdpIsLoopback) {
+      const mod = await getPwAiModule({ mode: "strict" });
+      const closePageByTargetIdViaPlaywright = (mod as Partial<PwAiModule> | null)
+        ?.closePageByTargetIdViaPlaywright;
+      if (typeof closePageByTargetIdViaPlaywright === "function") {
+        await closePageByTargetIdViaPlaywright({
+          cdpUrl: profile.cdpUrl,
+          targetId: resolved.targetId,
+        });
+        return;
+      }
+    }
+
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolved.targetId}`));
   };
 

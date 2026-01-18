@@ -18,15 +18,26 @@ describe("gateway ws log helpers", () => {
     expect(formatForLog(obj)).toBe("Oops: failed: code=E1");
   });
 
+  test("formatForLog redacts obvious secrets", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const out = formatForLog({ token });
+    expect(out).toContain("token");
+    expect(out).not.toContain(token);
+    expect(out).toContain("…");
+  });
+
   test("summarizeAgentEventForWsLog extracts useful fields", () => {
     const summary = summarizeAgentEventForWsLog({
       runId: "12345678-1234-1234-1234-123456789abc",
+      sessionKey: "agent:main:main",
       stream: "assistant",
       seq: 2,
       data: { text: "hello world", mediaUrls: ["a", "b"] },
     });
     expect(summary).toMatchObject({
+      agent: "main",
       run: "12345678…9abc",
+      session: "main",
       stream: "assistant",
       aseq: 2,
       text: "hello world",

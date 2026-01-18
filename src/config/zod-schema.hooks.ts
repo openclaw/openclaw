@@ -41,6 +41,45 @@ export const HookMappingSchema = z
   })
   .optional();
 
+export const InternalHookHandlerSchema = z.object({
+  event: z.string(),
+  module: z.string(),
+  export: z.string().optional(),
+});
+
+const HookConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .passthrough();
+
+const HookInstallRecordSchema = z
+  .object({
+    source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
+    spec: z.string().optional(),
+    sourcePath: z.string().optional(),
+    installPath: z.string().optional(),
+    version: z.string().optional(),
+    installedAt: z.string().optional(),
+    hooks: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+export const InternalHooksSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    handlers: z.array(InternalHookHandlerSchema).optional(),
+    entries: z.record(z.string(), HookConfigSchema).optional(),
+    load: z
+      .object({
+        extraDirs: z.array(z.string()).optional(),
+      })
+      .optional(),
+    installs: z.record(z.string(), HookInstallRecordSchema).optional(),
+  })
+  .optional();
+
 export const HooksGmailSchema = z
   .object({
     account: z.string().optional(),

@@ -16,9 +16,7 @@ enum Launchctl {
             process.standardOutput = pipe
             process.standardError = pipe
             do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readToEndSafely()
+                let data = try process.runAndReadToEnd(from: pipe)
                 let output = String(data: data, encoding: .utf8) ?? ""
                 return Result(status: process.terminationStatus, output: output)
             } catch {

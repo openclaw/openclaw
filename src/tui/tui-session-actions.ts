@@ -41,6 +41,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
   } = context;
+  let refreshSessionInfoPromise: Promise<void> | null = null;
 
   const applyAgentsResult = (result: GatewayAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
@@ -95,43 +96,51 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const refreshSessionInfo = async () => {
+    if (refreshSessionInfoPromise) return refreshSessionInfoPromise;
+    refreshSessionInfoPromise = (async () => {
+      try {
+        const listAgentId =
+          state.currentSessionKey === "global" || state.currentSessionKey === "unknown"
+            ? undefined
+            : state.currentAgentId;
+        const result = await client.listSessions({
+          includeGlobal: false,
+          includeUnknown: false,
+          agentId: listAgentId,
+        });
+        const entry = result.sessions.find((row) => {
+          // Exact match
+          if (row.key === state.currentSessionKey) return true;
+          // Also match canonical keys like "agent:default:main" against "main"
+          const parsed = parseAgentSessionKey(row.key);
+          return parsed?.rest === state.currentSessionKey;
+        });
+        state.sessionInfo = {
+          thinkingLevel: entry?.thinkingLevel,
+          verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
+          model: entry?.model ?? result.defaults?.model ?? undefined,
+          modelProvider: entry?.modelProvider ?? result.defaults?.modelProvider ?? undefined,
+          contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
+          inputTokens: entry?.inputTokens ?? null,
+          outputTokens: entry?.outputTokens ?? null,
+          totalTokens: entry?.totalTokens ?? null,
+          responseUsage: entry?.responseUsage,
+          updatedAt: entry?.updatedAt ?? null,
+          displayName: entry?.displayName,
+        };
+      } catch (err) {
+        chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      }
+      updateAutocompleteProvider();
+      updateFooter();
+      tui.requestRender();
+    })();
     try {
-      const listAgentId =
-        state.currentSessionKey === "global" || state.currentSessionKey === "unknown"
-          ? undefined
-          : state.currentAgentId;
-      const result = await client.listSessions({
-        includeGlobal: false,
-        includeUnknown: false,
-        agentId: listAgentId,
-      });
-      const entry = result.sessions.find((row) => {
-        // Exact match
-        if (row.key === state.currentSessionKey) return true;
-        // Also match canonical keys like "agent:default:main" against "main"
-        const parsed = parseAgentSessionKey(row.key);
-        return parsed?.rest === state.currentSessionKey;
-      });
-      state.sessionInfo = {
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        model: entry?.model ?? result.defaults?.model ?? undefined,
-        modelProvider: entry?.modelProvider ?? result.defaults?.modelProvider ?? undefined,
-        contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
-        inputTokens: entry?.inputTokens ?? null,
-        outputTokens: entry?.outputTokens ?? null,
-        totalTokens: entry?.totalTokens ?? null,
-        responseUsage: entry?.responseUsage,
-        updatedAt: entry?.updatedAt ?? null,
-        displayName: entry?.displayName,
-      };
-    } catch (err) {
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      await refreshSessionInfoPromise;
+    } finally {
+      refreshSessionInfoPromise = null;
     }
-    updateAutocompleteProvider();
-    updateFooter();
-    tui.requestRender();
   };
 
   const loadHistory = async () => {

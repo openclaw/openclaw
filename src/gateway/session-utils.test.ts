@@ -17,9 +17,13 @@ describe("gateway session utils", () => {
     expect(res.items).toEqual(["b", "c"]);
   });
 
-  test("parseGroupKey handles group prefixes", () => {
-    expect(parseGroupKey("group:abc")).toEqual({ id: "abc" });
+  test("parseGroupKey handles group keys", () => {
     expect(parseGroupKey("discord:group:dev")).toEqual({
+      channel: "discord",
+      kind: "group",
+      id: "dev",
+    });
+    expect(parseGroupKey("agent:ops:discord:group:dev")).toEqual({
       channel: "discord",
       kind: "group",
       id: "dev",
@@ -30,7 +34,6 @@ describe("gateway session utils", () => {
   test("classifySessionKey respects chat type + prefixes", () => {
     expect(classifySessionKey("global")).toBe("global");
     expect(classifySessionKey("unknown")).toBe("unknown");
-    expect(classifySessionKey("group:abc")).toBe("group");
     expect(classifySessionKey("discord:group:dev")).toBe("group");
     expect(classifySessionKey("main")).toBe("direct");
     const entry = { chatType: "group" } as SessionEntry;
@@ -52,7 +55,9 @@ describe("gateway session utils", () => {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops", default: true }] },
     } as ClawdbotConfig;
-    expect(resolveSessionStoreKey({ cfg, sessionKey: "group:123" })).toBe("agent:ops:group:123");
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
+      "agent:ops:discord:group:123",
+    );
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:main" })).toBe(
       "agent:alpha:main",
     );

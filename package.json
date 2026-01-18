@@ -1,9 +1,14 @@
 {
   "name": "clawdbot",
-  "version": "2026.1.15",
+  "version": "2026.1.17-1",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk/*": "./dist/plugin-sdk/*"
+  },
   "bin": {
     "clawdbot": "dist/entry.js"
   },
@@ -26,8 +31,10 @@
     "dist/infra/**",
     "dist/macos/**",
     "dist/media/**",
+    "dist/media-understanding/**",
     "dist/process/**",
     "dist/plugins/**",
+    "dist/plugin-sdk/**",
     "dist/security/**",
     "dist/sessions/**",
     "dist/providers/**",
@@ -47,7 +54,6 @@
     "README-header.png",
     "CHANGELOG.md",
     "LICENSE",
-    "patches/**",
     "scripts/postinstall.js",
     "dist/terminal/**",
     "dist/routing/**",
@@ -66,7 +72,7 @@
     "docs:bin": "bun build scripts/docs-list.ts --compile --outfile bin/docs-list",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx --reporter append-only mint broken-links",
-    "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",
+    "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts && tsx scripts/copy-hook-metadata.ts && tsx scripts/write-build-info.ts",
     "plugins:sync": "tsx scripts/sync-plugin-versions.ts",
     "release:check": "tsx scripts/release-check.ts",
     "ui:install": "node scripts/ui.js install",
@@ -91,10 +97,10 @@
     "mac:restart": "bash scripts/restart-mac.sh",
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:open": "open dist/Clawdbot.app",
-    "lint": "oxlint --type-aware src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
+    "lint": "oxlint --type-aware src test",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:all": "pnpm lint && pnpm lint:swift",
-    "lint:fix": "pnpm format:fix && oxlint --type-aware --fix src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
+    "lint:fix": "pnpm format:fix && oxlint --type-aware --fix src test",
     "format": "oxfmt --check src test",
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:all": "pnpm format && pnpm format:swift",
@@ -139,10 +145,12 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
+    "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.46.0",
     "@mariozechner/pi-ai": "0.46.0",
     "@mariozechner/pi-coding-agent": "^0.46.0",
     "@mariozechner/pi-tui": "^0.46.0",
+    "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
@@ -163,6 +171,8 @@
     "hono": "4.11.4",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
+    "jszip": "^3.10.1",
+    "linkedom": "^0.18.12",
     "long": "5.3.2",
     "markdown-it": "^14.1.0",
     "osc-progress": "^0.2.0",
@@ -170,10 +180,12 @@
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
-    "tar": "^7.5.2",
+    "sqlite-vec": "0.1.7-alpha.2",
+    "tar": "^7.5.3",
     "tslog": "^4.10.2",
     "undici": "^7.18.2",
     "ws": "^8.19.0",
+    "yaml": "^2.8.2",
     "zod": "^4.3.5"
   },
   "optionalDependencies": {
@@ -193,7 +205,6 @@
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.0.16",
     "docx-preview": "^0.3.7",
-    "jszip": "^3.10.1",
     "lit": "^3.3.2",
     "lucide": "^0.562.0",
     "ollama": "^0.6.3",
@@ -212,10 +223,8 @@
     "minimumReleaseAge": 2880,
     "overrides": {
       "@sinclair/typebox": "0.34.47",
-      "hono": "4.11.4"
-    },
-    "patchedDependencies": {
-      "@mariozechner/pi-agent-core@0.46.0": "patches/@mariozechner__pi-agent-core.patch"
+      "hono": "4.11.4",
+      "tar": "7.5.3"
     }
   },
   "vitest": {

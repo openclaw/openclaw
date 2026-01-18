@@ -19,6 +19,8 @@ To see the current flags/behavior, run:
 curl -fsSL https://clawd.bot/install.sh | bash -s -- --help
 ```
 
+If the installer completes but `clawdbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
+
 ## install.sh (recommended)
 
 What it does (high level):
@@ -71,9 +73,3 @@ Help:
 ```bash
 curl -fsSL https://clawd.bot/install-cli.sh | bash -s -- --help
 ```
-
-## Patches (npm / pnpm / bun)
-
-Clawdbot’s `postinstall` script includes a builtin JS patcher that can apply `pnpm.patchedDependencies` patches even when the package manager doesn’t support them (notably Bun). pnpm itself already applies `pnpm.patchedDependencies`, so the fallback skips pnpm installs to avoid double-applying.
-
-See: [Bun notes](/install/bun).

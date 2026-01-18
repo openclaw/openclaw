@@ -13,6 +13,7 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 2) Set the token:
    - Env: `TELEGRAM_BOT_TOKEN=...`
    - Or config: `channels.telegram.botToken: "..."`.
+   - If both are set, config takes precedence (env fallback is default-account only).
 3) Start the gateway.
 4) DM access is pairing by default; approve the pairing code on first contact.
 
@@ -61,10 +62,11 @@ Example:
 ```
 
 Env option: `TELEGRAM_BOT_TOKEN=...` (works for the default account).
+If both env and config are set, config takes precedence.
 
 Multi-account support: use `channels.telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-3) Start the gateway. Telegram starts when a token is resolved (env or config).
+3) Start the gateway. Telegram starts when a token is resolved (config first, env fallback).
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
 5) For groups: add the bot, decide privacy/admin behavior (below), then set `channels.telegram.groups` to control mention gating + allowlists.
 
@@ -150,6 +152,7 @@ By default, the bot only responds to mentions in groups (`@botname` or patterns 
 ```
 
 **Important:** Setting `channels.telegram.groups` creates an **allowlist** - only listed groups (or `"*"`) will be accepted.
+Forum topics inherit their parent group config (allowFrom, requireMention, skills, prompts) unless you add per-topic overrides under `channels.telegram.groups.<groupId>.topics.<topicId>`.
 
 To allow all groups with always-respond:
 ```json5
@@ -214,18 +217,21 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - General topic (thread id `1`) is special: message sends omit `message_thread_id` (Telegram rejects it), but typing indicators still include it.
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
 - Topic-specific configuration is available under `channels.telegram.groups.<chatId>.topics.<threadId>` (skills, allowlists, auto-reply, system prompts, disable).
+- Topic configs inherit group settings (requireMention, allowlists, skills, prompts, enabled) unless overridden per topic.
 
 Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps the DM session key unchanged, but still uses the thread id for replies/draft streaming when it is present.
 
 ## Inline Buttons
 
-Telegram supports inline keyboards with callback buttons. Enable this feature via capabilities:
+Telegram supports inline keyboards with callback buttons.
 
 ```json5
 {
   "channels": {
     "telegram": {
-      "capabilities": ["inlineButtons"]
+      "capabilities": {
+        "inlineButtons": "allowlist"
+      }
     }
   }
 }
@@ -238,13 +244,25 @@ For per-account configuration:
     "telegram": {
       "accounts": {
         "main": {
-          "capabilities": ["inlineButtons"]
+          "capabilities": {
+            "inlineButtons": "allowlist"
+          }
         }
       }
     }
   }
 }
 ```
+
+Scopes:
+- `off` — inline buttons disabled
+- `dm` — only DMs (group targets blocked)
+- `group` — only groups (DM targets blocked)
+- `all` — DMs + groups
+- `allowlist` — DMs + groups, but only senders allowed by `allowFrom`/`groupAllowFrom` (same rules as control commands)
+
+Default: `allowlist`.
+Legacy: `capabilities: ["inlineButtons"]` = `inlineButtons: "all"`.
 
 ### Sending buttons
 
@@ -273,12 +291,12 @@ When a user clicks a button, the callback data is sent back to the agent as a me
 
 ### Configuration options
 
-Telegram capabilities can be configured at two levels:
+Telegram capabilities can be configured at two levels (object form shown above; legacy string arrays still supported):
 
-- `channels.telegram.capabilities`: Global default capability list applied to all Telegram accounts unless overridden.
-- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities that override or extend the global defaults for that specific account.
+- `channels.telegram.capabilities`: Global default capability config applied to all Telegram accounts unless overridden.
+- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities that override the global defaults for that specific account.
 
-Use the global setting when all Telegram bots/accounts should behave the same. Use per-account configuration when different bots need different behaviors (for example, one account only handles DMs while another is allowed in groups or has extra capabilities).
+Use the global setting when all Telegram bots/accounts should behave the same. Use per-account configuration when different bots need different behaviors (for example, one account only handles DMs while another is allowed in groups).
 ## Access control (DMs + groups)
 
 ### DM access
@@ -344,6 +362,19 @@ To force a voice note bubble in agent replies, include this tag anywhere in the 
 
 The tag is stripped from the delivered text. Other channels ignore this tag.
 
+For message tool sends, set `asVoice: true` with a voice-compatible audio `media` URL
+(`message` is optional when media is present):
+
+```json5
+{
+  "action": "send",
+  "channel": "telegram",
+  "to": "123456789",
+  "media": "https://example.com/voice.ogg",
+  "asVoice": true
+}
+```
+
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
 Clawdbot uses Bot API `sendMessageDraft` (not real messages) and then sends the
@@ -397,8 +428,8 @@ The agent sees reactions as **system notifications** in the conversation history
 
 **Configuration:**
 - `channels.telegram.reactionNotifications`: Controls which reactions trigger notifications
-  - `"off"` — ignore all reactions (default when not set)
-  - `"own"` — notify when users react to bot messages (best-effort; in-memory)
+  - `"off"` — ignore all reactions
+  - `"own"` — notify when users react to bot messages (best-effort; in-memory) (default)
   - `"all"` — notify for all reactions
 
 - `channels.telegram.reactionLevel`: Controls agent's reaction capability
@@ -428,7 +459,7 @@ The agent sees reactions as **system notifications** in the conversation history
 
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
-- Example: `clawdbot message send --channel telegram --to 123456789 --message "hi"`.
+- Example: `clawdbot message send --channel telegram --target 123456789 --message "hi"`.
 
 ## Troubleshooting
 
@@ -477,8 +508,8 @@ Provider options:
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
   - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
-- `channels.telegram.capabilities`: Enable channel features (e.g., "inlineButtons").
-- `channels.telegram.accounts.<account>.capabilities`: Per-account capabilities.
+- `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
+- `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `first`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.streamMode`: `off | partial | block` (draft streaming).
@@ -491,8 +522,8 @@ Provider options:
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
-- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `off` when not set).
-- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `ack` when not set).
+- `channels.telegram.reactionNotifications`: `off | own | all` — control which reactions trigger system events (default: `own` when not set).
+- `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` — control agent's reaction capability (default: `minimal` when not set).
 
 Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).

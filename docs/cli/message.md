@@ -21,19 +21,25 @@ Channel selection:
 - If exactly one channel is configured, it becomes the default.
 - Values: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
 
-Target formats (`--to`):
+Target formats (`--target`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
-- Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are rejected)
+- Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle, `chat_id:<id>`, `chat_guid:<guid>`, or `chat_identifier:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
+Name lookup:
+- For supported providers (Discord/Slack/etc), channel names like `Help` or `#help` are resolved via the directory cache.
+- On cache miss, Clawdbot will attempt a live directory lookup when the provider supports it.
+
 ## Common flags
 
 - `--channel <name>`
 - `--account <id>`
+- `--target <dest>` (target channel or user for send/poll/read/etc)
+- `--targets <name>` (repeat; broadcast only)
 - `--json`
 - `--dry-run`
 - `--verbose`
@@ -44,61 +50,56 @@ Target formats (`--to`):
 
 - `send`
   - Channels: WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams
-  - Required: `--to`, plus `--message` or `--media`
+  - Required: `--target`, plus `--message` or `--media`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
-  - Telegram only: `--buttons` (requires `"inlineButtons"` in `channels.telegram.capabilities` or `channels.telegram.accounts.<id>.capabilities`)
+  - Telegram only: `--buttons` (requires `channels.telegram.capabilities.inlineButtons` to allow it)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
 
 - `poll`
   - Channels: WhatsApp/Discord/MS Teams
-  - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
+  - Required: `--target`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`
   - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`
   - Channels: Discord/Slack/Telegram/WhatsApp
-  - Required: `--message-id`, `--to` or `--channel-id`
-  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--channel-id`
+  - Required: `--message-id`, `--target`
+  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`
   - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
   - WhatsApp only: `--participant`, `--from-me`
 
 - `reactions`
   - Channels: Discord/Slack
-  - Required: `--message-id`, `--to` or `--channel-id`
-  - Optional: `--limit`, `--channel-id`
+  - Required: `--message-id`, `--target`
+  - Optional: `--limit`
 
 - `read`
   - Channels: Discord/Slack
-  - Required: `--to` or `--channel-id`
-  - Optional: `--limit`, `--before`, `--after`, `--channel-id`
+  - Required: `--target`
+  - Optional: `--limit`, `--before`, `--after`
   - Discord only: `--around`
 
 - `edit`
   - Channels: Discord/Slack
-  - Required: `--message-id`, `--message`, `--to` or `--channel-id`
-  - Optional: `--channel-id`
+  - Required: `--message-id`, `--message`, `--target`
 
 - `delete`
   - Channels: Discord/Slack/Telegram
-  - Required: `--message-id`, `--to` or `--channel-id`
-  - Optional: `--channel-id`
+  - Required: `--message-id`, `--target`
 
 - `pin` / `unpin`
   - Channels: Discord/Slack
-  - Required: `--message-id`, `--to` or `--channel-id`
-  - Optional: `--channel-id`
+  - Required: `--message-id`, `--target`
 
 - `pins` (list)
   - Channels: Discord/Slack
-  - Required: `--to` or `--channel-id`
-  - Optional: `--channel-id`
+  - Required: `--target`
 
 - `permissions`
   - Channels: Discord
-  - Required: `--to` or `--channel-id`
-  - Optional: `--channel-id`
+  - Required: `--target`
 
 - `search`
   - Channels: Discord
@@ -109,7 +110,7 @@ Target formats (`--to`):
 
 - `thread create`
   - Channels: Discord
-  - Required: `--thread-name`, `--to` (channel id) or `--channel-id`
+  - Required: `--thread-name`, `--target` (channel id)
   - Optional: `--message-id`, `--auto-archive-min`
 
 - `thread list`
@@ -119,7 +120,7 @@ Target formats (`--to`):
 
 - `thread reply`
   - Channels: Discord
-  - Required: `--to` (thread id), `--message`
+  - Required: `--target` (thread id), `--message`
   - Optional: `--media`, `--reply-to`
 
 ### Emojis
@@ -137,7 +138,7 @@ Target formats (`--to`):
 
 - `sticker send`
   - Channels: Discord
-  - Required: `--to`, `--sticker-id` (repeat)
+  - Required: `--target`, `--sticker-id` (repeat)
   - Optional: `--message`
 
 - `sticker upload`
@@ -148,7 +149,7 @@ Target formats (`--to`):
 
 - `role info` (Discord): `--guild-id`
 - `role add` / `role remove` (Discord): `--guild-id`, `--user-id`, `--role-id`
-- `channel info` (Discord): `--channel-id`
+- `channel info` (Discord): `--target`
 - `channel list` (Discord): `--guild-id`
 - `member info` (Discord/Slack): `--user-id` (+ `--guild-id` for Discord)
 - `voice status` (Discord): `--guild-id`, `--user-id`
@@ -166,18 +167,25 @@ Target formats (`--to`):
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` also supports `--reason`
 
+### Broadcast
+
+- `broadcast`
+  - Channels: any configured channel; use `--channel all` to target all providers
+  - Required: `--targets` (repeat)
+  - Optional: `--message`, `--media`, `--dry-run`
+
 ## Examples
 
 Send a Discord reply:
 ```
 clawdbot message send --channel discord \
-  --to channel:123 --message "hi" --reply-to 456
+  --target channel:123 --message "hi" --reply-to 456
 ```
 
 Create a Discord poll:
 ```
 clawdbot message poll --channel discord \
-  --to channel:123 \
+  --target channel:123 \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
   --poll-multi --poll-duration-hours 48
@@ -186,13 +194,13 @@ clawdbot message poll --channel discord \
 Send a Teams proactive message:
 ```
 clawdbot message send --channel msteams \
-  --to conversation:19:abc@thread.tacv2 --message "hi"
+  --target conversation:19:abc@thread.tacv2 --message "hi"
 ```
 
 Create a Teams poll:
 ```
 clawdbot message poll --channel msteams \
-  --to conversation:19:abc@thread.tacv2 \
+  --target conversation:19:abc@thread.tacv2 \
   --poll-question "Lunch?" \
   --poll-option Pizza --poll-option Sushi
 ```
@@ -200,11 +208,11 @@ clawdbot message poll --channel msteams \
 React in Slack:
 ```
 clawdbot message react --channel slack \
-  --to C123 --message-id 456 --emoji "✅"
+  --target C123 --message-id 456 --emoji "✅"
 ```
 
 Send Telegram inline buttons:
 ```
-clawdbot message send --channel telegram --to @mychat --message "Choose:" \
+clawdbot message send --channel telegram --target @mychat --message "Choose:" \
   --buttons '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
 ```

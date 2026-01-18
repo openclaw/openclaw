@@ -161,6 +161,7 @@ describe("trigger handling", () => {
           SenderName: "Peter Steinberger",
           SenderUsername: "steipete",
           SenderTag: "steipete",
+          CommandAuthorized: true,
         },
         {},
         cfg,

@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
+  ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelHeartbeatDeps,
   ChannelLogSink,
@@ -217,6 +218,69 @@ export type ChannelHeartbeatAdapter = {
     recipients: string[];
     source: string;
   };
+};
+
+export type ChannelDirectoryAdapter = {
+  self?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    query?: string | null;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    groupId: string;
+    limit?: number | null;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelDirectoryEntry[]>;
+};
+
+export type ChannelResolveKind = "user" | "group";
+
+export type ChannelResolveResult = {
+  input: string;
+  resolved: boolean;
+  id?: string;
+  name?: string;
+  note?: string;
+};
+
+export type ChannelResolverAdapter = {
+  resolveTargets: (params: {
+    cfg: ClawdbotConfig;
+    accountId?: string | null;
+    inputs: string[];
+    kind: ChannelResolveKind;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelResolveResult[]>;
 };
 
 export type ChannelElevatedAdapter = {

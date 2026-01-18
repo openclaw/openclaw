@@ -11,10 +11,8 @@ export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
 
 export function resolveExecToolDefaults(config?: ClawdbotConfig): ExecToolDefaults | undefined {
   const tools = config?.tools;
-  if (!tools) return undefined;
-  if (!tools.exec) return tools.bash;
-  if (!tools.bash) return tools.exec;
-  return { ...tools.bash, ...tools.exec };
+  if (!tools?.exec) return undefined;
+  return tools.exec;
 }
 
 export function describeUnknownError(error: unknown): string {

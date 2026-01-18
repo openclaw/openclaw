@@ -13,6 +13,11 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
+const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
+vi.mock("../plugins/providers.js", () => ({
+  resolvePluginProviders,
+}));
+
 const noopAsync = async () => {};
 const noop = () => {};
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
@@ -27,12 +32,14 @@ describe("applyAuthChoice", () => {
   const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
+  const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
   const previousSshTty = process.env.SSH_TTY;
   const previousChutesClientId = process.env.CHUTES_CLIENT_ID;
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    resolvePluginProviders.mockReset();
     if (tempStateDir) {
       await fs.rm(tempStateDir, { recursive: true, force: true });
       tempStateDir = null;
@@ -56,6 +63,11 @@ describe("applyAuthChoice", () => {
       delete process.env.OPENROUTER_API_KEY;
     } else {
       process.env.OPENROUTER_API_KEY = previousOpenrouterKey;
+    }
+    if (previousAiGatewayKey === undefined) {
+      delete process.env.AI_GATEWAY_API_KEY;
+    } else {
+      process.env.AI_GATEWAY_API_KEY = previousAiGatewayKey;
     }
     if (previousSshTty === undefined) {
       delete process.env.SSH_TTY;
@@ -330,6 +342,69 @@ describe("applyAuthChoice", () => {
     delete process.env.OPENROUTER_API_KEY;
   });
 
+  it("uses existing AI_GATEWAY_API_KEY when selecting ai-gateway-api-key", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    process.env.AI_GATEWAY_API_KEY = "gateway-test-key";
+
+    const text = vi.fn();
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options[0]?.value as never,
+    );
+    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+    const confirm = vi.fn(async () => true);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect,
+      text,
+      confirm,
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "ai-gateway-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("AI_GATEWAY_API_KEY"),
+      }),
+    );
+    expect(text).not.toHaveBeenCalled();
+    expect(result.config.auth?.profiles?.["vercel-ai-gateway:default"]).toMatchObject({
+      provider: "vercel-ai-gateway",
+      mode: "api_key",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe(
+      "vercel-ai-gateway/anthropic/claude-opus-4.5",
+    );
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["vercel-ai-gateway:default"]?.key).toBe("gateway-test-key");
+
+    delete process.env.AI_GATEWAY_API_KEY;
+  });
+
   it("writes Chutes OAuth credentials when selecting chutes (remote/manual)", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
@@ -416,11 +491,110 @@ describe("applyAuthChoice", () => {
       email: "remote-user",
     });
   });
+
+  it("writes Qwen credentials when selecting qwen-portal", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "qwen-portal",
+        label: "Qwen",
+        auth: [
+          {
+            id: "device",
+            label: "Qwen OAuth",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "qwen-portal:default",
+                  credential: {
+                    type: "oauth",
+                    provider: "qwen-portal",
+                    access: "access",
+                    refresh: "refresh",
+                    expires: Date.now() + 60 * 60 * 1000,
+                  },
+                },
+              ],
+              configPatch: {
+                models: {
+                  providers: {
+                    "qwen-portal": {
+                      baseUrl: "https://portal.qwen.ai/v1",
+                      apiKey: "qwen-oauth",
+                      api: "openai-completions",
+                      models: [],
+                    },
+                  },
+                },
+              },
+              defaultModel: "qwen-portal/coder-model",
+            })),
+          },
+        ],
+      },
+    ]);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "" as never),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "qwen-portal",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.auth?.profiles?.["qwen-portal:default"]).toMatchObject({
+      provider: "qwen-portal",
+      mode: "oauth",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("qwen-portal/coder-model");
+    expect(result.config.models?.providers?.["qwen-portal"]).toMatchObject({
+      baseUrl: "https://portal.qwen.ai/v1",
+      apiKey: "qwen-oauth",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
+    };
+    expect(parsed.profiles?.["qwen-portal:default"]).toMatchObject({
+      provider: "qwen-portal",
+      access: "access",
+      refresh: "refresh",
+    });
+  });
 });
 
 describe("resolvePreferredProviderForAuthChoice", () => {
   it("maps github-copilot to the provider", () => {
     expect(resolvePreferredProviderForAuthChoice("github-copilot")).toBe("github-copilot");
+  });
+
+  it("maps qwen-portal to the provider", () => {
+    expect(resolvePreferredProviderForAuthChoice("qwen-portal")).toBe("qwen-portal");
   });
 
   it("returns undefined for unknown choices", () => {

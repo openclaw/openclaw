@@ -129,16 +129,16 @@ describe("createClawdbotCodingTools", () => {
     expect(Array.isArray(action?.enum)).toBe(true);
     expect(action?.enum).toContain("act");
 
-    const format = parameters.properties?.format as
+    const snapshotFormat = parameters.properties?.snapshotFormat as
       | {
           type?: unknown;
           enum?: unknown[];
           anyOf?: unknown[];
         }
       | undefined;
-    expect(format?.type).toBe("string");
-    expect(format?.anyOf).toBeUndefined();
-    expect(format?.enum).toEqual(["aria", "ai"]);
+    expect(snapshotFormat?.type).toBe("string");
+    expect(snapshotFormat?.anyOf).toBeUndefined();
+    expect(snapshotFormat?.enum).toEqual(["aria", "ai"]);
   });
   it("inlines local $ref before removing unsupported keywords", () => {
     const cleaned = __testing.cleanToolSchemaForGemini({

@@ -3,6 +3,8 @@ import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
+  ChannelDirectoryAdapter,
+  ChannelResolverAdapter,
   ChannelElevatedAdapter,
   ChannelGatewayAdapter,
   ChannelGroupAdapter,
@@ -28,6 +30,20 @@ import type {
 
 // Channel docking: implement this contract in src/channels/plugins/<id>.ts.
 // biome-ignore lint/suspicious/noExplicitAny: registry aggregates heterogeneous account types.
+export type ChannelConfigUiHint = {
+  label?: string;
+  help?: string;
+  advanced?: boolean;
+  sensitive?: boolean;
+  placeholder?: string;
+  itemTemplate?: unknown;
+};
+
+export type ChannelConfigSchema = {
+  schema: Record<string, unknown>;
+  uiHints?: Record<string, ChannelConfigUiHint>;
+};
+
 export type ChannelPlugin<ResolvedAccount = any> = {
   id: ChannelId;
   meta: ChannelMeta;
@@ -36,6 +52,7 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   // CLI onboarding wizard hooks for this channel.
   onboarding?: ChannelOnboardingAdapter;
   config: ChannelConfigAdapter<ResolvedAccount>;
+  configSchema?: ChannelConfigSchema;
   setup?: ChannelSetupAdapter;
   pairing?: ChannelPairingAdapter;
   security?: ChannelSecurityAdapter<ResolvedAccount>;
@@ -51,6 +68,8 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;
+  directory?: ChannelDirectoryAdapter;
+  resolver?: ChannelResolverAdapter;
   actions?: ChannelMessageActionAdapter;
   heartbeat?: ChannelHeartbeatAdapter;
   // Channel-owned agent tools (login flows, etc.).

@@ -5,9 +5,21 @@ import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { normalizeMainKey } from "../routing/session-key.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
+import { defaultRuntime } from "../runtime.js";
+import {
+  type DeliveryContext,
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
+import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatDurationShort(valueMs?: number) {
@@ -75,6 +87,108 @@ async function waitForSessionUsage(params: { sessionKey: string }) {
   return { entry, storePath };
 }
 
+type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
+
+function resolveAnnounceOrigin(
+  entry?: DeliveryContextSource,
+  requesterOrigin?: DeliveryContext,
+): DeliveryContext | undefined {
+  return mergeDeliveryContext(deliveryContextFromSession(entry), requesterOrigin);
+}
+
+async function sendAnnounce(item: AnnounceQueueItem) {
+  const origin = item.origin;
+  await callGateway({
+    method: "agent",
+    params: {
+      sessionKey: item.sessionKey,
+      message: item.prompt,
+      channel: origin?.channel,
+      accountId: origin?.accountId,
+      to: origin?.to,
+      deliver: true,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    expectFinal: true,
+    timeoutMs: 60_000,
+  });
+}
+
+function resolveRequesterStoreKey(
+  cfg: ReturnType<typeof loadConfig>,
+  requesterSessionKey: string,
+): string {
+  const raw = requesterSessionKey.trim();
+  if (!raw) return raw;
+  if (raw === "global" || raw === "unknown") return raw;
+  if (raw.startsWith("agent:")) return raw;
+  const mainKey = normalizeMainKey(cfg.session?.mainKey);
+  if (raw === "main" || raw === mainKey) {
+    return resolveMainSessionKey(cfg);
+  }
+  const agentId = resolveAgentIdFromSessionKey(raw);
+  return `agent:${agentId}:${raw}`;
+}
+
+function loadRequesterSessionEntry(requesterSessionKey: string) {
+  const cfg = loadConfig();
+  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
+  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  const entry = store[canonicalKey];
+  return { cfg, entry, canonicalKey };
+}
+
+async function maybeQueueSubagentAnnounce(params: {
+  requesterSessionKey: string;
+  triggerMessage: string;
+  summaryLine?: string;
+  requesterOrigin?: DeliveryContext;
+}): Promise<"steered" | "queued" | "none"> {
+  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
+  const sessionId = entry?.sessionId;
+  if (!sessionId) return "none";
+
+  const queueSettings = resolveQueueSettings({
+    cfg,
+    channel: entry?.channel ?? entry?.lastChannel,
+    sessionEntry: entry,
+  });
+  const isActive = isEmbeddedPiRunActive(sessionId);
+
+  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  if (shouldSteer) {
+    const steered = queueEmbeddedPiMessage(sessionId, params.triggerMessage);
+    if (steered) return "steered";
+  }
+
+  const shouldFollowup =
+    queueSettings.mode === "followup" ||
+    queueSettings.mode === "collect" ||
+    queueSettings.mode === "steer-backlog" ||
+    queueSettings.mode === "interrupt";
+  if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
+    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    enqueueAnnounce({
+      key: canonicalKey,
+      item: {
+        prompt: params.triggerMessage,
+        summaryLine: params.summaryLine,
+        enqueuedAt: Date.now(),
+        sessionKey: canonicalKey,
+        origin,
+      },
+      settings: queueSettings,
+      send: sendAnnounce,
+    });
+    return "queued";
+  }
+
+  return "none";
+}
+
 async function buildSubagentStatsLine(params: {
   sessionKey: string;
   startedAt?: number;
@@ -129,7 +243,7 @@ async function buildSubagentStatsLine(params: {
 
 export function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
-  requesterChannel?: string;
+  requesterOrigin?: DeliveryContext;
   childSessionKey: string;
   label?: string;
   task?: string;
@@ -170,7 +284,9 @@ export function buildSubagentSystemPrompt(params: {
     "## Session Context",
     params.label ? `- Label: ${params.label}` : undefined,
     params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
-    params.requesterChannel ? `- Requester channel: ${params.requesterChannel}.` : undefined,
+    params.requesterOrigin?.channel
+      ? `- Requester channel: ${params.requesterOrigin.channel}.`
+      : undefined,
     `- Your session: ${params.childSessionKey}.`,
     "",
   ].filter((line): line is string => line !== undefined);
@@ -186,7 +302,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
-  requesterChannel?: string;
+  requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -200,6 +316,7 @@ export async function runSubagentAnnounceFlow(params: {
 }): Promise<boolean> {
   let didAnnounce = false;
   try {
+    const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
@@ -278,20 +395,44 @@ export async function runSubagentAnnounceFlow(params: {
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
 
+    const queued = await maybeQueueSubagentAnnounce({
+      requesterSessionKey: params.requesterSessionKey,
+      triggerMessage,
+      summaryLine: taskLabel,
+      requesterOrigin,
+    });
+    if (queued === "steered") {
+      didAnnounce = true;
+      return true;
+    }
+    if (queued === "queued") {
+      didAnnounce = true;
+      return true;
+    }
+
     // Send to main agent - it will respond in its own voice
+    let directOrigin = requesterOrigin;
+    if (!directOrigin) {
+      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+      directOrigin = deliveryContextFromSession(entry);
+    }
     await callGateway({
       method: "agent",
       params: {
         sessionKey: params.requesterSessionKey,
         message: triggerMessage,
         deliver: true,
+        channel: directOrigin?.channel,
+        accountId: directOrigin?.accountId,
         idempotencyKey: crypto.randomUUID(),
       },
+      expectFinal: true,
       timeoutMs: 60_000,
     });
 
     didAnnounce = true;
-  } catch {
+  } catch (err) {
+    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
     // Patch label after all writes complete

@@ -54,11 +54,6 @@ export function resolveTelegramToken(
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
-  if (envToken) {
-    return { token: envToken, source: "env" };
-  }
-
   const tokenFile = telegramCfg?.tokenFile?.trim();
   if (tokenFile && allowEnv) {
     if (!fs.existsSync(tokenFile)) {
@@ -79,6 +74,11 @@ export function resolveTelegramToken(
   const configToken = telegramCfg?.botToken?.trim();
   if (configToken && allowEnv) {
     return { token: configToken, source: "config" };
+  }
+
+  const envToken = allowEnv ? (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim() : "";
+  if (envToken) {
+    return { token: envToken, source: "env" };
   }
 
   return { token: "", source: "none" };

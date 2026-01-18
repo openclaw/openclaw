@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
+  deliverOutboundPayloads: vi.fn(),
 }));
 
 vi.mock("../../discord/send.js", () => ({
@@ -37,12 +38,25 @@ vi.mock("../../telegram/send.js", () => ({
 vi.mock("../../web/outbound.js", () => ({
   sendMessageWhatsApp: mocks.sendMessageWhatsApp,
 }));
+vi.mock("../../infra/outbound/deliver.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
+    "../../infra/outbound/deliver.js",
+  );
+  return {
+    ...actual,
+    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  };
+});
+const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
+  "../../infra/outbound/deliver.js",
+);
 
 const { routeReply } = await import("./route-reply.js");
 
 describe("routeReply", () => {
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    mocks.deliverOutboundPayloads.mockImplementation(actualDeliver.deliverOutboundPayloads);
   });
 
   afterEach(() => {
@@ -258,6 +272,25 @@ describe("routeReply", () => {
         cfg,
         to: "conversation:19:abc@thread.tacv2",
         text: "hi",
+      }),
+    );
+  });
+
+  it("passes mirror data when sessionKey is set", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:main:main",
+      cfg: {} as never,
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:main",
+          text: "hi",
+        }),
       }),
     );
   });

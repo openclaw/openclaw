@@ -124,7 +124,7 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 ## Delivery targets (CLI/cron)
 - Use a chat id as the target.
-- Example: `clawdbot message send --channel zalo --to 123456789 --message "hi"`.
+- Example: `clawdbot message send --channel zalo --target 123456789 --message "hi"`.
 
 ## Troubleshooting
 

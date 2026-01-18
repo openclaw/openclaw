@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyKimiCodeConfig,
+  applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
@@ -21,15 +23,21 @@ import {
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyVercelAiGatewayConfig,
+  applyVercelAiGatewayProviderConfig,
   applyZaiConfig,
+  KIMI_CODE_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   setGeminiApiKey,
+  setKimiCodeApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setVercelAiGatewayApiKey,
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
@@ -121,6 +129,48 @@ export async function applyAuthChoiceApiProviders(
     return { config: nextConfig, agentModelOverride };
   }
 
+  if (params.authChoice === "ai-gateway-api-key") {
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("vercel-ai-gateway");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing AI_GATEWAY_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setVercelAiGatewayApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Vercel AI Gateway API key",
+        validate: validateApiKeyInput,
+      });
+      await setVercelAiGatewayApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "vercel-ai-gateway:default",
+      provider: "vercel-ai-gateway",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyVercelAiGatewayConfig,
+        applyProviderConfig: applyVercelAiGatewayProviderConfig,
+        noteDefault: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
   if (params.authChoice === "moonshot-api-key") {
     let hasCredential = false;
     const envKey = resolveEnvApiKey("moonshot");
@@ -153,6 +203,55 @@ export async function applyAuthChoiceApiProviders(
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyDefaultConfig: applyMoonshotConfig,
         applyProviderConfig: applyMoonshotProviderConfig,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "kimi-code-api-key") {
+    await params.prompter.note(
+      [
+        "Kimi Code uses a dedicated endpoint and API key.",
+        "Get your API key at: https://www.kimi.com/code/en",
+      ].join("\n"),
+      "Kimi Code",
+    );
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("kimi-code");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing KIMICODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setKimiCodeApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Kimi Code API key",
+        validate: validateApiKeyInput,
+      });
+      await setKimiCodeApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "kimi-code:default",
+      provider: "kimi-code",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: KIMI_CODE_MODEL_REF,
+        applyDefaultConfig: applyKimiCodeConfig,
+        applyProviderConfig: applyKimiCodeProviderConfig,
+        noteDefault: KIMI_CODE_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

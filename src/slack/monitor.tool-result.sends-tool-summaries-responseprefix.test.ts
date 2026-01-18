@@ -33,6 +33,16 @@ vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
 }));
 
+vi.mock("./resolve-channels.js", () => ({
+  resolveSlackChannelAllowlist: async ({ entries }: { entries: string[] }) =>
+    entries.map((input) => ({ input, resolved: false })),
+}));
+
+vi.mock("./resolve-users.js", () => ({
+  resolveSlackUserAllowlist: async ({ entries }: { entries: string[] }) =>
+    entries.map((input) => ({ input, resolved: false })),
+}));
+
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
@@ -46,6 +56,7 @@ vi.mock("../config/sessions.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
   resolveSessionKey: vi.fn(),
+  recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@slack/bolt", () => {
@@ -99,6 +110,7 @@ async function waitForEvent(name: string) {
 
 beforeEach(() => {
   resetInboundDedupe();
+  getSlackHandlers()?.clear();
   config = {
     messages: {
       responsePrefix: "PFX",
@@ -264,7 +276,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[1][1]).toBe("final reply");
   });
 
-  it("wraps room history in Body and preserves RawBody", async () => {
+  it("preserves RawBody without injecting processed room history", async () => {
     config = {
       messages: { ackReactionScope: "group-mentions" },
       channels: {
@@ -320,9 +332,9 @@ describe("monitorSlackProvider tool results", () => {
     await run;
 
     expect(replyMock).toHaveBeenCalledTimes(2);
-    expect(capturedCtx.Body).toContain(HISTORY_CONTEXT_MARKER);
-    expect(capturedCtx.Body).toContain(CURRENT_MESSAGE_MARKER);
-    expect(capturedCtx.Body).toContain("first");
+    expect(capturedCtx.Body).not.toContain(HISTORY_CONTEXT_MARKER);
+    expect(capturedCtx.Body).not.toContain(CURRENT_MESSAGE_MARKER);
+    expect(capturedCtx.Body).not.toContain("first");
     expect(capturedCtx.RawBody).toBe("second");
     expect(capturedCtx.CommandBody).toBe("second");
   });
@@ -334,7 +346,7 @@ describe("monitorSlackProvider tool results", () => {
         slack: {
           historyLimit: 5,
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-          channels: { C1: { allow: true, requireMention: false } },
+          channels: { C1: { allow: true, requireMention: true } },
         },
       },
     };
@@ -372,7 +384,7 @@ describe("monitorSlackProvider tool results", () => {
       event: {
         type: "message",
         user: "U1",
-        text: "thread-a-two",
+        text: "<@bot-user> thread-a-two",
         ts: "201",
         thread_ts: "100",
         channel: "C1",
@@ -384,7 +396,7 @@ describe("monitorSlackProvider tool results", () => {
       event: {
         type: "message",
         user: "U2",
-        text: "thread-b-one",
+        text: "<@bot-user> thread-b-one",
         ts: "301",
         thread_ts: "300",
         channel: "C1",
@@ -396,10 +408,10 @@ describe("monitorSlackProvider tool results", () => {
     controller.abort();
     await run;
 
-    expect(replyMock).toHaveBeenCalledTimes(3);
-    expect(capturedCtx[1]?.Body).toContain("thread-a-one");
-    expect(capturedCtx[2]?.Body).not.toContain("thread-a-one");
-    expect(capturedCtx[2]?.Body).not.toContain("thread-a-two");
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    expect(capturedCtx[0]?.Body).toContain("thread-a-one");
+    expect(capturedCtx[1]?.Body).not.toContain("thread-a-one");
+    expect(capturedCtx[1]?.Body).not.toContain("thread-a-two");
   });
 
   it("updates assistant thread status when replies start", async () => {
@@ -485,6 +497,49 @@ describe("monitorSlackProvider tool results", () => {
         user: "U1",
         text: "clawd: hello",
         ts: "123",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+  });
+
+  it("treats replies to bot threads as implicit mentions", async () => {
+    config = {
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "following up",
+        ts: "124",
+        thread_ts: "123",
+        parent_user_id: "bot-user",
         channel: "C1",
         channel_type: "channel",
       },

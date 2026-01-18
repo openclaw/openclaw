@@ -146,6 +146,7 @@ describe("trigger handling", () => {
           To: "+2000",
           Provider: "whatsapp",
           SenderE164: "+1002",
+          CommandAuthorized: true,
         },
         {},
         cfg,
@@ -176,6 +177,7 @@ describe("trigger handling", () => {
           Provider: "whatsapp",
           Surface: "whatsapp",
           SenderE164: "+1002",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {
@@ -208,6 +210,7 @@ describe("trigger handling", () => {
           Body: "please /help now",
           From: "+1002",
           To: "+2000",
+          CommandAuthorized: true,
         },
         {
           onBlockReply: async (payload) => {

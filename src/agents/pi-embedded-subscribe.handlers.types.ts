@@ -56,7 +56,9 @@ export type EmbeddedPiSubscribeContext = {
   blockChunker: EmbeddedBlockChunker | null;
 
   shouldEmitToolResult: () => boolean;
+  shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
+  emitToolOutput: (toolName?: string, meta?: string, output?: string) => void;
   stripBlockTags: (
     text: string,
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },

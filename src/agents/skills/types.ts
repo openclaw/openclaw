@@ -26,6 +26,17 @@ export type ClawdbotSkillMetadata = {
   install?: SkillInstallSpec[];
 };
 
+export type SkillInvocationPolicy = {
+  userInvocable: boolean;
+  disableModelInvocation: boolean;
+};
+
+export type SkillCommandSpec = {
+  name: string;
+  skillName: string;
+  description: string;
+};
+
 export type SkillsInstallPreferences = {
   preferBrew: boolean;
   nodeManager: "npm" | "pnpm" | "yarn" | "bun";
@@ -37,6 +48,7 @@ export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   clawdbot?: ClawdbotSkillMetadata;
+  invocation?: SkillInvocationPolicy;
 };
 
 export type SkillEligibilityContext = {

@@ -166,7 +166,9 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("Alice (+111): hello group");
     expect(payload.Body).toContain("[message_id: g1]");
     expect(payload.Body).toContain("@bot ping");
-    expect(payload.Body).toContain("[from: Bob (+222)]");
+    expect(payload.SenderName).toBe("Bob");
+    expect(payload.SenderE164).toBe("+222");
+    expect(payload.SenderId).toBe("+222");
   });
 
   it("bypasses mention gating for owner /new in group chats", async () => {

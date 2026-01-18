@@ -21,6 +21,8 @@ export const SendParamsSchema = Type.Object(
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
+    /** Optional session key for mirroring delivered output back into the transcript. */
+    sessionKey: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -50,6 +52,7 @@ export const AgentParamsSchema = Type.Object(
     deliver: Type.Optional(Type.Boolean()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
     channel: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),

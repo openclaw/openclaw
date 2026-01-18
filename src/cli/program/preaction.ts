@@ -61,6 +61,15 @@ export function registerPreActionHooks(program: Command, programVersion: string)
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     if (actionCommand.name() === "doctor") return;
+    const snapshot = await readConfigFileSnapshot();
+    if (snapshot.exists && !snapshot.valid) {
+      defaultRuntime.error(`Config invalid at ${snapshot.path}.`);
+      for (const issue of snapshot.issues) {
+        defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+      }
+      defaultRuntime.error("Run `clawdbot doctor` to repair, then retry.");
+      process.exit(1);
+    }
     const cfg = loadConfig();
     await autoMigrateLegacyState({ cfg });
   });

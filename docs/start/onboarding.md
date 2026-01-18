@@ -87,7 +87,7 @@ On the first agent run, Clawdbot bootstraps a workspace (default `~/clawd`):
 Gmail Pub/Sub setup is currently a manual step. Use:
 
 ```bash
-clawdbot hooks gmail setup --account you@gmail.com
+clawdbot webhooks gmail setup --account you@gmail.com
 ```
 
 See [/automation/gmail-pubsub](/automation/gmail-pubsub) for details.

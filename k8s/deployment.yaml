@@ -40,6 +40,35 @@ spec:
             - name: clawdbot-config
               mountPath: /config
 
+        # Init container to create auth-profiles.json from environment variables
+        - name: auth-profile-init
+          image: busybox:latest
+          command: ["/bin/sh", "/scripts/create-auth-profile.sh"]
+          env:
+            - name: CLAUDE_AI_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawdbot-secrets
+                  key: CLAUDE_AI_SESSION_KEY
+                  optional: true
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawdbot-secrets
+                  key: ANTHROPIC_API_KEY
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawdbot-secrets
+                  key: OPENAI_API_KEY
+                  optional: true
+          volumeMounts:
+            - name: config-volume
+              mountPath: /home/node/.clawdbot
+            - name: auth-profile-script
+              mountPath: /scripts
+
       containers:
         - name: gateway
           image: vcr.vnpaycloud.vn/286e18c6183846159c47575db4e3d831-clawdbot/clawdbot:latest
@@ -124,6 +153,10 @@ spec:
             items:
               - key: clawdbot.json
                 path: clawdbot.json
+        - name: auth-profile-script
+          configMap:
+            name: auth-profile-script
+            defaultMode: 0755
 
       # Security context
       securityContext:

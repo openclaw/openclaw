@@ -734,6 +734,22 @@
       "destination": "/start/wizard"
     },
     {
+      "source": "/install/node",
+      "destination": "/install#nodejs--npm-path-sanity"
+    },
+    {
+      "source": "/install/node/",
+      "destination": "/install#nodejs--npm-path-sanity"
+    },
+    {
+      "source": "/start/faq",
+      "destination": "/help"
+    },
+    {
+      "source": "/start/faq/",
+      "destination": "/help"
+    },
+    {
       "source": "/oauth",
       "destination": "/concepts/oauth"
     },
@@ -752,12 +768,19 @@
           "start/wizard",
           "start/setup",
           "start/pairing",
-          "start/faq",
           "start/clawd",
           "start/showcase",
           "start/hubs",
           "start/onboarding",
           "start/lore"
+        ]
+      },
+      {
+        "group": "Help",
+        "pages": [
+          "help/index",
+          "help/troubleshooting",
+          "help/faq"
         ]
       },
       {
@@ -792,6 +815,7 @@
           "cli/health",
           "cli/sessions",
           "cli/channels",
+          "cli/directory",
           "cli/skills",
           "cli/plugins",
           "cli/memory",
@@ -870,7 +894,6 @@
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
-          "logging",
           "gateway/security",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
@@ -907,6 +930,7 @@
           "channels/msteams",
           "channels/matrix",
           "channels/zalo",
+          "channels/zalouser",
           "broadcast-groups",
           "channels/troubleshooting",
           "channels/location"
@@ -932,6 +956,8 @@
       {
         "group": "Automation & Hooks",
         "pages": [
+          "hooks",
+          "hooks/soul-evil",
           "automation/auth-monitoring",
           "automation/webhook",
           "automation/gmail-pubsub",
@@ -945,6 +971,7 @@
           "tools",
           "plugin",
           "plugins/voice-call",
+          "plugins/zalouser",
           "tools/exec",
           "tools/web",
           "tools/apply-patch",

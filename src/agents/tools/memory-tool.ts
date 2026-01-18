@@ -34,7 +34,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
@@ -47,18 +47,23 @@ export function createMemorySearchTool(options: {
       if (!manager) {
         return jsonResult({ results: [], disabled: true, error });
       }
-      const results = await manager.search(query, {
-        maxResults,
-        minScore,
-        sessionKey: options.agentSessionKey,
-      });
-      const status = manager.status();
-      return jsonResult({
-        results,
-        provider: status.provider,
-        model: status.model,
-        fallback: status.fallback,
-      });
+      try {
+        const results = await manager.search(query, {
+          maxResults,
+          minScore,
+          sessionKey: options.agentSessionKey,
+        });
+        const status = manager.status();
+        return jsonResult({
+          results,
+          provider: status.provider,
+          model: status.model,
+          fallback: status.fallback,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ results: [], disabled: true, error: message });
+      }
     },
   };
 }
@@ -91,12 +96,17 @@ export function createMemoryGetTool(options: {
       if (!manager) {
         return jsonResult({ path: relPath, text: "", disabled: true, error });
       }
-      const result = await manager.readFile({
-        relPath,
-        from: from ?? undefined,
-        lines: lines ?? undefined,
-      });
-      return jsonResult(result);
+      try {
+        const result = await manager.readFile({
+          relPath,
+          from: from ?? undefined,
+          lines: lines ?? undefined,
+        });
+        return jsonResult(result);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({ path: relPath, text: "", disabled: true, error: message });
+      }
     },
   };
 }

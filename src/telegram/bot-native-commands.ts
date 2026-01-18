@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { Bot, Context } from "grammy";
 
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import {
@@ -9,11 +9,23 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
+import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import { resolveTelegramCustomCommands } from "../config/telegram-custom-commands.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { danger, logVerbose } from "../globals.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import type { ChannelGroupPolicy } from "../config/group-policy.js";
+import type {
+  ReplyToMode,
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
 import { buildInlineKeyboard } from "./send.js";
 import {
@@ -24,6 +36,31 @@ import {
 } from "./bot/helpers.js";
 import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import { readTelegramAllowFromStore } from "./pairing-store.js";
+
+type TelegramNativeCommandContext = Context & { match?: string };
+
+type RegisterTelegramNativeCommandsParams = {
+  bot: Bot;
+  cfg: ClawdbotConfig;
+  runtime: RuntimeEnv;
+  accountId: string;
+  telegramCfg: TelegramAccountConfig;
+  allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  replyToMode: ReplyToMode;
+  textLimit: number;
+  useAccessGroups: boolean;
+  nativeEnabled: boolean;
+  nativeSkillsEnabled: boolean;
+  nativeDisabledExplicit: boolean;
+  resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId?: number,
+  ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
+  shouldSkipUpdate: (ctx: unknown) => boolean;
+  opts: { token: string };
+};
 
 export const registerTelegramNativeCommands = ({
   bot,
@@ -37,16 +74,24 @@ export const registerTelegramNativeCommands = ({
   textLimit,
   useAccessGroups,
   nativeEnabled,
+  nativeSkillsEnabled,
   nativeDisabledExplicit,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   opts,
-}) => {
-  const nativeCommands = nativeEnabled ? listNativeCommandSpecsForConfig(cfg) : [];
+}: RegisterTelegramNativeCommandsParams) => {
+  const skillCommands =
+    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg, { skillCommands })
+    : [];
   const reservedCommands = new Set(
     listNativeCommandSpecs().map((command) => command.name.toLowerCase()),
   );
+  for (const command of skillCommands) {
+    reservedCommands.add(command.name.toLowerCase());
+  }
   const customResolution = resolveTelegramCustomCommands({
     commands: telegramCfg.customCommands,
     reservedCommands,
@@ -64,24 +109,15 @@ export const registerTelegramNativeCommands = ({
   ];
 
   if (allCommands.length > 0) {
-    const api = bot.api as unknown as {
-      setMyCommands?: (
-        commands: Array<{ command: string; description: string }>,
-      ) => Promise<unknown>;
-    };
-    if (typeof api.setMyCommands === "function") {
-      api.setMyCommands(allCommands).catch((err) => {
-        runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
-      });
-    } else {
-      logVerbose("telegram: setMyCommands unavailable; skipping registration");
-    }
+    bot.api.setMyCommands(allCommands).catch((err) => {
+      runtime.error?.(danger(`telegram setMyCommands failed: ${String(err)}`));
+    });
 
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
-        bot.command(command.name, async (ctx) => {
+        bot.command(command.name, async (ctx: TelegramNativeCommandContext) => {
           const msg = ctx.message;
           if (!msg) return;
           if (shouldSkipUpdate(ctx)) return;
@@ -127,7 +163,8 @@ export const registerTelegramNativeCommands = ({
           }
 
           if (isGroup && useAccessGroups) {
-            const groupPolicy = telegramCfg.groupPolicy ?? "open";
+            const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+            const groupPolicy = telegramCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
             if (groupPolicy === "disabled") {
               await bot.api.sendMessage(chatId, "Telegram group commands are disabled.");
               return;
@@ -162,17 +199,17 @@ export const registerTelegramNativeCommands = ({
             : [];
           const senderId = msg.from?.id ? String(msg.from.id) : "";
           const senderUsername = msg.from?.username ?? "";
-          const commandAuthorized =
-            allowFromList.length === 0 ||
-            allowFromList.includes("*") ||
-            (senderId && allowFromList.includes(senderId)) ||
-            (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
-            (senderUsername &&
-              allowFromList.some(
-                (entry) =>
-                  entry.toLowerCase() === senderUsername.toLowerCase() ||
-                  entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
-              ));
+          const dmAllow = normalizeAllowFrom(allowFromList);
+          const senderAllowed = isSenderAllowed({
+            allow: dmAllow,
+            senderId,
+            senderUsername,
+          });
+          const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
+            useAccessGroups,
+            authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+            modeWhenAccessGroupsOff: "configured",
+          });
           if (!commandAuthorized) {
             await bot.api.sendMessage(chatId, "You are not authorized to use this command.");
             return;
@@ -197,7 +234,7 @@ export const registerTelegramNativeCommands = ({
                 cfg,
               })
             : null;
-          if (menu) {
+          if (menu && commandDefinition) {
             const title =
               menu.title ??
               `Choose ${menu.arg.description || menu.arg.name} for /${commandDefinition.nativeName ?? commandDefinition.key}.`;
@@ -239,12 +276,20 @@ export const registerTelegramNativeCommands = ({
           ].filter((entry): entry is string => Boolean(entry));
           const groupSystemPrompt =
             systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-          const ctxPayload = {
+          const conversationLabel = isGroup
+            ? msg.chat.title
+              ? `${msg.chat.title} id:${chatId}`
+              : `group:${chatId}`
+            : (buildSenderName(msg) ?? String(senderId || chatId));
+          const ctxPayload = finalizeInboundContext({
             Body: prompt,
+            RawBody: prompt,
+            CommandBody: prompt,
             CommandArgs: commandArgs,
             From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
             To: `slash:${senderId || chatId}`,
             ChatType: isGroup ? "group" : "direct",
+            ConversationLabel: conversationLabel,
             GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
             GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
             SenderName: buildSenderName(msg),
@@ -260,7 +305,7 @@ export const registerTelegramNativeCommands = ({
             CommandTargetSessionKey: route.sessionKey,
             MessageThreadId: resolvedThreadId,
             IsForum: isForum,
-          };
+          });
 
           const disableBlockStreaming =
             typeof telegramCfg.blockStreaming === "boolean"
@@ -297,15 +342,8 @@ export const registerTelegramNativeCommands = ({
       }
     }
   } else if (nativeDisabledExplicit) {
-    const api = bot.api as unknown as {
-      setMyCommands?: (commands: []) => Promise<unknown>;
-    };
-    if (typeof api.setMyCommands === "function") {
-      api.setMyCommands([]).catch((err) => {
-        runtime.error?.(danger(`telegram clear commands failed: ${String(err)}`));
-      });
-    } else {
-      logVerbose("telegram: setMyCommands unavailable; skipping clear");
-    }
+    bot.api.setMyCommands([]).catch((err) => {
+      runtime.error?.(danger(`telegram clear commands failed: ${String(err)}`));
+    });
   }
 };

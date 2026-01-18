@@ -16,6 +16,8 @@ export type ConfigUiHints = Record<string, ConfigUiHint>;
 
 export type ConfigSchema = ReturnType<typeof ClawdbotSchema.toJSONSchema>;
 
+type JsonSchemaNode = Record<string, unknown>;
+
 export type ConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
@@ -31,16 +33,20 @@ export type PluginUiMetadata = {
     string,
     Pick<ConfigUiHint, "label" | "help" | "advanced" | "sensitive" | "placeholder">
   >;
+  configSchema?: JsonSchemaNode;
 };
 
 export type ChannelUiMetadata = {
   id: string;
   label?: string;
   description?: string;
+  configSchema?: JsonSchemaNode;
+  configUiHints?: Record<string, ConfigUiHint>;
 };
 
 const GROUP_LABELS: Record<string, string> = {
   wizard: "Wizard",
+  update: "Update",
   logging: "Logging",
   gateway: "Gateway",
   agents: "Agents",
@@ -66,6 +72,7 @@ const GROUP_LABELS: Record<string, string> = {
 
 const GROUP_ORDER: Record<string, number> = {
   wizard: 20,
+  update: 25,
   gateway: 30,
   agents: 40,
   tools: 50,
@@ -90,6 +97,8 @@ const GROUP_ORDER: Record<string, number> = {
 };
 
 const FIELD_LABELS: Record<string, string> = {
+  "update.channel": "Update Channel",
+  "update.checkOnStart": "Update Check on Start",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -97,14 +106,51 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
-  "tools.audio.transcription.args": "Audio Transcription Args",
-  "tools.audio.transcription.timeoutSeconds": "Audio Transcription Timeout (sec)",
+  "tools.media.image.enabled": "Enable Image Understanding",
+  "tools.media.image.maxBytes": "Image Understanding Max Bytes",
+  "tools.media.image.maxChars": "Image Understanding Max Chars",
+  "tools.media.image.prompt": "Image Understanding Prompt",
+  "tools.media.image.timeoutSeconds": "Image Understanding Timeout (sec)",
+  "tools.media.image.attachments": "Image Understanding Attachment Policy",
+  "tools.media.image.models": "Image Understanding Models",
+  "tools.media.image.scope": "Image Understanding Scope",
+  "tools.media.models": "Media Understanding Shared Models",
+  "tools.media.concurrency": "Media Understanding Concurrency",
+  "tools.media.audio.enabled": "Enable Audio Understanding",
+  "tools.media.audio.maxBytes": "Audio Understanding Max Bytes",
+  "tools.media.audio.maxChars": "Audio Understanding Max Chars",
+  "tools.media.audio.prompt": "Audio Understanding Prompt",
+  "tools.media.audio.timeoutSeconds": "Audio Understanding Timeout (sec)",
+  "tools.media.audio.language": "Audio Understanding Language",
+  "tools.media.audio.attachments": "Audio Understanding Attachment Policy",
+  "tools.media.audio.models": "Audio Understanding Models",
+  "tools.media.audio.scope": "Audio Understanding Scope",
+  "tools.media.video.enabled": "Enable Video Understanding",
+  "tools.media.video.maxBytes": "Video Understanding Max Bytes",
+  "tools.media.video.maxChars": "Video Understanding Max Chars",
+  "tools.media.video.prompt": "Video Understanding Prompt",
+  "tools.media.video.timeoutSeconds": "Video Understanding Timeout (sec)",
+  "tools.media.video.attachments": "Video Understanding Attachment Policy",
+  "tools.media.video.models": "Video Understanding Models",
+  "tools.media.video.scope": "Video Understanding Scope",
   "tools.profile": "Tool Profile",
   "agents.list[].tools.profile": "Agent Tool Profile",
   "tools.byProvider": "Tool Policy by Provider",
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
+  "tools.exec.notifyOnExit": "Exec Notify On Exit",
+  "tools.exec.host": "Exec Host",
+  "tools.exec.security": "Exec Security",
+  "tools.exec.ask": "Exec Ask",
+  "tools.exec.node": "Exec Node Binding",
+  "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
+  "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
+  "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
+  "tools.message.crossContext.marker.enabled": "Cross-Context Marker",
+  "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
+  "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
+  "tools.message.broadcast.enabled": "Enable Message Broadcast",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.apiKey": "Brave Search API Key",
@@ -126,14 +172,20 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.sources": "Memory Search Sources",
+  "agents.defaults.memorySearch.experimental.sessionMemory":
+    "Memory Search Session Index (Experimental)",
   "agents.defaults.memorySearch.provider": "Memory Search Provider",
   "agents.defaults.memorySearch.remote.baseUrl": "Remote Embedding Base URL",
   "agents.defaults.memorySearch.remote.apiKey": "Remote Embedding API Key",
   "agents.defaults.memorySearch.remote.headers": "Remote Embedding Headers",
+  "agents.defaults.memorySearch.remote.batch.concurrency": "Remote Batch Concurrency",
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
+  "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
+  "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
   "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
   "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
@@ -142,6 +194,13 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
+  "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Memory Search Hybrid Candidate Multiplier",
+  "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
+  "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -158,6 +217,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "agents.defaults.cliBackends": "CLI Backends",
   "commands.native": "Native Commands",
+  "commands.nativeSkills": "Native Skill Commands",
   "commands.text": "Text Commands",
   "commands.bash": "Allow Bash Chat Command",
   "commands.bashForegroundMs": "Bash Foreground Window (ms)",
@@ -194,6 +254,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
   "channels.telegram.retry.jitter": "Telegram Retry Jitter",
   "channels.telegram.timeoutSeconds": "Telegram API Timeout (seconds)",
+  "channels.telegram.capabilities.inlineButtons": "Telegram Inline Buttons",
   "channels.whatsapp.dmPolicy": "WhatsApp DM Policy",
   "channels.whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
   "channels.whatsapp.debounceMs": "WhatsApp Message Debounce (ms)",
@@ -220,6 +281,8 @@ const FIELD_LABELS: Record<string, string> = {
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
   "plugins.load.paths": "Plugin Load Paths",
+  "plugins.slots": "Plugin Slots",
+  "plugins.slots.memory": "Memory Plugin",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.config": "Plugin Config",
@@ -233,6 +296,8 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const FIELD_HELP: Record<string, string> = {
+  "update.channel": 'Update channel for npm installs ("stable" or "beta").',
+  "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
@@ -249,6 +314,21 @@ const FIELD_HELP: Record<string, string> = {
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+  "tools.exec.notifyOnExit":
+    "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
+  "tools.message.allowCrossContextSend":
+    "Legacy override: allow cross-context sends across all providers.",
+  "tools.message.crossContext.allowWithinProvider":
+    "Allow sends to other channels within the same provider (default: true).",
+  "tools.message.crossContext.allowAcrossProviders":
+    "Allow sends across different providers (default: false).",
+  "tools.message.crossContext.marker.enabled":
+    "Add a visible origin marker when sending cross-context (default: true).",
+  "tools.message.crossContext.marker.prefix":
+    'Text prefix for cross-context markers (supports "{channel}").',
+  "tools.message.crossContext.marker.suffix":
+    'Text suffix for cross-context markers (supports "{channel}").',
+  "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
   "tools.web.search.enabled": "Enable the web_search tool (requires Brave API key).",
   "tools.web.search.provider": 'Search provider (only "brave" supported today).',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
@@ -260,6 +340,17 @@ const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.readability":
+    "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+  "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
+  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
+  "tools.web.fetch.firecrawl.baseUrl":
+    "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
+  "tools.web.fetch.firecrawl.onlyMainContent":
+    "When true, Firecrawl returns only the main content (default: true).",
+  "tools.web.fetch.firecrawl.maxAgeMs":
+    "Firecrawl maxAge (ms) for cached results when supported by the API.",
+  "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.slack.thread.historyScope":
@@ -279,18 +370,48 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "agents.defaults.memorySearch.sources":
+    'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
+  "agents.defaults.memorySearch.experimental.sessionMemory":
+    "Enable experimental session transcript indexing for memory search (default: false).",
   "agents.defaults.memorySearch.provider": 'Embedding provider ("openai" or "local").',
   "agents.defaults.memorySearch.remote.baseUrl":
     "Custom OpenAI-compatible base URL (e.g. for Gemini/OpenRouter proxies).",
   "agents.defaults.memorySearch.remote.apiKey": "Custom API key for the remote embedding provider.",
   "agents.defaults.memorySearch.remote.headers":
     "Extra headers for remote embeddings (merged; remote overrides OpenAI headers).",
+  "agents.defaults.memorySearch.remote.batch.enabled":
+    "Enable OpenAI Batch API for memory embeddings (default: true).",
+  "agents.defaults.memorySearch.remote.batch.wait":
+    "Wait for OpenAI batch completion when indexing (default: true).",
+  "agents.defaults.memorySearch.remote.batch.concurrency":
+    "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
+  "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
+    "Polling interval in ms for OpenAI batch status (default: 2000).",
+  "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
+    "Timeout in minutes for OpenAI batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":
     "Local GGUF model path or hf: URI (node-llama-cpp).",
   "agents.defaults.memorySearch.fallback":
     'Fallback to OpenAI when local embeddings fail ("openai" or "none").',
   "agents.defaults.memorySearch.store.path":
     "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
+  "agents.defaults.memorySearch.store.vector.enabled":
+    "Enable sqlite-vec extension for vector search (default: true).",
+  "agents.defaults.memorySearch.store.vector.extensionPath":
+    "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
+  "agents.defaults.memorySearch.query.hybrid.enabled":
+    "Enable hybrid BM25 + vector search for memory (default: true).",
+  "agents.defaults.memorySearch.query.hybrid.vectorWeight":
+    "Weight for vector similarity when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.textWeight":
+    "Weight for BM25 text relevance when merging results (0-1).",
+  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
+    "Multiplier for candidate pool size (default: 4).",
+  "agents.defaults.memorySearch.cache.enabled":
+    "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  "agents.defaults.memorySearch.cache.maxEntries":
+    "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
     "Lazy sync: reindex on first search after a change.",
   "agents.defaults.memorySearch.sync.watch": "Watch memory files for changes (chokidar).",
@@ -298,6 +419,9 @@ const FIELD_HELP: Record<string, string> = {
   "plugins.allow": "Optional allowlist of plugin ids; when set, only listed plugins load.",
   "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
   "plugins.load.paths": "Additional plugin files or directories to load.",
+  "plugins.slots": "Select which plugins own exclusive slots (memory, etc.).",
+  "plugins.slots.memory":
+    'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.entries": "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
   "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
   "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",
@@ -322,6 +446,8 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
   "commands.native":
     "Register native commands with channels that support it (Discord/Slack/Telegram).",
+  "commands.nativeSkills":
+    "Register native skill commands (user-invocable skills) with channels that support it.",
   "commands.text": "Allow text command parsing (slash commands only).",
   "commands.bash":
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
@@ -333,6 +459,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer" or "per-channel-peer" isolates DM history (recommended for shared inboxes).',
+  "session.identityLinks":
+    "Map canonical identities to provider-prefixed peer IDs for DM session linking (example: telegram:123456).",
   "channels.telegram.configWrites":
     "Allow Telegram to write config in response to channel events/commands (default: true).",
   "channels.slack.configWrites":
@@ -348,8 +476,14 @@ const FIELD_HELP: Record<string, string> = {
   "channels.msteams.configWrites":
     "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
+  "channels.discord.commands.nativeSkills":
+    'Override native skill commands for Discord (bool or "auto").',
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
+  "channels.telegram.commands.nativeSkills":
+    'Override native skill commands for Telegram (bool or "auto").',
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
+  "channels.slack.commands.nativeSkills":
+    'Override native skill commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "channels.telegram.customCommands":
@@ -408,6 +542,48 @@ const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
 
 function isSensitivePath(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+}
+
+type JsonSchemaObject = JsonSchemaNode & {
+  type?: string | string[];
+  properties?: Record<string, JsonSchemaObject>;
+  required?: string[];
+  additionalProperties?: JsonSchemaObject | boolean;
+};
+
+function cloneSchema<T>(value: T): T {
+  if (typeof structuredClone === "function") return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function asSchemaObject(value: unknown): JsonSchemaObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as JsonSchemaObject;
+}
+
+function isObjectSchema(schema: JsonSchemaObject): boolean {
+  const type = schema.type;
+  if (type === "object") return true;
+  if (Array.isArray(type) && type.includes("object")) return true;
+  return Boolean(schema.properties || schema.additionalProperties);
+}
+
+function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject): JsonSchemaObject {
+  const mergedRequired = new Set<string>([...(base.required ?? []), ...(extension.required ?? [])]);
+  const merged: JsonSchemaObject = {
+    ...base,
+    ...extension,
+    properties: {
+      ...base.properties,
+      ...extension.properties,
+    },
+  };
+  if (mergedRequired.size > 0) {
+    merged.required = Array.from(mergedRequired);
+  }
+  const additional = extension.additionalProperties ?? base.additionalProperties;
+  if (additional !== undefined) merged.additionalProperties = additional;
+  return merged;
 }
 
 function buildBaseHints(): ConfigUiHints {
@@ -497,11 +673,94 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
       ...(label ? { label } : {}),
       ...(help ? { help } : {}),
     };
+
+    const uiHints = channel.configUiHints ?? {};
+    for (const [relPathRaw, hint] of Object.entries(uiHints)) {
+      const relPath = relPathRaw.trim().replace(/^\./, "");
+      if (!relPath) continue;
+      const key = `${basePath}.${relPath}`;
+      next[key] = {
+        ...next[key],
+        ...hint,
+      };
+    }
   }
   return next;
 }
 
+function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): ConfigSchema {
+  const next = cloneSchema(schema);
+  const root = asSchemaObject(next);
+  const pluginsNode = asSchemaObject(root?.properties?.plugins);
+  const entriesNode = asSchemaObject(pluginsNode?.properties?.entries);
+  if (!entriesNode) return next;
+
+  const entryBase = asSchemaObject(entriesNode.additionalProperties);
+  const entryProperties = entriesNode.properties ?? {};
+  entriesNode.properties = entryProperties;
+
+  for (const plugin of plugins) {
+    if (!plugin.configSchema) continue;
+    const entrySchema = entryBase
+      ? cloneSchema(entryBase)
+      : ({ type: "object" } as JsonSchemaObject);
+    const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
+    const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
+    const pluginSchema = asSchemaObject(plugin.configSchema);
+    const nextConfigSchema =
+      baseConfigSchema &&
+      pluginSchema &&
+      isObjectSchema(baseConfigSchema) &&
+      isObjectSchema(pluginSchema)
+        ? mergeObjectSchema(baseConfigSchema, pluginSchema)
+        : cloneSchema(plugin.configSchema);
+
+    entryObject.properties = {
+      ...entryObject.properties,
+      config: nextConfigSchema,
+    };
+    entryProperties[plugin.id] = entryObject;
+  }
+
+  return next;
+}
+
+function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]): ConfigSchema {
+  const next = cloneSchema(schema);
+  const root = asSchemaObject(next);
+  const channelsNode = asSchemaObject(root?.properties?.channels);
+  if (!channelsNode) return next;
+  const channelProps = channelsNode.properties ?? {};
+  channelsNode.properties = channelProps;
+
+  for (const channel of channels) {
+    if (!channel.configSchema) continue;
+    const existing = asSchemaObject(channelProps[channel.id]);
+    const incoming = asSchemaObject(channel.configSchema);
+    if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
+      channelProps[channel.id] = mergeObjectSchema(existing, incoming);
+    } else {
+      channelProps[channel.id] = cloneSchema(channel.configSchema);
+    }
+  }
+
+  return next;
+}
+
 let cachedBase: ConfigSchemaResponse | null = null;
+
+function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
+  const next = cloneSchema(schema);
+  const root = asSchemaObject(next);
+  if (!root || !root.properties) return next;
+  const channelsNode = asSchemaObject(root.properties.channels);
+  if (channelsNode) {
+    channelsNode.properties = {};
+    channelsNode.required = [];
+    channelsNode.additionalProperties = true;
+  }
+  return next;
+}
 
 function buildBaseConfigSchema(): ConfigSchemaResponse {
   if (cachedBase) return cachedBase;
@@ -512,7 +771,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   schema.title = "ClawdbotConfig";
   const hints = applySensitiveHints(buildBaseHints());
   const next = {
-    schema,
+    schema: stripChannelSchema(schema),
     uiHints: hints,
     version: VERSION,
     generatedAt: new Date().toISOString(),
@@ -529,11 +788,13 @@ export function buildConfigSchema(params?: {
   const plugins = params?.plugins ?? [];
   const channels = params?.channels ?? [];
   if (plugins.length === 0 && channels.length === 0) return base;
-  const merged = applySensitiveHints(
+  const mergedHints = applySensitiveHints(
     applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
   );
+  const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
   return {
     ...base,
-    uiHints: merged,
+    schema: mergedSchema,
+    uiHints: mergedHints,
   };
 }

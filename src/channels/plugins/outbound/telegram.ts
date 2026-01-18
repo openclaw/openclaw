@@ -22,16 +22,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
   textChunkLimit: 4000,
-  resolveTarget: ({ to }) => {
-    const trimmed = to?.trim();
-    if (!trimmed) {
-      return {
-        ok: false,
-        error: new Error("Delivering to Telegram requires --to <chatId>"),
-      };
-    }
-    return { ok: true, to: trimmed };
-  },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseReplyToMessageId(replyToId);

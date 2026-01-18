@@ -4,7 +4,32 @@
 
 Zalo integration available as a plugin. Status: **Experimental** (DMs only, groups coming soon)
 
-## 📋 Setup Steps
+## � Lấy CLAUDE_AI_SESSION_KEY (OAuth Mode)
+
+### Bước 1: Đăng nhập Claude.ai
+1. Truy cập: **https://claude.ai**
+2. Đăng nhập với Google/Email account
+
+### Bước 2: Lấy Session Key từ Browser
+1. Mở Developer Tools (F12)
+2. Chọn tab **Application** → **Cookies** → **https://claude.ai**
+3. Tìm cookie có tên: `__Secure-next-auth.session-token`
+4. Copy giá trị của cookie này
+
+### Bước 3: Cập nhật Secret
+```bash
+# Edit secret file
+vim k8s/secret.yaml
+
+# Thêm key (KHÔNG có prefix "sk-ant-")
+CLAUDE_AI_SESSION_KEY: "eyJhbGciOiJkaXIi..."
+```
+
+> **Lưu ý**: Session key sẽ expire sau 30 ngày, cần refresh định kỳ.
+
+---
+
+## �📋 Setup Zalo Steps
 
 ### 1. Get Zalo Bot Token
 
@@ -15,67 +40,53 @@ Zalo integration available as a plugin. Status: **Experimental** (DMs only, grou
 
 ### 2. Update Secret File
 
-File `k8s/secret.yaml` đã được cập nhật với field:
-
-```yaml
-ZALO_BOT_TOKEN: ""  # Paste your token here
-```
-
-**Action**: Edit và thêm token của bạn:
-
 ```bash
 vim k8s/secret.yaml
-# Thay "" bằng token thực của bạn
-# ZALO_BOT_TOKEN: "12345689:abc-xyz"
+
+# Thêm Zalo token
+ZALO_BOT_TOKEN: "12345689:abc-xyz"
 ```
 
-### 3. ConfigMap đã được cấu hình
+### 3. ConfigMap Configuration
 
 File `k8s/configmap.yaml` đã có config:
 
 ```json
-"channels": {
-  "zalo": {
-    "enabled": true,
-    "botToken": "${ZALO_BOT_TOKEN}",
-    "dmPolicy": "pairing",
-    "allowFrom": [],
-    "mediaMaxMb": 5
-  }
+"zalo": {
+  "enabled": true,
+  "dmPolicy": "open",
+  "allowFrom": ["*"],
+  "mediaMaxMb": 5
 }
 ```
 
-### 4. Install Zalo Plugin (Post-Deployment)
+**DM Policy Options:**
+- `"open"` - Cho phép tất cả mọi người (recommended cho testing)
+- `"pairing"` - Yêu cầu pairing code approval (production)
+- `"allowlist"` - Chỉ users trong allowFrom list
 
-Sau khi deploy lên K8s:
-
-```bash
-# Step 1: Exec vào pod
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- /bin/bash
-
-# Step 2: Install Zalo plugin
-node dist/index.js plugins install @clawdbot/zalo
-# Hoặc từ source local:
-# node dist/index.js plugins install ./extensions/zalo
-
-# Step 3: Restart gateway để load plugin
-exit
-kubectl rollout restart deployment/clawdbot-gateway -n clawdbot
-```
-
-### 5. Approve Pairing Codes
-
-Khi ai đó nhắn tin cho bot lần đầu:
+### 4. Deploy và Enable Zalo Plugin
 
 ```bash
-# List pending pairing codes
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js pairing list zalo
+# Deploy lên K8s
+./k8s/deploy.sh
 
-# Approve a pairing code
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js pairing approve zalo <CODE>
+# Enable Zalo plugin
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins enable zalo
+
+# Restart gateway
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- kill 1
+
+# Verify (sau 30s)
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts channels status
 ```
+
+Expected output:
+```
+- Zalo default: enabled, configured, mode:polling, token:env
+```
+
+---
 
 ## 🔧 Configuration Options
 
@@ -83,10 +94,10 @@ kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
 
 ```json
 {
-  "dmPolicy": "pairing"  // Default - require pairing approval
-  // OR "allowlist"      // Only users in allowFrom
-  // OR "open"           // Anyone can message (set allowFrom: ["*"])
-  // OR "disabled"       // No DMs allowed
+  "dmPolicy": "open"       // Anyone can message (set allowFrom: ["*"])
+  // OR "pairing"          // Default - require pairing approval  
+  // OR "allowlist"        // Only users in allowFrom
+  // OR "disabled"         // No DMs allowed
 }
 ```
 
@@ -94,7 +105,8 @@ kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
 
 ```json
 {
-  "allowFrom": ["123456789", "987654321"]  // Zalo user IDs
+  "dmPolicy": "allowlist",
+  "allowFrom": ["0fc808c0d7893ed76798", "987654321"]  // Zalo user IDs
 }
 ```
 
@@ -110,6 +122,8 @@ kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
 
 **Note**: Webhook and long-polling are mutually exclusive.
 
+---
+
 ## ✨ Features
 
 | Feature | Status |
@@ -121,88 +135,114 @@ kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
 | Stickers | ⚠️ Logged only |
 | Streaming | ❌ Disabled (char limit) |
 
-## 🚀 Complete Deployment Workflow
+---
 
-```bash
-# 1. Update secret with Zalo token
-vim k8s/secret.yaml
+## 🚀 Quick Deployment Workflow
 
-# 2. Deploy (hoặc update nếu đã deploy)
-./deploy.sh
-
-# 3. Install Zalo plugin
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js plugins install @clawdbot/zalo
-
-# 4. Restart to load plugin
-kubectl rollout restart deployment/clawdbot-gateway -n clawdbot
-
-# 5. Check logs
-kubectl logs -f deployment/clawdbot-gateway -n clawdbot
-
-# 6. Test by messaging your bot on Zalo
-# Then approve the pairing code
+Sử dụng workflow tự động:
+```
+/deploy-k8s-vnpay
 ```
 
+Hoặc manual:
+```bash
+# 1. Build và push image
+./k8s/build-push-script.sh
+
+# 2. Deploy
+./k8s/deploy.sh
+
+# 3. Enable Zalo plugin
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins enable zalo
+
+# 4. Restart gateway
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- kill 1
+
+# 5. Verify
+sleep 30
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts channels status
+```
+
+---
+
 ## 🐛 Troubleshooting
+
+### Zalo không xuất hiện trong channels
+
+```bash
+# Check if plugin is enabled
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins list
+
+# Re-enable plugin
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins enable zalo
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- kill 1
+```
 
 ### Bot không phản hồi
 
 ```bash
 # Check channel status
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js channels status --probe
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts channels status
 
 # Check logs
-kubectl logs -f deployment/clawdbot-gateway -n clawdbot | grep zalo
+kubectl logs -n clawdbot -l app=clawdbot --tail=50 | grep -i zalo
 
 # Verify token
-kubectl get secret clawdbot-secrets -n clawdbot \
-  -o jsonpath='{.data.ZALO_BOT_TOKEN}' | base64 -d
+kubectl get secret clawdbot-secrets -n clawdbot -o jsonpath='{.data.ZALO_BOT_TOKEN}' | base64 -d
 ```
 
-### Plugin chưa cài
+### Yêu cầu pairing code nhưng không có CLI support
+
+Zalo plugin không hỗ trợ `pairing approve` qua CLI. Thay vào đó:
+1. Đổi `dmPolicy` thành `"open"` hoặc `"allowlist"`
+2. Thêm user ID vào `allowFrom` nếu dùng allowlist
 
 ```bash
-# List installed plugins
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js plugins list
+# Edit configmap
+vim k8s/configmap.yaml
+# Đổi dmPolicy thành "open" và allowFrom: ["*"]
 
-# Reinstall if needed
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js plugins install @clawdbot/zalo --force
-```
-
-## 📝 Notes
-
-- Zalo plugin = experimental, chủ yếu cho Vietnam market
-- Groups sẽ được support sau (theo Zalo roadmap)
-- Pairing mode = secure, recommended cho production
-- Token format validation: `12345689:abc-xyz`
-
-## 🎯 Quick Reference
-
-```bash
-# Send message
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js message send \
-  --channel zalo \
-  --to 123456789 \
-  --message "Hello from Clawdbot!"
-
-# List pairing codes
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js pairing list zalo
-
-# Approve pairing
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js pairing approve zalo ABC123
-
-# Check channel status
-kubectl exec -it deployment/clawdbot-gateway -n clawdbot -- \
-  node dist/index.js channels status
+# Apply và restart
+kubectl apply -f k8s/configmap.yaml
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- kill 1
 ```
 
 ---
 
-**Ready!** Just add your Zalo bot token to `secret.yaml` and follow the deployment steps above! 🚀
+## 📝 Quick Reference Commands
+
+```bash
+# Check channel status
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts channels status
+
+# List plugins
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins list
+
+# Enable Zalo plugin
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- tsx src/entry.ts plugins enable zalo
+
+# View logs
+kubectl logs -n clawdbot -l app=clawdbot --tail=50
+
+# Restart gateway (without running init containers)
+kubectl exec deployment/clawdbot-gateway -n clawdbot -- kill 1
+
+# Force full restart (runs init containers, loses plugin state)
+kubectl delete pod -n clawdbot -l app=clawdbot
+```
+
+---
+
+## ⚠️ Lưu Ý Quan Trọng
+
+1. **Plugin không persist qua pod deletion**: Khi pod bị delete (không phải restart), bạn cần chạy lại `plugins enable zalo`
+
+2. **Session key expiry**: `CLAUDE_AI_SESSION_KEY` expire sau ~30 ngày, cần refresh
+
+3. **Zalo pairing**: CLI không hỗ trợ `pairing approve` cho Zalo, dùng `dmPolicy: "open"` hoặc `"allowlist"`
+
+4. **Webhook vs Polling**: Default là polling mode, webhook cần configure thêm
+
+---
+
+**Ready!** Just add your tokens to `secret.yaml` and run `/deploy-k8s-vnpay`! 🚀

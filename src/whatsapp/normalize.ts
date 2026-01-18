@@ -7,10 +7,7 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   let candidate = value.trim();
   for (;;) {
     const before = candidate;
-    candidate = candidate
-      .replace(/^whatsapp:/i, "")
-      .replace(/^group:/i, "")
-      .trim();
+    candidate = candidate.replace(/^whatsapp:/i, "").trim();
     if (candidate === before) return candidate;
   }
 }
@@ -59,6 +56,9 @@ export function normalizeWhatsAppTarget(value: string): string | null {
     const normalized = normalizeE164(phone);
     return normalized.length > 1 ? normalized : null;
   }
+  // If the caller passed a JID-ish string that we don't understand, fail fast.
+  // Otherwise normalizeE164 would happily treat "group:120@g.us" as a phone number.
+  if (candidate.includes("@")) return null;
   const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }

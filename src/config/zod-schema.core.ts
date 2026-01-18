@@ -240,10 +240,102 @@ export const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
-export const ToolsAudioTranscriptionSchema = z
+export const MediaUnderstandingScopeSchema = z
   .object({
+    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+    rules: z
+      .array(
+        z.object({
+          action: z.union([z.literal("allow"), z.literal("deny")]),
+          match: z
+            .object({
+              channel: z.string().optional(),
+              chatType: z
+                .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                .optional(),
+              keyPrefix: z.string().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .optional(),
+  })
+  .optional();
+
+export const MediaUnderstandingCapabilitiesSchema = z
+  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
+  .optional();
+
+export const MediaUnderstandingAttachmentsSchema = z
+  .object({
+    mode: z.union([z.literal("first"), z.literal("all")]).optional(),
+    maxAttachments: z.number().int().positive().optional(),
+    prefer: z
+      .union([z.literal("first"), z.literal("last"), z.literal("path"), z.literal("url")])
+      .optional(),
+  })
+  .optional();
+
+const DeepgramAudioSchema = z
+  .object({
+    detectLanguage: z.boolean().optional(),
+    punctuate: z.boolean().optional(),
+    smartFormat: z.boolean().optional(),
+  })
+  .optional();
+
+const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const ProviderOptionsSchema = z
+  .record(z.string(), z.record(z.string(), ProviderOptionValueSchema))
+  .optional();
+
+export const MediaUnderstandingModelSchema = z
+  .object({
+    provider: z.string().optional(),
+    model: z.string().optional(),
+    capabilities: MediaUnderstandingCapabilitiesSchema,
+    type: z.union([z.literal("provider"), z.literal("cli")]).optional(),
+    command: z.string().optional(),
     args: z.array(z.string()).optional(),
+    prompt: z.string().optional(),
+    maxChars: z.number().int().positive().optional(),
+    maxBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    language: z.string().optional(),
+    providerOptions: ProviderOptionsSchema,
+    deepgram: DeepgramAudioSchema,
+    baseUrl: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    profile: z.string().optional(),
+    preferredProfile: z.string().optional(),
+  })
+  .optional();
+
+export const ToolsMediaUnderstandingSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxBytes: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    prompt: z.string().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    language: z.string().optional(),
+    providerOptions: ProviderOptionsSchema,
+    deepgram: DeepgramAudioSchema,
+    baseUrl: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    attachments: MediaUnderstandingAttachmentsSchema,
+    models: z.array(MediaUnderstandingModelSchema).optional(),
+  })
+  .optional();
+
+export const ToolsMediaSchema = z
+  .object({
+    models: z.array(MediaUnderstandingModelSchema).optional(),
+    concurrency: z.number().int().positive().optional(),
+    image: ToolsMediaUnderstandingSchema.optional(),
+    audio: ToolsMediaUnderstandingSchema.optional(),
+    video: ToolsMediaUnderstandingSchema.optional(),
   })
   .optional();
 
@@ -252,5 +344,6 @@ export const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto
 export const ProviderCommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional(),
+    nativeSkills: NativeCommandsSettingSchema.optional(),
   })
   .optional();

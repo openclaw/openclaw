@@ -85,6 +85,14 @@ When a channel supplies history, it uses a shared wrapper:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
+For **non-direct chats** (groups/channels/rooms), the **current message body** is prefixed with the
+sender label (same style used for history entries). This keeps real-time and queued/history
+messages consistent in the agent prompt.
+
+History buffers are **pending-only**: they include group messages that did *not*
+trigger a run (for example, mention-gated messages) and **exclude** messages
+already in the session transcript.
+
 Directive stripping only applies to the **current message** section so history
 remains intact. Channels that wrap history should set `CommandBody` (or
 `RawBody`) to the original message text and keep `Body` as the combined prompt.

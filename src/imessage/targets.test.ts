@@ -13,8 +13,8 @@ describe("imessage targets", () => {
     expect(target).toEqual({ kind: "chat_id", chatId: 123 });
   });
 
-  it("parses group chat targets", () => {
-    const target = parseIMessageTarget("group:456");
+  it("parses chat targets", () => {
+    const target = parseIMessageTarget("chat:456");
     expect(target).toEqual({ kind: "chat_id", chatId: 456 });
   });
 

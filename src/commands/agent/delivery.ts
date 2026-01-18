@@ -1,8 +1,6 @@
+import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
-import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
-import type { CliDeps } from "../../cli/deps.js";
-import { createOutboundSendDeps } from "../../cli/deps.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -13,17 +11,39 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
-import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
-  isInternalMessageChannel,
-  resolveGatewayMessageChannel,
-} from "../../utils/message-channel.js";
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../../infra/outbound/agent-delivery.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
 >;
+
+const NESTED_LOG_PREFIX = "[agent:nested]";
+
+function formatNestedLogPrefix(opts: AgentCommandOpts): string {
+  const parts = [NESTED_LOG_PREFIX];
+  const session = opts.sessionKey ?? opts.sessionId;
+  if (session) parts.push(`session=${session}`);
+  if (opts.runId) parts.push(`run=${opts.runId}`);
+  const channel = opts.messageChannel ?? opts.channel;
+  if (channel) parts.push(`channel=${channel}`);
+  if (opts.to) parts.push(`to=${opts.to}`);
+  if (opts.accountId) parts.push(`account=${opts.accountId}`);
+  return parts.join(" ");
+}
+
+function logNestedOutput(runtime: RuntimeEnv, opts: AgentCommandOpts, output: string) {
+  const prefix = formatNestedLogPrefix(opts);
+  for (const line of output.split(/\r?\n/)) {
+    if (!line) continue;
+    runtime.log(`${prefix} ${line}`);
+  }
+}
 
 export async function deliverAgentCommandResult(params: {
   cfg: ClawdbotConfig;
@@ -37,7 +57,14 @@ export async function deliverAgentCommandResult(params: {
   const { cfg, deps, runtime, opts, sessionEntry, payloads, result } = params;
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryChannel = resolveGatewayMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
+  const deliveryPlan = resolveAgentDeliveryPlan({
+    sessionEntry,
+    requestedChannel: opts.channel,
+    explicitTo: opts.to,
+    accountId: opts.accountId,
+    wantsDelivery: deliver,
+  });
+  const deliveryChannel = deliveryPlan.resolvedChannel;
   // Channel docking: delivery channels are resolved via plugin registry.
   const deliveryPlugin = !isInternalMessageChannel(deliveryChannel)
     ? getChannelPlugin(normalizeChannelId(deliveryChannel) ?? deliveryChannel)
@@ -46,19 +73,26 @@ export async function deliverAgentCommandResult(params: {
   const isDeliveryChannelKnown =
     isInternalMessageChannel(deliveryChannel) || Boolean(deliveryPlugin);
 
-  const targetMode: ChannelOutboundTargetMode =
-    opts.deliveryTargetMode ?? (opts.to ? "explicit" : "implicit");
-  const resolvedTarget =
+  const targetMode =
+    opts.deliveryTargetMode ??
+    deliveryPlan.deliveryTargetMode ??
+    (opts.to ? "explicit" : "implicit");
+  const resolvedAccountId = deliveryPlan.resolvedAccountId;
+  const resolved =
     deliver && isDeliveryChannelKnown && deliveryChannel
-      ? resolveOutboundTarget({
-          channel: deliveryChannel,
-          to: opts.to,
+      ? resolveAgentOutboundTarget({
           cfg,
-          accountId: targetMode === "implicit" ? sessionEntry?.lastAccountId : undefined,
-          mode: targetMode,
+          plan: deliveryPlan,
+          targetMode,
+          validateExplicitTarget: true,
         })
-      : null;
-  const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
+      : {
+          resolvedTarget: null,
+          resolvedTo: deliveryPlan.resolvedTo,
+          targetMode,
+        };
+  const resolvedTarget = resolved.resolvedTarget;
+  const deliveryTarget = resolved.resolvedTo;
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
@@ -101,7 +135,12 @@ export async function deliverAgentCommandResult(params: {
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) return;
     const output = formatOutboundPayloadLog(payload);
-    if (output) runtime.log(output);
+    if (!output) return;
+    if (opts.lane === AGENT_LANE_NESTED) {
+      logNestedOutput(runtime, opts, output);
+      return;
+    }
+    runtime.log(output);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) logPayload(payload);
@@ -112,6 +151,7 @@ export async function deliverAgentCommandResult(params: {
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
+        accountId: resolvedAccountId,
         payloads: deliveryPayloads,
         bestEffort: bestEffortDeliver,
         onError: (err) => logDeliveryError(err),

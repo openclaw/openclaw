@@ -7,6 +7,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import {
+  resolveMemoryCacheSummary,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
+  type Tone,
+} from "../memory/status-format.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getDaemonStatusSummary } from "./status.daemon.js";
@@ -19,7 +25,11 @@ import {
 } from "./status.format.js";
 import { resolveGatewayProbeAuth } from "./status.gateway-probe.js";
 import { scanStatus } from "./status.scan.js";
-import { formatUpdateOneLiner } from "./status.update.js";
+import {
+  formatUpdateAvailableHint,
+  formatUpdateOneLiner,
+  resolveUpdateAvailability,
+} from "./status.update.js";
 import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { statusAllCommand } from "./status-all.js";
 
@@ -60,6 +70,8 @@ export async function statusCommand(
     agentStatus,
     channels,
     summary,
+    memory,
+    memoryPlugin,
   } = scan;
 
   const securityAudit = await withProgress(
@@ -97,6 +109,7 @@ export async function statusCommand(
         async () =>
           await callGateway<HealthSummary>({
             method: "health",
+            params: { probe: true },
             timeoutMs: opts.timeoutMs,
           }),
       )
@@ -109,6 +122,8 @@ export async function statusCommand(
           ...summary,
           os: osSummary,
           update,
+          memory,
+          memoryPlugin,
           gateway: {
             mode: gatewayMode,
             url: gatewayConnection.url,
@@ -211,6 +226,61 @@ export async function statusCommand(
 
   const probesValue = health ? ok("enabled") : muted("skipped (use --deep)");
 
+  const heartbeatValue = (() => {
+    const parts = summary.heartbeat.agents
+      .map((agent) => {
+        if (!agent.enabled || !agent.everyMs) return `disabled (${agent.agentId})`;
+        const everyLabel = agent.every;
+        return `${everyLabel} (${agent.agentId})`;
+      })
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join(", ") : "disabled";
+  })();
+
+  const storeLabel =
+    summary.sessions.paths.length > 1
+      ? `${summary.sessions.paths.length} stores`
+      : (summary.sessions.paths[0] ?? "unknown");
+
+  const memoryValue = (() => {
+    if (!memoryPlugin.enabled) {
+      const suffix = memoryPlugin.reason ? ` (${memoryPlugin.reason})` : "";
+      return muted(`disabled${suffix}`);
+    }
+    if (!memory) {
+      const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
+      return muted(`enabled (${slot}) · unavailable`);
+    }
+    const parts: string[] = [];
+    const dirtySuffix = memory.dirty ? ` · ${warn("dirty")}` : "";
+    parts.push(`${memory.files} files · ${memory.chunks} chunks${dirtySuffix}`);
+    if (memory.sources?.length) parts.push(`sources ${memory.sources.join(", ")}`);
+    if (memoryPlugin.slot) parts.push(`plugin ${memoryPlugin.slot}`);
+    const colorByTone = (tone: Tone, text: string) =>
+      tone === "ok" ? ok(text) : tone === "warn" ? warn(text) : muted(text);
+    const vector = memory.vector;
+    if (vector) {
+      const state = resolveMemoryVectorState(vector);
+      const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+      parts.push(colorByTone(state.tone, label));
+    }
+    const fts = memory.fts;
+    if (fts) {
+      const state = resolveMemoryFtsState(fts);
+      const label = state.state === "disabled" ? "fts off" : `fts ${state.state}`;
+      parts.push(colorByTone(state.tone, label));
+    }
+    const cache = memory.cache;
+    if (cache) {
+      const summary = resolveMemoryCacheSummary(cache);
+      parts.push(colorByTone(summary.tone, summary.text));
+    }
+    return parts.join(" · ");
+  })();
+
+  const updateAvailability = resolveUpdateAvailability(update);
+  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+
   const overviewRows = [
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
@@ -225,17 +295,18 @@ export async function statusCommand(
     },
     {
       Item: "Update",
-      Value: formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""),
+      Value: updateAvailability.available ? warn(`available · ${updateLine}`) : updateLine,
     },
     { Item: "Gateway", Value: gatewayValue },
     { Item: "Daemon", Value: daemonValue },
     { Item: "Agents", Value: agentsValue },
+    { Item: "Memory", Value: memoryValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
-    { Item: "Heartbeat", Value: `${summary.heartbeatSeconds}s` },
+    { Item: "Heartbeat", Value: heartbeatValue },
     {
       Item: "Sessions",
-      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · store ${summary.sessions.path}`,
+      Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
     },
   ];
 
@@ -396,7 +467,7 @@ export async function statusCommand(
       Detail: `${health.durationMs}ms`,
     });
 
-    for (const line of formatHealthChannelLines(health)) {
+    for (const line of formatHealthChannelLines(health, { accountMode: "all" })) {
       const colon = line.indexOf(":");
       if (colon === -1) continue;
       const item = line.slice(0, colon).trim();
@@ -439,6 +510,11 @@ export async function statusCommand(
   runtime.log("FAQ: https://docs.clawd.bot/faq");
   runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
   runtime.log("");
+  const updateHint = formatUpdateAvailableHint(update);
+  if (updateHint) {
+    runtime.log(theme.warn(updateHint));
+    runtime.log("");
+  }
   runtime.log("Next steps:");
   runtime.log("  Need to share?      clawdbot status --all");
   runtime.log("  Need to debug live? clawdbot logs --follow");

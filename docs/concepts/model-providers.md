@@ -83,7 +83,12 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
-- CLI: `clawdbot onboard --auth-choice antigravity` (others via interactive wizard)
+- Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
+  - Enable: `clawdbot plugins enable google-antigravity-auth`
+  - Login: `clawdbot models auth login --provider google-antigravity --set-default`
+- Gemini CLI OAuth is shipped as a bundled plugin (`google-gemini-cli-auth`, disabled by default).
+  - Enable: `clawdbot plugins enable google-gemini-cli-auth`
+  - Login: `clawdbot models auth login --provider google-gemini-cli --set-default`
 
 ### Z.AI (GLM)
 
@@ -92,6 +97,13 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 - Example model: `zai/glm-4.7`
 - CLI: `clawdbot onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
+
+### Vercel AI Gateway
+
+- Provider: `vercel-ai-gateway`
+- Auth: `AI_GATEWAY_API_KEY`
+- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.5`
+- CLI: `clawdbot onboard --auth-choice ai-gateway-api-key`
 
 ### Other built-in providers
 
@@ -142,6 +154,50 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
   }
 }
 ```
+
+### Kimi Code
+
+Kimi Code uses a dedicated endpoint and key (separate from Moonshot):
+
+- Provider: `kimi-code`
+- Auth: `KIMICODE_API_KEY`
+- Example model: `kimi-code/kimi-for-coding`
+
+```json5
+{
+  env: { KIMICODE_API_KEY: "sk-..." },
+  agents: {
+    defaults: { model: { primary: "kimi-code/kimi-for-coding" } }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "kimi-code": {
+        baseUrl: "https://api.kimi.com/coding/v1",
+        apiKey: "${KIMICODE_API_KEY}",
+        api: "openai-completions",
+        models: [{ id: "kimi-for-coding", name: "Kimi For Coding" }]
+      }
+    }
+  }
+}
+```
+
+### Qwen OAuth (free tier)
+
+Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
+Enable the bundled plugin, then log in:
+
+```bash
+clawdbot plugins enable qwen-portal-auth
+clawdbot models auth login --provider qwen-portal --set-default
+```
+
+Model refs:
+- `qwen-portal/coder-model`
+- `qwen-portal/vision-model`
+
+See [/providers/qwen](/providers/qwen) for setup details and notes.
 
 ### Synthetic
 

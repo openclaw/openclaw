@@ -31,7 +31,7 @@ export function resolveSessionKey(scope: SessionScope, ctx: MsgContext, mainKey?
     agentId: DEFAULT_AGENT_ID,
     mainKey: canonicalMainKey,
   });
-  const isGroup = raw.startsWith("group:") || raw.includes(":group:") || raw.includes(":channel:");
+  const isGroup = raw.includes(":group:") || raw.includes(":channel:");
   if (!isGroup) return canonical;
   return `agent:${DEFAULT_AGENT_ID}:${raw}`;
 }

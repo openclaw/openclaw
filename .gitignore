@@ -55,9 +55,15 @@ apps/ios/*.mobileprovision
 # Local untracked files
 .local/
 .vscode/
+<<<<<<< HEAD
 
 # Kubernetes secrets (DO NOT COMMIT)
 k8s/secret.yaml
 
 # Registry credentials (DO NOT COMMIT)
 k8s/.env.registry
+=======
+IDENTITY.md
+USER.md
+.tgz
+>>>>>>> ca350fc66c9df994421d0171aa6bd6b98e32d7a2

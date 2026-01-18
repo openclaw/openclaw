@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -271,17 +272,22 @@ export function discoverClawdbotPlugins(params: {
   const candidates: PluginCandidate[] = [];
   const diagnostics: PluginDiagnostic[] = [];
   const seen = new Set<string>();
-
-  const globalDir = path.join(CONFIG_DIR, "extensions");
-  discoverInDirectory({
-    dir: globalDir,
-    origin: "global",
-    candidates,
-    diagnostics,
-    seen,
-  });
-
   const workspaceDir = params.workspaceDir?.trim();
+
+  const extra = params.extraPaths ?? [];
+  for (const extraPath of extra) {
+    if (typeof extraPath !== "string") continue;
+    const trimmed = extraPath.trim();
+    if (!trimmed) continue;
+    discoverFromPath({
+      rawPath: trimmed,
+      origin: "config",
+      workspaceDir: workspaceDir?.trim() || undefined,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
   if (workspaceDir) {
     const workspaceRoot = resolveUserPath(workspaceDir);
     const workspaceExt = path.join(workspaceRoot, ".clawdbot", "extensions");
@@ -295,15 +301,20 @@ export function discoverClawdbotPlugins(params: {
     });
   }
 
-  const extra = params.extraPaths ?? [];
-  for (const extraPath of extra) {
-    if (typeof extraPath !== "string") continue;
-    const trimmed = extraPath.trim();
-    if (!trimmed) continue;
-    discoverFromPath({
-      rawPath: trimmed,
-      origin: "config",
-      workspaceDir: workspaceDir?.trim() || undefined,
+  const globalDir = path.join(CONFIG_DIR, "extensions");
+  discoverInDirectory({
+    dir: globalDir,
+    origin: "global",
+    candidates,
+    diagnostics,
+    seen,
+  });
+
+  const bundledDir = resolveBundledPluginsDir();
+  if (bundledDir) {
+    discoverInDirectory({
+      dir: bundledDir,
+      origin: "bundled",
       candidates,
       diagnostics,
       seen,

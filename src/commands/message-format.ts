@@ -2,6 +2,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
+import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -236,6 +237,34 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
 
   if (result.handledBy === "dry-run") {
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
+  }
+
+  if (result.kind === "broadcast") {
+    const results = result.payload.results ?? [];
+    const rows = results.map((entry) => ({
+      Channel: resolveChannelLabel(entry.channel),
+      Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
+      Status: entry.ok ? "ok" : "error",
+      Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
+    }));
+    const okCount = results.filter((entry) => entry.ok).length;
+    const total = results.length;
+    const headingLine = ok(
+      `✅ Broadcast complete (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+    );
+    return [
+      headingLine,
+      renderTable({
+        width: opts.width,
+        columns: [
+          { key: "Channel", header: "Channel", minWidth: 10 },
+          { key: "Target", header: "Target", minWidth: 12, flex: true },
+          { key: "Status", header: "Status", minWidth: 6 },
+          { key: "Error", header: "Error", minWidth: 20, flex: true },
+        ],
+        rows: rows.slice(0, 50),
+      }).trimEnd(),
+    ];
   }
 
   if (result.kind === "send") {

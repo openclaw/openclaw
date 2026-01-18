@@ -77,17 +77,15 @@ export async function maybeBroadcastMessage(params: {
     }
   };
 
-  let didSendReply = false;
   if (strategy === "sequential") {
     for (const agentId of broadcastAgents) {
-      if (await processForAgent(agentId)) didSendReply = true;
+      await processForAgent(agentId);
     }
   } else {
-    const results = await Promise.allSettled(broadcastAgents.map(processForAgent));
-    didSendReply = results.some((result) => result.status === "fulfilled" && result.value);
+    await Promise.allSettled(broadcastAgents.map(processForAgent));
   }
 
-  if (params.msg.chatType === "group" && didSendReply) {
+  if (params.msg.chatType === "group") {
     params.groupHistories.set(params.groupHistoryKey, []);
   }
 

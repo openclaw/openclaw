@@ -38,12 +38,22 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.
-- Audio transcription (if configured via `tools.audio.transcription`) runs before templating and can replace `Body` with the transcript.
+- Media understanding (if configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
+  - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
+  - Video and image descriptions preserve any caption text for command parsing.
+- By default only the first matching image/audio/video attachment is processed; set `tools.media.<cap>.attachments` to process multiple attachments.
 
 ## Limits & Errors
+**Outbound send caps (WhatsApp web send)**
 - Images: ~6 MB cap after recompression.
 - Audio/voice/video: 16 MB cap; documents: 100 MB cap.
 - Oversize or unreadable media → clear error in logs and the reply is skipped.
+
+**Media understanding caps (transcription/description)**
+- Image default: 10 MB (`tools.media.image.maxBytes`).
+- Audio default: 20 MB (`tools.media.audio.maxBytes`).
+- Video default: 50 MB (`tools.media.video.maxBytes`).
+- Oversize media skips understanding, but replies still go through with the original body.
 
 ## Notes for Tests
 - Cover send + reply flows for image/audio/document cases.

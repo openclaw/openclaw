@@ -1,6 +1,8 @@
 import type express from "express";
 
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { PwAiModule } from "../pw-ai-module.js";
+import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
 import { getProfileContext, jsonError } from "./utils.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
@@ -38,20 +40,8 @@ export function resolveProfileContext(
   return profileCtx;
 }
 
-export type PwAiModule = typeof import("../pw-ai.js");
-
-let pwAiModule: Promise<PwAiModule | null> | null = null;
-
 export async function getPwAiModule(): Promise<PwAiModule | null> {
-  if (pwAiModule) return pwAiModule;
-  pwAiModule = (async () => {
-    try {
-      return await import("../pw-ai.js");
-    } catch {
-      return null;
-    }
-  })();
-  return pwAiModule;
+  return await getPwAiModuleBase({ mode: "soft" });
 }
 
 export async function requirePwAi(

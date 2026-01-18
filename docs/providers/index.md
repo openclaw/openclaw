@@ -26,12 +26,18 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Chann
 
 - [OpenAI (API + Codex)](/providers/openai)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
-- [Moonshot AI (Kimi)](/providers/moonshot)
+- [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
+
+## Transcription providers
+
+- [Deepgram (audio transcription)](/providers/deepgram)
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

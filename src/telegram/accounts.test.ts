@@ -27,7 +27,7 @@ describe("resolveTelegramAccount", () => {
     }
   });
 
-  it("prefers TELEGRAM_BOT_TOKEN when accountId is omitted", () => {
+  it("uses TELEGRAM_BOT_TOKEN when default account config is missing", () => {
     const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
     process.env.TELEGRAM_BOT_TOKEN = "tok-env";
     try {
@@ -41,6 +41,29 @@ describe("resolveTelegramAccount", () => {
       expect(account.accountId).toBe("default");
       expect(account.token).toBe("tok-env");
       expect(account.tokenSource).toBe("env");
+    } finally {
+      if (prevTelegramToken === undefined) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+    }
+  });
+
+  it("prefers default config token over TELEGRAM_BOT_TOKEN", () => {
+    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+    process.env.TELEGRAM_BOT_TOKEN = "tok-env";
+    try {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          telegram: { botToken: "tok-config" },
+        },
+      };
+
+      const account = resolveTelegramAccount({ cfg });
+      expect(account.accountId).toBe("default");
+      expect(account.token).toBe("tok-config");
+      expect(account.tokenSource).toBe("config");
     } finally {
       if (prevTelegramToken === undefined) {
         delete process.env.TELEGRAM_BOT_TOKEN;

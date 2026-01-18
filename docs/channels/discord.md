@@ -13,6 +13,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 2) Set the token for Clawdbot:
    - Env: `DISCORD_BOT_TOKEN=...`
    - Or config: `channels.discord.token: "..."`.
+   - If both are set, config takes precedence (env fallback is default-account only).
 3) Invite the bot to your server with message permissions.
 4) Start the gateway.
 5) DM access is pairing by default; approve the pairing code on first contact.
@@ -38,8 +39,8 @@ Minimal config:
 ## How it works
 1. Create a Discord application → Bot, enable the intents you need (DMs + guild messages + message content), and grab the bot token.
 2. Invite the bot to your server with the permissions required to read/send messages where you want to use it.
-3. Configure Clawdbot with `DISCORD_BOT_TOKEN` (or `channels.discord.token` in `~/.clawdbot/clawdbot.json`).
-4. Run the gateway; it auto-starts the Discord channel when a token is available (env or config) and `channels.discord.enabled` is not `false`.
+3. Configure Clawdbot with `channels.discord.token` (or `DISCORD_BOT_TOKEN` as a fallback).
+4. Run the gateway; it auto-starts the Discord channel when a token is available (config first, env fallback) and `channels.discord.enabled` is not `false`.
    - If you prefer env vars, set `DISCORD_BOT_TOKEN` (a config block is optional).
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session. Bare numeric IDs are ambiguous and rejected.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
@@ -57,7 +58,7 @@ Minimal config:
     - The `discord` tool is only exposed when the current channel is Discord.
 13. Native commands use isolated session keys (`agent:<agentId>:discord:slash:<userId>`) rather than the shared `main` session.
 
-Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
+Note: Name → id resolution uses guild member search and requires Server Members Intent; if the bot can’t search members, use ids or `<@id>` mentions.
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
 Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
@@ -174,6 +175,7 @@ Notes:
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`) also count as mentions for guild messages.
 - Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - If `channels` is present, any channel not listed is denied by default.
+- Threads inherit parent channel config (allowlist, `requireMention`, skills, prompts, etc.) unless you add the thread channel id explicitly.
 - Bot-authored messages are ignored by default; set `channels.discord.allowBots=true` to allow them (own messages remain filtered).
 - Warning: If you allow replies to other bots (`channels.discord.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.discord.guilds.*.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 
@@ -191,8 +193,11 @@ Notes:
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
 - **`requireMention: false` but still no replies**:
-  - `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or add a guild entry under `channels.discord.guilds` (optionally list channels under `channels.discord.guilds.<id>.channels` to restrict).
-  - `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
+- `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or add a guild entry under `channels.discord.guilds` (optionally list channels under `channels.discord.guilds.<id>.channels` to restrict).
+  - If you only set `DISCORD_BOT_TOKEN` and never create a `channels.discord` section, the runtime
+    defaults `groupPolicy` to `open`. Add `channels.discord.groupPolicy`,
+    `channels.defaults.groupPolicy`, or a guild/channel allowlist to lock it down.
+- `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
 
@@ -360,10 +365,15 @@ Allowlist matching notes:
 - Use `*` to allow any sender/channel.
 - When `guilds.<id>.channels` is present, channels not listed are denied by default.
 - When `guilds.<id>.channels` is omitted, all channels in the allowlisted guild are allowed.
+- To allow **no channels**, set `channels.discord.groupPolicy: "disabled"` (or keep an empty allowlist).
+- The configure wizard accepts `Guild/Channel` names (public + private) and resolves them to IDs when possible.
+- On startup, Clawdbot resolves channel/user names in allowlists to IDs (when the bot can search members)
+  and logs the mapping; unresolved entries are kept as typed.
 
 Native command notes:
 - The registered commands mirror Clawdbot’s chat commands.
 - Native commands honor the same allowlists as DMs/guild messages (`channels.discord.dm.allowFrom`, `channels.discord.guilds`, per-channel rules).
+- Slash commands may still be visible in Discord UI to users who aren’t allowlisted; Clawdbot enforces allowlists on execution and replies “not authorized”.
 
 ## Tool actions
 The agent can call `discord` with actions like:

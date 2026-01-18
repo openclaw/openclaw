@@ -1,19 +1,16 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 
-import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  resolveEmbeddedSessionLane,
-  waitForEmbeddedPiRunEnd,
-} from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
+import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  snapshotSessionOrigin,
   resolveMainSessionKey,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { clearCommandLane } from "../../process/command-queue.js";
 import {
   ErrorCodes,
   errorShape,
@@ -177,6 +174,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
+        origin: snapshotSessionOrigin(entry),
         lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
         skillsSnapshot: entry?.skillsSnapshot,
@@ -223,8 +221,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
     const existed = Boolean(entry);
-    clearCommandLane(resolveEmbeddedSessionLane(target.canonicalKey));
-    if (sessionId && isEmbeddedPiRunActive(sessionId)) {
+    const queueKeys = new Set<string>(target.storeKeys);
+    queueKeys.add(target.canonicalKey);
+    if (sessionId) queueKeys.add(sessionId);
+    clearSessionQueues([...queueKeys]);
+    stopSubagentsForRequester({ cfg, requesterSessionKey: target.canonicalKey });
+    if (sessionId) {
       abortEmbeddedPiRun(sessionId);
       const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
       if (!ended) {

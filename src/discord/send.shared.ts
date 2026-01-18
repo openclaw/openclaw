@@ -12,6 +12,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
+import { parseDiscordTarget } from "./targets.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -90,36 +91,13 @@ function normalizeReactionEmoji(raw: string) {
 }
 
 function parseRecipient(raw: string): DiscordRecipient {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  const target = parseDiscordTarget(raw, {
+    ambiguousMessage: `Ambiguous Discord recipient "${raw.trim()}". Use "user:${raw.trim()}" for DMs or "channel:${raw.trim()}" for channel messages.`,
+  });
+  if (!target) {
     throw new Error("Recipient is required for Discord sends");
   }
-  const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
-  if (mentionMatch) {
-    return { kind: "user", id: mentionMatch[1] };
-  }
-  if (trimmed.startsWith("user:")) {
-    return { kind: "user", id: trimmed.slice("user:".length) };
-  }
-  if (trimmed.startsWith("channel:")) {
-    return { kind: "channel", id: trimmed.slice("channel:".length) };
-  }
-  if (trimmed.startsWith("discord:")) {
-    return { kind: "user", id: trimmed.slice("discord:".length) };
-  }
-  if (trimmed.startsWith("@")) {
-    const candidate = trimmed.slice(1);
-    if (!/^\d+$/.test(candidate)) {
-      throw new Error("Discord DMs require a user id (use user:<id> or a <@id> mention)");
-    }
-    return { kind: "user", id: candidate };
-  }
-  if (/^\d+$/.test(trimmed)) {
-    throw new Error(
-      `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
-    );
-  }
-  return { kind: "channel", id: trimmed };
+  return { kind: target.kind, id: target.id };
 }
 
 function normalizeStickerIds(raw: string[]) {
@@ -252,6 +230,7 @@ async function sendDiscordText(
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
+  embeds?: unknown[],
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -265,7 +244,11 @@ async function sendDiscordText(
     const res = (await request(
       () =>
         rest.post(Routes.channelMessages(channelId), {
-          body: { content: chunks[0], message_reference: messageReference },
+          body: {
+            content: chunks[0],
+            message_reference: messageReference,
+            ...(embeds?.length ? { embeds } : {}),
+          },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
     )) as { id: string; channel_id: string };
@@ -280,6 +263,7 @@ async function sendDiscordText(
           body: {
             content: chunk,
             message_reference: isFirst ? messageReference : undefined,
+            ...(isFirst && embeds?.length ? { embeds } : {}),
           },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
@@ -300,6 +284,7 @@ async function sendDiscordMedia(
   replyTo: string | undefined,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
+  embeds?: unknown[],
 ) {
   const media = await loadWebMedia(mediaUrl);
   const chunks = text
@@ -316,6 +301,7 @@ async function sendDiscordMedia(
         body: {
           content: caption || undefined,
           message_reference: messageReference,
+          ...(embeds?.length ? { embeds } : {}),
           files: [
             {
               data: media.buffer,

@@ -73,7 +73,7 @@ describe("directive behavior", () => {
       ]);
 
       const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222" },
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {
@@ -105,7 +105,7 @@ describe("directive behavior", () => {
       ]);
 
       const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222" },
+        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
         {
           agents: {

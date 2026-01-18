@@ -1,5 +1,4 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { isRemoteEnvironment, loginAntigravityVpsAware } from "./antigravity-oauth.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -92,106 +91,6 @@ export async function applyAuthChoiceOAuth(
       );
     }
     return { config: nextConfig };
-  }
-
-  if (params.authChoice === "antigravity") {
-    let nextConfig = params.config;
-    let agentModelOverride: string | undefined;
-    const noteAgentModel = async (model: string) => {
-      if (!params.agentId) return;
-      await params.prompter.note(
-        `Default model set to ${model} for agent "${params.agentId}".`,
-        "Model configured",
-      );
-    };
-
-    const isRemote = isRemoteEnvironment();
-    await params.prompter.note(
-      isRemote
-        ? [
-            "You are running in a remote/VPS environment.",
-            "A URL will be shown for you to open in your LOCAL browser.",
-            "After signing in, copy the redirect URL and paste it back here.",
-          ].join("\n")
-        : [
-            "Browser will open for Google authentication.",
-            "Sign in with your Google account that has Antigravity access.",
-            "The callback will be captured automatically on localhost:51121.",
-          ].join("\n"),
-      "Google Antigravity OAuth",
-    );
-    const spin = params.prompter.progress("Starting OAuth flow…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAntigravityVpsAware(
-        async (url) => {
-          if (isRemote) {
-            spin.stop("OAuth URL ready");
-            params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-          } else {
-            spin.update("Complete sign-in in browser…");
-            await openUrl(url);
-            params.runtime.log(`Open: ${url}`);
-          }
-        },
-        (msg) => spin.update(msg),
-      );
-      spin.stop("Antigravity OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("google-antigravity", oauthCreds, params.agentDir);
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
-          provider: "google-antigravity",
-          mode: "oauth",
-        });
-        const modelKey = "google-antigravity/claude-opus-4-5-thinking";
-        nextConfig = {
-          ...nextConfig,
-          agents: {
-            ...nextConfig.agents,
-            defaults: {
-              ...nextConfig.agents?.defaults,
-              models: {
-                ...nextConfig.agents?.defaults?.models,
-                [modelKey]: nextConfig.agents?.defaults?.models?.[modelKey] ?? {},
-              },
-            },
-          },
-        };
-        if (params.setDefaultModel) {
-          const existingModel = nextConfig.agents?.defaults?.model;
-          nextConfig = {
-            ...nextConfig,
-            agents: {
-              ...nextConfig.agents,
-              defaults: {
-                ...nextConfig.agents?.defaults,
-                model: {
-                  ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
-                    ? {
-                        fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-                      }
-                    : undefined),
-                  primary: modelKey,
-                },
-              },
-            },
-          };
-          await params.prompter.note(`Default model set to ${modelKey}`, "Model configured");
-        } else {
-          agentModelOverride = modelKey;
-          await noteAgentModel(modelKey);
-        }
-      }
-    } catch (err) {
-      spin.stop("Antigravity OAuth failed");
-      params.runtime.error(String(err));
-      await params.prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
-    }
-    return { config: nextConfig, agentModelOverride };
   }
 
   return null;
