@@ -37,10 +37,11 @@ The hooks system allows you to:
 
 ### Bundled Hooks
 
-Clawdbot ships with three bundled hooks that are automatically discovered:
+Clawdbot ships with four bundled hooks that are automatically discovered:
 
 - **💾 session-memory**: Saves session context to your agent workspace (default `~/clawd/memory/`) when you issue `/new`
 - **📝 command-logger**: Logs all command events to `~/.clawdbot/logs/commands.log`
+- **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
 - **😈 soul-evil**: Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance
 
 List available hooks:
@@ -195,7 +196,7 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent',
+  type: 'command' | 'session' | 'agent' | 'gateway',
   action: string,              // e.g., 'new', 'reset', 'stop'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
@@ -227,6 +228,12 @@ Triggered when agent commands are issued:
 ### Agent Events
 
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
+
+### Gateway Events
+
+Triggered when the gateway starts:
+
+- **`gateway:startup`**: After channels start and hooks are loaded
 
 ### Future Events
 
@@ -542,6 +549,26 @@ clawdbot hooks enable soul-evil
 }
 ```
 
+### boot-md
+
+Runs `BOOT.md` when the gateway starts (after channels start).
+Internal hooks must be enabled for this to run.
+
+**Events**: `gateway:startup`
+
+**Requirements**: `workspace.dir` must be configured
+
+**What it does**:
+1. Reads `BOOT.md` from your workspace
+2. Runs the instructions via the agent runner
+3. Sends any requested outbound messages via the message tool
+
+**Enable**:
+
+```bash
+clawdbot hooks enable boot-md
+```
+
 ## Best Practices
 
 ### Keep Handlers Fast
@@ -614,6 +641,7 @@ The gateway logs hook loading at startup:
 ```
 Registered hook: session-memory -> command:new
 Registered hook: command-logger -> command
+Registered hook: boot-md -> gateway:startup
 ```
 
 ### Check Discovery

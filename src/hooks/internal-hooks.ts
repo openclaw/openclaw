@@ -8,7 +8,7 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 
-export type InternalHookEventType = "command" | "session" | "agent";
+export type InternalHookEventType = "command" | "session" | "agent" | "gateway";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -26,7 +26,7 @@ export type AgentBootstrapHookEvent = InternalHookEvent & {
 };
 
 export interface InternalHookEvent {
-  /** The type of event (command, session, agent, etc.) */
+  /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
   /** The specific action within the type (e.g., 'new', 'reset', 'stop') */
   action: string;

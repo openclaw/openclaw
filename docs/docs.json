@@ -658,6 +658,10 @@
       "destination": "/reference/templates/AGENTS"
     },
     {
+      "source": "/templates/BOOT",
+      "destination": "/reference/templates/BOOT"
+    },
+    {
       "source": "/templates/BOOTSTRAP",
       "destination": "/reference/templates/BOOTSTRAP"
     },
@@ -1051,6 +1055,7 @@
           "reference/RELEASING",
           "reference/AGENTS.default",
           "reference/templates/AGENTS",
+          "reference/templates/BOOT",
           "reference/templates/BOOTSTRAP",
           "reference/templates/HEARTBEAT",
           "reference/templates/IDENTITY",
