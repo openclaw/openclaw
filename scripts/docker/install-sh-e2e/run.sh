@@ -237,17 +237,20 @@ if (expectProvider && provider && provider !== expectProvider) {
 NODE
 }
 
-extract_first_text() {
+extract_matching_text() {
   local path="$1"
-  node - <<'NODE' "$path"
+  local expected="$2"
+  node - <<'NODE' "$path" "$expected"
 const fs = require("node:fs");
 const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const expected = String(process.argv[3] ?? "");
 const payloads =
   Array.isArray(p?.result?.payloads) ? p.result.payloads :
   Array.isArray(p?.payloads) ? p.payloads :
   [];
-const text = payloads.map((x) => String(x?.text ?? "").trim()).filter(Boolean)[0] ?? "";
-process.stdout.write(text);
+const texts = payloads.map((x) => String(x?.text ?? "").trim()).filter(Boolean);
+const match = texts.find((text) => text === expected);
+process.stdout.write(match ?? texts[0] ?? "");
 NODE
 }
 
@@ -453,7 +456,7 @@ run_profile() {
   assert_agent_json_has_text "$TURN1_JSON"
   assert_agent_json_ok "$TURN1_JSON" "$agent_model_provider"
   local reply1
-  reply1="$(extract_first_text "$TURN1_JSON" | tr -d '\r\n')"
+  reply1="$(extract_matching_text "$TURN1_JSON" "$PROOF_VALUE" | tr -d '\r\n')"
   if [[ "$reply1" != "$PROOF_VALUE" ]]; then
     echo "ERROR: agent did not read proof.txt correctly ($profile): $reply1" >&2
     exit 1
@@ -471,7 +474,7 @@ run_profile() {
     exit 1
   fi
   local reply2
-  reply2="$(extract_first_text "$TURN2_JSON" | tr -d '\r\n')"
+  reply2="$(extract_matching_text "$TURN2_JSON" "$PROOF_VALUE" | tr -d '\r\n')"
   if [[ "$reply2" != "$PROOF_VALUE" ]]; then
     echo "ERROR: agent did not read copy.txt correctly ($profile): $reply2" >&2
     exit 1
@@ -497,7 +500,7 @@ run_profile() {
     exit 1
   fi
   local reply4
-  reply4="$(extract_first_text "$TURN4_JSON")"
+  reply4="$(extract_matching_text "$TURN4_JSON" "LEFT=RED RIGHT=GREEN")"
   if [[ "$reply4" != "LEFT=RED RIGHT=GREEN" ]]; then
     echo "ERROR: agent reply did not contain expected marker ($profile): $reply4" >&2
     exit 1
