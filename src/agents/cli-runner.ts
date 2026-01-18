@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
-import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
@@ -32,7 +32,6 @@ import {
   resolveBootstrapMaxChars,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
-import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -73,12 +72,7 @@ export async function runCliAgent(params: {
     .filter(Boolean)
     .join("\n");
 
-  const bootstrapFiles = filterBootstrapFilesForSession(
-    await loadWorkspaceBootstrapFiles(workspaceDir),
-    params.sessionKey ?? params.sessionId,
-  );
-  const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+  const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,

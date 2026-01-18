@@ -9,11 +9,7 @@ import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
-import { applyBootstrapHookOverrides } from "../../agents/bootstrap-hooks.js";
-import {
-  filterBootstrapFilesForSession,
-  loadWorkspaceBootstrapFiles,
-} from "../../agents/workspace.js";
+import { resolveBootstrapFilesForRun } from "../../agents/bootstrap-files.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import type { ReplyPayload } from "../types.js";
@@ -56,17 +52,13 @@ async function resolveContextReport(
 
   const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const bootstrapFiles = filterBootstrapFilesForSession(
-    await loadWorkspaceBootstrapFiles(workspaceDir),
-    params.sessionKey,
-  );
-  const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
+  const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
+  const bootstrapFiles: WorkspaceBootstrapFile[] = hookAdjustedBootstrapFiles;
   const injectedFiles = buildBootstrapContextFiles(hookAdjustedBootstrapFiles, {
     maxChars: bootstrapMaxChars,
   });

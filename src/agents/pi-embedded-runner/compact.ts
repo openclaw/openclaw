@@ -16,7 +16,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import { applyBootstrapHookOverrides } from "../bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -44,7 +44,6 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
-import { filterBootstrapFilesForSession, loadWorkspaceBootstrapFiles } from "../workspace.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -179,12 +178,7 @@ export async function compactEmbeddedPiSession(params: {
           workspaceDir: effectiveWorkspace,
         });
 
-        const bootstrapFiles = filterBootstrapFilesForSession(
-          await loadWorkspaceBootstrapFiles(effectiveWorkspace),
-          params.sessionKey ?? params.sessionId,
-        );
-        const hookAdjustedBootstrapFiles = await applyBootstrapHookOverrides({
-          files: bootstrapFiles,
+        const hookAdjustedBootstrapFiles = await resolveBootstrapFilesForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
