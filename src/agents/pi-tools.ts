@@ -74,19 +74,18 @@ function isApplyPatchAllowedForModel(params: {
   });
 }
 
-function resolveExecConfig(cfg: ClawdbotConfig | undefined, agentId?: string | null) {
+function resolveExecConfig(cfg: ClawdbotConfig | undefined) {
   const globalExec = cfg?.tools?.exec;
-  const agentExec = cfg?.agents?.list?.find((entry) => entry.id === agentId)?.tools?.exec;
   return {
-    host: agentExec?.host ?? globalExec?.host,
-    security: agentExec?.security ?? globalExec?.security,
-    ask: agentExec?.ask ?? globalExec?.ask,
-    node: agentExec?.node ?? globalExec?.node,
-    backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
-    timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
-    cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
-    notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
-    applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
+    host: globalExec?.host,
+    security: globalExec?.security,
+    ask: globalExec?.ask,
+    node: globalExec?.node,
+    backgroundMs: globalExec?.backgroundMs,
+    timeoutSec: globalExec?.timeoutSec,
+    cleanupMs: globalExec?.cleanupMs,
+    notifyOnExit: globalExec?.notifyOnExit,
+    applyPatch: globalExec?.applyPatch,
   };
 }
 
@@ -162,7 +161,7 @@ export function createClawdbotCodingTools(options?: {
     sandbox?.tools,
     subagentPolicy,
   ]);
-  const execConfig = resolveExecConfig(options?.config, agentId);
+  const execConfig = resolveExecConfig(options?.config);
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = options?.workspaceDir ?? process.cwd();
@@ -199,8 +198,9 @@ export function createClawdbotCodingTools(options?: {
     }
     return [tool as AnyAgentTool];
   });
+  const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = createExecTool({
-    ...options?.exec,
+    ...execDefaults,
     host: options?.exec?.host ?? execConfig.host,
     security: options?.exec?.security ?? execConfig.security,
     ask: options?.exec?.ask ?? execConfig.ask,
@@ -229,7 +229,7 @@ export function createClawdbotCodingTools(options?: {
     label: "bash",
   } satisfies AnyAgentTool;
   const processTool = createProcessTool({
-    cleanupMs: options?.exec?.cleanupMs,
+    cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
     scopeKey,
   });
   const applyPatchTool =

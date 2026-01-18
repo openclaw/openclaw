@@ -7,14 +7,10 @@ import {
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { ReplyDispatchKind, ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
-import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherImpl } from "../../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import type { ClawdbotConfig } from "../../config/config.js";
-import type { GroupPolicyChannel } from "../../config/group-policy.js";
 import { resolveChannelGroupPolicy, resolveChannelGroupRequireMention } from "../../config/group-policy.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { shouldLogVerbose } from "../../globals.js";
@@ -28,7 +24,6 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 
 import type { PluginRuntime } from "./types.js";
 
@@ -57,41 +52,13 @@ export function createPluginRuntime(): PluginRuntime {
         hasControlCommand,
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher: async (params) => {
-          const dispatcherOptions = params.dispatcherOptions;
-          const deliver = async (payload: ReplyPayload, _info: { kind: ReplyDispatchKind }) => {
-            await dispatcherOptions.deliver(payload);
-          };
-          const onError = dispatcherOptions.onError
-            ? (err: unknown, info: { kind: ReplyDispatchKind }) => {
-                dispatcherOptions.onError?.(err, { kind: info.kind });
-              }
-            : undefined;
-
-          await dispatchReplyWithBufferedBlockDispatcherImpl({
-            ctx: params.ctx as FinalizedMsgContext,
-            cfg: params.cfg as ClawdbotConfig,
-            dispatcherOptions: {
-              deliver,
-              onError,
-            } satisfies ReplyDispatcherWithTypingOptions,
-          });
-        },
-        createReplyDispatcherWithTyping: (...args) =>
-          createReplyDispatcherWithTyping(args[0] as ReplyDispatcherWithTypingOptions),
+        dispatchReplyWithBufferedBlockDispatcher,
+        createReplyDispatcherWithTyping,
         resolveEffectiveMessagesConfig,
         resolveHumanDelayConfig,
       },
       routing: {
-        resolveAgentRoute: (params) => {
-          const resolved = resolveAgentRoute({
-            cfg: params.cfg as ClawdbotConfig,
-            channel: params.channel,
-            accountId: params.accountId,
-            peer: params.peer,
-          });
-          return { sessionKey: resolved.sessionKey, accountId: resolved.accountId };
-        },
+        resolveAgentRoute,
       },
       pairing: {
         buildPairingReply,
@@ -100,61 +67,19 @@ export function createPluginRuntime(): PluginRuntime {
       },
       media: {
         fetchRemoteMedia,
-        saveMediaBuffer: async (buffer, contentType, direction, maxBytes) => {
-          const saved = await saveMediaBuffer(
-            Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer),
-            contentType,
-            direction,
-            maxBytes,
-          );
-          return { path: saved.path, contentType: saved.contentType };
-        },
+        saveMediaBuffer,
       },
       mentions: {
         buildMentionRegexes,
         matchesMentionPatterns,
       },
       groups: {
-        resolveGroupPolicy: (cfg, channel, accountId, groupId) =>
-          resolveChannelGroupPolicy({
-            cfg,
-            channel: channel as GroupPolicyChannel,
-            accountId,
-            groupId,
-          }),
-        resolveRequireMention: (cfg, channel, accountId, groupId, override) =>
-          resolveChannelGroupRequireMention({
-            cfg,
-            channel: channel as GroupPolicyChannel,
-            accountId,
-            groupId,
-            requireMentionOverride: override,
-          }),
+        resolveGroupPolicy: resolveChannelGroupPolicy,
+        resolveRequireMention: resolveChannelGroupRequireMention,
       },
       debounce: {
-        createInboundDebouncer: (opts) => {
-          const keys = new Set<string>();
-          const debouncer = createInboundDebouncer({
-            debounceMs: opts.debounceMs,
-            buildKey: opts.buildKey,
-            shouldDebounce: opts.shouldDebounce ?? (() => true),
-            onFlush: opts.onFlush,
-            onError: opts.onError ? (err: unknown) => opts.onError?.(err) : undefined,
-          });
-          return {
-            push: (value) => {
-              const key = opts.buildKey(value);
-              if (key) keys.add(key);
-              void debouncer.enqueue(value);
-            },
-            flush: async () => {
-              const flushKeys = Array.from(keys);
-              keys.clear();
-              for (const key of flushKeys) await debouncer.flushKey(key);
-            },
-          };
-        },
-        resolveInboundDebounceMs: (cfg, channel) => resolveInboundDebounceMs({ cfg, channel }),
+        createInboundDebouncer,
+        resolveInboundDebounceMs,
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers,
@@ -175,7 +100,7 @@ export function createPluginRuntime(): PluginRuntime {
       },
     },
     state: {
-      resolveStateDir: () => resolveStateDir(),
+      resolveStateDir,
     },
   };
 }

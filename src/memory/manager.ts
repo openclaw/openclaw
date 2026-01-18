@@ -11,10 +11,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
-import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
+import { resolveUserPath } from "../utils.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
