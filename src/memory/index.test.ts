@@ -236,7 +236,12 @@ describe("memory index", () => {
             query: {
               minScore: 0,
               maxResults: 200,
-              hybrid: { enabled: true, vectorWeight: 0.99, textWeight: 0.01, candidateMultiplier: 10 },
+              hybrid: {
+                enabled: true,
+                vectorWeight: 0.99,
+                textWeight: 0.01,
+                candidateMultiplier: 10,
+              },
             },
           },
         },
@@ -284,7 +289,12 @@ describe("memory index", () => {
             query: {
               minScore: 0,
               maxResults: 200,
-              hybrid: { enabled: true, vectorWeight: 0.01, textWeight: 0.99, candidateMultiplier: 10 },
+              hybrid: {
+                enabled: true,
+                vectorWeight: 0.01,
+                textWeight: 0.99,
+                candidateMultiplier: 10,
+              },
             },
           },
         },
