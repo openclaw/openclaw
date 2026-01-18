@@ -49,7 +49,7 @@ async function resolveContextReport(
 
   const workspaceDir = params.workspaceDir;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const { contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
