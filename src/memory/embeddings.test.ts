@@ -108,7 +108,7 @@ describe("embedding provider remote overrides", () => {
     expect(headers.Authorization).toBe("Bearer provider-key");
   });
 
-  it("uses gemini embedContent endpoint with x-goog-api-key", async () => {
+  it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -119,26 +119,91 @@ describe("embedding provider remote overrides", () => {
     const { createEmbeddingProvider } = await import("./embeddings.js");
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
-      apiKey: "gemini-key",
+      apiKey: "provider-key",
     });
 
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          },
+        },
+      },
+    };
+
     const result = await createEmbeddingProvider({
-      config: {} as never,
+      config: cfg as never,
       provider: "gemini",
       remote: {
-        baseUrl: "https://gemini.example/v1beta",
+        apiKey: "gemini-key",
       },
-      model: "gemini-embedding-001",
+      model: "text-embedding-004",
       fallback: "openai",
     });
 
     await result.provider.embedQuery("hello");
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe("https://gemini.example/v1beta/models/gemini-embedding-001:embedContent");
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
+    );
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers["x-goog-api-key"]).toBe("gemini-key");
     expect(headers["Content-Type"]).toBe("application/json");
+  });
+});
+
+describe("embedding provider auto selection", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  it("prefers openai when a key resolves", async () => {
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "openai") {
+        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY" };
+      }
+      throw new Error(`No API key found for provider "${provider}".`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.provider.id).toBe("openai");
+  });
+
+  it("uses gemini when openai is missing", async () => {
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "openai") {
+        throw new Error('No API key found for provider "openai".');
+      }
+      if (provider === "google") {
+        return { apiKey: "gemini-key", source: "env: GEMINI_API_KEY" };
+      }
+      throw new Error(`Unexpected provider ${provider}`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.provider.id).toBe("gemini");
   });
 });
 
