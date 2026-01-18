@@ -141,7 +141,6 @@ describe("gateway wizard (e2e)", () => {
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
-    vi.resetModules();
 
     const wizardToken = `wiz-${randomUUID()}`;
     const port = await getFreeGatewayPort();
@@ -187,8 +186,8 @@ describe("gateway wizard (e2e)", () => {
       expect(didSendToken).toBe(true);
       expect(next.status).toBe("done");
 
-      const { CONFIG_PATH_CLAWDBOT } = await import("../config/config.js");
-      const parsed = JSON.parse(await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8"));
+      const { resolveConfigPath } = await import("../config/config.js");
+      const parsed = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8"));
       const token = (parsed as Record<string, unknown>)?.gateway as
         | Record<string, unknown>
         | undefined;

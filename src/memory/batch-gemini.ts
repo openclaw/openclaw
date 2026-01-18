@@ -183,7 +183,9 @@ async function fetchGeminiBatchStatus(params: {
   batchName: string;
 }): Promise<GeminiBatchStatus> {
   const baseUrl = getGeminiBaseUrl(params.gemini);
-  const name = params.batchName.startsWith("batches/") ? params.batchName : `batches/${params.batchName}`;
+  const name = params.batchName.startsWith("batches/")
+    ? params.batchName
+    : `batches/${params.batchName}`;
   const statusUrl = `${baseUrl}/${name}`;
   debugLog("memory embeddings: gemini batch status", { statusUrl });
   const res = await fetch(statusUrl, {
@@ -328,7 +330,11 @@ export async function runGeminiEmbeddingBatches(params: {
       requests: group.length,
     });
 
-    if (!params.wait && batchInfo.state && !["SUCCEEDED", "COMPLETED", "DONE"].includes(batchInfo.state)) {
+    if (
+      !params.wait &&
+      batchInfo.state &&
+      !["SUCCEEDED", "COMPLETED", "DONE"].includes(batchInfo.state)
+    ) {
       throw new Error(
         `gemini batch ${batchName} submitted; enable remote.batch.wait to await completion`,
       );
@@ -376,8 +382,7 @@ export async function runGeminiEmbeddingBatches(params: {
         errors.push(`${customId}: ${line.response.error.message}`);
         continue;
       }
-      const embedding =
-        line.embedding?.values ?? line.response?.embedding?.values ?? [];
+      const embedding = line.embedding?.values ?? line.response?.embedding?.values ?? [];
       if (embedding.length === 0) {
         errors.push(`${customId}: empty embedding`);
         continue;

@@ -58,7 +58,12 @@ async function resizeImageBase64IfNeeded(params: {
   const height = meta?.height;
   const overBytes = buf.byteLength > params.maxBytes;
   const hasDimensions = typeof width === "number" && typeof height === "number";
-  if (hasDimensions && !overBytes && width <= params.maxDimensionPx && height <= params.maxDimensionPx) {
+  if (
+    hasDimensions &&
+    !overBytes &&
+    width <= params.maxDimensionPx &&
+    height <= params.maxDimensionPx
+  ) {
     return {
       base64: params.base64,
       mimeType: params.mimeType,
@@ -67,7 +72,10 @@ async function resizeImageBase64IfNeeded(params: {
       height,
     };
   }
-  if (hasDimensions && (width > params.maxDimensionPx || height > params.maxDimensionPx || overBytes)) {
+  if (
+    hasDimensions &&
+    (width > params.maxDimensionPx || height > params.maxDimensionPx || overBytes)
+  ) {
     log.warn("Image exceeds limits; resizing", {
       label: params.label,
       width,

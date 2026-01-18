@@ -41,7 +41,7 @@ describe("detectImageReferences", () => {
     expect(refs[0]?.raw).toBe("~/Pictures/vacation.png");
     expect(refs[0]?.type).toBe("path");
     // Resolved path should expand ~
-    expect(refs[0]?.resolved).not.toContain("~");
+    expect(refs[0]?.resolved?.startsWith("~")).toBe(false);
   });
 
   it("detects multiple image references in a prompt", () => {

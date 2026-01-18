@@ -3,14 +3,8 @@ import fsSync from "node:fs";
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
-import {
-  createGeminiEmbeddingProvider,
-  type GeminiEmbeddingClient,
-} from "./embeddings-gemini.js";
-import {
-  createOpenAiEmbeddingProvider,
-  type OpenAiEmbeddingClient,
-} from "./embeddings-openai.js";
+import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
@@ -67,7 +61,6 @@ function isMissingApiKeyError(err: unknown): boolean {
   const message = formatError(err);
   return message.includes("No API key found for provider");
 }
-
 
 async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
@@ -188,9 +181,7 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        throw new Error(
-          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
-        );
+        throw new Error(`${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`);
       }
     }
     throw new Error(reason);

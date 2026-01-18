@@ -50,7 +50,6 @@ describe("onboard (non-interactive): remote gateway config", () => {
     process.env.HOME = tempHome;
     delete process.env.CLAWDBOT_STATE_DIR;
     delete process.env.CLAWDBOT_CONFIG_PATH;
-    vi.resetModules();
 
     const port = await getFreePort();
     const token = "tok_remote_123";
@@ -85,8 +84,8 @@ describe("onboard (non-interactive): remote gateway config", () => {
         runtime,
       );
 
-      const { CONFIG_PATH_CLAWDBOT } = await import("../config/config.js");
-      const cfg = JSON.parse(await fs.readFile(CONFIG_PATH_CLAWDBOT, "utf8")) as {
+      const { resolveConfigPath } = await import("../config/config.js");
+      const cfg = JSON.parse(await fs.readFile(resolveConfigPath(), "utf8")) as {
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
       };
 

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 
@@ -13,22 +13,6 @@ function makeTempDir() {
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
-}
-
-async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
-  const prev = process.env.CLAWDBOT_STATE_DIR;
-  process.env.CLAWDBOT_STATE_DIR = stateDir;
-  vi.resetModules();
-  try {
-    return await fn();
-  } finally {
-    if (prev === undefined) {
-      delete process.env.CLAWDBOT_STATE_DIR;
-    } else {
-      process.env.CLAWDBOT_STATE_DIR = prev;
-    }
-    vi.resetModules();
-  }
 }
 
 afterEach(() => {
@@ -72,10 +56,9 @@ describe("installHooksFromArchive", () => {
     const buffer = await zip.generateAsync({ type: "nodebuffer" });
     fs.writeFileSync(archivePath, buffer);
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installHooksFromArchive } = await import("./install.js");
-      return await installHooksFromArchive({ archivePath });
-    });
+    const hooksDir = path.join(stateDir, "hooks");
+    const { installHooksFromArchive } = await import("./install.js");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -121,10 +104,9 @@ describe("installHooksFromArchive", () => {
     );
     await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installHooksFromArchive } = await import("./install.js");
-      return await installHooksFromArchive({ archivePath });
-    });
+    const hooksDir = path.join(stateDir, "hooks");
+    const { installHooksFromArchive } = await import("./install.js");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -155,10 +137,9 @@ describe("installHooksFromPath", () => {
     );
     fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installHooksFromPath } = await import("./install.js");
-      return await installHooksFromPath({ path: hookDir });
-    });
+    const hooksDir = path.join(stateDir, "hooks");
+    const { installHooksFromPath } = await import("./install.js");
+    const result = await installHooksFromPath({ path: hookDir, hooksDir });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;

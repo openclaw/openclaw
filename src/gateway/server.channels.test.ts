@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -9,6 +11,125 @@ import {
 const loadConfigHelpers = async () => await import("../config/config.js");
 
 installGatewayTestHooks();
+
+const registryState = vi.hoisted(() => ({
+  registry: {
+    plugins: [],
+    tools: [],
+    channels: [],
+    providers: [],
+    gatewayHandlers: {},
+    httpHandlers: [],
+    cliRegistrars: [],
+    services: [],
+    diagnostics: [],
+  } as PluginRegistry,
+}));
+
+vi.mock("./server-plugins.js", async () => {
+  const { setActivePluginRegistry } = await import("../plugins/runtime.js");
+  return {
+    loadGatewayPlugins: (params: { baseMethods: string[] }) => {
+      setActivePluginRegistry(registryState.registry);
+      return {
+        pluginRegistry: registryState.registry,
+        gatewayMethods: params.baseMethods ?? [],
+      };
+    },
+  };
+});
+
+const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
+  plugins: [],
+  tools: [],
+  channels,
+  providers: [],
+  gatewayHandlers: {},
+  httpHandlers: [],
+  cliRegistrars: [],
+  services: [],
+  diagnostics: [],
+});
+
+const createStubChannelPlugin = (params: {
+  id: ChannelPlugin["id"];
+  label: string;
+  summary?: Record<string, unknown>;
+  logoutCleared?: boolean;
+}): ChannelPlugin => ({
+  id: params.id,
+  meta: {
+    id: params.id,
+    label: params.label,
+    selectionLabel: params.label,
+    docsPath: `/channels/${params.id}`,
+    blurb: "test stub.",
+  },
+  capabilities: { chatTypes: ["direct"] },
+  config: {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => ({}),
+    isConfigured: async () => false,
+  },
+  status: {
+    buildChannelSummary: async () => ({
+      configured: false,
+      ...(params.summary ?? {}),
+    }),
+  },
+  gateway: {
+    logoutAccount: async () => ({
+      cleared: params.logoutCleared ?? false,
+      envToken: false,
+    }),
+  },
+});
+
+const telegramPlugin: ChannelPlugin = {
+  ...createStubChannelPlugin({
+    id: "telegram",
+    label: "Telegram",
+    summary: { tokenSource: "none", lastProbeAt: null },
+    logoutCleared: true,
+  }),
+  gateway: {
+    logoutAccount: async ({ cfg }) => {
+      const { writeConfigFile } = await import("../config/config.js");
+      const nextTelegram = cfg.channels?.telegram ? { ...cfg.channels.telegram } : {};
+      delete nextTelegram.botToken;
+      await writeConfigFile({
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          telegram: nextTelegram,
+        },
+      });
+      return { cleared: true, envToken: false, loggedOut: true };
+    },
+  },
+};
+
+const defaultRegistry = createRegistry([
+  {
+    pluginId: "whatsapp",
+    source: "test",
+    plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
+  },
+  {
+    pluginId: "telegram",
+    source: "test",
+    plugin: telegramPlugin,
+  },
+  {
+    pluginId: "signal",
+    source: "test",
+    plugin: createStubChannelPlugin({
+      id: "signal",
+      label: "Signal",
+      summary: { lastProbeAt: null },
+    }),
+  },
+]);
 
 const servers: Array<Awaited<ReturnType<typeof startServerWithClient>>> = [];
 
@@ -28,6 +149,7 @@ afterEach(async () => {
 describe("gateway server channels", () => {
   test("channels.status returns snapshot without probe", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    registryState.registry = defaultRegistry;
     const result = await startServerWithClient();
     servers.push(result);
     const { ws } = result;
@@ -59,6 +181,7 @@ describe("gateway server channels", () => {
   });
 
   test("channels.logout reports no session when missing", async () => {
+    registryState.registry = defaultRegistry;
     const result = await startServerWithClient();
     servers.push(result);
     const { ws } = result;
@@ -74,6 +197,7 @@ describe("gateway server channels", () => {
 
   test("channels.logout clears telegram bot token from config", async () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
+    registryState.registry = defaultRegistry;
     const { readConfigFileSnapshot, writeConfigFile } = await loadConfigHelpers();
     await writeConfigFile({
       channels: {

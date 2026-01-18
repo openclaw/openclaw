@@ -1,6 +1,9 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort } from "../config/config.js";
-import { resolveGatewayLaunchAgentLabel, resolveNodeLaunchAgentLabel } from "../daemon/constants.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveNodeLaunchAgentLabel,
+} from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import {
   isLaunchAgentListed,
@@ -44,10 +47,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   const plistExists = await launchAgentPlistExists(params.env);
   if (!plistExists) return false;
 
-  note(
-    "LaunchAgent is listed but not loaded in launchd.",
-    `${params.title} LaunchAgent`,
-  );
+  note("LaunchAgent is listed but not loaded in launchd.", `${params.title} LaunchAgent`);
 
   const shouldFix = await params.prompter.confirmSkipInNonInteractive({
     message: `Repair ${params.title} LaunchAgent bootstrap now?`,

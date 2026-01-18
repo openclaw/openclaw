@@ -27,9 +27,10 @@ describe("runBootOnce", () => {
 
   it("skips when BOOT.md is missing", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-boot-"));
-    await expect(
-      runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir }),
-    ).resolves.toEqual({ status: "skipped", reason: "missing" });
+    await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+      status: "skipped",
+      reason: "missing",
+    });
     expect(agentCommand).not.toHaveBeenCalled();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
@@ -37,9 +38,10 @@ describe("runBootOnce", () => {
   it("skips when BOOT.md is empty", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-boot-"));
     await fs.writeFile(path.join(workspaceDir, "BOOT.md"), "   \n", "utf-8");
-    await expect(
-      runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir }),
-    ).resolves.toEqual({ status: "skipped", reason: "empty" });
+    await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+      status: "skipped",
+      reason: "empty",
+    });
     expect(agentCommand).not.toHaveBeenCalled();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
@@ -50,9 +52,9 @@ describe("runBootOnce", () => {
     await fs.writeFile(path.join(workspaceDir, "BOOT.md"), content, "utf-8");
 
     agentCommand.mockResolvedValue(undefined);
-    await expect(
-      runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir }),
-    ).resolves.toEqual({ status: "ran" });
+    await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+      status: "ran",
+    });
 
     expect(agentCommand).toHaveBeenCalledTimes(1);
     const call = agentCommand.mock.calls[0]?.[0];

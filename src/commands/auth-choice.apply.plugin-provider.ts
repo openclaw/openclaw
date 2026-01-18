@@ -176,10 +176,7 @@ export async function applyAuthChoicePluginProvider(
   if (result.defaultModel) {
     if (params.setDefaultModel) {
       nextConfig = applyDefaultModel(nextConfig, result.defaultModel);
-      await params.prompter.note(
-        `Default model set to ${result.defaultModel}`,
-        "Model configured",
-      );
+      await params.prompter.note(`Default model set to ${result.defaultModel}`, "Model configured");
     } else if (params.agentId) {
       agentModelOverride = result.defaultModel;
       await params.prompter.note(

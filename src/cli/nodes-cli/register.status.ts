@@ -116,12 +116,14 @@ export function registerNodesStatusCommands(nodes: Command) {
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
-          const versions = formatNodeVersions(obj as {
-            platform?: string;
-            version?: string;
-            coreVersion?: string;
-            uiVersion?: string;
-          });
+          const versions = formatNodeVersions(
+            obj as {
+              platform?: string;
+              version?: string;
+              coreVersion?: string;
+              uiVersion?: string;
+            },
+          );
 
           const parts: string[] = ["Node:", displayName, nodeId];
           if (ip) parts.push(ip);

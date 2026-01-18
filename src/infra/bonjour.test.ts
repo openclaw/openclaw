@@ -1,6 +1,8 @@
 import os from "node:os";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import * as logging from "../logging.js";
 
 const createService = vi.fn();
 const shutdown = vi.fn();
@@ -20,14 +22,6 @@ vi.mock("../logger.js", () => {
     logInfo: vi.fn(),
     logError: vi.fn(),
     logSuccess: vi.fn(),
-  };
-});
-
-vi.mock("../logging.js", async () => {
-  const actual = await vi.importActual<typeof import("../logging.js")>("../logging.js");
-  return {
-    ...actual,
-    getLogger: () => ({ info: (...args: unknown[]) => getLoggerInfo(...args) }),
   };
 });
 
@@ -59,6 +53,12 @@ describe("gateway bonjour advertiser", () => {
   };
 
   const prevEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.spyOn(logging, "getLogger").mockReturnValue({
+      info: (...args: unknown[]) => getLoggerInfo(...args),
+    });
+  });
 
   afterEach(() => {
     for (const key of Object.keys(process.env)) {

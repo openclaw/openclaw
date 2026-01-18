@@ -87,19 +87,13 @@ describe("gateway SIGTERM", () => {
     const out: string[] = [];
     const err: string[] = [];
 
+    const bunBin = process.env.BUN_INSTALL
+      ? path.join(process.env.BUN_INSTALL, "bin", "bun")
+      : "bun";
+
     child = spawn(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "src/index.ts",
-        "gateway",
-        "--port",
-        String(port),
-        "--bind",
-        "loopback",
-        "--allow-unconfigured",
-      ],
+      bunBin,
+      ["src/entry.ts", "gateway", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
       {
         cwd: process.cwd(),
         env: {

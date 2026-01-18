@@ -4,29 +4,30 @@ import fs from "node:fs/promises";
 import { request } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 
-const MEDIA_DIR = path.join(CONFIG_DIR, "media");
+const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
 export function getMediaDir() {
-  return MEDIA_DIR;
+  return resolveMediaDir();
 }
 
 export async function ensureMediaDir() {
-  await fs.mkdir(MEDIA_DIR, { recursive: true });
-  return MEDIA_DIR;
+  const mediaDir = resolveMediaDir();
+  await fs.mkdir(mediaDir, { recursive: true });
+  return mediaDir;
 }
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
-  await ensureMediaDir();
-  const entries = await fs.readdir(MEDIA_DIR).catch(() => []);
+  const mediaDir = await ensureMediaDir();
+  const entries = await fs.readdir(mediaDir).catch(() => []);
   const now = Date.now();
   await Promise.all(
     entries.map(async (file) => {
-      const full = path.join(MEDIA_DIR, file);
+      const full = path.join(mediaDir, file);
       const stat = await fs.stat(full).catch(() => null);
       if (!stat) return;
       if (now - stat.mtimeMs > ttlMs) {
@@ -110,7 +111,8 @@ export async function saveMediaSource(
   headers?: Record<string, string>,
   subdir = "",
 ): Promise<SavedMedia> {
-  const dir = subdir ? path.join(MEDIA_DIR, subdir) : MEDIA_DIR;
+  const baseDir = resolveMediaDir();
+  const dir = subdir ? path.join(baseDir, subdir) : baseDir;
   await fs.mkdir(dir, { recursive: true });
   await cleanOldMedia();
   const baseId = crypto.randomUUID();
@@ -154,7 +156,7 @@ export async function saveMediaBuffer(
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
   }
-  const dir = path.join(MEDIA_DIR, subdir);
+  const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);

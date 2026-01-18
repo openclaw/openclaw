@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 
@@ -77,22 +77,6 @@ function packToArchive({
   return dest;
 }
 
-async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
-  const prev = process.env.CLAWDBOT_STATE_DIR;
-  process.env.CLAWDBOT_STATE_DIR = stateDir;
-  vi.resetModules();
-  try {
-    return await fn();
-  } finally {
-    if (prev === undefined) {
-      delete process.env.CLAWDBOT_STATE_DIR;
-    } else {
-      process.env.CLAWDBOT_STATE_DIR = prev;
-    }
-    vi.resetModules();
-  }
-}
-
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     try {
@@ -126,10 +110,9 @@ describe("installPluginFromArchive", () => {
       outName: "plugin.tgz",
     });
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installPluginFromArchive } = await import("./install.js");
-      return await installPluginFromArchive({ archivePath });
-    });
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const result = await installPluginFromArchive({ archivePath, extensionsDir });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.pluginId).toBe("voice-call");
@@ -160,12 +143,10 @@ describe("installPluginFromArchive", () => {
       outName: "plugin.tgz",
     });
 
-    const { first, second } = await withStateDir(stateDir, async () => {
-      const { installPluginFromArchive } = await import("./install.js");
-      const first = await installPluginFromArchive({ archivePath });
-      const second = await installPluginFromArchive({ archivePath });
-      return { first, second };
-    });
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const first = await installPluginFromArchive({ archivePath, extensionsDir });
+    const second = await installPluginFromArchive({ archivePath, extensionsDir });
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(false);
@@ -191,10 +172,9 @@ describe("installPluginFromArchive", () => {
     const buffer = await zip.generateAsync({ type: "nodebuffer" });
     fs.writeFileSync(archivePath, buffer);
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installPluginFromArchive } = await import("./install.js");
-      return await installPluginFromArchive({ archivePath });
-    });
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const result = await installPluginFromArchive({ archivePath, extensionsDir });
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -243,18 +223,23 @@ describe("installPluginFromArchive", () => {
       });
     })();
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installPluginFromArchive } = await import("./install.js");
-      const first = await installPluginFromArchive({ archivePath: archiveV1 });
-      const second = await installPluginFromArchive({ archivePath: archiveV2, mode: "update" });
-      return { first, second };
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const first = await installPluginFromArchive({
+      archivePath: archiveV1,
+      extensionsDir,
+    });
+    const second = await installPluginFromArchive({
+      archivePath: archiveV2,
+      extensionsDir,
+      mode: "update",
     });
 
-    expect(result.first.ok).toBe(true);
-    expect(result.second.ok).toBe(true);
-    if (!result.second.ok) return;
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
     const manifest = JSON.parse(
-      fs.readFileSync(path.join(result.second.targetDir, "package.json"), "utf-8"),
+      fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
     expect(manifest.version).toBe("0.0.2");
   });
@@ -276,10 +261,9 @@ describe("installPluginFromArchive", () => {
       outName: "bad.tgz",
     });
 
-    const result = await withStateDir(stateDir, async () => {
-      const { installPluginFromArchive } = await import("./install.js");
-      return await installPluginFromArchive({ archivePath });
-    });
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const result = await installPluginFromArchive({ archivePath, extensionsDir });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toContain("clawdbot.extensions");

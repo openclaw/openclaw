@@ -697,9 +697,7 @@ export class MemoryIndexManager {
 
   private async removeIndexFiles(basePath: string): Promise<void> {
     const suffixes = ["", "-wal", "-shm"];
-    await Promise.all(
-      suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })),
-    );
+    await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
   }
 
   private ensureSchema() {
@@ -1064,8 +1062,8 @@ export class MemoryIndexManager {
     const batch = this.settings.remote?.batch;
     const enabled = Boolean(
       batch?.enabled &&
-        ((this.openAi && this.provider.id === "openai") ||
-          (this.gemini && this.provider.id === "gemini")),
+      ((this.openAi && this.provider.id === "openai") ||
+        (this.gemini && this.provider.id === "gemini")),
     );
     return {
       enabled,

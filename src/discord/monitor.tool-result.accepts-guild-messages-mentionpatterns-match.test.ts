@@ -3,6 +3,8 @@ import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
+
 const sendMock = vi.fn();
 const reactMock = vi.fn();
 const updateLastRouteMock = vi.fn();
@@ -42,7 +44,7 @@ beforeEach(() => {
   });
   readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-  vi.resetModules();
+  __resetDiscordChannelInfoCacheForTest();
 });
 
 describe("discord tool result dispatch", () => {

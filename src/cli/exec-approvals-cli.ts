@@ -151,15 +151,13 @@ export function registerExecApprovalsCli(program: Command) {
     });
   nodesCallOpts(setCmd);
 
-  const allowlist = approvals
-    .command("allowlist")
-    .description("Edit the per-agent allowlist");
+  const allowlist = approvals.command("allowlist").description("Edit the per-agent allowlist");
 
   const allowlistAdd = allowlist
     .command("add <pattern>")
     .description("Add a glob pattern to an allowlist")
     .option("--node <node>", "Target node id/name/IP (defaults to gateway)")
-    .option("--agent <id>", "Agent id (defaults to \"default\")")
+    .option("--agent <id>", 'Agent id (defaults to "default")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       const trimmed = pattern.trim();
       if (!trimmed) {
@@ -196,7 +194,7 @@ export function registerExecApprovalsCli(program: Command) {
     .command("remove <pattern>")
     .description("Remove a glob pattern from an allowlist")
     .option("--node <node>", "Target node id/name/IP (defaults to gateway)")
-    .option("--agent <id>", "Agent id (defaults to \"default\")")
+    .option("--agent <id>", 'Agent id (defaults to "default")')
     .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
       const trimmed = pattern.trim();
       if (!trimmed) {

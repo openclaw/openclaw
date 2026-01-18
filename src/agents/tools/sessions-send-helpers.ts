@@ -1,4 +1,8 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizeAnyChannelId,
+} from "../../channels/plugins/index.js";
+import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
@@ -21,7 +25,8 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
   const id = rest.join(":").trim();
   if (!id) return null;
   if (!channelRaw) return null;
-  const normalizedChannel = normalizeChannelId(channelRaw);
+  const normalizedChannel =
+    normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
   const channel = normalizedChannel ?? channelRaw.toLowerCase();
   const kindTarget = (() => {
     if (!normalizedChannel) return id;
