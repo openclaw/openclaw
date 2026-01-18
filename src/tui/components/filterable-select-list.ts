@@ -15,7 +15,6 @@ export interface FilterableSelectItem extends SelectItem {
 
 export interface FilterableSelectListTheme extends SelectListTheme {
   filterLabel: (text: string) => string;
-  filterInput: (text: string) => string;
 }
 
 /**
@@ -26,6 +25,7 @@ export class FilterableSelectList implements Component {
   private input: Input;
   private selectList: SelectList;
   private allItems: FilterableSelectItem[];
+  private maxVisible: number;
   private theme: FilterableSelectListTheme;
   private filterText = "";
 
@@ -38,31 +38,11 @@ export class FilterableSelectList implements Component {
     theme: FilterableSelectListTheme,
   ) {
     this.allItems = items;
+    this.maxVisible = maxVisible;
     this.theme = theme;
 
     this.input = new Input();
     this.selectList = new SelectList(items, maxVisible, theme);
-
-    // Wire up input to filter the list
-    this.input.onSubmit = () => {
-      const selected = this.selectList.getSelectedItem();
-      if (selected) {
-        this.onSelect?.(selected);
-      }
-    };
-
-    this.input.onEscape = () => {
-      if (this.filterText) {
-        // First escape clears filter
-        this.filterText = "";
-        this.input.setValue("");
-        this.selectList.setFilter("");
-        this.selectList.setSelectedIndex(0);
-      } else {
-        // Second escape cancels
-        this.onCancel?.();
-      }
-    };
   }
 
   private getSearchText(item: FilterableSelectItem): string {
@@ -75,29 +55,14 @@ export class FilterableSelectList implements Component {
   private applyFilter(): void {
     const query = this.filterText.toLowerCase().trim();
     if (!query) {
-      // Reset to all items
-      this.selectList = new SelectList(
-        this.allItems,
-        this.selectList["maxVisible"],
-        this.theme,
-      );
-      this.selectList.onSelect = this.onSelect;
-      this.selectList.onCancel = this.onCancel;
+      this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
       return;
     }
 
-    // Use fuzzy filter from pi-tui
     const filtered = fuzzyFilter(this.allItems, query, (item) =>
       this.getSearchText(item),
     );
-
-    this.selectList = new SelectList(
-      filtered,
-      this.selectList["maxVisible"],
-      this.theme,
-    );
-    this.selectList.onSelect = this.onSelect;
-    this.selectList.onCancel = this.onCancel;
+    this.selectList = new SelectList(filtered, this.maxVisible, this.theme);
   }
 
   invalidate(): void {
