@@ -14,11 +14,18 @@ export type EmbeddedSubscribeLogger = {
   warn: (message: string) => void;
 };
 
+export type ToolErrorSummary = {
+  toolName: string;
+  meta?: string;
+  error?: string;
+};
+
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, string | undefined>;
   toolSummaryById: Set<string>;
+  lastToolError?: ToolErrorSummary;
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;
