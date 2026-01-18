@@ -78,7 +78,9 @@ export function resolveSessionResetPolicy(params: {
     typeReset?.mode ??
     baseReset?.mode ??
     (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
-  const atHour = normalizeResetAtHour(typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR);
+  const atHour = normalizeResetAtHour(
+    typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
+  );
   const idleMinutesRaw =
     params.idleMinutesOverride ??
     typeReset?.idleMinutes ??
