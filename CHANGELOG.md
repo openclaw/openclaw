@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 - Plugins: add exclusive plugin slots with a dedicated memory slot selector.
 - Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
 - Docs: document plugin slots and memory plugin behavior.
+- Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
 - Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
 
 ## 2026.1.17-5
