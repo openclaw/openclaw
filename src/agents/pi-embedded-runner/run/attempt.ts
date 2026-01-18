@@ -64,7 +64,7 @@ import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../../date-time.js";
-import { mapThinkingLevel, resolveExecToolDefaults } from "../utils.js";
+import { mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -133,7 +133,7 @@ export async function runEmbeddedAttempt(
 
     const toolsRaw = createClawdbotCodingTools({
       exec: {
-        ...resolveExecToolDefaults(params.config),
+        ...(params.execOverrides ?? {}),
         elevated: params.bashElevated,
       },
       sandbox,

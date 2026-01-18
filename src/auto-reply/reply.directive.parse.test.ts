@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { extractStatusDirective } from "./reply/directives.js";
 import {
   extractElevatedDirective,
+  extractExecDirective,
   extractQueueDirective,
   extractReasoningDirective,
   extractReplyToTag,
@@ -110,6 +111,26 @@ describe("directive parsing", () => {
     expect(res.elevatedLevel).toBeUndefined();
     expect(res.rawLevel).toBeUndefined();
     expect(res.cleaned).toBe("");
+  });
+
+  it("matches exec directive with options", () => {
+    const res = extractExecDirective(
+      "please /exec host=gateway security=allowlist ask=on-miss node=mac-mini now",
+    );
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBe("gateway");
+    expect(res.execSecurity).toBe("allowlist");
+    expect(res.execAsk).toBe("on-miss");
+    expect(res.execNode).toBe("mac-mini");
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("captures invalid exec host values", () => {
+    const res = extractExecDirective("/exec host=spaceship");
+    expect(res.hasDirective).toBe(true);
+    expect(res.execHost).toBeUndefined();
+    expect(res.rawExecHost).toBe("spaceship");
+    expect(res.invalidHost).toBe(true);
   });
 
   it("matches queue directive", () => {
