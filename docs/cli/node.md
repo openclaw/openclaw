@@ -10,6 +10,19 @@ read_when:
 Run a **headless node host** that connects to the Gateway bridge and exposes
 `system.run` / `system.which` on this machine.
 
+## Why use a node host?
+
+Use a node host when you want agents to **run commands on other machines** in your
+network without installing a full macOS companion app there.
+
+Common use cases:
+- Run commands on remote Linux/Windows boxes (build servers, lab machines, NAS).
+- Keep exec **sandboxed** on the gateway, but delegate approved runs to other hosts.
+- Provide a lightweight, headless execution target for automation or CI nodes.
+
+Execution is still guarded by **exec approvals** and per‑agent allowlists on the
+node host, so you can keep command access scoped and explicit.
+
 ## Start (foreground)
 
 ```bash
