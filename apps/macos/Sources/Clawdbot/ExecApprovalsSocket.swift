@@ -28,7 +28,7 @@ private struct ExecApprovalSocketDecision: Codable {
     var decision: ExecApprovalDecision
 }
 
-private struct ExecHostSocketRequest: Codable {
+fileprivate struct ExecHostSocketRequest: Codable {
     var type: String
     var id: String
     var nonce: String
@@ -37,7 +37,7 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-private struct ExecHostRequest: Codable {
+fileprivate struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
     var cwd: String?
@@ -48,7 +48,7 @@ private struct ExecHostRequest: Codable {
     var sessionKey: String?
 }
 
-private struct ExecHostRunResult: Codable {
+fileprivate struct ExecHostRunResult: Codable {
     var exitCode: Int?
     var timedOut: Bool
     var success: Bool
@@ -57,13 +57,13 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
-private struct ExecHostError: Codable {
+fileprivate struct ExecHostError: Codable {
     var code: String
     var message: String
     var reason: String?
 }
 
-private struct ExecHostResponse: Codable {
+fileprivate struct ExecHostResponse: Codable {
     var type: String
     var id: String
     var ok: Bool
@@ -254,7 +254,7 @@ enum ExecApprovalsPromptPresenter {
 }
 
 @MainActor
-enum ExecHostExecutor {
+fileprivate enum ExecHostExecutor {
     private static let blockedEnvKeys: Set<String> = [
         "PATH",
         "NODE_OPTIONS",
