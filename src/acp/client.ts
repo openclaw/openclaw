@@ -101,8 +101,9 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       },
       requestPermission: async (params: RequestPermissionRequest) => {
         console.log("\n[permission requested]", params.toolCall?.title ?? "tool");
-        const allowOnce = params.options.find((option) => option.kind === "allow_once");
-        const fallback = params.options[0];
+        const options = params.options ?? [];
+        const allowOnce = options.find((option) => option.kind === "allow_once");
+        const fallback = options[0];
         return {
           outcome: {
             outcome: "selected",
