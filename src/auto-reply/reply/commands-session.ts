@@ -6,7 +6,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../infra/restart.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeUsageDisplay } from "../thinking.js";
+import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
 import {
   formatAbortReplyText,
   isAbortTrigger,
@@ -151,12 +151,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const currentRaw =
     params.sessionEntry?.responseUsage ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
-  const current =
-    currentRaw === "full"
-      ? "full"
-      : currentRaw === "tokens" || currentRaw === "on"
-        ? "tokens"
-        : "off";
+  const current = resolveResponseUsageMode(currentRaw);
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (params.sessionEntry && params.sessionStore && params.sessionKey) {
