@@ -120,6 +120,35 @@ export type ToolPolicyConfig = {
   profile?: ToolProfileId;
 };
 
+export type ExecToolConfig = {
+  /** Exec host routing (default: sandbox). */
+  host?: "sandbox" | "gateway" | "node";
+  /** Exec security mode (default: deny). */
+  security?: "deny" | "allowlist" | "full";
+  /** Exec ask mode (default: on-miss). */
+  ask?: "off" | "on-miss" | "always";
+  /** Default node binding for exec.host=node (node id/name). */
+  node?: string;
+  /** Default time (ms) before an exec command auto-backgrounds. */
+  backgroundMs?: number;
+  /** Default timeout (seconds) before auto-killing exec commands. */
+  timeoutSec?: number;
+  /** How long to keep finished sessions in memory (ms). */
+  cleanupMs?: number;
+  /** Emit a system event and heartbeat when a backgrounded exec exits. */
+  notifyOnExit?: boolean;
+  /** apply_patch subtool configuration (experimental). */
+  applyPatch?: {
+    /** Enable apply_patch for OpenAI models (default: false). */
+    enabled?: boolean;
+    /**
+     * Optional allowlist of model ids that can use apply_patch.
+     * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+     */
+    allowModels?: string[];
+  };
+};
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -134,6 +163,8 @@ export type AgentToolsConfig = {
     /** Approved senders for /elevated (per-provider allowlists). */
     allowFrom?: AgentElevatedAllowFromConfig;
   };
+  /** Exec tool defaults for this agent. */
+  exec?: ExecToolConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -338,34 +369,7 @@ export type ToolsConfig = {
     allowFrom?: AgentElevatedAllowFromConfig;
   };
   /** Exec tool defaults. */
-  exec?: {
-    /** Exec host routing (default: sandbox). */
-    host?: "sandbox" | "gateway" | "node";
-    /** Exec security mode (default: deny). */
-    security?: "deny" | "allowlist" | "full";
-    /** Exec ask mode (default: on-miss). */
-    ask?: "off" | "on-miss" | "always";
-    /** Default node binding for exec.host=node (node id/name). */
-    node?: string;
-    /** Default time (ms) before an exec command auto-backgrounds. */
-    backgroundMs?: number;
-    /** Default timeout (seconds) before auto-killing exec commands. */
-    timeoutSec?: number;
-    /** How long to keep finished sessions in memory (ms). */
-    cleanupMs?: number;
-    /** Emit a system event and heartbeat when a backgrounded exec exits. */
-    notifyOnExit?: boolean;
-    /** apply_patch subtool configuration (experimental). */
-    applyPatch?: {
-      /** Enable apply_patch for OpenAI models (default: false). */
-      enabled?: boolean;
-      /**
-       * Optional allowlist of model ids that can use apply_patch.
-       * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
-       */
-      allowModels?: string[];
-    };
-  };
+  exec?: ExecToolConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */

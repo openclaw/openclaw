@@ -213,7 +213,6 @@ export function createClawdbotCodingTools(options?: {
     messageProvider: options?.messageProvider,
     backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
     timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
-    cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     sandbox: sandbox
       ? {

@@ -185,7 +185,7 @@ function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
   if (!trimmed) return null;
   const first = trimmed[0];
-  if (first === "\"" || first === "'") {
+  if (first === '"' || first === "'") {
     const end = trimmed.indexOf(first, 1);
     if (end > 1) return trimmed.slice(1, end);
     return trimmed.slice(1);

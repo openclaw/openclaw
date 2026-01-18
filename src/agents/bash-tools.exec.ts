@@ -343,10 +343,7 @@ export function createExecTool(
 
       const configuredSecurity = defaults?.security ?? "deny";
       const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(
-        configuredSecurity,
-        requestedSecurity ?? configuredSecurity,
-      );
+      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested) {
         security = "full";
       }
