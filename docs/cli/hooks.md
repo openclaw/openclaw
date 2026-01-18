@@ -7,7 +7,7 @@ read_when:
 
 # `clawdbot hooks`
 
-Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, etc.).
+Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
 
 Related:
 - Hooks: [Hooks](/hooks)
@@ -29,9 +29,10 @@ List all discovered hooks from workspace, managed, and bundled directories.
 **Example output:**
 
 ```
-Hooks (3/3 ready)
+Hooks (4/4 ready)
 
 Ready:
+  🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📝 command-logger ✓ - Log all command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new command is issued
   😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
@@ -107,8 +108,8 @@ Show summary of hook eligibility status (how many are ready vs. not ready).
 ```
 Hooks Status
 
-Total hooks: 2
-Ready: 2
+Total hooks: 4
+Ready: 4
 Not ready: 0
 ```
 
@@ -273,3 +274,17 @@ clawdbot hooks enable soul-evil
 ```
 
 **See:** [SOUL Evil Hook](/hooks/soul-evil)
+
+### boot-md
+
+Runs `BOOT.md` when the gateway starts (after channels start).
+
+**Events**: `gateway:startup`
+
+**Enable**:
+
+```bash
+clawdbot hooks enable boot-md
+```
+
+**See:** [boot-md documentation](/hooks#boot-md)
