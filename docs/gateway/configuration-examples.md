@@ -261,10 +261,9 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
         ackMaxChars: 300
       },
       memorySearch: {
-        provider: "openai",
-        model: "text-embedding-004",
+        provider: "gemini",
+        model: "gemini-embedding-001",
         remote: {
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
           apiKey: "${GEMINI_API_KEY}"
         }
       },

@@ -89,7 +89,26 @@ OAuth only covers chat/completions and does **not** satisfy embeddings for
 memory search. When using a custom OpenAI-compatible endpoint, set
 `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
-If you want to use a **custom OpenAI-compatible endpoint** (like Gemini, OpenRouter, or a proxy),
+If you want to use **Gemini embeddings** directly, set the provider to `gemini`:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "gemini",
+      model: "gemini-embedding-001", // default
+      remote: {
+        apiKey: "${GEMINI_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Gemini uses `GEMINI_API_KEY` (or `models.providers.google.apiKey`). Override
+`memorySearch.remote.baseUrl` to point at a custom Gemini-compatible endpoint.
+
+If you want to use a **custom OpenAI-compatible endpoint** (like OpenRouter or a proxy),
 you can use the `remote` configuration:
 
 ```json5
@@ -99,8 +118,8 @@ agents: {
       provider: "openai",
       model: "text-embedding-3-small",
       remote: {
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
-        apiKey: "YOUR_GEMINI_API_KEY",
+        baseUrl: "https://proxy.example/v1",
+        apiKey: "YOUR_PROXY_KEY",
         headers: { "X-Custom-Header": "value" }
       }
     }
