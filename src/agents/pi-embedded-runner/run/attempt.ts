@@ -133,7 +133,7 @@ export async function runEmbeddedAttempt(
 
     const toolsRaw = createClawdbotCodingTools({
       exec: {
-        ...(params.execOverrides ?? {}),
+        ...params.execOverrides,
         elevated: params.bashElevated,
       },
       sandbox,
