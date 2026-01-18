@@ -48,6 +48,7 @@ Docs: https://docs.clawd.bot
 - Memory: avoid sqlite-vec unique constraint failures when reindexing duplicate chunk ids. (#1151)
 - Skills: improve remote bin probe logging with node labels + connectivity hints.
 - Exec approvals: enforce allowlist when ask is off; prefer raw command for node approvals/events.
+- Exec approvals: fix command token parsing for PATH resolution. (#1167) — thanks @gumadeiras.
 - Tools: return a companion-app-required message when node exec is requested with no paired node.
 - Streaming: emit assistant deltas for OpenAI-compatible SSE chunks. (#1147) — thanks @alauppe.
 - Model fallback: treat timeout aborts as failover while preserving user aborts. (#1137) — thanks @cheeeee.
