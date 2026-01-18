@@ -35,6 +35,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
+    lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on",
@@ -380,6 +381,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    state.lastToolError = undefined;
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
@@ -425,6 +427,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     waitForCompactionRetry: () => {
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();
