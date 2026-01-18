@@ -15,6 +15,19 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.18-2
 
+## 2026.1.17-6
+
+### Changes
+- Plugins: add exclusive plugin slots with a dedicated memory slot selector.
+- Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
+- Docs: document plugin slots and memory plugin behavior.
+- Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
+- Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
+- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime.
+
+## 2026.1.17-5
+
 ### Changes
 - Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
