@@ -19,6 +19,7 @@ Docs: https://docs.clawd.bot
 - Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
 - CLI: surface FTS + embedding cache state in `clawdbot memory status`.
+- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default.
 - Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
 - Tools: centralize plugin tool policy helpers.
 - Docs: clarify plugin agent tool configuration. https://docs.clawd.bot/plugins/agent-tools

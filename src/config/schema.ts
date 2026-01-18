@@ -387,7 +387,7 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.batch.concurrency":
     "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
-    "Polling interval in ms for OpenAI batch status (default: 500).",
+    "Polling interval in ms for OpenAI batch status (default: 2000).",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
     "Timeout in minutes for OpenAI batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":

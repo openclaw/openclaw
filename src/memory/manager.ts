@@ -12,6 +12,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import { createSubsystemLogger } from "../logging.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -252,7 +253,7 @@ export class MemoryIndexManager {
       enabled: Boolean(batch?.enabled && this.openAi && this.provider.id === "openai"),
       wait: batch?.wait ?? true,
       concurrency: Math.max(1, batch?.concurrency ?? 2),
-      pollIntervalMs: batch?.pollIntervalMs ?? 500,
+      pollIntervalMs: batch?.pollIntervalMs ?? 2000,
       timeoutMs: (batch?.timeoutMinutes ?? 60) * 60 * 1000,
     };
   }
@@ -1647,6 +1648,9 @@ export class MemoryIndexManager {
       const status = current ?? (await this.fetchOpenAiBatchStatus(batchId));
       const state = status.status ?? "unknown";
       if (state === "completed") {
+        log.debug(`openai batch ${batchId} ${state}`, {
+          consoleMessage: this.formatOpenAiBatchConsoleMessage({ batchId, state }),
+        });
         if (!status.output_file_id) {
           throw new Error(`openai batch ${batchId} completed without output file`);
         }
@@ -1668,10 +1672,35 @@ export class MemoryIndexManager {
       if (Date.now() - start > this.batch.timeoutMs) {
         throw new Error(`openai batch ${batchId} timed out after ${this.batch.timeoutMs}ms`);
       }
-      log.debug(`openai batch ${batchId} ${state}; waiting ${this.batch.pollIntervalMs}ms`);
+      log.debug(`openai batch ${batchId} ${state}; waiting ${this.batch.pollIntervalMs}ms`, {
+        consoleMessage: this.formatOpenAiBatchConsoleMessage({
+          batchId,
+          state,
+          waitMs: this.batch.pollIntervalMs,
+        }),
+      });
       await new Promise((resolve) => setTimeout(resolve, this.batch.pollIntervalMs));
       current = undefined;
     }
+  }
+
+  private formatOpenAiBatchConsoleMessage(params: {
+    batchId: string;
+    state: string;
+    waitMs?: number;
+  }): string {
+    const rich = isRich();
+    const normalized = params.state.toLowerCase();
+    const successStates = new Set(["completed", "succeeded"]);
+    const errorStates = new Set(["failed", "expired", "cancelled", "canceled"]);
+    const warnStates = new Set(["finalizing", "validating"]);
+    let color = theme.info;
+    if (successStates.has(normalized)) color = theme.success;
+    else if (errorStates.has(normalized)) color = theme.error;
+    else if (warnStates.has(normalized)) color = theme.warn;
+    const status = colorize(rich, color, params.state);
+    const suffix = typeof params.waitMs === "number" ? `; waiting ${params.waitMs}ms` : "";
+    return `openai batch ${params.batchId} ${status}${suffix}`;
   }
 
   private async embedChunksWithBatch(
