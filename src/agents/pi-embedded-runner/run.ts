@@ -318,6 +318,19 @@ export async function runEmbeddedPiAgent(
               thinkLevel = fallbackThinking;
               continue;
             }
+            // FIX: Throw FailoverError for prompt errors when fallbacks configured
+            // This enables model fallback for quota/rate limit errors during prompt submission
+            const promptFallbackConfigured =
+              (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+            if (promptFallbackConfigured && isFailoverErrorMessage(errorText)) {
+              throw new FailoverError(errorText, {
+                reason: promptFailoverReason ?? "unknown",
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status: resolveFailoverStatus(promptFailoverReason ?? "unknown"),
+              });
+            }
             throw promptError;
           }
 
