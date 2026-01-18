@@ -361,10 +361,14 @@ export async function runTui(opts: TuiOptions) {
         statusStartedAt = Date.now();
       }
       ensureStatusLoader();
+      if (activityStatus === "waiting") {
+        stopStatusTimer();
+        startWaitingTimer();
+      } else {
+        stopWaitingTimer();
+        startStatusTimer();
+      }
       updateBusyStatusMessage();
-      startStatusTimer();
-      if (activityStatus === "waiting") startWaitingTimer();
-      else stopWaitingTimer();
     } else {
       statusStartedAt = null;
       stopStatusTimer();

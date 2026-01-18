@@ -94,7 +94,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "Use `Read` to load the SKILL.md at the location listed for that skill.",
+      "read its SKILL.md at <location> with `Read`",
     );
     expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
     expect(prompt).toContain(
@@ -188,7 +188,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "Use `read` to load the SKILL.md at the location listed for that skill.",
+      "read its SKILL.md at <location> with `read`",
     );
   });
 
