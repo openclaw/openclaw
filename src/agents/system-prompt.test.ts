@@ -32,12 +32,14 @@ describe("buildAgentSystemPrompt", () => {
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
       toolNames: ["message", "memory_search"],
+      docsPath: "/tmp/clawd/docs",
       extraSystemPrompt: "Subagent details",
     });
 
     expect(prompt).not.toContain("## User Identity");
     expect(prompt).not.toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
+    expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
     expect(prompt).not.toContain("## Messaging");
     expect(prompt).not.toContain("## Silent Replies");
@@ -86,12 +88,28 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["Read", "Exec", "process"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      docsPath: "/tmp/clawd/docs",
     });
 
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
       "Use `Read` to load the SKILL.md at the location listed for that skill.",
+    );
+    expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
+    expect(prompt).toContain("read the docs first using `Read`");
+  });
+
+  it("includes docs guidance when docsPath is provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      docsPath: "/tmp/clawd/docs",
+    });
+
+    expect(prompt).toContain("## Documentation");
+    expect(prompt).toContain("Clawdbot docs: /tmp/clawd/docs");
+    expect(prompt).toContain(
+      "When a user asks about Clawdbot behavior, commands, config, or architecture",
     );
   });
 

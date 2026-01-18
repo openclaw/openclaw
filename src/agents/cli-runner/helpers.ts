@@ -168,6 +168,7 @@ export function buildSystemPrompt(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
+  docsPath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
@@ -182,6 +183,7 @@ export function buildSystemPrompt(params: {
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
+    docsPath: params.docsPath,
     runtimeInfo: {
       host: "clawdbot",
       os: `${os.type()} ${os.release()}`,

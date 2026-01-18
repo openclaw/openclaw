@@ -17,6 +17,7 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import { resolveClawdbotDocsPath } from "../docs-path.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
@@ -250,6 +251,12 @@ export async function compactEmbeddedPiSession(params: {
         });
         const isDefaultAgent = sessionAgentId === defaultAgentId;
         const promptMode = isSubagentSessionKey(params.sessionKey) ? "minimal" : "full";
+        const docsPath = await resolveClawdbotDocsPath({
+          workspaceDir: effectiveWorkspace,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+          moduleUrl: import.meta.url,
+        });
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
@@ -261,6 +268,7 @@ export async function compactEmbeddedPiSession(params: {
             ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
             : undefined,
           skillsPrompt,
+          docsPath,
           promptMode,
           runtimeInfo,
           sandboxInfo,

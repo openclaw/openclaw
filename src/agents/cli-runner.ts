@@ -6,6 +6,7 @@ import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveClawdbotDocsPath } from "./docs-path.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -83,6 +84,12 @@ export async function runCliAgent(params: {
     sessionAgentId === defaultAgentId
       ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
       : undefined;
+  const docsPath = await resolveClawdbotDocsPath({
+    workspaceDir,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
   const systemPrompt = buildSystemPrompt({
     workspaceDir,
     config: params.config,
@@ -90,6 +97,7 @@ export async function runCliAgent(params: {
     extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
     heartbeatPrompt,
+    docsPath,
     tools: [],
     contextFiles,
     modelDisplay,
