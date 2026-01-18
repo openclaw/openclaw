@@ -73,13 +73,11 @@ export function deriveGroupSessionPatch(params: {
   const normalizedChannel = normalizeChannelId(channel);
   const isChannelProvider = Boolean(
     normalizedChannel &&
-      getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+    getChannelDock(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
-    ((resolution.chatType === "channel" || isChannelProvider) &&
-    subject &&
-    subject.startsWith("#")
+    ((resolution.chatType === "channel" || isChannelProvider) && subject && subject.startsWith("#")
       ? subject
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;

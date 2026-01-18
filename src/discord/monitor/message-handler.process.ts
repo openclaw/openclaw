@@ -288,6 +288,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         to: `user:${author.id}`,
         accountId: route.accountId,
       },
+      ctx: ctxPayload,
     });
   }
 

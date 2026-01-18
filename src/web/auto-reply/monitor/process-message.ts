@@ -206,26 +206,15 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
-  if (params.msg.chatType !== "group") {
-    const to = (() => {
-      if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
-      // In direct chats, `msg.from` is already the canonical conversation id.
-      if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
-      return normalizeE164(params.msg.from);
-    })();
-    if (to) {
-      updateLastRouteInBackground({
-        cfg: params.cfg,
-        backgroundTasks: params.backgroundTasks,
-        storeAgentId: params.route.agentId,
-        sessionKey: params.route.mainSessionKey,
-        channel: "whatsapp",
-        to,
-        accountId: params.route.accountId,
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
-    }
-  }
+  const dmRouteTarget =
+    params.msg.chatType !== "group"
+      ? (() => {
+          if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
+          // In direct chats, `msg.from` is already the canonical conversation id.
+          if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
+          return normalizeE164(params.msg.from);
+        })()
+      : undefined;
 
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   let didLogHeartbeatStrip = false;
@@ -251,39 +240,53 @@ export async function processMessage(params: {
   };
 
   const ctxPayload = finalizeInboundContext({
-      Body: combinedBody,
-      RawBody: params.msg.body,
-      CommandBody: params.msg.body,
-      From: params.msg.from,
-      To: params.msg.to,
-      SessionKey: params.route.sessionKey,
-      AccountId: params.route.accountId,
-      MessageSid: params.msg.id,
-      ReplyToId: params.msg.replyToId,
-      ReplyToBody: params.msg.replyToBody,
-      ReplyToSender: params.msg.replyToSender,
-      MediaPath: params.msg.mediaPath,
-      MediaUrl: params.msg.mediaUrl,
-      MediaType: params.msg.mediaType,
-      ChatType: params.msg.chatType,
-      ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
-      GroupSubject: params.msg.groupSubject,
-      GroupMembers: formatGroupMembers({
-        participants: params.msg.groupParticipants,
-        roster: params.groupMemberNames.get(params.groupHistoryKey),
-        fallbackE164: params.msg.senderE164,
-      }),
-      SenderName: params.msg.senderName,
-      SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
-      SenderE164: params.msg.senderE164,
-      CommandAuthorized: commandAuthorized,
-      WasMentioned: params.msg.wasMentioned,
-      ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: params.msg.from,
+    Body: combinedBody,
+    RawBody: params.msg.body,
+    CommandBody: params.msg.body,
+    From: params.msg.from,
+    To: params.msg.to,
+    SessionKey: params.route.sessionKey,
+    AccountId: params.route.accountId,
+    MessageSid: params.msg.id,
+    ReplyToId: params.msg.replyToId,
+    ReplyToBody: params.msg.replyToBody,
+    ReplyToSender: params.msg.replyToSender,
+    MediaPath: params.msg.mediaPath,
+    MediaUrl: params.msg.mediaUrl,
+    MediaType: params.msg.mediaType,
+    ChatType: params.msg.chatType,
+    ConversationLabel: params.msg.chatType === "group" ? conversationId : params.msg.from,
+    GroupSubject: params.msg.groupSubject,
+    GroupMembers: formatGroupMembers({
+      participants: params.msg.groupParticipants,
+      roster: params.groupMemberNames.get(params.groupHistoryKey),
+      fallbackE164: params.msg.senderE164,
+    }),
+    SenderName: params.msg.senderName,
+    SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
+    SenderE164: params.msg.senderE164,
+    CommandAuthorized: commandAuthorized,
+    WasMentioned: params.msg.wasMentioned,
+    ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
+    Provider: "whatsapp",
+    Surface: "whatsapp",
+    OriginatingChannel: "whatsapp",
+    OriginatingTo: params.msg.from,
+  });
+
+  if (dmRouteTarget) {
+    updateLastRouteInBackground({
+      cfg: params.cfg,
+      backgroundTasks: params.backgroundTasks,
+      storeAgentId: params.route.agentId,
+      sessionKey: params.route.mainSessionKey,
+      channel: "whatsapp",
+      to: dmRouteTarget,
+      accountId: params.route.accountId,
+      ctx: ctxPayload,
+      warn: params.replyLogger.warn.bind(params.replyLogger),
     });
+  }
 
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,

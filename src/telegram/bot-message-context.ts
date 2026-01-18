@@ -537,6 +537,7 @@ export const buildTelegramMessageContext = async ({
         to: String(chatId),
         accountId: route.accountId,
       },
+      ctx: ctxPayload,
     });
   }
 

@@ -3,7 +3,8 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as helpers from "./pi-embedded-helpers.js";
 
-type SanitizeSessionHistory = typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
+type SanitizeSessionHistory =
+  typeof import("./pi-embedded-runner/google.js").sanitizeSessionHistory;
 let sanitizeSessionHistory: SanitizeSessionHistory;
 
 // Mock dependencies

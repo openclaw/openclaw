@@ -172,6 +172,44 @@ When enabled, Clawdbot combines:
 
 If full-text search is unavailable on your platform, Clawdbot falls back to vector-only search.
 
+#### Why hybrid?
+
+Vector search is great at “this means the same thing”:
+- “Mac Studio gateway host” vs “the machine running the gateway”
+- “debounce file updates” vs “avoid indexing on every write”
+
+But it can be weak at exact, high-signal tokens:
+- IDs (`a828e60`, `b3b9895a…`)
+- code symbols (`memorySearch.query.hybrid`)
+- error strings (“sqlite-vec unavailable”)
+
+BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
+Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
+good results for both “natural language” queries and “needle in a haystack” queries.
+
+#### How we merge results (the current design)
+
+Implementation sketch:
+
+1) Retrieve a candidate pool from both sides:
+- **Vector**: top `maxResults * candidateMultiplier` by cosine similarity.
+- **BM25**: top `maxResults * candidateMultiplier` by FTS5 BM25 rank (lower is better).
+
+2) Convert BM25 rank into a 0..1-ish score:
+- `textScore = 1 / (1 + max(0, bm25Rank))`
+
+3) Union candidates by chunk id and compute a weighted score:
+- `finalScore = vectorWeight * vectorScore + textWeight * textScore`
+
+Notes:
+- `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
+- If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
+- If FTS5 can’t be created, we keep vector-only search (no hard failure).
+
+This isn’t “IR-theory perfect”, but it’s simple, fast, and tends to improve recall/precision on real notes.
+If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
+(min/max or z-score) before mixing.
+
 Config:
 
 ```json5

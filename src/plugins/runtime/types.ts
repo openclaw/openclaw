@@ -1,4 +1,38 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { LogLevel } from "../../logging/levels.js";
+
+type ShouldLogVerbose = typeof import("../../globals.js").shouldLogVerbose;
+type DispatchReplyWithBufferedBlockDispatcher =
+  typeof import("../../auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+type CreateReplyDispatcherWithTyping =
+  typeof import("../../auto-reply/reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
+type ResolveEffectiveMessagesConfig =
+  typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
+type ResolveHumanDelayConfig = typeof import("../../agents/identity.js").resolveHumanDelayConfig;
+type ResolveAgentRoute = typeof import("../../routing/resolve-route.js").resolveAgentRoute;
+type BuildPairingReply = typeof import("../../pairing/pairing-messages.js").buildPairingReply;
+type ReadChannelAllowFromStore =
+  typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
+type UpsertChannelPairingRequest =
+  typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
+type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
+type BuildMentionRegexes = typeof import("../../auto-reply/reply/mentions.js").buildMentionRegexes;
+type MatchesMentionPatterns =
+  typeof import("../../auto-reply/reply/mentions.js").matchesMentionPatterns;
+type ResolveChannelGroupPolicy =
+  typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
+type ResolveChannelGroupRequireMention =
+  typeof import("../../config/group-policy.js").resolveChannelGroupRequireMention;
+type CreateInboundDebouncer =
+  typeof import("../../auto-reply/inbound-debounce.js").createInboundDebouncer;
+type ResolveInboundDebounceMs =
+  typeof import("../../auto-reply/inbound-debounce.js").resolveInboundDebounceMs;
+type ResolveCommandAuthorizedFromAuthorizers =
+  typeof import("../../channels/command-gating.js").resolveCommandAuthorizedFromAuthorizers;
+type ResolveTextChunkLimit = typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
+type ChunkMarkdownText = typeof import("../../auto-reply/chunk.js").chunkMarkdownText;
+type HasControlCommand = typeof import("../../auto-reply/command-detection.js").hasControlCommand;
+type ResolveStateDir = typeof import("../../config/paths.js").resolveStateDir;
 
 export type RuntimeLogger = {
   debug?: (message: string) => void;
@@ -11,102 +45,52 @@ export type PluginRuntime = {
   version: string;
   channel: {
     text: {
-      chunkMarkdownText: (text: string, limit: number) => string[];
-      resolveTextChunkLimit: (cfg: ClawdbotConfig, channel: string, accountId?: string) => number;
-      hasControlCommand: (text: string, cfg: ClawdbotConfig) => boolean;
+      chunkMarkdownText: ChunkMarkdownText;
+      resolveTextChunkLimit: ResolveTextChunkLimit;
+      hasControlCommand: HasControlCommand;
     };
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: (params: {
-        ctx: unknown;
-        cfg: unknown;
-        dispatcherOptions: {
-          deliver: (payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string }) => void | Promise<void>;
-          onError?: (err: unknown, info: { kind: string }) => void;
-        };
-      }) => Promise<void>;
-      createReplyDispatcherWithTyping: (...args: unknown[]) => unknown;
-      resolveEffectiveMessagesConfig: (
-        cfg: ClawdbotConfig,
-        agentId: string,
-        opts?: { hasAllowFrom?: boolean; fallbackMessagePrefix?: string },
-      ) => { messagePrefix: string; responsePrefix?: string };
-      resolveHumanDelayConfig: (
-        cfg: ClawdbotConfig,
-        agentId: string,
-      ) => { mode?: string; minMs?: number; maxMs?: number } | undefined;
+      dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
+      createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
+      resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
+      resolveHumanDelayConfig: ResolveHumanDelayConfig;
     };
     routing: {
-      resolveAgentRoute: (params: {
-        cfg: unknown;
-        channel: string;
-        accountId: string;
-        peer: { kind: "dm" | "group" | "channel"; id: string };
-      }) => { sessionKey: string; accountId: string };
+      resolveAgentRoute: ResolveAgentRoute;
     };
     pairing: {
-      buildPairingReply: (params: { channel: string; idLine: string; code: string }) => string;
-      readAllowFromStore: (channel: string) => Promise<string[]>;
-      upsertPairingRequest: (params: {
-        channel: string;
-        id: string;
-        meta?: { name?: string };
-      }) => Promise<{ code: string; created: boolean }>;
+      buildPairingReply: BuildPairingReply;
+      readAllowFromStore: ReadChannelAllowFromStore;
+      upsertPairingRequest: UpsertChannelPairingRequest;
     };
     media: {
-      fetchRemoteMedia: (params: { url: string }) => Promise<{ buffer: Buffer; contentType?: string }>;
-      saveMediaBuffer: (
-        buffer: Uint8Array,
-        contentType: string | undefined,
-        direction: "inbound" | "outbound",
-        maxBytes: number,
-      ) => Promise<{ path: string; contentType?: string }>;
+      fetchRemoteMedia: FetchRemoteMedia;
+      saveMediaBuffer: SaveMediaBuffer;
     };
     mentions: {
-      buildMentionRegexes: (cfg: ClawdbotConfig, agentId?: string) => RegExp[];
-      matchesMentionPatterns: (text: string, regexes: RegExp[]) => boolean;
+      buildMentionRegexes: BuildMentionRegexes;
+      matchesMentionPatterns: MatchesMentionPatterns;
     };
     groups: {
-      resolveGroupPolicy: (
-        cfg: ClawdbotConfig,
-        channel: string,
-        accountId: string,
-        groupId: string,
-      ) => {
-        allowlistEnabled: boolean;
-        allowed: boolean;
-        groupConfig?: unknown;
-        defaultConfig?: unknown;
-      };
-      resolveRequireMention: (
-        cfg: ClawdbotConfig,
-        channel: string,
-        accountId: string,
-        groupId: string,
-        override?: boolean,
-      ) => boolean;
+      resolveGroupPolicy: ResolveChannelGroupPolicy;
+      resolveRequireMention: ResolveChannelGroupRequireMention;
     };
     debounce: {
-      createInboundDebouncer: <T>(opts: {
-        debounceMs: number;
-        buildKey: (value: T) => string | null;
-        shouldDebounce: (value: T) => boolean;
-        onFlush: (entries: T[]) => Promise<void>;
-        onError?: (err: unknown) => void;
-      }) => { push: (value: T) => void; flush: () => Promise<void> };
-      resolveInboundDebounceMs: (cfg: ClawdbotConfig, channel: string) => number;
+      createInboundDebouncer: CreateInboundDebouncer;
+      resolveInboundDebounceMs: ResolveInboundDebounceMs;
     };
     commands: {
-      resolveCommandAuthorizedFromAuthorizers: (params: {
-        useAccessGroups: boolean;
-        authorizers: Array<{ configured: boolean; allowed: boolean }>;
-      }) => boolean;
+      resolveCommandAuthorizedFromAuthorizers: ResolveCommandAuthorizedFromAuthorizers;
     };
   };
   logging: {
-    shouldLogVerbose: () => boolean;
-    getChildLogger: (bindings?: Record<string, unknown>, opts?: { level?: string }) => RuntimeLogger;
+    shouldLogVerbose: ShouldLogVerbose;
+    getChildLogger: (
+      bindings?: Record<string, unknown>,
+      opts?: { level?: LogLevel },
+    ) => RuntimeLogger;
   };
   state: {
-    resolveStateDir: (cfg: ClawdbotConfig) => string;
+    resolveStateDir: ResolveStateDir;
   };
 };

@@ -71,7 +71,11 @@ export function registerMemoryCli(program: Command) {
             });
             if (opts.index) {
               await withProgressTotals(
-                { label: "Indexing memory…", total: 0 },
+                {
+                  label: "Indexing memory…",
+                  total: 0,
+                  fallback: opts.verbose ? "line" : undefined,
+                },
                 async (update, progress) => {
                   try {
                     await manager.sync({

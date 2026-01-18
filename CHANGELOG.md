@@ -2,22 +2,51 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-3
+
+### Changes
+- Exec: add host/security/ask routing for gateway + node exec.
+- Exec: add `/exec` directive for per-session exec defaults (host/security/ask/node).
+- macOS: migrate exec approvals to `~/.clawdbot/exec-approvals.json` with per-agent allowlists and skill auto-allow toggle.
+- macOS: add approvals socket UI server + node exec lifecycle events.
+- Slash commands: replace `/cost` with `/usage off|tokens|full` to control per-response usage footer; `/usage` no longer aliases `/status`. (Supersedes #1140) — thanks @Nachx639.
+- Docs: refresh exec/elevated/exec-approvals docs for the new flow. https://docs.clawd.bot/tools/exec-approvals
+
+### Fixes
+- Tools: return a companion-app-required message when node exec is requested with no paired node.
+
+## 2026.1.18-2
+
+### Fixes
+- Tests: stabilize plugin SDK resolution and embedded agent timeouts.
+
 ## 2026.1.17-6
 
 ### Changes
 - Plugins: add exclusive plugin slots with a dedicated memory slot selector.
 - Memory: ship core memory tools + CLI as the bundled `memory-core` plugin.
 - Docs: document plugin slots and memory plugin behavior.
+- Plugins: add the bundled BlueBubbles channel plugin (disabled by default).
 - Plugins: migrate bundled messaging extensions to the plugin SDK; resolve plugin-sdk imports in loader.
+- Plugins: migrate the Zalo plugin to the shared plugin SDK runtime.
+- Plugins: migrate the Zalo Personal plugin to the shared plugin SDK runtime.
 
 ## 2026.1.17-5
 
 ### Changes
 - Memory: add hybrid BM25 + vector search (FTS5) with weighted merging and fallback.
 - Memory: add SQLite embedding cache to speed up reindexing and frequent updates.
-- CLI: surface memory search state in `clawdbot status` and detailed FTS + embedding cache state in `clawdbot memory status`.
+- CLI: surface FTS + embedding cache state in `clawdbot memory status`.
+- Memory: render progress immediately, color batch statuses in verbose logs, and poll OpenAI batch status every 2s by default.
+- Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
+- Tools: centralize plugin tool policy helpers.
+- Commands: add `/subagents info` and show sub-agent counts in `/status`.
+- Docs: clarify plugin agent tool configuration. https://docs.clawd.bot/plugins/agent-tools
 
-## 2026.1.17-4
+### Fixes
+- Voice call: include request query in Twilio webhook verification when publicUrl is set. (#864)
+
+## 2026.1.18-1
 
 ### Changes
 - Tools: allow `sessions_spawn` to override thinking level for sub-agent runs.
@@ -33,13 +62,11 @@ Docs: https://docs.clawd.bot
 - macOS: bundle Textual resources in packaged app builds to avoid code block crashes. (#1006)
 - Tools: return a companion-app-required message when `system.run` is requested without a supporting node.
 - Discord: only emit slow listener warnings after 30s.
-
 ## 2026.1.17-3
 
 ### Changes
 - Memory: add OpenAI Batch API indexing for embeddings when configured.
 - Memory: enable OpenAI batch indexing by default for OpenAI embeddings.
-- Sessions: persist origin metadata across connectors for generic session explainers.
 
 ### Fixes
 - Memory: retry transient 5xx errors (Cloudflare) during embedding indexing.

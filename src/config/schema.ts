@@ -140,6 +140,10 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
+  "tools.exec.host": "Exec Host",
+  "tools.exec.security": "Exec Security",
+  "tools.exec.ask": "Exec Ask",
+  "tools.exec.node": "Exec Node Binding",
   "tools.message.allowCrossContextSend": "Allow Cross-Context Messaging",
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
@@ -383,7 +387,7 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.remote.batch.concurrency":
     "Max concurrent OpenAI batch jobs for memory indexing (default: 2).",
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs":
-    "Polling interval in ms for OpenAI batch status (default: 5000).",
+    "Polling interval in ms for OpenAI batch status (default: 2000).",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes":
     "Timeout in minutes for OpenAI batch indexing (default: 60).",
   "agents.defaults.memorySearch.local.modelPath":

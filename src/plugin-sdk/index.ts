@@ -54,6 +54,7 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { ClawdbotPluginApi } from "../plugins/types.js";
+export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { ClawdbotConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
 export type {
@@ -106,9 +107,16 @@ export {
 } from "../channels/plugins/channel-config.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export { formatAllowlistMatchMeta } from "../channels/plugins/allowlist-match.js";
-export { readChannelAllowFromStore, upsertChannelPairingRequest } from "../pairing/pairing-store.js";
+export {
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
+} from "../pairing/pairing-store.js";
 export { resolveAgentRoute } from "../routing/resolve-route.js";
-export { recordSessionMetaFromInbound, resolveStorePath, updateLastRoute } from "../config/sessions.js";
+export {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+  updateLastRoute,
+} from "../config/sessions.js";
 export { resolveStateDir } from "../config/paths.js";
 export { loadConfig } from "../config/config.js";
 export { danger } from "../globals.js";
@@ -129,7 +137,10 @@ export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
-export { applyAccountNameToChannelSection } from "../channels/plugins/setup-helpers.js";
+export {
+  applyAccountNameToChannelSection,
+  migrateBaseNameToDefaultAccount,
+} from "../channels/plugins/setup-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
 
@@ -137,7 +148,7 @@ export type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
 } from "../channels/plugins/onboarding-types.js";
-export { addWildcardAllowFrom } from "../channels/plugins/onboarding/helpers.js";
+export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
 
 export {
@@ -151,3 +162,5 @@ export { createMemoryGetTool, createMemorySearchTool } from "../agents/tools/mem
 export { registerMemoryCli } from "../cli/memory-cli.js";
 
 export { formatDocsLink } from "../terminal/links.js";
+export type { HookEntry } from "../hooks/types.js";
+export { registerPluginHooksFromDir } from "../hooks/plugin-hooks.js";

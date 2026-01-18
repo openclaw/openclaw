@@ -58,6 +58,7 @@ register:
 - Optional config validation
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 ## Discovery & precedence
 
@@ -213,6 +214,27 @@ Plugins export either:
 
 - A function: `(api) => { ... }`
 - An object: `{ id, name, configSchema, register(api) { ... } }`
+
+## Plugin hooks
+
+Plugins can ship hooks and register them at runtime. This lets a plugin bundle
+event-driven automation without a separate hook pack install.
+
+### Example
+
+```
+import { registerPluginHooksFromDir } from "clawdbot/plugin-sdk";
+
+export default function register(api) {
+  registerPluginHooksFromDir(api, "./hooks");
+}
+```
+
+Notes:
+- Hook directories follow the normal hook structure (`HOOK.md` + `handler.ts`).
+- Hook eligibility rules still apply (OS/bins/env/config requirements).
+- Plugin-managed hooks show up in `clawdbot hooks list` with `plugin:<id>`.
+- You cannot enable/disable plugin-managed hooks via `clawdbot hooks`; enable/disable the plugin instead.
 
 ## Provider plugins (model auth)
 
@@ -379,24 +401,9 @@ export default function (api) {
 Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
 then configure `channels.<id>` in your config.
 
-### Register a tool
+### Agent tools
 
-```ts
-import { Type } from "@sinclair/typebox";
-
-export default function (api) {
-  api.registerTool({
-    name: "my_tool",
-    description: "Do a thing",
-    parameters: Type.Object({
-      input: Type.String(),
-    }),
-    async execute(_id, params) {
-      return { content: [{ type: "text", text: params.input }] };
-    },
-  });
-}
-```
+See the dedicated guide: [Plugin agent tools](/plugins/agent-tools).
 
 ### Register a gateway RPC method
 
