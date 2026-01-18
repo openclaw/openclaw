@@ -6,6 +6,7 @@ import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
+import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
@@ -30,6 +31,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...channelsHandlers,
   ...chatHandlers,
   ...cronHandlers,
+  ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
   ...configHandlers,

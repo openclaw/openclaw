@@ -12,6 +12,8 @@ const BASE_METHODS = [
   "config.apply",
   "config.patch",
   "config.schema",
+  "exec.approvals.get",
+  "exec.approvals.set",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",

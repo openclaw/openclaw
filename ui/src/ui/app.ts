@@ -24,6 +24,10 @@ import type {
 import { type ChatQueueItem, type CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "./controllers/exec-approvals";
 import {
   resetToolStream as resetToolStreamInternal,
   toggleToolOutput as toggleToolOutputInternal,
@@ -104,6 +108,12 @@ export class ClawdbotApp extends LitElement {
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
+  @state() execApprovalsLoading = false;
+  @state() execApprovalsSaving = false;
+  @state() execApprovalsDirty = false;
+  @state() execApprovalsSnapshot: ExecApprovalsSnapshot | null = null;
+  @state() execApprovalsForm: ExecApprovalsFile | null = null;
+  @state() execApprovalsSelectedAgent: string | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";

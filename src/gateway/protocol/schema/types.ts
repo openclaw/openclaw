@@ -46,6 +46,11 @@ import type {
   CronUpdateParamsSchema,
 } from "./cron.js";
 import type {
+  ExecApprovalsGetParamsSchema,
+  ExecApprovalsSetParamsSchema,
+  ExecApprovalsSnapshotSchema,
+} from "./exec-approvals.js";
+import type {
   ConnectParamsSchema,
   ErrorShapeSchema,
   EventFrameSchema,
@@ -163,6 +168,9 @@ export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
 export type LogsTailResult = Static<typeof LogsTailResultSchema>;
+export type ExecApprovalsGetParams = Static<typeof ExecApprovalsGetParamsSchema>;
+export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>;
+export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

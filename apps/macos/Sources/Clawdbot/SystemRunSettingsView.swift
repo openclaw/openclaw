@@ -13,18 +13,16 @@ struct SystemRunSettingsView: View {
                 Text("Exec approvals")
                     .font(.body)
                 Spacer(minLength: 0)
-                if self.model.agentIds.count > 1 {
-                    Picker("Agent", selection: Binding(
-                        get: { self.model.selectedAgentId },
-                        set: { self.model.selectAgent($0) }))
-                    {
-                        ForEach(self.model.agentIds, id: \.self) { id in
-                            Text(id).tag(id)
-                        }
+                Picker("Agent", selection: Binding(
+                    get: { self.model.selectedAgentId },
+                    set: { self.model.selectAgent($0) }))
+                {
+                    ForEach(self.model.agentPickerIds, id: \.self) { id in
+                        Text(self.model.label(for: id)).tag(id)
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 160, alignment: .trailing)
                 }
+                .pickerStyle(.menu)
+                .frame(width: 180, alignment: .trailing)
             }
 
             Picker("", selection: self.$tab) {
@@ -82,7 +80,9 @@ struct SystemRunSettingsView: View {
             .labelsHidden()
             .pickerStyle(.menu)
 
-            Text("Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
+            Text(self.model.isDefaultsScope
+                 ? "Defaults apply when an agent has no overrides. Ask controls prompt behavior; fallback is used when no companion UI is reachable."
+                 : "Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -101,31 +101,37 @@ struct SystemRunSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 8) {
-                TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
-                    .textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !pattern.isEmpty else { return }
-                    self.model.addEntry(pattern)
-                    self.newPattern = ""
-                }
-                .buttonStyle(.bordered)
-                .disabled(self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            if self.model.entries.isEmpty {
-                Text("No allowlisted commands yet.")
+            if self.model.isDefaultsScope {
+                Text("Allowlists are per-agent. Select an agent to edit its allowlist.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(Array(self.model.entries.enumerated()), id: \.offset) { index, _ in
-                        ExecAllowlistRow(
-                            entry: Binding(
-                                get: { self.model.entries[index] },
-                                set: { self.model.updateEntry($0, at: index) }),
-                            onRemove: { self.model.removeEntry(at: index) })
+                HStack(spacing: 8) {
+                    TextField("Add allowlist pattern (case-insensitive globs)", text: self.$newPattern)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add") {
+                        let pattern = self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !pattern.isEmpty else { return }
+                        self.model.addEntry(pattern)
+                        self.newPattern = ""
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if self.model.entries.isEmpty {
+                    Text("No allowlisted commands yet.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(self.model.entries.enumerated()), id: \.offset) { index, _ in
+                            ExecAllowlistRow(
+                                entry: Binding(
+                                    get: { self.model.entries[index] },
+                                    set: { self.model.updateEntry($0, at: index) }),
+                                onRemove: { self.model.removeEntry(at: index) })
+                        }
                     }
                 }
             }
@@ -177,8 +183,16 @@ struct ExecAllowlistRow: View {
                 Text("Last used \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if let lastUsedCommand = self.entry.lastUsedCommand, !lastUsedCommand.isEmpty {
-                Text("Last used: \(lastUsedCommand)")
+            }
+
+            if let lastUsedCommand = self.entry.lastUsedCommand, !lastUsedCommand.isEmpty {
+                Text("Last command: \(lastUsedCommand)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let lastResolvedPath = self.entry.lastResolvedPath, !lastResolvedPath.isEmpty {
+                Text("Resolved path: \(lastResolvedPath)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -201,6 +215,7 @@ struct ExecAllowlistRow: View {
 @MainActor
 @Observable
 final class ExecApprovalsSettingsModel {
+    private static let defaultsScopeId = "__defaults__"
     var agentIds: [String] = []
     var selectedAgentId: String = "main"
     var defaultAgentId: String = "main"
@@ -210,6 +225,19 @@ final class ExecApprovalsSettingsModel {
     var autoAllowSkills = false
     var entries: [ExecAllowlistEntry] = []
     var skillBins: [String] = []
+
+    var agentPickerIds: [String] {
+        [Self.defaultsScopeId] + self.agentIds
+    }
+
+    var isDefaultsScope: Bool {
+        self.selectedAgentId == Self.defaultsScopeId
+    }
+
+    func label(for id: String) -> String {
+        if id == Self.defaultsScopeId { return "Defaults" }
+        return id
+    }
 
     func refresh() async {
         await self.refreshAgents()
@@ -242,6 +270,9 @@ final class ExecApprovalsSettingsModel {
         }
         self.agentIds = ids
         self.defaultAgentId = defaultId ?? "main"
+        if self.selectedAgentId == Self.defaultsScopeId {
+            return
+        }
         if !self.agentIds.contains(self.selectedAgentId) {
             self.selectedAgentId = self.defaultAgentId
         }
@@ -254,6 +285,15 @@ final class ExecApprovalsSettingsModel {
     }
 
     func loadSettings(for agentId: String) {
+        if agentId == Self.defaultsScopeId {
+            let defaults = ExecApprovalsStore.resolveDefaults()
+            self.security = defaults.security
+            self.ask = defaults.ask
+            self.askFallback = defaults.askFallback
+            self.autoAllowSkills = defaults.autoAllowSkills
+            self.entries = []
+            return
+        }
         let resolved = ExecApprovalsStore.resolve(agentId: agentId)
         self.security = resolved.agent.security
         self.ask = resolved.agent.ask
@@ -265,36 +305,61 @@ final class ExecApprovalsSettingsModel {
 
     func setSecurity(_ security: ExecSecurity) {
         self.security = security
-        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
-            entry.security = security
+        if self.isDefaultsScope {
+            ExecApprovalsStore.updateDefaults { defaults in
+                defaults.security = security
+            }
+        } else {
+            ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+                entry.security = security
+            }
         }
         self.syncQuickMode()
     }
 
     func setAsk(_ ask: ExecAsk) {
         self.ask = ask
-        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
-            entry.ask = ask
+        if self.isDefaultsScope {
+            ExecApprovalsStore.updateDefaults { defaults in
+                defaults.ask = ask
+            }
+        } else {
+            ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+                entry.ask = ask
+            }
         }
         self.syncQuickMode()
     }
 
     func setAskFallback(_ mode: ExecSecurity) {
         self.askFallback = mode
-        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
-            entry.askFallback = mode
+        if self.isDefaultsScope {
+            ExecApprovalsStore.updateDefaults { defaults in
+                defaults.askFallback = mode
+            }
+        } else {
+            ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+                entry.askFallback = mode
+            }
         }
     }
 
     func setAutoAllowSkills(_ enabled: Bool) {
         self.autoAllowSkills = enabled
-        ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
-            entry.autoAllowSkills = enabled
+        if self.isDefaultsScope {
+            ExecApprovalsStore.updateDefaults { defaults in
+                defaults.autoAllowSkills = enabled
+            }
+        } else {
+            ExecApprovalsStore.updateAgentSettings(agentId: self.selectedAgentId) { entry in
+                entry.autoAllowSkills = enabled
+            }
         }
         Task { await self.refreshSkillBins(force: enabled) }
     }
 
     func addEntry(_ pattern: String) {
+        guard !self.isDefaultsScope else { return }
         let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         self.entries.append(ExecAllowlistEntry(pattern: trimmed, lastUsedAt: nil))
@@ -302,12 +367,14 @@ final class ExecApprovalsSettingsModel {
     }
 
     func updateEntry(_ entry: ExecAllowlistEntry, at index: Int) {
+        guard !self.isDefaultsScope else { return }
         guard self.entries.indices.contains(index) else { return }
         self.entries[index] = entry
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
     }
 
     func removeEntry(at index: Int) {
+        guard !self.isDefaultsScope else { return }
         guard self.entries.indices.contains(index) else { return }
         self.entries.remove(at: index)
         ExecApprovalsStore.updateAllowlist(agentId: self.selectedAgentId, allowlist: self.entries)
@@ -323,6 +390,10 @@ final class ExecApprovalsSettingsModel {
     }
 
     private func syncQuickMode() {
+        if self.isDefaultsScope {
+            AppStateStore.shared.execApprovalMode = ExecApprovalQuickMode.from(security: self.security, ask: self.ask)
+            return
+        }
         if self.selectedAgentId == self.defaultAgentId || self.agentIds.count <= 1 {
             AppStateStore.shared.execApprovalMode = ExecApprovalQuickMode.from(security: self.security, ask: self.ask)
         }
