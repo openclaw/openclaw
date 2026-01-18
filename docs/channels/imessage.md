@@ -244,7 +244,7 @@ Provider options:
 - `channels.imessage.service`: `imessage | sms | auto`.
 - `channels.imessage.region`: SMS region.
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.imessage.allowFrom`: DM allowlist (handles or `chat_id:*`). `open` requires `"*"`.
+- `channels.imessage.allowFrom`: DM allowlist (handles, emails, E.164 numbers, or `chat_id:*`). `open` requires `"*"`. iMessage has no usernames; use handles or chat targets.
 - `channels.imessage.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.imessage.groupAllowFrom`: group sender allowlist.
 - `channels.imessage.historyLimit` / `channels.imessage.accounts.*.historyLimit`: max group messages to include as context (0 disables).

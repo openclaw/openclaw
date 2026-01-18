@@ -287,7 +287,7 @@ ack reaction after the bot replies.
 
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.
-- `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation.
+- `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation. The wizard accepts usernames and resolves them to ids when the bot can search members.
 - `dm.groupEnabled`: enable group DMs (default `false`).
 - `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
 - `groupPolicy`: controls guild channel handling (`open|disabled|allowlist`); `allowlist` requires channel allowlists.

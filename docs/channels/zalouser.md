@@ -66,7 +66,7 @@ clawdbot directory groups list --channel zalouser --query "work"
 
 ## Access control (DMs)
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
-`channels.zalouser.allowFrom` accepts user IDs or names (resolved at startup when available).
+`channels.zalouser.allowFrom` accepts user IDs or names. The wizard resolves names to IDs via `zca friend find` when available.
 
 Approve via:
 - `clawdbot pairing list zalouser`

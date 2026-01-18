@@ -70,7 +70,7 @@ Matrix is an open messaging protocol. Clawdbot connects as a Matrix user and lis
   - `clawdbot pairing list matrix`
   - `clawdbot pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
-- `channels.matrix.dm.allowFrom` accepts user IDs or display names (resolved at startup when directory search is available).
+- `channels.matrix.dm.allowFrom` accepts user IDs or display names. The wizard resolves display names to user IDs when directory search is available.
 
 ## Rooms (groups)
 - Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
@@ -121,7 +121,7 @@ Provider options:
 - `channels.matrix.threadReplies`: `off | inbound | always` (default: inbound).
 - `channels.matrix.textChunkLimit`: outbound text chunk size (chars).
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.matrix.dm.allowFrom`: DM allowlist. `open` requires `"*"`.
+- `channels.matrix.dm.allowFrom`: DM allowlist (user IDs or display names). `open` requires `"*"`. The wizard resolves names to IDs when possible.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
 - `channels.matrix.allowlistOnly`: force allowlist rules for DMs + rooms.
 - `channels.matrix.rooms`: per-room settings and allowlist.
