@@ -359,6 +359,33 @@ export async function runEmbeddedAttempt(
         runAbortController.abort();
         void activeSession.abort();
       };
+      const abortable = <T>(promise: Promise<T>): Promise<T> => {
+        const signal = runAbortController.signal;
+        if (signal.aborted) {
+          const err = new Error("aborted");
+          (err as { name?: string }).name = "AbortError";
+          return Promise.reject(err);
+        }
+        return new Promise<T>((resolve, reject) => {
+          const onAbort = () => {
+            const err = new Error("aborted");
+            (err as { name?: string }).name = "AbortError";
+            signal.removeEventListener("abort", onAbort);
+            reject(err);
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          promise.then(
+            (value) => {
+              signal.removeEventListener("abort", onAbort);
+              resolve(value);
+            },
+            (err) => {
+              signal.removeEventListener("abort", onAbort);
+              reject(err);
+            },
+          );
+        });
+      };
 
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
@@ -454,7 +481,7 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await activeSession.prompt(params.prompt, { images: params.images });
+          await abortable(activeSession.prompt(params.prompt, { images: params.images }));
         } catch (err) {
           promptError = err;
         } finally {

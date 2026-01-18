@@ -15,6 +15,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.18-2
 
+### Fixes
+- Tests: stabilize plugin SDK resolution and embedded agent timeouts.
+
 ## 2026.1.17-6
 
 ### Changes

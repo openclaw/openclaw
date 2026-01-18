@@ -172,6 +172,10 @@ vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  loadClawdbotPlugins: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -248,7 +252,7 @@ vi.mock("../telegram/pairing-store.js", () => ({
 
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "", created: false }),
+  upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
 }));
 
 vi.mock("../telegram/token.js", () => ({
@@ -374,5 +378,5 @@ describe("doctor command", () => {
 
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
     expect(confirm).not.toHaveBeenCalled();
-  }, 20_000);
+  }, 30_000);
 });

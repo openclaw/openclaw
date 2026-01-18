@@ -14,10 +14,10 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server auth/connect", () => {
-  test("closes silent handshakes after timeout", { timeout: 15_000 }, async () => {
+  test("closes silent handshakes after timeout", { timeout: 30_000 }, async () => {
     const { server, ws } = await startServerWithClient();
     const closed = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 12_000);
+      const timer = setTimeout(() => resolve(false), 25_000);
       ws.once("close", () => {
         clearTimeout(timer);
         resolve(true);

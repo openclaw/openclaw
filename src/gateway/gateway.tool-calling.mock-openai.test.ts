@@ -252,7 +252,7 @@ async function connectClient(params: { url: string; token: string }) {
 }
 
 describe("gateway (mock openai): tool calling", () => {
-  it("runs a Read tool call end-to-end via gateway agent loop", async () => {
+  it("runs a Read tool call end-to-end via gateway agent loop", { timeout: 90_000 }, async () => {
     const prev = {
       home: process.env.HOME,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,

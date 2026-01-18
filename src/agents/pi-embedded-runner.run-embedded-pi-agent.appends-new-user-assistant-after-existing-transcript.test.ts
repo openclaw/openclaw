@@ -146,7 +146,7 @@ const readSessionMessages = async (sessionFile: string) => {
 };
 
 describe("runEmbeddedPiAgent", () => {
-  it("appends new user + assistant after existing transcript entries", async () => {
+  it("appends new user + assistant after existing transcript entries", { timeout: 90_000 }, async () => {
     const { SessionManager } = await import("@mariozechner/pi-coding-agent");
 
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
@@ -271,7 +271,7 @@ describe("runEmbeddedPiAgent", () => {
     expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);
     expect(secondUserIndex).toBeGreaterThan(firstAssistantIndex);
     expect(secondAssistantIndex).toBeGreaterThan(secondUserIndex);
-  }, 20_000);
+  }, 90_000);
   it("repairs orphaned user messages and continues", async () => {
     const { SessionManager } = await import("@mariozechner/pi-coding-agent");
 

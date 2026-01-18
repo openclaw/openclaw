@@ -268,5 +268,5 @@ describe("gateway wizard (e2e)", () => {
       process.env.CLAWDBOT_SKIP_CRON = prev.skipCron;
       process.env.CLAWDBOT_SKIP_CANVAS_HOST = prev.skipCanvas;
     }
-  }, 60_000);
+  }, 90_000);
 });

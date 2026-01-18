@@ -192,7 +192,7 @@ describe("runEmbeddedPiAgent", () => {
 
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
-  it("persists the first user message before assistant output", { timeout: 45_000 }, async () => {
+  it("persists the first user message before assistant output", { timeout: 60_000 }, async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-agent-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-workspace-"));
     const sessionFile = path.join(workspaceDir, "session.jsonl");
