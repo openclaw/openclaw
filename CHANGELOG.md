@@ -2,6 +2,13 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.18-4
+
+### Changes
+- macOS: switch PeekabooBridge integration to the tagged Swift Package Manager release (no submodule).
+- macOS: stop syncing Peekaboo as a git submodule in postinstall.
+- Swabble: use the tagged Commander Swift package release.
+
 ## 2026.1.18-3
 
 ### Changes
