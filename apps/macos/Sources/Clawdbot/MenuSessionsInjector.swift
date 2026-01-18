@@ -440,6 +440,8 @@ extension MenuSessionsInjector {
             displayName: "Gateway",
             platform: platform,
             version: nil,
+            coreVersion: nil,
+            uiVersion: nil,
             deviceFamily: nil,
             modelIdentifier: nil,
             remoteIp: host,
