@@ -62,6 +62,34 @@ export class TwilioProvider implements VoiceCallProvider {
   /** Map of call SID to stream SID for media streams */
   private callStreamMap = new Map<string, string>();
 
+  /** Storage for TwiML content (for notify mode with URL-based TwiML) */
+  private readonly twimlStorage = new Map<string, string>();
+
+  /**
+   * Delete stored TwiML for a given `callId`.
+   *
+   * We keep TwiML in-memory only long enough to satisfy the initial Twilio
+   * webhook request (notify mode). Subsequent webhooks should not reuse it.
+   */
+  private deleteStoredTwiml(callId: string): void {
+    this.twimlStorage.delete(callId);
+  }
+
+  /**
+   * Delete stored TwiML for a call, addressed by Twilio's provider call SID.
+   *
+   * This is used when we only have `providerCallId` (e.g. hangup).
+   */
+  private deleteStoredTwimlForProviderCall(providerCallId: string): void {
+    const webhookUrl = this.callWebhookUrls.get(providerCallId);
+    if (!webhookUrl) return;
+
+    const callIdMatch = webhookUrl.match(/callId=([^&]+)/);
+    if (!callIdMatch) return;
+
+    this.deleteStoredTwiml(callIdMatch[1]);
+  }
+
   constructor(config: TwilioConfig, options: TwilioProviderOptions = {}) {
     if (!config.accountSid) {
       throw new Error("Twilio Account SID is required");
@@ -228,8 +256,14 @@ export class TwilioProvider implements VoiceCallProvider {
       case "busy":
       case "no-answer":
       case "failed":
+        if (callIdOverride) {
+          this.deleteStoredTwiml(callIdOverride);
+        }
         return { ...baseEvent, type: "call.ended", reason: callStatus };
       case "canceled":
+        if (callIdOverride) {
+          this.deleteStoredTwiml(callIdOverride);
+        }
         return { ...baseEvent, type: "call.ended", reason: "hangup-bot" };
       default:
         return null;
@@ -254,11 +288,25 @@ export class TwilioProvider implements VoiceCallProvider {
     const params = new URLSearchParams(ctx.rawBody);
     const callStatus = params.get("CallStatus");
     const direction = params.get("Direction");
+    const callIdFromQuery =
+      typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
+        ? ctx.query.callId.trim()
+        : undefined;
 
-    console.log(
-      `[voice-call] generateTwimlResponse: status=${callStatus} direction=${direction}`,
-    );
+    // Avoid logging webhook params/TwiML (may contain PII).
 
+    // Handle initial TwiML request (when Twilio first initiates the call)
+    // Check if we have stored TwiML for this call (notify mode)
+    if (callIdFromQuery) {
+      const storedTwiml = this.twimlStorage.get(callIdFromQuery);
+      if (storedTwiml) {
+        // Clean up after serving (one-time use)
+        this.deleteStoredTwiml(callIdFromQuery);
+        return storedTwiml;
+      }
+    }
+
+    // Handle subsequent webhook requests (status callbacks, etc.)
     // For inbound calls, answer immediately with stream
     if (direction === "inbound") {
       const streamUrl = this.getStreamUrl();
@@ -328,21 +376,27 @@ export class TwilioProvider implements VoiceCallProvider {
     const url = new URL(input.webhookUrl);
     url.searchParams.set("callId", input.callId);
 
-    // Build request params
+    // Create separate URL for status callbacks (required by Twilio)
+    const statusUrl = new URL(input.webhookUrl);
+    statusUrl.searchParams.set("callId", input.callId);
+    statusUrl.searchParams.set("type", "status"); // Differentiate from TwiML requests
+
+    // Store TwiML content if provided (for notify mode)
+    // We now serve it from the webhook endpoint instead of sending inline
+    if (input.inlineTwiml) {
+      this.twimlStorage.set(input.callId, input.inlineTwiml);
+    }
+
+    // Build request params - always use URL-based TwiML.
+    // Twilio silently ignores `StatusCallback` when using the inline `Twiml` parameter.
     const params: Record<string, string> = {
       To: input.to,
       From: input.from,
-      StatusCallback: url.toString(),
+      Url: url.toString(), // TwiML serving endpoint
+      StatusCallback: statusUrl.toString(), // Separate status callback endpoint
       StatusCallbackEvent: "initiated ringing answered completed",
       Timeout: "30",
     };
-
-    // Use inline TwiML for notify mode (simpler, no webhook needed)
-    if (input.inlineTwiml) {
-      params.Twiml = input.inlineTwiml;
-    } else {
-      params.Url = url.toString();
-    }
 
     const result = await this.apiRequest<TwilioCallResponse>(
       "/Calls.json",
@@ -361,6 +415,8 @@ export class TwilioProvider implements VoiceCallProvider {
    * Hang up a call via Twilio API.
    */
   async hangupCall(input: HangupCallInput): Promise<void> {
+    this.deleteStoredTwimlForProviderCall(input.providerCallId);
+
     this.callWebhookUrls.delete(input.providerCallId);
 
     await this.apiRequest(
