@@ -12,6 +12,45 @@ export type RestartAttempt = {
 };
 
 const SPAWN_TIMEOUT_MS = 2000;
+const SIGUSR1_AUTH_GRACE_MS = 5000;
+
+let sigusr1AuthorizedCount = 0;
+let sigusr1AuthorizedUntil = 0;
+let sigusr1ExternalAllowed = false;
+
+function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
+  if (sigusr1AuthorizedCount <= 0) return;
+  if (now <= sigusr1AuthorizedUntil) return;
+  sigusr1AuthorizedCount = 0;
+  sigusr1AuthorizedUntil = 0;
+}
+
+export function setGatewaySigusr1RestartPolicy(opts?: { allowExternal?: boolean }) {
+  sigusr1ExternalAllowed = opts?.allowExternal === true;
+}
+
+export function isGatewaySigusr1RestartExternallyAllowed() {
+  return sigusr1ExternalAllowed;
+}
+
+export function authorizeGatewaySigusr1Restart(delayMs = 0) {
+  const delay = Math.max(0, Math.floor(delayMs));
+  const expiresAt = Date.now() + delay + SIGUSR1_AUTH_GRACE_MS;
+  sigusr1AuthorizedCount += 1;
+  if (expiresAt > sigusr1AuthorizedUntil) {
+    sigusr1AuthorizedUntil = expiresAt;
+  }
+}
+
+export function consumeGatewaySigusr1RestartAuthorization(): boolean {
+  resetSigusr1AuthorizationIfExpired();
+  if (sigusr1AuthorizedCount <= 0) return false;
+  sigusr1AuthorizedCount -= 1;
+  if (sigusr1AuthorizedCount <= 0) {
+    sigusr1AuthorizedUntil = 0;
+  }
+  return true;
+}
 
 function formatSpawnDetail(result: {
   error?: unknown;
@@ -134,6 +173,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
+  authorizeGatewaySigusr1Restart(delayMs);
   const pid = process.pid;
   const hasListener = process.listenerCount("SIGUSR1") > 0;
   setTimeout(() => {
@@ -156,3 +196,11 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     mode: hasListener ? "emit" : "signal",
   };
 }
+
+export const __testing = {
+  resetSigusr1State() {
+    sigusr1AuthorizedCount = 0;
+    sigusr1AuthorizedUntil = 0;
+    sigusr1ExternalAllowed = false;
+  },
+};

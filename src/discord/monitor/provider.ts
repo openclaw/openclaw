@@ -14,7 +14,7 @@ import {
 import type { ClawdbotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
-import { createSubsystemLogger } from "../../logging.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -443,6 +443,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     emitter: gatewayEmitter,
     runtime,
   });
+  const abortSignal = opts.abortSignal;
+  const onAbort = () => {
+    if (!gateway) return;
+    gateway.options.reconnect = { maxAttempts: 0 };
+    gateway.disconnect();
+  };
+  if (abortSignal?.aborted) {
+    onAbort();
+  } else {
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  }
   // Timeout to detect zombie connections where HELLO is never received.
   const HELLO_TIMEOUT_MS = 30000;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -472,7 +483,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             disconnect: () => gateway.disconnect(),
           }
         : undefined,
-      abortSignal: opts.abortSignal,
+      abortSignal,
       onGatewayError: (err) => {
         runtime.error?.(danger(`discord gateway error: ${String(err)}`));
       },
@@ -487,6 +498,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     stopGatewayLogging();
     if (helloTimeoutId) clearTimeout(helloTimeoutId);
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
+    abortSignal?.removeEventListener("abort", onAbort);
   }
 }
 

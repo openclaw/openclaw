@@ -28,6 +28,8 @@ Docs: https://docs.clawd.bot
 - TUI: highlight model search matches and stabilize search ordering.
 - CLI: keep banners on routed commands, restore config guarding outside fast-path routing, and tighten fast-path flag parsing while skipping console capture for extra speed. (#1195) — thanks @gumadeiras.
 - Slack: resolve Bolt import interop for Bun + Node. (#1191) — thanks @CoreyH.
+- Gateway: require authorized restarts for SIGUSR1 (restart/apply/update) so config gating can't be bypassed.
+- Discord: stop reconnecting the gateway after aborts to prevent duplicate listeners.
 
 ## 2026.1.18-4
 
