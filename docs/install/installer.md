@@ -12,11 +12,18 @@ Clawdbot ships two installer scripts (served from `clawd.bot`):
 
 - `https://clawd.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
 - `https://clawd.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
+ - `https://clawd.bot/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
 
 To see the current flags/behavior, run:
 
 ```bash
 curl -fsSL https://clawd.bot/install.sh | bash -s -- --help
+```
+
+Windows (PowerShell) help:
+
+```powershell
+& ([scriptblock]::Create((iwr -useb https://clawd.bot/install.ps1))) -?
 ```
 
 If the installer completes but `clawdbot` is not found in a new terminal, it’s usually a Node/npm PATH issue. See: [Install](/install#nodejs--npm-path-sanity).
@@ -73,3 +80,37 @@ Help:
 ```bash
 curl -fsSL https://clawd.bot/install-cli.sh | bash -s -- --help
 ```
+
+## install.ps1 (Windows PowerShell)
+
+What it does (high level):
+
+- Ensure Node.js **22+** (winget/Chocolatey/Scoop or manual).
+- Choose install method:
+  - `npm` (default): `npm install -g clawdbot@latest`
+  - `git`: clone/build a source checkout and install a wrapper script
+- Runs `clawdbot doctor --non-interactive` on upgrades and git installs (best effort).
+
+Examples:
+
+```powershell
+iwr -useb https://clawd.bot/install.ps1 | iex
+```
+
+```powershell
+iwr -useb https://clawd.bot/install.ps1 | iex -InstallMethod git
+```
+
+```powershell
+iwr -useb https://clawd.bot/install.ps1 | iex -InstallMethod git -GitDir "C:\\clawdbot"
+```
+
+Environment variables:
+
+- `CLAWDBOT_INSTALL_METHOD=git|npm`
+- `CLAWDBOT_GIT_DIR=...`
+
+Git requirement:
+
+If you choose `-InstallMethod git` and Git is missing, the installer will print the
+Git for Windows link (`https://git-scm.com/download/win`) and exit.
