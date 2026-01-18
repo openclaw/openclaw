@@ -3,6 +3,7 @@ set -euo pipefail
 
 INSTALL_URL="${CLAWDBOT_INSTALL_URL:-https://clawd.bot/install.sh}"
 MODELS_MODE="${CLAWDBOT_E2E_MODELS:-both}" # both|openai|anthropic
+INSTALL_TAG="${CLAWDBOT_INSTALL_TAG:-latest}"
 E2E_PREVIOUS_VERSION="${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}"
 SKIP_PREVIOUS="${CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
@@ -32,7 +33,11 @@ elif [[ "$MODELS_MODE" == "anthropic" && -z "$ANTHROPIC_API_TOKEN" && -z "$ANTHR
 fi
 
 echo "==> Resolve npm versions"
-LATEST_VERSION="$(npm view clawdbot version)"
+EXPECTED_VERSION="$(npm view "clawdbot@${INSTALL_TAG}" version)"
+if [[ -z "$EXPECTED_VERSION" || "$EXPECTED_VERSION" == "undefined" || "$EXPECTED_VERSION" == "null" ]]; then
+  echo "ERROR: unable to resolve clawdbot@${INSTALL_TAG} version" >&2
+  exit 2
+fi
 if [[ -n "$E2E_PREVIOUS_VERSION" ]]; then
   PREVIOUS_VERSION="$E2E_PREVIOUS_VERSION"
 else
@@ -44,7 +49,7 @@ process.stdout.write(versions.length >= 2 ? versions[versions.length - 2] : vers
 NODE
   )"
 fi
-echo "latest=$LATEST_VERSION previous=$PREVIOUS_VERSION"
+echo "expected=$EXPECTED_VERSION previous=$PREVIOUS_VERSION"
 
 if [[ "$SKIP_PREVIOUS" == "1" ]]; then
   echo "==> Skip preinstall previous (CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS=1)"
@@ -54,13 +59,19 @@ else
 fi
 
 echo "==> Run official installer one-liner"
-curl -fsSL "$INSTALL_URL" | bash
+if [[ "$INSTALL_TAG" == "beta" ]]; then
+  CLAWDBOT_BETA=1 curl -fsSL "$INSTALL_URL" | bash
+elif [[ "$INSTALL_TAG" != "latest" ]]; then
+  CLAWDBOT_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
+else
+  curl -fsSL "$INSTALL_URL" | bash
+fi
 
 echo "==> Verify installed version"
 INSTALLED_VERSION="$(clawdbot --version 2>/dev/null | head -n 1 | tr -d '\r')"
-echo "installed=$INSTALLED_VERSION expected=$LATEST_VERSION"
-if [[ "$INSTALLED_VERSION" != "$LATEST_VERSION" ]]; then
-  echo "ERROR: expected clawdbot@$LATEST_VERSION, got clawdbot@$INSTALLED_VERSION" >&2
+echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
+if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
+  echo "ERROR: expected clawdbot@$EXPECTED_VERSION, got clawdbot@$INSTALLED_VERSION" >&2
   exit 1
 fi
 
