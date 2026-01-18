@@ -6,6 +6,27 @@ read_when:
 ---
 # Github Copilot
 
+## What is GitHub Copilot?
+
+GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
+models for your GitHub account and plan. Clawdbot can use Copilot as a model
+provider in two different ways.
+
+## Two ways to use Copilot in Clawdbot
+
+### 1) Built-in GitHub Copilot provider (`github-copilot`)
+
+Use the native device-login flow to obtain a GitHub token, then exchange it for
+Copilot API tokens when Clawdbot runs. This is the **default** and simplest path
+because it does not require VS Code.
+
+### 2) Copilot Proxy plugin (`copilot-proxy`)
+
+Use the **Copilot Proxy** VS Code extension as a local bridge. Clawdbot talks to
+the proxy’s `/v1` endpoint and uses the model list you configure there. Choose
+this when you already run Copilot Proxy in VS Code or need to route through it.
+You must enable the plugin and keep the VS Code extension running.
+
 Use GitHub Copilot as a model provider (`github-copilot`). The login command runs
 the GitHub device flow, saves an auth profile, and updates your config to use that
 profile.

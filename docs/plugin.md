@@ -46,7 +46,7 @@ See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
-- Copilot Proxy (provider auth) — bundled as `copilot-proxy` (disabled by default)
+- Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
 
 Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
