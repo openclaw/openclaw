@@ -8,6 +8,7 @@ const execSyncMock = vi.fn();
 
 describe("cli credentials", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.useFakeTimers();
   });
 

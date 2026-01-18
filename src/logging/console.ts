@@ -1,6 +1,7 @@
+import { createRequire } from "node:module";
 import util from "node:util";
 
-import { type ClawdbotConfig, loadConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
@@ -13,6 +14,8 @@ type ConsoleSettings = {
   style: ConsoleStyle;
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
+
+const requireConfig = createRequire(import.meta.url);
 
 function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) return "debug";
@@ -28,8 +31,19 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  const cfg: ClawdbotConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? loadConfig().logging;
+  let cfg: ClawdbotConfig["logging"] | undefined;
+  if (loggingState.overrideSettings) {
+    cfg = loggingState.overrideSettings as LoggerSettings;
+  } else {
+    try {
+      const loaded = requireConfig("../config/config.js") as {
+        loadConfig?: () => ClawdbotConfig;
+      };
+      cfg = loaded.loadConfig?.().logging;
+    } catch {
+      cfg = undefined;
+    }
+  }
   const level = normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
