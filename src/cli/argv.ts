@@ -1,8 +1,42 @@
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg));
+}
+
+function isValueToken(arg: string | undefined): boolean {
+  if (!arg) return false;
+  if (arg === FLAG_TERMINATOR) return false;
+  if (!arg.startsWith("-")) return true;
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+}
+
+export function hasFlag(argv: string[], name: string): boolean {
+  const args = argv.slice(2);
+  for (const arg of args) {
+    if (arg === FLAG_TERMINATOR) break;
+    if (arg === name) return true;
+  }
+  return false;
+}
+
+export function getFlagValue(argv: string[], name: string): string | null | undefined {
+  const args = argv.slice(2);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === FLAG_TERMINATOR) break;
+    if (arg === name) {
+      const next = args[i + 1];
+      return isValueToken(next) ? next : null;
+    }
+    if (arg.startsWith(`${name}=`)) {
+      const value = arg.slice(name.length + 1);
+      return value ? value : null;
+    }
+  }
+  return undefined;
 }
 
 export function getCommandPath(argv: string[], depth = 2): string[] {

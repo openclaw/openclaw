@@ -528,6 +528,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   }
 
   async function writeConfigFile(cfg: ClawdbotConfig) {
+    clearConfigCache();
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
