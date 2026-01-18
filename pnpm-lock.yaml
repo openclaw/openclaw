@@ -238,6 +238,8 @@ importers:
         specifier: 3.14.5
         version: 3.14.5(typescript@5.9.3)
 
+  extensions/bluebubbles: {}
+
   extensions/copilot-proxy: {}
 
   extensions/google-antigravity-auth: {}
@@ -255,6 +257,12 @@ importers:
       matrix-js-sdk:
         specifier: 40.0.0
         version: 40.0.0
+
+  extensions/memory-core:
+    dependencies:
+      clawdbot:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/msteams:
     dependencies:
