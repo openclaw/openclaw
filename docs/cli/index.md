@@ -32,6 +32,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
 - [`nodes`](/cli/nodes)
+- [`node`](/cli/node)
 - [`sandbox`](/cli/sandbox)
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
@@ -168,21 +169,15 @@ clawdbot [--dev] [--profile <name>] <command>
     runs
     run
   nodes
-    status
-    describe
-    list
-    pending
-    approve
-    reject
-    rename
-    invoke
-    run
-    notify
-    camera list|snap|clip
-    canvas snapshot|present|hide|navigate|eval
-    canvas a2ui push|reset
-    screen record
-    location get
+  node
+    start
+    daemon
+      status
+      install
+      uninstall
+      start
+      stop
+      restart
   browser
     status
     start
@@ -772,6 +767,20 @@ Subcommands:
 
 All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
+## Node host
+
+`node` runs a **headless node host** or manages it as a background service. See
+[`clawdbot node`](/cli/node).
+
+Subcommands:
+- `node start --host <gateway-host> --port 18790`
+- `node daemon status`
+- `node daemon install [--host <gateway-host>] [--port <port>] [--tls] [--tls-fingerprint <sha256>] [--node-id <id>] [--display-name <name>] [--runtime <node|bun>] [--force]`
+- `node daemon uninstall`
+- `node daemon start`
+- `node daemon stop`
+- `node daemon restart`
+
 ## Nodes
 
 `nodes` talks to the Gateway and targets paired nodes. See [/nodes](/nodes).
@@ -788,7 +797,7 @@ Subcommands:
 - `nodes reject <requestId>`
 - `nodes rename --node <id|name|ip> --name <displayName>`
 - `nodes invoke --node <id|name|ip> --command <command> [--params <json>] [--invoke-timeout <ms>] [--idempotency-key <key>]`
-- `nodes run --node <id|name|ip> [--cwd <path>] [--env KEY=VAL] [--command-timeout <ms>] [--needs-screen-recording] [--invoke-timeout <ms>] <command...>` (mac only)
+- `nodes run --node <id|name|ip> [--cwd <path>] [--env KEY=VAL] [--command-timeout <ms>] [--needs-screen-recording] [--invoke-timeout <ms>] <command...>` (mac node or headless node host)
 - `nodes notify --node <id|name|ip> [--title <text>] [--body <text>] [--sound <name>] [--priority <passive|active|timeSensitive>] [--delivery <system|overlay|auto>] [--invoke-timeout <ms>]` (mac only)
 
 Camera:

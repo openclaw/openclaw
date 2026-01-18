@@ -46,7 +46,7 @@ When TLS is enabled, discovery TXT records include `bridgeTls=1` plus
 ## Frames
 
 Client → Gateway:
-- `req` / `res`: scoped gateway RPC (chat, sessions, config, health, voicewake)
+- `req` / `res`: scoped gateway RPC (chat, sessions, config, health, voicewake, skills.bins)
 - `event`: node signals (voice transcript, agent request, chat subscribe)
 
 Gateway → Client:

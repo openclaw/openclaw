@@ -147,9 +147,10 @@ Notes:
 - The permission prompt must be accepted on the Android device before the capability is advertised.
 - Wi-Fi-only devices without telephony will not advertise `sms.send`.
 
-## System commands (mac node)
+## System commands (node host / mac node)
 
-The macOS node exposes `system.run` and `system.notify`.
+The macOS node exposes `system.run` and `system.notify`. The headless node host
+exposes `system.run` and `system.which`.
 
 Examples:
 
@@ -163,11 +164,32 @@ Notes:
 - `system.notify` respects notification permission state on the macOS app.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.
 - `system.notify` supports `--priority <passive|active|timeSensitive>` and `--delivery <system|overlay|auto>`.
-- `system.run` is gated by the macOS app policy (Settings → "Node Run Commands"): "Always Ask" prompts per command, "Always Allow" runs without prompts, and "Never" disables the tool. Denied prompts return `SYSTEM_RUN_DENIED`; disabled returns `SYSTEM_RUN_DISABLED`.
+- On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
+  Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
+- On headless node host, `system.run` is gated by exec approvals (`~/.clawdbot/exec-approvals.json`).
 
 ## Permissions map
 
 Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by permission name (e.g. `screenRecording`, `accessibility`) with boolean values (`true` = granted).
+
+## Headless node host (cross-platform)
+
+Clawdbot can run a **headless node host** (no UI) that connects to the Gateway
+bridge and exposes `system.run` / `system.which`. This is useful on Linux/Windows
+or for running a minimal node alongside a server.
+
+Start it:
+
+```bash
+clawdbot node start --host <gateway-host> --port 18790
+```
+
+Notes:
+- Pairing is still required (the Gateway will show a node approval prompt).
+- The node host stores its node id + pairing token in `~/.clawdbot/node.json`.
+- Exec approvals are enforced locally via `~/.clawdbot/exec-approvals.json`
+  (see [Exec approvals](/tools/exec-approvals)).
+- Add `--tls` / `--tls-fingerprint` when the bridge requires TLS.
 
 ## Mac node mode
 

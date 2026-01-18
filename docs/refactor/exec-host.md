@@ -29,6 +29,7 @@ read_when:
 - **Runner:** headless system service; UI app hosts a Unix socket for approvals.
 - **Node identity:** use existing `nodeId`.
 - **Socket auth:** Unix socket + token (cross-platform); split later if needed.
+- **Node host state:** `~/.clawdbot/node.json` (node id + pairing token).
 
 ## Key concepts
 ### Host
