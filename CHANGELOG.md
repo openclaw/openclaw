@@ -9,6 +9,9 @@ Docs: https://docs.clawd.bot
 - macOS: stop syncing Peekaboo as a git submodule in postinstall.
 - Swabble: use the tagged Commander Swift package release.
 
+### Fixes
+- Auth profiles: keep auto-pinned preference while allowing rotation on failover; user pins stay locked. (#1138) — thanks @cheeeee.
+
 ## 2026.1.18-3
 
 ### Changes

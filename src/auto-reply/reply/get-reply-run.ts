@@ -152,7 +152,13 @@ async function resolveSessionAuthProfileOverride(params: {
   let current = sessionEntry.authProfileOverride?.trim();
   if (current && !order.includes(current)) current = undefined;
 
-  const source = sessionEntry.authProfileOverrideSource ?? (current ? "user" : undefined);
+  const source =
+    sessionEntry.authProfileOverrideSource ??
+    (typeof sessionEntry.authProfileOverrideCompactionCount === "number"
+      ? "auto"
+      : current
+        ? "user"
+        : undefined);
   if (source === "user" && current && !isNewSession) {
     return current;
   }
@@ -406,6 +412,7 @@ export async function runPreparedReply(
     storePath,
     isNewSession,
   });
+  const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSid,
@@ -430,6 +437,7 @@ export async function runPreparedReply(
       provider,
       model,
       authProfileId,
+      authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,

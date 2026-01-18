@@ -117,15 +117,17 @@ export async function runEmbeddedPiAgent(
       }
 
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-      const explicitProfileId = params.authProfileId?.trim();
+      const preferredProfileId = params.authProfileId?.trim();
+      const lockedProfileId =
+        params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
         store: authStore,
         provider,
-        preferredProfile: explicitProfileId,
+        preferredProfile: preferredProfileId,
       });
-      if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
-        throw new Error(`Auth profile "${explicitProfileId}" is not configured for ${provider}.`);
+      if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
+        throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
       const profileCandidates = profileOrder.length > 0 ? profileOrder : [undefined];
       let profileIndex = 0;
@@ -162,6 +164,7 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
+        if (lockedProfileId) return false;
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
@@ -172,7 +175,7 @@ export async function runEmbeddedPiAgent(
             attemptedThinking.clear();
             return true;
           } catch (err) {
-            if (candidate && candidate === explicitProfileId) throw err;
+            if (candidate && candidate === lockedProfileId) throw err;
             nextIndex += 1;
           }
         }
@@ -182,7 +185,7 @@ export async function runEmbeddedPiAgent(
       try {
         await applyApiKeyInfo(profileCandidates[profileIndex]);
       } catch (err) {
-        if (profileCandidates[profileIndex] === explicitProfileId) throw err;
+        if (profileCandidates[profileIndex] === lockedProfileId) throw err;
         const advanced = await advanceAuthProfile();
         if (!advanced) throw err;
       }
