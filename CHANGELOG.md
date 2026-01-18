@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - CLI: surface FTS + embedding cache state in `clawdbot memory status`.
 - Plugins: allow optional agent tools with explicit allowlists and add plugin tool authoring guide. https://docs.clawd.bot/plugins/agent-tools
 - Tools: centralize plugin tool policy helpers.
+- Docs: clarify plugin agent tool configuration. https://docs.clawd.bot/plugins/agent-tools
 
 ### Fixes
 - Voice call: include request query in Twilio webhook verification when publicUrl is set. (#864)

@@ -6,8 +6,13 @@ read_when:
 ---
 # Plugin agent tools
 
-Clawdbot plugins can register agent tools (JSON‑schema functions) that appear in the
-agent tool list. Tools can be **required** (always available) or **optional** (opt‑in).
+Clawdbot plugins can register **agent tools** (JSON‑schema functions) that are exposed
+to the LLM during agent runs. Tools can be **required** (always available) or
+**optional** (opt‑in).
+
+Agent tools are configured under `tools` in the main config, or per‑agent under
+`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
+can call.
 
 ## Basic tool
 
@@ -55,7 +60,7 @@ export default function (api) {
 }
 ```
 
-Enable optional tools in `agents.list[].tools.allow`:
+Enable optional tools in `agents.list[].tools.allow` (or global `tools.allow`):
 
 ```json5
 {
@@ -75,6 +80,11 @@ Enable optional tools in `agents.list[].tools.allow`:
   }
 }
 ```
+
+Other config knobs that affect tool availability:
+- `tools.profile` / `agents.list[].tools.profile` (base allowlist)
+- `tools.byProvider` / `agents.list[].tools.byProvider` (provider‑specific allow/deny)
+- `tools.sandbox.tools.*` (sandbox tool policy when sandboxed)
 
 ## Rules + tips
 
