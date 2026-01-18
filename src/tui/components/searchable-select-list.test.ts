@@ -45,6 +45,41 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toBe("google/gemini-pro");
   });
 
+  it("prioritizes exact substring matches over fuzzy matches", () => {
+    // Add items where one has early exact match, others are fuzzy or late matches
+    const items = [
+      { value: "openrouter/auto", label: "openrouter/auto", description: "Routes to best" },
+      { value: "opus-direct", label: "opus-direct", description: "Direct opus model" },
+      { value: "anthropic/claude-3-opus", label: "anthropic/claude-3-opus", description: "Claude 3 Opus" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    // Type "opus" - should match "opus-direct" first (earliest exact substring)
+    for (const ch of "opus") {
+      list.handleInput(ch);
+    }
+
+    // First result should be "opus-direct" where "opus" appears at position 0
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe("opus-direct");
+  });
+
+  it("exact label match beats description match", () => {
+    const items = [
+      { value: "provider/other", label: "provider/other", description: "This mentions opus in description" },
+      { value: "provider/opus-model", label: "provider/opus-model", description: "Something else" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "opus") {
+      list.handleInput(ch);
+    }
+
+    // Label match should win over description match
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe("provider/opus-model");
+  });
+
   it("filters items with fuzzy matching", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
