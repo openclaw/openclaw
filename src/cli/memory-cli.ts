@@ -178,18 +178,33 @@ export function registerMemoryCli(program: Command) {
             if (status.vector.extensionPath) {
               lines.push(`${label("Vector path")} ${info(status.vector.extensionPath)}`);
             }
-          if (status.vector.loadError) {
-            lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+            if (status.vector.loadError) {
+              lines.push(`${label("Vector error")} ${warn(status.vector.loadError)}`);
+            }
           }
-        }
-        if (status.cache) {
-          const cacheState = status.cache.enabled ? "enabled" : "disabled";
-          const cacheColor = status.cache.enabled ? theme.success : theme.muted;
-          const suffix =
+          if (status.fts) {
+            const ftsState = status.fts.enabled
+              ? status.fts.available
+                ? "ready"
+                : "unavailable"
+              : "disabled";
+            const ftsColor =
+              ftsState === "ready" ? theme.success : ftsState === "unavailable" ? theme.warn : theme.muted;
+            lines.push(`${label("FTS")} ${colorize(rich, ftsColor, ftsState)}`);
+            if (status.fts.error) {
+              lines.push(`${label("FTS error")} ${warn(status.fts.error)}`);
+            }
+          }
+          if (status.cache) {
+            const cacheState = status.cache.enabled ? "enabled" : "disabled";
+            const cacheColor = status.cache.enabled ? theme.success : theme.muted;
+            const suffix =
               status.cache.enabled && typeof status.cache.entries === "number"
                 ? ` (${status.cache.entries} entries)`
                 : "";
-            lines.push(`${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`);
+            lines.push(
+              `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`,
+            );
             if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
               lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
             }

@@ -256,6 +256,14 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        hybrid: z
+          .object({
+            enabled: z.boolean().optional(),
+            vectorWeight: z.number().min(0).max(1).optional(),
+            textWeight: z.number().min(0).max(1).optional(),
+            candidateMultiplier: z.number().int().positive().optional(),
+          })
+          .optional(),
       })
       .optional(),
     cache: z

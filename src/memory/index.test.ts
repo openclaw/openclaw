@@ -181,6 +181,38 @@ describe("memory index", () => {
     expect(embedBatchCalls).toBe(afterFirst);
   });
 
+  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath, vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: {
+              minScore: 0,
+              hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+            },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    expect(result.manager).not.toBeNull();
+    if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
+
+    const status = manager.status();
+    if (!status.fts?.available) return;
+
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+  });
+
   it("reports vector availability after probe", async () => {
     const cfg = {
       agents: {

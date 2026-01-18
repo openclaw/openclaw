@@ -53,6 +53,12 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
+    hybrid: {
+      enabled: boolean;
+      vectorWeight: number;
+      textWeight: number;
+      candidateMultiplier: number;
+    };
   };
   cache: {
     enabled: boolean;
@@ -66,6 +72,10 @@ const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_HYBRID_ENABLED = true;
+const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
+const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
+const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
 
@@ -157,6 +167,24 @@ function mergeConfig(
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
   };
+  const hybrid = {
+    enabled:
+      overrides?.query?.hybrid?.enabled ??
+      defaults?.query?.hybrid?.enabled ??
+      DEFAULT_HYBRID_ENABLED,
+    vectorWeight:
+      overrides?.query?.hybrid?.vectorWeight ??
+      defaults?.query?.hybrid?.vectorWeight ??
+      DEFAULT_HYBRID_VECTOR_WEIGHT,
+    textWeight:
+      overrides?.query?.hybrid?.textWeight ??
+      defaults?.query?.hybrid?.textWeight ??
+      DEFAULT_HYBRID_TEXT_WEIGHT,
+    candidateMultiplier:
+      overrides?.query?.hybrid?.candidateMultiplier ??
+      defaults?.query?.hybrid?.candidateMultiplier ??
+      DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+  };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
@@ -164,6 +192,12 @@ function mergeConfig(
 
   const overlap = Math.max(0, Math.min(chunking.overlap, chunking.tokens - 1));
   const minScore = Math.max(0, Math.min(1, query.minScore));
+  const vectorWeight = Math.max(0, Math.min(1, hybrid.vectorWeight));
+  const textWeight = Math.max(0, Math.min(1, hybrid.textWeight));
+  const sum = vectorWeight + textWeight;
+  const normalizedVectorWeight = sum > 0 ? vectorWeight / sum : DEFAULT_HYBRID_VECTOR_WEIGHT;
+  const normalizedTextWeight = sum > 0 ? textWeight / sum : DEFAULT_HYBRID_TEXT_WEIGHT;
+  const candidateMultiplier = Math.max(1, Math.min(20, Math.floor(hybrid.candidateMultiplier)));
   return {
     enabled,
     sources,
@@ -178,7 +212,16 @@ function mergeConfig(
     store,
     chunking: { tokens: Math.max(1, chunking.tokens), overlap },
     sync,
-    query: { ...query, minScore },
+    query: {
+      ...query,
+      minScore,
+      hybrid: {
+        enabled: Boolean(hybrid.enabled),
+        vectorWeight: normalizedVectorWeight,
+        textWeight: normalizedTextWeight,
+        candidateMultiplier,
+      },
+    },
     cache: {
       enabled: Boolean(cache.enabled),
       maxEntries:
