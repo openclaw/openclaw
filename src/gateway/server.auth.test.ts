@@ -1,5 +1,4 @@
 import { describe, expect, test, vi } from "vitest";
-import fs from "node:fs/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { HANDSHAKE_TIMEOUT_MS } from "./server-constants.js";
@@ -16,13 +15,14 @@ import {
 installGatewayTestHooks();
 
 async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
-  const deadline = process.hrtime.bigint() + BigInt(timeoutMs) * 1_000_000n;
-  while (process.hrtime.bigint() < deadline) {
-    if (ws.readyState === WebSocket.CLOSED) return true;
-    // Yield to the event loop without relying on timers (fake timers can leak).
-    await fs.stat(process.cwd()).catch(() => {});
-  }
-  return ws.readyState === WebSocket.CLOSED;
+  if (ws.readyState === WebSocket.CLOSED) return true;
+  return await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(ws.readyState === WebSocket.CLOSED), timeoutMs);
+    ws.once("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 describe("gateway server auth/connect", () => {

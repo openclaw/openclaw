@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const waitForPortOpen = async (
@@ -108,37 +109,28 @@ describe("gateway SIGTERM", () => {
       CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
       CLAWDBOT_BRIDGE_PORT: "0",
     };
-    let childArgs: string[];
-    if (process.platform === "win32") {
-      const bootstrapPath = path.join(stateDir, "clawdbot-entry-bootstrap.mjs");
-      fs.writeFileSync(
-        bootstrapPath,
-        [
-          'import { pathToFileURL } from "node:url";',
-          "const entry = process.env.CLAWDBOT_ENTRY_PATH;",
-          'const rawArgs = process.env.CLAWDBOT_ENTRY_ARGS ?? "[]";',
-          "if (!entry) {",
-          '  console.error("Missing CLAWDBOT_ENTRY_PATH");',
-          "  process.exit(1);",
-          "}",
-          "let entryArgs = [];",
-          "try {",
-          "  entryArgs = JSON.parse(rawArgs);",
-          "} catch (err) {",
-          '  console.error("Failed to parse CLAWDBOT_ENTRY_ARGS", err);',
-          "  process.exit(1);",
-          "}",
-          "process.argv = [process.argv[0], entry, ...entryArgs];",
-          "await import(pathToFileURL(entry).href);",
-        ].join("\n"),
-        "utf8",
-      );
-      childArgs = ["--import", "tsx", bootstrapPath];
-      env.CLAWDBOT_ENTRY_PATH = path.resolve("src/entry.ts");
-      env.CLAWDBOT_ENTRY_ARGS = JSON.stringify(entryArgs);
-    } else {
-      childArgs = ["--import", "tsx", "src/entry.ts", ...entryArgs];
-    }
+    const bootstrapPath = path.join(stateDir, "clawdbot-entry-bootstrap.mjs");
+    const runMainPath = path.resolve("src/cli/run-main.ts");
+    fs.writeFileSync(
+      bootstrapPath,
+      [
+        'import { pathToFileURL } from "node:url";',
+        'const rawArgs = process.env.CLAWDBOT_ENTRY_ARGS ?? "[]";',
+        "let entryArgs = [];",
+        "try {",
+        "  entryArgs = JSON.parse(rawArgs);",
+        "} catch (err) {",
+        '  console.error("Failed to parse CLAWDBOT_ENTRY_ARGS", err);',
+        "  process.exit(1);",
+        "}",
+        `const runMainUrl = ${JSON.stringify(pathToFileURL(runMainPath).href)};`,
+        "const { runCli } = await import(runMainUrl);",
+        "await runCli([process.execPath, \"clawdbot\", ...entryArgs]);",
+      ].join("\n"),
+      "utf8",
+    );
+    const childArgs = ["--import", "tsx", bootstrapPath];
+    env.CLAWDBOT_ENTRY_ARGS = JSON.stringify(entryArgs);
 
     child = spawn(nodeBin, childArgs, {
       cwd: process.cwd(),
