@@ -32,6 +32,9 @@ apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
 vendor/
+apps/ios/Clawdbot.xcodeproj/
+apps/ios/Clawdbot.xcodeproj/**
+apps/macos/.build/**
 
 # Vendor build artifacts
 vendor/a2ui/renderers/lit/dist/
@@ -44,6 +47,7 @@ apps/ios/fastlane/Preview.html
 apps/ios/fastlane/screenshots/
 apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
+apps/ios/fastlane/.env
 
 # fastlane build artifacts (local)
 apps/ios/*.ipa
