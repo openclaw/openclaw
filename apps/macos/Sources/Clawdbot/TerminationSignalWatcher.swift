@@ -42,6 +42,7 @@ final class TerminationSignalWatcher {
         self.logger.info("received signal \(sig, privacy: .public); terminating")
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
+        DevicePairingApprovalPrompter.shared.stop()
         NSApp.terminate(nil)
 
         // Safety net: don't hang forever if something blocks termination.

@@ -51,7 +51,14 @@ import type {
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
+  ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParamsSchema,
 } from "./exec-approvals.js";
+import type {
+  DevicePairApproveParamsSchema,
+  DevicePairListParamsSchema,
+  DevicePairRejectParamsSchema,
+} from "./devices.js";
 import type {
   ConnectParamsSchema,
   ErrorShapeSchema,
@@ -175,6 +182,11 @@ export type ExecApprovalsSetParams = Static<typeof ExecApprovalsSetParamsSchema>
 export type ExecApprovalsNodeGetParams = Static<typeof ExecApprovalsNodeGetParamsSchema>;
 export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParamsSchema>;
 export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
+export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
+export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
+export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
+export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

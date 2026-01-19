@@ -2,6 +2,7 @@ import type { ErrorShape } from "./types.js";
 
 export const ErrorCodes = {
   NOT_LINKED: "NOT_LINKED",
+  NOT_PAIRED: "NOT_PAIRED",
   AGENT_TIMEOUT: "AGENT_TIMEOUT",
   INVALID_REQUEST: "INVALID_REQUEST",
   UNAVAILABLE: "UNAVAILABLE",

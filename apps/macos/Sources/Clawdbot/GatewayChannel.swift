@@ -204,6 +204,7 @@ actor GatewayChannelActor {
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let clientDisplayName = InstanceIdentity.displayName
         let clientId = "clawdbot-macos"
+        let clientMode = "ui"
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
@@ -212,7 +213,7 @@ actor GatewayChannelActor {
             "version": ProtoAnyCodable(
                 Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
             "platform": ProtoAnyCodable(platform),
-            "mode": ProtoAnyCodable("ui"),
+            "mode": ProtoAnyCodable(clientMode),
             "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
         ]
         client["deviceFamily"] = ProtoAnyCodable("Mac")
@@ -226,11 +227,35 @@ actor GatewayChannelActor {
             "caps": ProtoAnyCodable([] as [String]),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
+            "role": ProtoAnyCodable("operator"),
+            "scopes": ProtoAnyCodable(["operator.admin", "operator.approvals", "operator.pairing"]),
         ]
         if let token = self.token {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
+        }
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
+        let scopes = "operator.admin,operator.approvals,operator.pairing"
+        let payload = [
+            "v1",
+            identity.deviceId,
+            clientId,
+            clientMode,
+            "operator",
+            scopes,
+            String(signedAtMs),
+            self.token ?? "",
+        ].joined(separator: "|")
+        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
+           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
+            params["device"] = ProtoAnyCodable([
+                "id": ProtoAnyCodable(identity.deviceId),
+                "publicKey": ProtoAnyCodable(publicKey),
+                "signature": ProtoAnyCodable(signature),
+                "signedAt": ProtoAnyCodable(signedAtMs),
+            ])
         }
 
         let frame = RequestFrame(

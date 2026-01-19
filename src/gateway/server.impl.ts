@@ -37,6 +37,8 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { startGatewayBridgeRuntime } from "./server-bridge-runtime.js";
+import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
 import { createAgentEventHandler } from "./server-chat.js";
@@ -351,6 +353,9 @@ export async function startGatewayServer(
 
   void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
+  const execApprovalManager = new ExecApprovalManager();
+  const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager);
+
   attachGatewayWsHandlers({
     wss,
     clients,
@@ -364,7 +369,10 @@ export async function startGatewayServer(
     logGateway: log,
     logHealth,
     logWsControl,
-    extraHandlers: pluginRegistry.gatewayHandlers,
+    extraHandlers: {
+      ...pluginRegistry.gatewayHandlers,
+      ...execApprovalHandlers,
+    },
     broadcast,
     context: {
       deps,

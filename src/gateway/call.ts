@@ -7,6 +7,7 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -186,6 +187,9 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
       clientVersion: opts.clientVersion ?? "dev",
       platform: opts.platform,
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      role: "operator",
+      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async () => {

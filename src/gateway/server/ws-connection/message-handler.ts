@@ -2,12 +2,24 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 
 import type { WebSocket } from "ws";
+import {
+  deriveDeviceIdFromPublicKey,
+  normalizeDevicePublicKeyBase64Url,
+  verifyDeviceSignature,
+} from "../../../infra/device-identity.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+  updatePairedDeviceMetadata,
+} from "../../../infra/device-pairing.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
+import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress } from "../../net.js";
 import {
   type ConnectParams,
@@ -37,6 +49,8 @@ import {
 import type { GatewayWsClient } from "../ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -235,6 +249,163 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
         const authMethod = authResult.method ?? "none";
+
+        const role = connectParams.role ?? "operator";
+        const scopes = Array.isArray(connectParams.scopes)
+          ? connectParams.scopes
+          : role === "operator"
+            ? ["operator.admin"]
+            : [];
+        connectParams.role = role;
+        connectParams.scopes = scopes;
+
+        const device = connectParams.device;
+        let devicePublicKey: string | null = null;
+        if (device) {
+          const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
+          if (!derivedId || derivedId !== device.id) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-id-mismatch",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device identity mismatch"),
+            });
+            close(1008, "device identity mismatch");
+            return;
+          }
+          const signedAt = device.signedAt;
+          if (
+            typeof signedAt !== "number" ||
+            Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
+          ) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature-stale",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature expired"),
+            });
+            close(1008, "device signature expired");
+            return;
+          }
+          const payload = buildDeviceAuthPayload({
+            deviceId: device.id,
+            clientId: connectParams.client.id,
+            clientMode: connectParams.client.mode,
+            role,
+            scopes,
+            signedAtMs: signedAt,
+            token: connectParams.auth?.token ?? null,
+          });
+          if (!verifyDeviceSignature(device.publicKey, payload, device.signature)) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+            });
+            close(1008, "device signature invalid");
+            return;
+          }
+          devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
+          if (!devicePublicKey) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-public-key",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device public key invalid"),
+            });
+            close(1008, "device public key invalid");
+            return;
+          }
+        }
+
+        if (device && devicePublicKey) {
+          const paired = await getPairedDevice(device.id);
+          const isPaired = paired?.publicKey === devicePublicKey;
+          if (!isPaired) {
+            const pairing = await requestDevicePairing({
+              deviceId: device.id,
+              publicKey: devicePublicKey,
+              displayName: connectParams.client.displayName,
+              platform: connectParams.client.platform,
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
+              role,
+              scopes,
+              remoteIp: remoteAddr,
+              silent: isLoopbackAddress(remoteAddr) && authMethod !== "none",
+            });
+            const context = buildRequestContext();
+            if (pairing.request.silent === true) {
+              const approved = await approveDevicePairing(pairing.request.requestId);
+              if (approved) {
+                context.broadcast(
+                  "device.pair.resolved",
+                  {
+                    requestId: pairing.request.requestId,
+                    deviceId: approved.device.deviceId,
+                    decision: "approved",
+                    ts: Date.now(),
+                  },
+                  { dropIfSlow: true },
+                );
+              }
+            } else if (pairing.created) {
+              context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+            }
+            if (pairing.request.silent !== true) {
+              setHandshakeState("failed");
+              setCloseCause("pairing-required", {
+                deviceId: device.id,
+                requestId: pairing.request.requestId,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
+                  details: { requestId: pairing.request.requestId },
+                }),
+              });
+              close(1008, "pairing required");
+              return;
+            }
+          } else {
+            await updatePairedDeviceMetadata(device.id, {
+              displayName: connectParams.client.displayName,
+              platform: connectParams.client.platform,
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
+              role,
+              scopes,
+              remoteIp: remoteAddr,
+            });
+          }
+        }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
         const clientId = connectParams.client.id;

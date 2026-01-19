@@ -86,3 +86,26 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ExecApprovalRequestParamsSchema = Type.Object(
+  {
+    command: NonEmptyString,
+    cwd: Type.Optional(Type.String()),
+    host: Type.Optional(Type.String()),
+    security: Type.Optional(Type.String()),
+    ask: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    resolvedPath: Type.Optional(Type.String()),
+    sessionKey: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalResolveParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    decision: NonEmptyString,
+  },
+  { additionalProperties: false },
+);

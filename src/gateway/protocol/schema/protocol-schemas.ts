@@ -53,7 +53,16 @@ import {
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
+  ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParamsSchema,
 } from "./exec-approvals.js";
+import {
+  DevicePairApproveParamsSchema,
+  DevicePairListParamsSchema,
+  DevicePairRejectParamsSchema,
+  DevicePairRequestedEventSchema,
+  DevicePairResolvedEventSchema,
+} from "./devices.js";
 import {
   ConnectParamsSchema,
   ErrorShapeSchema,
@@ -182,6 +191,13 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
   ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
+  ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  DevicePairListParams: DevicePairListParamsSchema,
+  DevicePairApproveParams: DevicePairApproveParamsSchema,
+  DevicePairRejectParams: DevicePairRejectParamsSchema,
+  DevicePairRequestedEvent: DevicePairRequestedEventSchema,
+  DevicePairResolvedEvent: DevicePairResolvedEventSchema,
   ChatHistoryParams: ChatHistoryParamsSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,

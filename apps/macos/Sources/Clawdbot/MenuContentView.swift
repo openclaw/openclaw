@@ -15,6 +15,7 @@ struct MenuContent: View {
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
+    @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
@@ -48,6 +49,13 @@ struct MenuContent: View {
                         let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
                         self.statusLine(
                             label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))\(repairSuffix)",
+                            color: .orange)
+                    }
+                    if self.devicePairingPrompter.pendingCount > 0 {
+                        let repairCount = self.devicePairingPrompter.pendingRepairCount
+                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
+                        self.statusLine(
+                            label: "Device pairing pending (\(self.devicePairingPrompter.pendingCount))\(repairSuffix)",
                             color: .orange)
                     }
                 }

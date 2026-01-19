@@ -2,12 +2,15 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
+import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../infra/device-identity.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   type ConnectParams,
   type EventFrame,
@@ -35,6 +38,9 @@ export type GatewayClientOptions = {
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  role?: string;
+  scopes?: string[];
+  deviceIdentity?: DeviceIdentity;
   minProtocol?: number;
   maxProtocol?: number;
   onEvent?: (evt: EventFrame) => void;
@@ -110,6 +116,28 @@ export class GatewayClient {
             password: this.opts.password,
           }
         : undefined;
+    const signedAtMs = Date.now();
+    const role = this.opts.role ?? "operator";
+    const scopes = this.opts.scopes ?? ["operator.admin"];
+    const device = (() => {
+      if (!this.opts.deviceIdentity) return undefined;
+      const payload = buildDeviceAuthPayload({
+        deviceId: this.opts.deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+        role,
+        scopes,
+        signedAtMs,
+        token: this.opts.token ?? null,
+      });
+      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
+      return {
+        id: this.opts.deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+      };
+    })();
     const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -123,6 +151,9 @@ export class GatewayClient {
       },
       caps: [],
       auth,
+      role,
+      scopes,
+      device,
     };
 
     void this.request<HelloOk>("connect", params)

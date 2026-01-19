@@ -13,7 +13,6 @@ import {
   maxAsk,
   minSecurity,
   recordAllowlistUse,
-  requestExecApprovalViaSocket,
   resolveCommandResolution,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
@@ -526,20 +525,21 @@ export function createExecTool(
 
         let approvedByAsk = false;
         if (requiresAsk) {
+          const decisionResult = (await callGatewayTool("exec.approval.request", {}, {
+            command: params.command,
+            cwd: workdir,
+            host: "gateway",
+            security: hostSecurity,
+            ask: hostAsk,
+            agentId: defaults?.agentId,
+            resolvedPath: resolution?.resolvedPath ?? null,
+            sessionKey: defaults?.sessionKey ?? null,
+            timeoutMs: 120_000,
+          })) as { decision?: string } | null;
           const decision =
-            (await requestExecApprovalViaSocket({
-              socketPath: approvals.socketPath,
-              token: approvals.token,
-              request: {
-                command: params.command,
-                cwd: workdir,
-                host: "gateway",
-                security: hostSecurity,
-                ask: hostAsk,
-                agentId: defaults?.agentId,
-                resolvedPath: resolution?.resolvedPath ?? null,
-              },
-            })) ?? null;
+            decisionResult && typeof decisionResult === "object"
+              ? decisionResult.decision ?? null
+              : null;
 
           if (decision === "deny") {
             throw new Error("exec denied: user denied");
@@ -550,14 +550,12 @@ export function createExecTool(
             } else if (askFallback === "allowlist") {
               if (!allowlistMatch) {
                 throw new Error(
-                  "exec denied: approval required (companion app approval UI not available)",
+                  "exec denied: approval required (approval UI not available)",
                 );
               }
               approvedByAsk = true;
             } else {
-              throw new Error(
-                "exec denied: approval required (companion app approval UI not available)",
-              );
+              throw new Error("exec denied: approval required (approval UI not available)");
             }
           }
           if (decision === "allow-once") {

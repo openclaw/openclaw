@@ -76,6 +76,10 @@ actor GatewayConnection {
         case voicewakeSet = "voicewake.set"
         case nodePairApprove = "node.pair.approve"
         case nodePairReject = "node.pair.reject"
+        case devicePairList = "device.pair.list"
+        case devicePairApprove = "device.pair.approve"
+        case devicePairReject = "device.pair.reject"
+        case execApprovalResolve = "exec.approval.resolve"
         case cronList = "cron.list"
         case cronRuns = "cron.runs"
         case cronRun = "cron.run"
@@ -606,6 +610,22 @@ extension GatewayConnection {
     func nodePairReject(requestId: String) async throws {
         try await self.requestVoid(
             method: .nodePairReject,
+            params: ["requestId": AnyCodable(requestId)],
+            timeoutMs: 10000)
+    }
+
+    // MARK: - Device pairing
+
+    func devicePairApprove(requestId: String) async throws {
+        try await self.requestVoid(
+            method: .devicePairApprove,
+            params: ["requestId": AnyCodable(requestId)],
+            timeoutMs: 10000)
+    }
+
+    func devicePairReject(requestId: String) async throws {
+        try await self.requestVoid(
+            method: .devicePairReject,
             params: ["requestId": AnyCodable(requestId)],
             timeoutMs: 10000)
     }
