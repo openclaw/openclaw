@@ -35,6 +35,7 @@ import {
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -64,7 +65,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const capped = capArrayByJsonBytes(sliced, MAX_CHAT_HISTORY_MESSAGES_BYTES).items;
+    const sanitized = stripEnvelopeFromMessages(sliced);
+    const capped = capArrayByJsonBytes(sanitized, MAX_CHAT_HISTORY_MESSAGES_BYTES).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
