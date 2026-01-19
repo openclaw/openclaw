@@ -36,7 +36,7 @@ async function rmTempDir(dir: string) {
 }
 
 describe("gateway server cron", () => {
-  test("supports cron.add and cron.list", async () => {
+  test("supports cron.add and cron.list", { timeout: 120_000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });

@@ -78,8 +78,9 @@ function normalizeWindowsArgv(argv: string[]): string[] {
     next = [argv[0], argv[1], ...argv.slice(3)];
   }
 
-  if (next.length < 3) return next;
-  const cleaned = [...next];
+  const filtered = next.filter((arg, index) => index === 0 || !isExecPath(arg));
+  if (filtered.length < 3) return filtered;
+  const cleaned = [...filtered];
   for (let i = 2; i < cleaned.length; ) {
     const arg = cleaned[i];
     if (!arg || arg.startsWith("-")) {
