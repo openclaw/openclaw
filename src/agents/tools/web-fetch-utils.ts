@@ -25,7 +25,7 @@ function normalizeWhitespace(value: string): string {
     .trim();
 }
 
-function htmlToMarkdown(html: string): { text: string; title?: string } {
+export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   const title = titleMatch ? normalizeWhitespace(stripTags(titleMatch[1])) : undefined;
   let text = html

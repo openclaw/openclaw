@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
+- Web: trim HTML error bodies in web_fetch failures. (#1193) — thanks @sebslight.
 
 ## 2026.1.18-5
 
