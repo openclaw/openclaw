@@ -99,7 +99,16 @@ export class GatewayClient {
           typeof fingerprintValue === "string" ? fingerprintValue : "",
         );
         const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
-        return Boolean(fingerprint && fingerprint === expected);
+        if (!expected) {
+          return new Error("gateway tls fingerprint missing");
+        }
+        if (!fingerprint) {
+          return new Error("gateway tls fingerprint unavailable");
+        }
+        if (fingerprint !== expected) {
+          return new Error("gateway tls fingerprint mismatch");
+        }
+        return undefined;
       };
     }
     this.ws = new WebSocket(url, wsOptions);
