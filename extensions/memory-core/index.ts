@@ -1,10 +1,12 @@
 import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 
 const memoryCorePlugin = {
   id: "memory-core",
   name: "Memory (Core)",
   description: "File-backed memory search tools and CLI",
   kind: "memory",
+  configSchema: emptyPluginConfigSchema(),
   register(api: ClawdbotPluginApi) {
     api.registerTool(
       (ctx) => {

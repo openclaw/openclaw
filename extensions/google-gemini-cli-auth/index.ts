@@ -1,3 +1,5 @@
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+
 import { loginGeminiCliOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -14,6 +16,7 @@ const geminiCliPlugin = {
   id: "google-gemini-cli-auth",
   name: "Google Gemini CLI Auth",
   description: "OAuth flow for Gemini CLI (Google Code Assist)",
+  configSchema: emptyPluginConfigSchema(),
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,

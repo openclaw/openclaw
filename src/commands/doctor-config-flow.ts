@@ -4,6 +4,7 @@ import {
   migrateLegacyConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { note } from "../terminal/note.js";
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -45,6 +46,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
+  void params.confirm;
+  const shouldRepair = params.options.repair === true || params.options.yes === true;
   const snapshot = await readConfigFileSnapshot();
   let cfg: ClawdbotConfig = snapshot.config ?? {};
   if (snapshot.exists && !snapshot.valid && snapshot.legacyIssues.length === 0) {
@@ -56,25 +59,34 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
       "Legacy config keys detected",
     );
-    const migrate =
-      params.options.nonInteractive === true
-        ? true
-        : await params.confirm({
-            message: "Migrate legacy config entries now?",
-            initialValue: true,
-          });
-    if (migrate) {
+    if (shouldRepair) {
       // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
       if (changes.length > 0) note(changes.join("\n"), "Doctor changes");
       if (migrated) cfg = migrated;
+    } else {
+      note('Run "clawdbot doctor --fix" to apply legacy migrations.', "Doctor");
     }
   }
 
   const normalized = normalizeLegacyConfigValues(cfg);
   if (normalized.changes.length > 0) {
     note(normalized.changes.join("\n"), "Doctor changes");
-    cfg = normalized.config;
+    if (shouldRepair) {
+      cfg = normalized.config;
+    } else {
+      note('Run "clawdbot doctor --fix" to apply these changes.', "Doctor");
+    }
+  }
+
+  const autoEnable = applyPluginAutoEnable({ config: cfg, env: process.env });
+  if (autoEnable.changes.length > 0) {
+    note(autoEnable.changes.join("\n"), "Doctor changes");
+    if (shouldRepair) {
+      cfg = autoEnable.config;
+    } else {
+      note('Run "clawdbot doctor --fix" to apply these changes.', "Doctor");
+    }
   }
 
   noteOpencodeProviderOverrides(cfg);

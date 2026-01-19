@@ -13,6 +13,7 @@ export const ClawdbotSchema = z
         lastTouchedVersion: z.string().optional(),
         lastTouchedAt: z.string().optional(),
       })
+      .strict()
       .optional(),
     env: z
       .object({
@@ -21,6 +22,7 @@ export const ClawdbotSchema = z
             enabled: z.boolean().optional(),
             timeoutMs: z.number().int().nonnegative().optional(),
           })
+          .strict()
           .optional(),
         vars: z.record(z.string(), z.string()).optional(),
       })
@@ -34,6 +36,7 @@ export const ClawdbotSchema = z
         lastRunCommand: z.string().optional(),
         lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
       })
+      .strict()
       .optional(),
     logging: z
       .object({
@@ -66,12 +69,14 @@ export const ClawdbotSchema = z
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),
       })
+      .strict()
       .optional(),
     update: z
       .object({
         channel: z.union([z.literal("stable"), z.literal("beta")]).optional(),
         checkOnStart: z.boolean().optional(),
       })
+      .strict()
       .optional(),
     browser: z
       .object({
@@ -99,28 +104,33 @@ export const ClawdbotSchema = z
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
                 color: HexColorSchema,
               })
+              .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {
                 message: "Profile must set cdpPort or cdpUrl",
               }),
           )
           .optional(),
       })
+      .strict()
       .optional(),
     ui: z
       .object({
         seamColor: HexColorSchema.optional(),
       })
+      .strict()
       .optional(),
     auth: z
       .object({
         profiles: z
           .record(
             z.string(),
-            z.object({
-              provider: z.string(),
-              mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
-              email: z.string().optional(),
-            }),
+            z
+              .object({
+                provider: z.string(),
+                mode: z.union([z.literal("api_key"), z.literal("oauth"), z.literal("token")]),
+                email: z.string().optional(),
+              })
+              .strict(),
           )
           .optional(),
         order: z.record(z.string(), z.array(z.string())).optional(),
@@ -131,8 +141,10 @@ export const ClawdbotSchema = z
             billingMaxHours: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     models: ModelsConfigSchema,
     agents: AgentsSchema,
@@ -149,6 +161,7 @@ export const ClawdbotSchema = z
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
       })
+      .strict()
       .optional(),
     hooks: z
       .object({
@@ -162,6 +175,7 @@ export const ClawdbotSchema = z
         gmail: HooksGmailSchema,
         internal: InternalHooksSchema,
       })
+      .strict()
       .optional(),
     web: z
       .object({
@@ -175,8 +189,10 @@ export const ClawdbotSchema = z
             jitter: z.number().min(0).max(1).optional(),
             maxAttempts: z.number().int().min(0).optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     channels: ChannelsSchema,
     bridge: z
@@ -194,8 +210,10 @@ export const ClawdbotSchema = z
             keyPath: z.string().optional(),
             caPath: z.string().optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     discovery: z
       .object({
@@ -203,8 +221,10 @@ export const ClawdbotSchema = z
           .object({
             enabled: z.boolean().optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     canvasHost: z
       .object({
@@ -213,6 +233,7 @@ export const ClawdbotSchema = z
         port: z.number().int().positive().optional(),
         liveReload: z.boolean().optional(),
       })
+      .strict()
       .optional(),
     talk: z
       .object({
@@ -223,6 +244,7 @@ export const ClawdbotSchema = z
         apiKey: z.string().optional(),
         interruptOnSpeech: z.boolean().optional(),
       })
+      .strict()
       .optional(),
     gateway: z
       .object({
@@ -236,6 +258,7 @@ export const ClawdbotSchema = z
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
           })
+          .strict()
           .optional(),
         auth: z
           .object({
@@ -244,12 +267,14 @@ export const ClawdbotSchema = z
             password: z.string().optional(),
             allowTailscale: z.boolean().optional(),
           })
+          .strict()
           .optional(),
         tailscale: z
           .object({
             mode: z.union([z.literal("off"), z.literal("serve"), z.literal("funnel")]).optional(),
             resetOnExit: z.boolean().optional(),
           })
+          .strict()
           .optional(),
         remote: z
           .object({
@@ -259,6 +284,7 @@ export const ClawdbotSchema = z
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),
           })
+          .strict()
           .optional(),
         reload: z
           .object({
@@ -272,6 +298,7 @@ export const ClawdbotSchema = z
               .optional(),
             debounceMs: z.number().int().min(0).optional(),
           })
+          .strict()
           .optional(),
         http: z
           .object({
@@ -281,12 +308,16 @@ export const ClawdbotSchema = z
                   .object({
                     enabled: z.boolean().optional(),
                   })
+                  .strict()
                   .optional(),
               })
+              .strict()
               .optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     skills: z
       .object({
@@ -297,6 +328,7 @@ export const ClawdbotSchema = z
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })
+          .strict()
           .optional(),
         install: z
           .object({
@@ -305,6 +337,7 @@ export const ClawdbotSchema = z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
           })
+          .strict()
           .optional(),
         entries: z
           .record(
@@ -315,10 +348,11 @@ export const ClawdbotSchema = z
                 apiKey: z.string().optional(),
                 env: z.record(z.string(), z.string()).optional(),
               })
-              .passthrough(),
+              .strict(),
           )
           .optional(),
       })
+      .strict()
       .optional(),
     plugins: z
       .object({
@@ -329,11 +363,13 @@ export const ClawdbotSchema = z
           .object({
             paths: z.array(z.string()).optional(),
           })
+          .strict()
           .optional(),
         slots: z
           .object({
             memory: z.string().optional(),
           })
+          .strict()
           .optional(),
         entries: z
           .record(
@@ -343,7 +379,7 @@ export const ClawdbotSchema = z
                 enabled: z.boolean().optional(),
                 config: z.record(z.string(), z.unknown()).optional(),
               })
-              .passthrough(),
+              .strict(),
           )
           .optional(),
         installs: z
@@ -358,13 +394,14 @@ export const ClawdbotSchema = z
                 version: z.string().optional(),
                 installedAt: z.string().optional(),
               })
-              .passthrough(),
+              .strict(),
           )
           .optional(),
       })
+      .strict()
       .optional(),
   })
-  .passthrough()
+  .strict()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
     if (agents.length === 0) return;

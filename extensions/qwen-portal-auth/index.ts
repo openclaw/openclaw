@@ -1,3 +1,5 @@
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+
 import { loginQwenPortalOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "qwen-portal";
@@ -30,6 +32,7 @@ const qwenPortalPlugin = {
   id: "qwen-portal-auth",
   name: "Qwen OAuth",
   description: "OAuth flow for Qwen (free-tier) models",
+  configSchema: emptyPluginConfigSchema(),
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,

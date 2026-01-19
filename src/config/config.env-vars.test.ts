@@ -12,7 +12,7 @@ describe("config env vars", () => {
         path.join(configDir, "clawdbot.json"),
         JSON.stringify(
           {
-            env: { OPENROUTER_API_KEY: "config-key" },
+            env: { vars: { OPENROUTER_API_KEY: "config-key" } },
           },
           null,
           2,
@@ -36,7 +36,7 @@ describe("config env vars", () => {
         path.join(configDir, "clawdbot.json"),
         JSON.stringify(
           {
-            env: { OPENROUTER_API_KEY: "config-key" },
+            env: { vars: { OPENROUTER_API_KEY: "config-key" } },
           },
           null,
           2,

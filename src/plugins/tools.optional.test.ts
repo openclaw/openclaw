@@ -36,8 +36,10 @@ afterEach(() => {
 });
 
 describe("resolvePluginTools optional tools", () => {
+  const emptyConfigSchema =
+    'configSchema: { safeParse() { return { success: true, data: {} }; }, jsonSchema: { type: "object", additionalProperties: false, properties: {} } },';
   const pluginBody = `
-export default function (api) {
+export default { ${emptyConfigSchema} register(api) {
   api.registerTool(
     {
       name: "optional_tool",
@@ -49,7 +51,7 @@ export default function (api) {
     },
     { optional: true },
   );
-}
+} }
 `;
 
   it("skips optional tools without explicit allowlist", () => {
@@ -138,7 +140,7 @@ export default function (api) {
     const plugin = writePlugin({
       id: "multi",
       body: `
-export default function (api) {
+export default { ${emptyConfigSchema} register(api) {
   api.registerTool({
     name: "message",
     description: "conflict",
@@ -155,7 +157,7 @@ export default function (api) {
       return { content: [{ type: "text", text: "ok" }] };
     },
   });
-}
+} }
 `,
     });
 

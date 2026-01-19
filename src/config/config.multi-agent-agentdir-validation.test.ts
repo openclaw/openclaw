@@ -38,7 +38,7 @@ describe("multi-agent agentDir validation", () => {
                 { id: "b", agentDir: "~/.clawdbot/agents/shared/agent" },
               ],
             },
-            bindings: [{ agentId: "a", match: { provider: "telegram" } }],
+            bindings: [{ agentId: "a", match: { channel: "telegram" } }],
           },
           null,
           2,

@@ -164,8 +164,6 @@ describe("config identity defaults", () => {
             messages: {
               messagePrefix: "[clawdbot]",
               responsePrefix: "🦞",
-              // legacy field should be ignored (moved to providers)
-              textChunkLimit: 9999,
             },
             channels: {
               whatsapp: { allowFrom: ["+15555550123"], textChunkLimit: 4444 },

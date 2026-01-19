@@ -1,3 +1,5 @@
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -61,6 +63,7 @@ const copilotProxyPlugin = {
   id: "copilot-proxy",
   name: "Copilot Proxy",
   description: "Local Copilot Proxy (VS Code LM) provider plugin",
+  configSchema: emptyPluginConfigSchema(),
   register(api) {
     api.registerProvider({
       id: "copilot-proxy",

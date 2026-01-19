@@ -36,6 +36,7 @@ export const WhatsAppAccountSchema = z
           .object({
             requireMention: z.boolean().optional(),
           })
+          .strict()
           .optional(),
       )
       .optional(),
@@ -45,9 +46,11 @@ export const WhatsAppAccountSchema = z
         direct: z.boolean().optional().default(true),
         group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
+      .strict()
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
@@ -84,6 +87,7 @@ export const WhatsAppConfigSchema = z
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
       })
+      .strict()
       .optional(),
     groups: z
       .record(
@@ -92,6 +96,7 @@ export const WhatsAppConfigSchema = z
           .object({
             requireMention: z.boolean().optional(),
           })
+          .strict()
           .optional(),
       )
       .optional(),
@@ -101,9 +106,11 @@ export const WhatsAppConfigSchema = z
         direct: z.boolean().optional().default(true),
         group: z.enum(["always", "mentions", "never"]).optional().default("mentions"),
       })
+      .strict()
       .optional(),
     debounceMs: z.number().int().nonnegative().optional().default(0),
   })
+  .strict()
   .superRefine((value, ctx) => {
     if (value.dmPolicy !== "open") return;
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);

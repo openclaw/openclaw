@@ -37,22 +37,26 @@ export const HookMappingSchema = z
         module: z.string(),
         export: z.string().optional(),
       })
+      .strict()
       .optional(),
   })
+  .strict()
   .optional();
 
-export const InternalHookHandlerSchema = z.object({
-  event: z.string(),
-  module: z.string(),
-  export: z.string().optional(),
-});
+export const InternalHookHandlerSchema = z
+  .object({
+    event: z.string(),
+    module: z.string(),
+    export: z.string().optional(),
+  })
+  .strict();
 
 const HookConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  .passthrough();
+  .strict();
 
 const HookInstallRecordSchema = z
   .object({
@@ -64,7 +68,7 @@ const HookInstallRecordSchema = z
     installedAt: z.string().optional(),
     hooks: z.array(z.string()).optional(),
   })
-  .passthrough();
+  .strict();
 
 export const InternalHooksSchema = z
   .object({
@@ -75,9 +79,11 @@ export const InternalHooksSchema = z
       .object({
         extraDirs: z.array(z.string()).optional(),
       })
+      .strict()
       .optional(),
     installs: z.record(z.string(), HookInstallRecordSchema).optional(),
   })
+  .strict()
   .optional();
 
 export const HooksGmailSchema = z
@@ -97,6 +103,7 @@ export const HooksGmailSchema = z
         port: z.number().int().positive().optional(),
         path: z.string().optional(),
       })
+      .strict()
       .optional(),
     tailscale: z
       .object({
@@ -104,6 +111,7 @@ export const HooksGmailSchema = z
         path: z.string().optional(),
         target: z.string().optional(),
       })
+      .strict()
       .optional(),
     model: z.string().optional(),
     thinking: z
@@ -116,4 +124,5 @@ export const HooksGmailSchema = z
       ])
       .optional(),
   })
+  .strict()
   .optional();
