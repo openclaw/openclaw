@@ -52,7 +52,8 @@ export async function runCli(argv: string[] = process.argv) {
 function stripWindowsNodeExec(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
   const normalizeArg = (value: string): string => value.replace(/^"+|"+$/g, "");
-  const normalizeCandidate = (value: string): string => normalizeArg(value).replace(/^\\\\\\?\\/, "");
+  const normalizeCandidate = (value: string): string =>
+    normalizeArg(value).replace(/^\\\\\\?\\/, "");
   const execPath = normalizeCandidate(process.execPath);
   const execPathLower = execPath.toLowerCase();
   const execBase = path.basename(execPath).toLowerCase();
