@@ -29,10 +29,19 @@ export function loadGatewayPlugins(params: {
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
   if (pluginRegistry.diagnostics.length > 0) {
     for (const diag of pluginRegistry.diagnostics) {
+      const details = [
+        diag.pluginId ? `plugin=${diag.pluginId}` : null,
+        diag.source ? `source=${diag.source}` : null,
+      ]
+        .filter((entry): entry is string => Boolean(entry))
+        .join(", ");
+      const message = details
+        ? `[plugins] ${diag.message} (${details})`
+        : `[plugins] ${diag.message}`;
       if (diag.level === "error") {
-        params.log.warn(`[plugins] ${diag.message}`);
+        params.log.error(message);
       } else {
-        params.log.info(`[plugins] ${diag.message}`);
+        params.log.info(message);
       }
     }
   }
