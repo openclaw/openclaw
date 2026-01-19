@@ -58,17 +58,30 @@ class SecurePrefs(context: Context) {
   private val _preventSleep = MutableStateFlow(prefs.getBoolean("screen.preventSleep", true))
   val preventSleep: StateFlow<Boolean> = _preventSleep
 
-  private val _manualEnabled = MutableStateFlow(prefs.getBoolean("bridge.manual.enabled", false))
+  private val _manualEnabled =
+    MutableStateFlow(readBoolWithMigration("gateway.manual.enabled", "bridge.manual.enabled", false))
   val manualEnabled: StateFlow<Boolean> = _manualEnabled
 
-  private val _manualHost = MutableStateFlow(prefs.getString("bridge.manual.host", "")!!)
+  private val _manualHost =
+    MutableStateFlow(readStringWithMigration("gateway.manual.host", "bridge.manual.host", ""))
   val manualHost: StateFlow<String> = _manualHost
 
-  private val _manualPort = MutableStateFlow(prefs.getInt("bridge.manual.port", 18790))
+  private val _manualPort =
+    MutableStateFlow(readIntWithMigration("gateway.manual.port", "bridge.manual.port", 18789))
   val manualPort: StateFlow<Int> = _manualPort
 
+  private val _manualTls =
+    MutableStateFlow(readBoolWithMigration("gateway.manual.tls", null, true))
+  val manualTls: StateFlow<Boolean> = _manualTls
+
   private val _lastDiscoveredStableId =
-    MutableStateFlow(prefs.getString("bridge.lastDiscoveredStableId", "")!!)
+    MutableStateFlow(
+      readStringWithMigration(
+        "gateway.lastDiscoveredStableID",
+        "bridge.lastDiscoveredStableId",
+        "",
+      ),
+    )
   val lastDiscoveredStableId: StateFlow<String> = _lastDiscoveredStableId
 
   private val _canvasDebugStatusEnabled =
@@ -86,7 +99,7 @@ class SecurePrefs(context: Context) {
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
-    prefs.edit { putString("bridge.lastDiscoveredStableId", trimmed) }
+    prefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
     _lastDiscoveredStableId.value = trimmed
   }
 
@@ -117,19 +130,24 @@ class SecurePrefs(context: Context) {
   }
 
   fun setManualEnabled(value: Boolean) {
-    prefs.edit { putBoolean("bridge.manual.enabled", value) }
+    prefs.edit { putBoolean("gateway.manual.enabled", value) }
     _manualEnabled.value = value
   }
 
   fun setManualHost(value: String) {
     val trimmed = value.trim()
-    prefs.edit { putString("bridge.manual.host", trimmed) }
+    prefs.edit { putString("gateway.manual.host", trimmed) }
     _manualHost.value = trimmed
   }
 
   fun setManualPort(value: Int) {
-    prefs.edit { putInt("bridge.manual.port", value) }
+    prefs.edit { putInt("gateway.manual.port", value) }
     _manualPort.value = value
+  }
+
+  fun setManualTls(value: Boolean) {
+    prefs.edit { putBoolean("gateway.manual.tls", value) }
+    _manualTls.value = value
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -137,23 +155,37 @@ class SecurePrefs(context: Context) {
     _canvasDebugStatusEnabled.value = value
   }
 
-  fun loadBridgeToken(): String? {
-    val key = "bridge.token.${_instanceId.value}"
-    return prefs.getString(key, null)
+  fun loadGatewayToken(): String? {
+    val key = "gateway.token.${_instanceId.value}"
+    val stored = prefs.getString(key, null)?.trim()
+    if (!stored.isNullOrEmpty()) return stored
+    val legacy = prefs.getString("bridge.token.${_instanceId.value}", null)?.trim()
+    return legacy?.takeIf { it.isNotEmpty() }
   }
 
-  fun saveBridgeToken(token: String) {
-    val key = "bridge.token.${_instanceId.value}"
+  fun saveGatewayToken(token: String) {
+    val key = "gateway.token.${_instanceId.value}"
     prefs.edit { putString(key, token.trim()) }
   }
 
-  fun loadBridgeTlsFingerprint(stableId: String): String? {
-    val key = "bridge.tls.$stableId"
+  fun loadGatewayPassword(): String? {
+    val key = "gateway.password.${_instanceId.value}"
+    val stored = prefs.getString(key, null)?.trim()
+    return stored?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveGatewayPassword(password: String) {
+    val key = "gateway.password.${_instanceId.value}"
+    prefs.edit { putString(key, password.trim()) }
+  }
+
+  fun loadGatewayTlsFingerprint(stableId: String): String? {
+    val key = "gateway.tls.$stableId"
     return prefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
-  fun saveBridgeTlsFingerprint(stableId: String, fingerprint: String) {
-    val key = "bridge.tls.$stableId"
+  fun saveGatewayTlsFingerprint(stableId: String, fingerprint: String) {
+    val key = "gateway.tls.$stableId"
     prefs.edit { putString(key, fingerprint.trim()) }
   }
 
@@ -224,5 +256,41 @@ class SecurePrefs(context: Context) {
     } catch (_: Throwable) {
       defaultWakeWords
     }
+  }
+
+  private fun readBoolWithMigration(newKey: String, oldKey: String?, defaultValue: Boolean): Boolean {
+    if (prefs.contains(newKey)) {
+      return prefs.getBoolean(newKey, defaultValue)
+    }
+    if (oldKey != null && prefs.contains(oldKey)) {
+      val value = prefs.getBoolean(oldKey, defaultValue)
+      prefs.edit { putBoolean(newKey, value) }
+      return value
+    }
+    return defaultValue
+  }
+
+  private fun readStringWithMigration(newKey: String, oldKey: String?, defaultValue: String): String {
+    if (prefs.contains(newKey)) {
+      return prefs.getString(newKey, defaultValue) ?: defaultValue
+    }
+    if (oldKey != null && prefs.contains(oldKey)) {
+      val value = prefs.getString(oldKey, defaultValue) ?: defaultValue
+      prefs.edit { putString(newKey, value) }
+      return value
+    }
+    return defaultValue
+  }
+
+  private fun readIntWithMigration(newKey: String, oldKey: String?, defaultValue: Int): Int {
+    if (prefs.contains(newKey)) {
+      return prefs.getInt(newKey, defaultValue)
+    }
+    if (oldKey != null && prefs.contains(oldKey)) {
+      val value = prefs.getInt(oldKey, defaultValue)
+      prefs.edit { putInt(newKey, value) }
+      return value
+    }
+    return defaultValue
   }
 }

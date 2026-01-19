@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun StatusPill(
-  bridge: BridgeState,
+  gateway: GatewayState,
   voiceEnabled: Boolean,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -49,11 +49,11 @@ fun StatusPill(
         Surface(
           modifier = Modifier.size(9.dp),
           shape = CircleShape,
-          color = bridge.color,
+          color = gateway.color,
         ) {}
 
         Text(
-          text = bridge.title,
+          text = gateway.title,
           style = MaterialTheme.typography.labelLarge,
         )
       }
@@ -106,7 +106,7 @@ data class StatusActivity(
   val tint: Color? = null,
 )
 
-enum class BridgeState(val title: String, val color: Color) {
+enum class GatewayState(val title: String, val color: Color) {
   Connected("Connected", Color(0xFF2ECC71)),
   Connecting("Connecting…", Color(0xFFF1C40F)),
   Error("Error", Color(0xFFE74C3C)),
