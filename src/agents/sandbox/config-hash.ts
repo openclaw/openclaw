@@ -9,13 +9,17 @@ type SandboxHashInput = {
   agentWorkspaceDir: string;
 };
 
+function isPrimitive(value: unknown): value is string | number | boolean | bigint | symbol | null {
+  return value === null || (typeof value !== "object" && typeof value !== "function");
+}
+
 function normalizeForHash(value: unknown): unknown {
   if (value === undefined) return undefined;
   if (Array.isArray(value)) {
-    const normalized = value.map(normalizeForHash).filter((item) => item !== undefined);
-    const allPrimitive = normalized.every((item) => item === null || typeof item !== "object");
-    if (allPrimitive) {
-      return [...normalized].sort((a, b) => String(a).localeCompare(String(b)));
+    const normalized = value.map(normalizeForHash).filter((item): item is unknown => item !== undefined);
+    const primitives = normalized.filter(isPrimitive);
+    if (primitives.length === normalized.length) {
+      return [...primitives].sort((a, b) => String(a).localeCompare(String(b)));
     }
     return normalized;
   }
