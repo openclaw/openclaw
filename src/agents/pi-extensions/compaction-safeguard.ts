@@ -10,6 +10,101 @@ const FALLBACK_SUMMARY =
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
+const MAX_TOOL_FAILURES = 8;
+const MAX_TOOL_FAILURE_CHARS = 240;
+
+type ToolFailure = {
+  toolCallId: string;
+  toolName: string;
+  summary: string;
+  meta?: string;
+};
+
+function normalizeFailureText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateFailureText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function formatToolFailureMeta(details: unknown): string | undefined {
+  if (!details || typeof details !== "object") return undefined;
+  const record = details as Record<string, unknown>;
+  const status = typeof record.status === "string" ? record.status : undefined;
+  const exitCode =
+    typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
+      ? record.exitCode
+      : undefined;
+  const parts: string[] = [];
+  if (status) parts.push(`status=${status}`);
+  if (exitCode !== undefined) parts.push(`exitCode=${exitCode}`);
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function extractToolResultText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type === "text" && typeof rec.text === "string") {
+      parts.push(rec.text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
+  const failures: ToolFailure[] = [];
+  const seen = new Set<string>();
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const role = (message as { role?: unknown }).role;
+    if (role !== "toolResult") continue;
+    const toolResult = message as {
+      toolCallId?: unknown;
+      toolName?: unknown;
+      content?: unknown;
+      details?: unknown;
+      isError?: unknown;
+    };
+    if (toolResult.isError !== true) continue;
+    const toolCallId =
+      typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
+    if (!toolCallId || seen.has(toolCallId)) continue;
+    seen.add(toolCallId);
+
+    const toolName =
+      typeof toolResult.toolName === "string" && toolResult.toolName.trim()
+        ? toolResult.toolName
+        : "tool";
+    const rawText = extractToolResultText(toolResult.content);
+    const meta = formatToolFailureMeta(toolResult.details);
+    const normalized = normalizeFailureText(rawText);
+    const summary = truncateFailureText(
+      normalized || (meta ? "failed" : "failed (no output)"),
+      MAX_TOOL_FAILURE_CHARS,
+    );
+    failures.push({ toolCallId, toolName, summary, meta });
+  }
+
+  return failures;
+}
+
+function formatToolFailuresSection(failures: ToolFailure[]): string {
+  if (failures.length === 0) return "";
+  const lines = failures.slice(0, MAX_TOOL_FAILURES).map((failure) => {
+    const meta = failure.meta ? ` (${failure.meta})` : "";
+    return `- ${failure.toolName}${meta}: ${failure.summary}`;
+  });
+  if (failures.length > MAX_TOOL_FAILURES) {
+    lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
+  }
+  return `\n\n## Tool Failures\n${lines.join("\n")}`;
+}
 
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
@@ -103,7 +198,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const { preparation, customInstructions, signal } = event;
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
-    const fallbackSummary = `${FALLBACK_SUMMARY}${fileOpsSummary}`;
+    const toolFailures = collectToolFailures([
+      ...preparation.messagesToSummarize,
+      ...preparation.turnPrefixMessages,
+    ]);
+    const toolFailureSection = formatToolFailuresSection(toolFailures);
+    const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
     const model = ctx.model;
     if (!model) {
@@ -162,6 +262,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;
       }
 
+      summary += toolFailureSection;
       summary += fileOpsSummary;
 
       return {
@@ -189,3 +290,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
   });
 }
+
+export const __testing = {
+  collectToolFailures,
+  formatToolFailuresSection,
+} as const;

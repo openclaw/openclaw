@@ -13,6 +13,7 @@ import {
 } from "../infra/shell-env.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import {
+  applyCompactionDefaults,
   applyContextPruningDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
@@ -334,9 +335,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
       }
       const cfg = applyModelDefaults(
-        applyContextPruningDefaults(
-          applySessionDefaults(
-            applyLoggingDefaults(applyMessageDefaults(validated.data as ClawdbotConfig)),
+        applyCompactionDefaults(
+          applyContextPruningDefaults(
+            applySessionDefaults(
+              applyLoggingDefaults(applyMessageDefaults(validated.data as ClawdbotConfig)),
+            ),
           ),
         ),
       );
@@ -380,7 +383,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const hash = hashConfigRaw(null);
       const config = applyTalkApiKey(
         applyModelDefaults(
-          applyContextPruningDefaults(applySessionDefaults(applyMessageDefaults({}))),
+          applyCompactionDefaults(
+            applyContextPruningDefaults(applySessionDefaults(applyMessageDefaults({}))),
+          ),
         ),
       );
       const legacyIssues: LegacyConfigIssue[] = [];

@@ -9,7 +9,12 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
+<<<<<<< Updated upstream
 - Agents: propagate accountId into embedded runs so sub-agent announce routing honors the originating account. (#1058)
+||||||| Stash base
+=======
+- Compaction: include tool failure summaries in safeguard compaction to prevent retry loops. (#1084)
+>>>>>>> Stashed changes
 
 ## 2026.1.18-5
 
