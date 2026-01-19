@@ -323,6 +323,22 @@ These are “real pipeline” regressions without real providers:
 - Gateway tool calling (mock OpenAI, real gateway + agent loop): `src/gateway/gateway.tool-calling.mock-openai.test.ts`
 - Gateway wizard (WS `wizard.start`/`wizard.next`, writes config + auth enforced): `src/gateway/gateway.wizard.e2e.test.ts`
 
+## Agent reliability evals (skills)
+
+We already have a few CI-safe tests that behave like “agent reliability evals”:
+- Mock tool-calling through the real gateway + agent loop (`src/gateway/gateway.tool-calling.mock-openai.test.ts`).
+- End-to-end wizard flows that validate session wiring and config effects (`src/gateway/gateway.wizard.e2e.test.ts`).
+
+What’s still missing for skills (see [Skills](/tools/skills)):
+- **Decisioning:** when skills are listed in the prompt, does the agent pick the right skill (or avoid irrelevant ones)?
+- **Compliance:** does the agent read `SKILL.md` before use and follow required steps/args?
+- **Workflow contracts:** multi-turn scenarios that assert tool order, session history carryover, and sandbox boundaries.
+
+Future evals should stay deterministic first:
+- A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
+- A small suite of skill-focused scenarios (use vs avoid, gating, prompt injection).
+- Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
+
 ## Adding regressions (guidance)
 
 When you fix a provider/model issue discovered in live:
