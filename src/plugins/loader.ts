@@ -101,12 +101,17 @@ const normalizePluginsConfig = (config?: ClawdbotConfig["plugins"]): NormalizedP
 
 const resolvePluginSdkAlias = (): string | null => {
   try {
+    const preferDist = process.env.VITEST || process.env.NODE_ENV === "test";
     let cursor = path.dirname(fileURLToPath(import.meta.url));
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
-      if (fs.existsSync(srcCandidate)) return srcCandidate;
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
-      if (fs.existsSync(distCandidate)) return distCandidate;
+      const orderedCandidates = preferDist
+        ? [distCandidate, srcCandidate]
+        : [srcCandidate, distCandidate];
+      for (const candidate of orderedCandidates) {
+        if (fs.existsSync(candidate)) return candidate;
+      }
       const parent = path.dirname(cursor);
       if (parent === cursor) break;
       cursor = parent;
