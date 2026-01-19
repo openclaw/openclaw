@@ -733,7 +733,9 @@ actor MacNodeRuntime {
             return BridgeInvokeResponse(id: req.id, ok: true)
         }
     }
+}
 
+extension MacNodeRuntime {
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [

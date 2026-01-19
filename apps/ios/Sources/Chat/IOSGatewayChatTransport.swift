@@ -95,16 +95,24 @@ struct IOSGatewayChatTransport: ClawdbotChatTransport, Sendable {
                         continuation.yield(.seqGap)
                     case "health":
                         guard let payload = evt.payload else { break }
-                        let ok = (try? GatewayPayloadDecoding.decode(payload, as: ClawdbotGatewayHealthOK.self))?.ok ?? true
+                        let ok = (try? GatewayPayloadDecoding.decode(
+                            payload,
+                            as: ClawdbotGatewayHealthOK.self))?.ok ?? true
                         continuation.yield(.health(ok: ok))
                     case "chat":
                         guard let payload = evt.payload else { break }
-                        if let chatPayload = try? GatewayPayloadDecoding.decode(payload, as: ClawdbotChatEventPayload.self) {
+                        if let chatPayload = try? GatewayPayloadDecoding.decode(
+                            payload,
+                            as: ClawdbotChatEventPayload.self)
+                        {
                             continuation.yield(.chat(chatPayload))
                         }
                     case "agent":
                         guard let payload = evt.payload else { break }
-                        if let agentPayload = try? GatewayPayloadDecoding.decode(payload, as: ClawdbotAgentEventPayload.self) {
+                        if let agentPayload = try? GatewayPayloadDecoding.decode(
+                            payload,
+                            as: ClawdbotAgentEventPayload.self)
+                        {
                             continuation.yield(.agent(agentPayload))
                         }
                     default:

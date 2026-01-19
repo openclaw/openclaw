@@ -55,7 +55,11 @@ final class GatewayConnectionController {
         guard let host = self.resolveGatewayHost(gateway) else { return }
         let port = gateway.gatewayPort ?? 18789
         let tlsParams = self.resolveDiscoveredTLSParams(gateway: gateway)
-        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true) else { return }
+        guard let url = self.buildGatewayURL(
+            host: host,
+            port: port,
+            useTLS: tlsParams?.required == true)
+        else { return }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -72,7 +76,11 @@ final class GatewayConnectionController {
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let stableID = self.manualStableID(host: host, port: port)
         let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
-        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true) else { return }
+        guard let url = self.buildGatewayURL(
+            host: host,
+            port: port,
+            useTLS: tlsParams?.required == true)
+        else { return }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
