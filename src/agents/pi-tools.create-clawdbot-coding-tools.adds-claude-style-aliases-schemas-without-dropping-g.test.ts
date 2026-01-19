@@ -75,32 +75,6 @@ describe("createClawdbotCodingTools", () => {
     const outsidePath = path.join(os.tmpdir(), "clawdbot-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
     try {
-      const sandbox = {
-        enabled: true,
-        sessionKey: "sandbox:test",
-        workspaceDir: tmpDir,
-        agentWorkspaceDir: path.join(os.tmpdir(), "clawdbot-workspace"),
-        workspaceAccess: "ro",
-        containerName: "clawdbot-sbx-test",
-        containerWorkdir: "/workspace",
-        docker: {
-          image: "clawdbot-sandbox:bookworm-slim",
-          containerPrefix: "clawdbot-sbx-",
-          workdir: "/workspace",
-          readOnlyRoot: true,
-          tmpfs: [],
-          network: "none",
-          user: "1000:1000",
-          capDrop: ["ALL"],
-          env: { LANG: "C.UTF-8" },
-        },
-        tools: {
-          allow: ["read"],
-          deny: [],
-        },
-        browserAllowHostControl: false,
-      };
-
       const readTool = createSandboxedReadTool(tmpDir);
       await expect(readTool.execute("tool-sbx-1", { file_path: outsidePath })).rejects.toThrow();
     } finally {
