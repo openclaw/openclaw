@@ -9,6 +9,7 @@ import {
   writeBase64ToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -29,7 +30,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .description("List available cameras on a node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("camera list", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const raw = (await callGatewayCli("node.invoke", opts, {
             nodeId,
@@ -61,10 +62,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             const position = typeof device.position === "string" ? device.position : "unspecified";
             defaultRuntime.log(`${name} (${position})${id ? ` — ${id}` : ""}`);
           }
-        } catch (err) {
-          defaultRuntime.error(`nodes camera list failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
     { timeoutMs: 60_000 },
   );
@@ -81,7 +79,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--delay-ms <ms>", "Delay before capture in ms (macOS default 2000)")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("camera snap", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const facingOpt = String(opts.facing ?? "both")
             .trim()
@@ -153,10 +151,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             return;
           }
           defaultRuntime.log(results.map((r) => `MEDIA:${r.path}`).join("\n"));
-        } catch (err) {
-          defaultRuntime.error(`nodes camera snap failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
     { timeoutMs: 60_000 },
   );
@@ -176,7 +171,7 @@ export function registerNodesCameraCommands(nodes: Command) {
       .option("--no-audio", "Disable audio capture")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 90000)", "90000")
       .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
-        try {
+        await runNodesCommand("camera clip", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const facing = parseFacing(String(opts.facing ?? "front"));
           const durationMs = parseDurationMs(String(opts.duration ?? "3000"));
@@ -230,10 +225,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             return;
           }
           defaultRuntime.log(`MEDIA:${filePath}`);
-        } catch (err) {
-          defaultRuntime.error(`nodes camera clip failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
     { timeoutMs: 90_000 },
   );

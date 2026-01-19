@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -47,7 +48,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .command("status")
       .description("List known nodes with connection status and capabilities")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("status", async () => {
           const result = (await callGatewayCli("node.list", opts, {})) as unknown;
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -79,10 +80,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               `- ${name} · ${n.nodeId}${ip}${device}${hw}${permsText}${versionText} · ${pairing} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
             );
           }
-        } catch (err) {
-          defaultRuntime.error(`nodes status failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
   );
 
@@ -92,7 +90,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .description("Describe a node (capabilities + supported invoke commands)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("describe", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const result = (await callGatewayCli("node.describe", opts, {
             nodeId,
@@ -140,10 +138,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             return;
           }
           for (const c of commands) defaultRuntime.log(`- ${c}`);
-        } catch (err) {
-          defaultRuntime.error(`nodes describe failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
   );
 
@@ -152,7 +147,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .command("list")
       .description("List pending and paired nodes")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("list", async () => {
           const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -178,10 +173,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               defaultRuntime.log(`- ${n.nodeId}: ${name}${ip}`);
             }
           }
-        } catch (err) {
-          defaultRuntime.error(`nodes list failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
   );
 }
