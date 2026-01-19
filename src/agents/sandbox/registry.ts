@@ -12,6 +12,7 @@ export type SandboxRegistryEntry = {
   createdAtMs: number;
   lastUsedAtMs: number;
   image: string;
+  configHash?: string;
 };
 
 type SandboxRegistry = {
@@ -56,6 +57,7 @@ export async function updateRegistry(entry: SandboxRegistryEntry) {
     ...entry,
     createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
     image: existing?.image ?? entry.image,
+    configHash: entry.configHash ?? existing?.configHash,
   });
   await writeRegistry({ entries: next });
 }

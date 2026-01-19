@@ -18,6 +18,9 @@ This allows you to run multiple agents with different security profiles:
 - Family/work agents with restricted tools
 - Public-facing agents in sandboxes
 
+`setupCommand` belongs under `sandbox.docker` (global or per-agent) and runs once
+when the container is created.
+
 Auth is per-agent: each agent reads from its own `agentDir` auth store at:
 
 ```

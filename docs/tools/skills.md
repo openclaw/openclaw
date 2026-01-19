@@ -111,6 +111,8 @@ Note on sandboxing:
 - `requires.bins` is checked on the **host** at skill load time.
 - If an agent is sandboxed, the binary must also exist **inside the container**.
   Install it via `agents.defaults.sandbox.docker.setupCommand` (or a custom image).
+  `setupCommand` runs once after the container is created.
+  Package installs also require network egress, a writable root FS, and a root user in the sandbox.
   Example: the `summarize` skill (`skills/summarize/SKILL.md`) needs the `summarize` CLI
   in the sandbox container to run there.
 

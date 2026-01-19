@@ -116,6 +116,20 @@ Override with `agents.defaults.sandbox.docker.network`.
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
 
+## setupCommand (one-time container setup)
+`setupCommand` runs **once** after the sandbox container is created (not on every run).
+It executes inside the container via `sh -lc`.
+
+Paths:
+- Global: `agents.defaults.sandbox.docker.setupCommand`
+- Per-agent: `agents.list[].sandbox.docker.setupCommand`
+
+
+Common pitfalls:
+- Default `docker.network` is `"none"` (no egress), so package installs will fail.
+- `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
+- `user` must be root for package installs (omit `user` or set `user: "0:0"`).
+
 ## Tool policy + escape hatches
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.

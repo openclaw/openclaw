@@ -89,6 +89,15 @@ clawdbot sandbox recreate --all
 clawdbot sandbox recreate --all
 ```
 
+### After changing setupCommand
+
+```bash
+clawdbot sandbox recreate --all
+# or just one agent:
+clawdbot sandbox recreate --agent family
+```
+
+
 ### For a specific agent only
 
 ```bash

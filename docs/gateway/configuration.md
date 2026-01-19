@@ -1990,6 +1990,9 @@ cross-session isolation. Use `scope: "session"` for per-session isolation.
 Legacy: `perSession` is still supported (`true` → `scope: "session"`,
 `false` → `scope: "shared"`).
 
+`setupCommand` runs **once** after the container is created (inside the container via `sh -lc`).
+For package installs, ensure network egress, a writable root FS, and a root user.
+
 ```json5
 {
   agents: {
