@@ -173,6 +173,8 @@ export type AgentDefaultsConfig = {
     };
     /** Heartbeat model override (provider/model). */
     model?: string;
+    /** Session key for heartbeat runs ("main" or explicit session key). */
+    session?: string;
     /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
     target?:
       | "last"

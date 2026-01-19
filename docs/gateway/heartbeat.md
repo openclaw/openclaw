@@ -127,18 +127,26 @@ Example: two agents, only the second agent runs heartbeats.
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
+- `session`: optional session key for heartbeat runs.
+  - `main` (default): agent main session.
+  - Explicit session key (copy from `clawdbot sessions --json` or the [sessions CLI](/cli/sessions)).
+  - Session key formats: see [Sessions](/concepts/session) and [Groups](/concepts/groups).
 - `target`:
   - `last` (default): deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage`.
+  - explicit channel: `whatsapp` / `telegram` / `discord` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: run the heartbeat but **do not deliver** externally.
-- `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram, etc.).
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id).
 - `prompt`: overrides the default prompt body (not merged).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery.
 
 ## Delivery behavior
 
-- Heartbeats run in each agent’s **main session** (`agent:<id>:<mainKey>`), or `global`
-  when `session.scope = "global"`.
+- Heartbeats run in the agent’s main session by default (`agent:<id>:<mainKey>`),
+  or `global` when `session.scope = "global"`. Set `session` to override to a
+  specific channel session (Discord/WhatsApp/etc.).
+- `session` only affects the run context; delivery is controlled by `target` and `to`.
+- To deliver to a specific channel/recipient, set `target` + `to`. With
+  `target: "last"`, delivery uses the last external channel for that session.
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.
