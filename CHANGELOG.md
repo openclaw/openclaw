@@ -7,6 +7,9 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
 
+### Fixes
+- Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
+
 ## 2026.1.18-5
 
 ### Changes

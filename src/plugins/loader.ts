@@ -376,6 +376,9 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     try {
       mod = jiti(candidate.source) as ClawdbotPluginModule;
     } catch (err) {
+      logger.error(
+        `[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`,
+      );
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
@@ -460,6 +463,9 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     if (!validatedConfig.ok) {
+      logger.error(
+        `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+      );
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);
@@ -474,6 +480,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (typeof register !== "function") {
+      logger.error(`[plugins] ${record.id} missing register/activate export`);
       record.status = "error";
       record.error = "plugin export missing register/activate";
       registry.plugins.push(record);
@@ -505,6 +512,9 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(candidate.idHint, candidate.origin);
     } catch (err) {
+      logger.error(
+        `[plugins] ${record.id} failed during register from ${record.source}: ${String(err)}`,
+      );
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
