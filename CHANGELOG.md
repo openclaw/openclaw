@@ -35,6 +35,7 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety; run `clawdbot doctor --fix` to repair. 
 
 ### Changes
+- Gateway: add `/v1/responses` endpoint (OpenResponses API) for agentic workflows with item-based input and semantic streaming events. Enable via `gateway.http.endpoints.responses.enabled: true`.
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
 - Agents: clarify node_modules read-only guidance in agent instructions.
 - TUI: add syntax highlighting for code blocks. (#1200) — thanks @vignesh07.

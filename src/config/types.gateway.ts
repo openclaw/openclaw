@@ -105,8 +105,17 @@ export type GatewayHttpChatCompletionsConfig = {
   enabled?: boolean;
 };
 
+export type GatewayHttpResponsesConfig = {
+  /**
+   * If false, the Gateway will not serve `POST /v1/responses` (OpenResponses API).
+   * Default: false when absent.
+   */
+  enabled?: boolean;
+};
+
 export type GatewayHttpEndpointsConfig = {
   chatCompletions?: GatewayHttpChatCompletionsConfig;
+  responses?: GatewayHttpResponsesConfig;
 };
 
 export type GatewayHttpConfig = {
