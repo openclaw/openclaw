@@ -7,11 +7,11 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let bridgeService = "com.clawdbot.bridge"
+private let gatewayService = "com.clawdbot.gateway"
 private let nodeService = "com.clawdbot.node"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
-private let preferredBridgeEntry = KeychainEntry(service: bridgeService, account: "preferredStableID")
-private let lastBridgeEntry = KeychainEntry(service: bridgeService, account: "lastDiscoveredStableID")
+private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
+private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
 
 private func snapshotDefaults(_ keys: [String]) -> [String: Any?] {
     let defaults = UserDefaults.standard
@@ -59,14 +59,14 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
     applyKeychain(snapshot)
 }
 
-@Suite(.serialized) struct BridgeSettingsStoreTests {
+@Suite(.serialized) struct GatewaySettingsStoreTests {
     @Test func bootstrapCopiesDefaultsToKeychainWhenMissing() {
         let defaultsKeys = [
             "node.instanceId",
-            "bridge.preferredStableID",
-            "bridge.lastDiscoveredStableID",
+            "gateway.preferredStableID",
+            "gateway.lastDiscoveredStableID",
         ]
-        let entries = [instanceIdEntry, preferredBridgeEntry, lastBridgeEntry]
+        let entries = [instanceIdEntry, preferredGatewayEntry, lastGatewayEntry]
         let defaultsSnapshot = snapshotDefaults(defaultsKeys)
         let keychainSnapshot = snapshotKeychain(entries)
         defer {
@@ -76,29 +76,29 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
 
         applyDefaults([
             "node.instanceId": "node-test",
-            "bridge.preferredStableID": "preferred-test",
-            "bridge.lastDiscoveredStableID": "last-test",
+            "gateway.preferredStableID": "preferred-test",
+            "gateway.lastDiscoveredStableID": "last-test",
         ])
         applyKeychain([
             instanceIdEntry: nil,
-            preferredBridgeEntry: nil,
-            lastBridgeEntry: nil,
+            preferredGatewayEntry: nil,
+            lastGatewayEntry: nil,
         ])
 
-        BridgeSettingsStore.bootstrapPersistence()
+        GatewaySettingsStore.bootstrapPersistence()
 
         #expect(KeychainStore.loadString(service: nodeService, account: "instanceId") == "node-test")
-        #expect(KeychainStore.loadString(service: bridgeService, account: "preferredStableID") == "preferred-test")
-        #expect(KeychainStore.loadString(service: bridgeService, account: "lastDiscoveredStableID") == "last-test")
+        #expect(KeychainStore.loadString(service: gatewayService, account: "preferredStableID") == "preferred-test")
+        #expect(KeychainStore.loadString(service: gatewayService, account: "lastDiscoveredStableID") == "last-test")
     }
 
     @Test func bootstrapCopiesKeychainToDefaultsWhenMissing() {
         let defaultsKeys = [
             "node.instanceId",
-            "bridge.preferredStableID",
-            "bridge.lastDiscoveredStableID",
+            "gateway.preferredStableID",
+            "gateway.lastDiscoveredStableID",
         ]
-        let entries = [instanceIdEntry, preferredBridgeEntry, lastBridgeEntry]
+        let entries = [instanceIdEntry, preferredGatewayEntry, lastGatewayEntry]
         let defaultsSnapshot = snapshotDefaults(defaultsKeys)
         let keychainSnapshot = snapshotKeychain(entries)
         defer {
@@ -108,20 +108,20 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
 
         applyDefaults([
             "node.instanceId": nil,
-            "bridge.preferredStableID": nil,
-            "bridge.lastDiscoveredStableID": nil,
+            "gateway.preferredStableID": nil,
+            "gateway.lastDiscoveredStableID": nil,
         ])
         applyKeychain([
             instanceIdEntry: "node-from-keychain",
-            preferredBridgeEntry: "preferred-from-keychain",
-            lastBridgeEntry: "last-from-keychain",
+            preferredGatewayEntry: "preferred-from-keychain",
+            lastGatewayEntry: "last-from-keychain",
         ])
 
-        BridgeSettingsStore.bootstrapPersistence()
+        GatewaySettingsStore.bootstrapPersistence()
 
         let defaults = UserDefaults.standard
         #expect(defaults.string(forKey: "node.instanceId") == "node-from-keychain")
-        #expect(defaults.string(forKey: "bridge.preferredStableID") == "preferred-from-keychain")
-        #expect(defaults.string(forKey: "bridge.lastDiscoveredStableID") == "last-from-keychain")
+        #expect(defaults.string(forKey: "gateway.preferredStableID") == "preferred-from-keychain")
+        #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == "last-from-keychain")
     }
 }

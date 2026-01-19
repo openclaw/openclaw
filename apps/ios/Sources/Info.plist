@@ -29,12 +29,12 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_clawdbot-bridge._tcp</string>
+		<string>_clawdbot-gateway._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Clawdbot can capture photos or short video clips when requested via the bridge.</string>
+	<string>Clawdbot can capture photos or short video clips when requested via the gateway.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clawdbot discovers and connects to your Clawdbot bridge on the local network.</string>
+	<string>Clawdbot discovers and connects to your Clawdbot gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Clawdbot can share your location in the background when you enable Always.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

@@ -29,7 +29,7 @@ struct RootCanvas: View {
         ZStack {
             CanvasContent(
                 systemColorScheme: self.systemColorScheme,
-                bridgeStatus: self.bridgeStatus,
+                gatewayStatus: self.gatewayStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
                 voiceWakeToastText: self.voiceWakeToastText,
                 cameraHUDText: self.appModel.cameraHUDText,
@@ -52,7 +52,7 @@ struct RootCanvas: View {
                 SettingsTab()
             case .chat:
                 ChatSheet(
-                    bridge: self.appModel.bridgeSession,
+                    gateway: self.appModel.gatewaySession,
                     sessionKey: self.appModel.mainSessionKey,
                     userAccent: self.appModel.seamColor)
             }
@@ -62,9 +62,9 @@ struct RootCanvas: View {
         .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
         .onAppear { self.updateCanvasDebugStatus() }
         .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.bridgeStatusText) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.bridgeServerName) { _, _ in self.updateCanvasDebugStatus() }
-        .onChange(of: self.appModel.bridgeRemoteAddress) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.gatewayStatusText) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.gatewayServerName) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.gatewayRemoteAddress) { _, _ in self.updateCanvasDebugStatus() }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,10 +91,10 @@ struct RootCanvas: View {
         }
     }
 
-    private var bridgeStatus: StatusPill.BridgeState {
-        if self.appModel.bridgeServerName != nil { return .connected }
+    private var gatewayStatus: StatusPill.GatewayState {
+        if self.appModel.gatewayServerName != nil { return .connected }
 
-        let text = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.localizedCaseInsensitiveContains("connecting") ||
             text.localizedCaseInsensitiveContains("reconnecting")
         {
@@ -115,8 +115,8 @@ struct RootCanvas: View {
     private func updateCanvasDebugStatus() {
         self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
         guard self.canvasDebugStatusEnabled else { return }
-        let title = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let subtitle = self.appModel.bridgeServerName ?? self.appModel.bridgeRemoteAddress
+        let title = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = self.appModel.gatewayServerName ?? self.appModel.gatewayRemoteAddress
         self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
     }
 }
@@ -126,7 +126,7 @@ private struct CanvasContent: View {
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     var systemColorScheme: ColorScheme
-    var bridgeStatus: StatusPill.BridgeState
+    var gatewayStatus: StatusPill.GatewayState
     var voiceWakeEnabled: Bool
     var voiceWakeToastText: String?
     var cameraHUDText: String?
@@ -177,7 +177,7 @@ private struct CanvasContent: View {
         }
         .overlay(alignment: .topLeading) {
             StatusPill(
-                bridge: self.bridgeStatus,
+                gateway: self.gatewayStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
                 activity: self.statusActivity,
                 brighten: self.brightenButtons,
@@ -208,15 +208,15 @@ private struct CanvasContent: View {
                 tint: .orange)
         }
 
-        let bridgeStatus = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bridgeLower = bridgeStatus.lowercased()
-        if bridgeLower.contains("repair") {
+        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayLower = gatewayStatus.lowercased()
+        if gatewayLower.contains("repair") {
             return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
         }
-        if bridgeLower.contains("approval") || bridgeLower.contains("pairing") {
+        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
             return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
         }
-        // Avoid duplicating the primary bridge status ("Connecting…") in the activity slot.
+        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
 
         if self.appModel.screenRecordActive {
             return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)

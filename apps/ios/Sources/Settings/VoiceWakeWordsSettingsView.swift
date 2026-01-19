@@ -42,7 +42,7 @@ struct VoiceWakeWordsSettingsView: View {
             }
         }
         .onChange(of: self.triggerWords) { _, newValue in
-            // Keep local voice wake responsive even if bridge isn't connected yet.
+            // Keep local voice wake responsive even if the gateway isn't connected yet.
             VoiceWakePreferences.saveTriggerWords(newValue)
 
             let snapshot = VoiceWakePreferences.sanitizeTriggerWords(newValue)

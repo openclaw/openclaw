@@ -5,14 +5,14 @@ import Observation
 
 @MainActor
 @Observable
-final class BridgeDiscoveryModel {
+final class GatewayDiscoveryModel {
     struct DebugLogEntry: Identifiable, Equatable {
         var id = UUID()
         var ts: Date
         var message: String
     }
 
-    struct DiscoveredBridge: Identifiable, Equatable {
+    struct DiscoveredGateway: Identifiable, Equatable {
         var id: String { self.stableID }
         var name: String
         var endpoint: NWEndpoint
@@ -21,19 +21,18 @@ final class BridgeDiscoveryModel {
         var lanHost: String?
         var tailnetDns: String?
         var gatewayPort: Int?
-        var bridgePort: Int?
         var canvasPort: Int?
         var tlsEnabled: Bool
         var tlsFingerprintSha256: String?
         var cliPath: String?
     }
 
-    var bridges: [DiscoveredBridge] = []
+    var gateways: [DiscoveredGateway] = []
     var statusText: String = "Idle"
     private(set) var debugLog: [DebugLogEntry] = []
 
     private var browsers: [String: NWBrowser] = [:]
-    private var bridgesByDomain: [String: [DiscoveredBridge]] = [:]
+    private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var debugLoggingEnabled = false
     private var lastStableIDs = Set<String>()
@@ -45,7 +44,7 @@ final class BridgeDiscoveryModel {
             self.debugLog = []
         } else if !wasEnabled {
             self.appendDebugLog("debug logging enabled")
-            self.appendDebugLog("snapshot: status=\(self.statusText) bridges=\(self.bridges.count)")
+            self.appendDebugLog("snapshot: status=\(self.statusText) gateways=\(self.gateways.count)")
         }
     }
 
@@ -72,7 +71,7 @@ final class BridgeDiscoveryModel {
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 Task { @MainActor in
                     guard let self else { return }
-                    self.bridgesByDomain[domain] = results.compactMap { result -> DiscoveredBridge? in
+                    self.gatewaysByDomain[domain] = results.compactMap { result -> DiscoveredGateway? in
                         switch result.endpoint {
                         case let .service(name, _, _, _):
                             let decodedName = BonjourEscapes.decode(name)
@@ -82,18 +81,17 @@ final class BridgeDiscoveryModel {
                                 .map(Self.prettifyInstanceName)
                                 .flatMap { $0.isEmpty ? nil : $0 }
                             let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
-                            return DiscoveredBridge(
+                            return DiscoveredGateway(
                                 name: prettyName,
                                 endpoint: result.endpoint,
-                                stableID: BridgeEndpointID.stableID(result.endpoint),
-                                debugID: BridgeEndpointID.prettyDescription(result.endpoint),
+                                stableID: GatewayEndpointID.stableID(result.endpoint),
+                                debugID: GatewayEndpointID.prettyDescription(result.endpoint),
                                 lanHost: Self.txtValue(txt, key: "lanHost"),
                                 tailnetDns: Self.txtValue(txt, key: "tailnetDns"),
                                 gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
-                                bridgePort: Self.txtIntValue(txt, key: "bridgePort"),
                                 canvasPort: Self.txtIntValue(txt, key: "canvasPort"),
-                                tlsEnabled: Self.txtBoolValue(txt, key: "bridgeTls"),
-                                tlsFingerprintSha256: Self.txtValue(txt, key: "bridgeTlsSha256"),
+                                tlsEnabled: Self.txtBoolValue(txt, key: "gatewayTls"),
+                                tlsFingerprintSha256: Self.txtValue(txt, key: "gatewayTlsSha256"),
                                 cliPath: Self.txtValue(txt, key: "cliPath"))
                         default:
                             return nil
@@ -101,12 +99,12 @@ final class BridgeDiscoveryModel {
                     }
                     .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-                    self.recomputeBridges()
+                    self.recomputeGateways()
                 }
             }
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "com.clawdbot.ios.bridge-discovery.\(domain)"))
+            browser.start(queue: DispatchQueue(label: "com.clawdbot.ios.gateway-discovery.\(domain)"))
         }
     }
 
@@ -116,14 +114,14 @@ final class BridgeDiscoveryModel {
             browser.cancel()
         }
         self.browsers = [:]
-        self.bridgesByDomain = [:]
+        self.gatewaysByDomain = [:]
         self.statesByDomain = [:]
-        self.bridges = []
+        self.gateways = []
         self.statusText = "Stopped"
     }
 
-    private func recomputeBridges() {
-        let next = self.bridgesByDomain.values
+    private func recomputeGateways() {
+        let next = self.gatewaysByDomain.values
             .flatMap(\.self)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
@@ -134,7 +132,7 @@ final class BridgeDiscoveryModel {
             self.appendDebugLog("results: total=\(next.count) added=\(added.count) removed=\(removed.count)")
         }
         self.lastStableIDs = nextIDs
-        self.bridges = next
+        self.gateways = next
     }
 
     private func updateStatusText() {

@@ -44,7 +44,7 @@ actor CameraController {
     {
         let facing = params.facing ?? .front
         let format = params.format ?? .jpg
-        // Default to a reasonable max width to keep bridge payload sizes manageable.
+        // Default to a reasonable max width to keep gateway payload sizes manageable.
         // If you need the full-res photo, explicitly request a larger maxWidth.
         let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
         let quality = Self.clampQuality(params.quality)
@@ -270,7 +270,7 @@ actor CameraController {
 
     nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
         let v = ms ?? 3000
-        // Keep clips short by default; avoid huge base64 payloads on the bridge.
+        // Keep clips short by default; avoid huge base64 payloads on the gateway.
         return min(60000, max(250, v))
     }
 

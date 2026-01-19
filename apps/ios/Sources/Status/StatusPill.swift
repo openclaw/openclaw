@@ -3,7 +3,7 @@ import SwiftUI
 struct StatusPill: View {
     @Environment(\.scenePhase) private var scenePhase
 
-    enum BridgeState: Equatable {
+    enum GatewayState: Equatable {
         case connected
         case connecting
         case error
@@ -34,7 +34,7 @@ struct StatusPill: View {
         var tint: Color?
     }
 
-    var bridge: BridgeState
+    var gateway: GatewayState
     var voiceWakeEnabled: Bool
     var activity: Activity?
     var brighten: Bool = false
@@ -47,12 +47,12 @@ struct StatusPill: View {
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Circle()
-                        .fill(self.bridge.color)
+                        .fill(self.gateway.color)
                         .frame(width: 9, height: 9)
-                        .scaleEffect(self.bridge == .connecting ? (self.pulse ? 1.15 : 0.85) : 1.0)
-                        .opacity(self.bridge == .connecting ? (self.pulse ? 1.0 : 0.6) : 1.0)
+                        .scaleEffect(self.gateway == .connecting ? (self.pulse ? 1.15 : 0.85) : 1.0)
+                        .opacity(self.gateway == .connecting ? (self.pulse ? 1.0 : 0.6) : 1.0)
 
-                    Text(self.bridge.title)
+                    Text(self.gateway.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                 }
@@ -95,26 +95,26 @@ struct StatusPill: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Status")
         .accessibilityValue(self.accessibilityValue)
-        .onAppear { self.updatePulse(for: self.bridge, scenePhase: self.scenePhase) }
+        .onAppear { self.updatePulse(for: self.gateway, scenePhase: self.scenePhase) }
         .onDisappear { self.pulse = false }
-        .onChange(of: self.bridge) { _, newValue in
+        .onChange(of: self.gateway) { _, newValue in
             self.updatePulse(for: newValue, scenePhase: self.scenePhase)
         }
         .onChange(of: self.scenePhase) { _, newValue in
-            self.updatePulse(for: self.bridge, scenePhase: newValue)
+            self.updatePulse(for: self.gateway, scenePhase: newValue)
         }
         .animation(.easeInOut(duration: 0.18), value: self.activity?.title)
     }
 
     private var accessibilityValue: String {
         if let activity {
-            return "\(self.bridge.title), \(activity.title)"
+            return "\(self.gateway.title), \(activity.title)"
         }
-        return "\(self.bridge.title), Voice Wake \(self.voiceWakeEnabled ? "enabled" : "disabled")"
+        return "\(self.gateway.title), Voice Wake \(self.voiceWakeEnabled ? "enabled" : "disabled")"
     }
 
-    private func updatePulse(for bridge: BridgeState, scenePhase: ScenePhase) {
-        guard bridge == .connecting, scenePhase == .active else {
+    private func updatePulse(for gateway: GatewayState, scenePhase: ScenePhase) {
+        guard gateway == .connecting, scenePhase == .active else {
             withAnimation(.easeOut(duration: 0.2)) { self.pulse = false }
             return
         }

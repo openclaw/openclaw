@@ -15,7 +15,7 @@ extension ConnectStatusStore: @unchecked Sendable {}
 struct SettingsTab: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(VoiceWakeManager.self) private var voiceWake: VoiceWakeManager
-    @Environment(BridgeConnectionController.self) private var bridgeController: BridgeConnectionController
+    @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.dismiss) private var dismiss
     @AppStorage("node.displayName") private var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
@@ -26,17 +26,20 @@ struct SettingsTab: View {
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = ClawdbotLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
-    @AppStorage("bridge.preferredStableID") private var preferredBridgeStableID: String = ""
-    @AppStorage("bridge.lastDiscoveredStableID") private var lastDiscoveredBridgeStableID: String = ""
-    @AppStorage("bridge.manual.enabled") private var manualBridgeEnabled: Bool = false
-    @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
-    @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
-    @AppStorage("bridge.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
+    @AppStorage("gateway.preferredStableID") private var preferredGatewayStableID: String = ""
+    @AppStorage("gateway.lastDiscoveredStableID") private var lastDiscoveredGatewayStableID: String = ""
+    @AppStorage("gateway.manual.enabled") private var manualGatewayEnabled: Bool = false
+    @AppStorage("gateway.manual.host") private var manualGatewayHost: String = ""
+    @AppStorage("gateway.manual.port") private var manualGatewayPort: Int = 18789
+    @AppStorage("gateway.manual.tls") private var manualGatewayTLS: Bool = true
+    @AppStorage("gateway.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var connectStatus = ConnectStatusStore()
-    @State private var connectingBridgeID: String?
+    @State private var connectingGatewayID: String?
     @State private var localIPAddress: String?
     @State private var lastLocationModeRaw: String = ClawdbotLocationMode.off.rawValue
+    @State private var gatewayToken: String = ""
+    @State private var gatewayPassword: String = ""
 
     var body: some View {
         NavigationStack {
@@ -61,12 +64,12 @@ struct SettingsTab: View {
                     LabeledContent("Model", value: self.modelIdentifier())
                 }
 
-                Section("Bridge") {
-                    LabeledContent("Discovery", value: self.bridgeController.discoveryStatusText)
-                    LabeledContent("Status", value: self.appModel.bridgeStatusText)
-                    if let serverName = self.appModel.bridgeServerName {
+                Section("Gateway") {
+                    LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
+                    LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                    if let serverName = self.appModel.gatewayServerName {
                         LabeledContent("Server", value: serverName)
-                        if let addr = self.appModel.bridgeRemoteAddress {
+                        if let addr = self.appModel.gatewayRemoteAddress {
                             let parts = Self.parseHostPort(from: addr)
                             let urlString = Self.httpURLString(host: parts?.host, port: parts?.port, fallback: addr)
                             LabeledContent("Address") {
@@ -96,12 +99,12 @@ struct SettingsTab: View {
                         }
 
                         Button("Disconnect", role: .destructive) {
-                            self.appModel.disconnectBridge()
+                            self.appModel.disconnectGateway()
                         }
 
-                        self.bridgeList(showing: .availableOnly)
+                        self.gatewayList(showing: .availableOnly)
                     } else {
-                        self.bridgeList(showing: .all)
+                        self.gatewayList(showing: .all)
                     }
 
                     if let text = self.connectStatus.text {
@@ -111,19 +114,21 @@ struct SettingsTab: View {
                     }
 
                     DisclosureGroup("Advanced") {
-                        Toggle("Use Manual Bridge", isOn: self.$manualBridgeEnabled)
+                        Toggle("Use Manual Gateway", isOn: self.$manualGatewayEnabled)
 
-                        TextField("Host", text: self.$manualBridgeHost)
+                        TextField("Host", text: self.$manualGatewayHost)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
 
-                        TextField("Port", value: self.$manualBridgePort, format: .number)
+                        TextField("Port", value: self.$manualGatewayPort, format: .number)
                             .keyboardType(.numberPad)
+
+                        Toggle("Use TLS", isOn: self.$manualGatewayTLS)
 
                         Button {
                             Task { await self.connectManual() }
                         } label: {
-                            if self.connectingBridgeID == "manual" {
+                            if self.connectingGatewayID == "manual" {
                                 HStack(spacing: 8) {
                                     ProgressView()
                                         .progressViewStyle(.circular)
@@ -133,26 +138,32 @@ struct SettingsTab: View {
                                 Text("Connect (Manual)")
                             }
                         }
-                        .disabled(self.connectingBridgeID != nil || self.manualBridgeHost
+                        .disabled(self.connectingGatewayID != nil || self.manualGatewayHost
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                            .isEmpty || self.manualBridgePort <= 0 || self.manualBridgePort > 65535)
+                            .isEmpty || self.manualGatewayPort <= 0 || self.manualGatewayPort > 65535)
 
                         Text(
                             "Use this when mDNS/Bonjour discovery is blocked. "
-                                + "The bridge runs on the gateway (default port 18790).")
+                                + "The gateway WebSocket listens on port 18789 by default.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
                         Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
                             .onChange(of: self.discoveryDebugLogsEnabled) { _, newValue in
-                                self.bridgeController.setDiscoveryDebugLoggingEnabled(newValue)
+                                self.gatewayController.setDiscoveryDebugLoggingEnabled(newValue)
                             }
 
                         NavigationLink("Discovery Logs") {
-                            BridgeDiscoveryDebugLogView()
+                            GatewayDiscoveryDebugLogView()
                         }
 
                         Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
+
+                        TextField("Gateway Token", text: self.$gatewayToken)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        SecureField("Gateway Password", text: self.$gatewayPassword)
                     }
                 }
 
@@ -179,7 +190,7 @@ struct SettingsTab: View {
 
                 Section("Camera") {
                     Toggle("Allow Camera", isOn: self.$cameraEnabled)
-                    Text("Allows the bridge to request photos or short video clips (foreground only).")
+                    Text("Allows the gateway to request photos or short video clips (foreground only).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -221,13 +232,30 @@ struct SettingsTab: View {
             .onAppear {
                 self.localIPAddress = Self.primaryIPv4Address()
                 self.lastLocationModeRaw = self.locationEnabledModeRaw
+                let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedInstanceId.isEmpty {
+                    self.gatewayToken = GatewaySettingsStore.loadGatewayToken(instanceId: trimmedInstanceId) ?? ""
+                    self.gatewayPassword = GatewaySettingsStore.loadGatewayPassword(instanceId: trimmedInstanceId) ?? ""
+                }
             }
-            .onChange(of: self.preferredBridgeStableID) { _, newValue in
+            .onChange(of: self.preferredGatewayStableID) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
-                BridgeSettingsStore.savePreferredBridgeStableID(trimmed)
+                GatewaySettingsStore.savePreferredGatewayStableID(trimmed)
             }
-            .onChange(of: self.appModel.bridgeServerName) { _, _ in
+            .onChange(of: self.gatewayToken) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !instanceId.isEmpty else { return }
+                GatewaySettingsStore.saveGatewayToken(trimmed, instanceId: instanceId)
+            }
+            .onChange(of: self.gatewayPassword) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let instanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !instanceId.isEmpty else { return }
+                GatewaySettingsStore.saveGatewayPassword(trimmed, instanceId: instanceId)
+            }
+            .onChange(of: self.appModel.gatewayServerName) { _, _ in
                 self.connectStatus.text = nil
             }
             .onChange(of: self.locationEnabledModeRaw) { _, newValue in
@@ -248,14 +276,14 @@ struct SettingsTab: View {
     }
 
     @ViewBuilder
-    private func bridgeList(showing: BridgeListMode) -> some View {
-        if self.bridgeController.bridges.isEmpty {
-            Text("No bridges found yet.")
+    private func gatewayList(showing: GatewayListMode) -> some View {
+        if self.gatewayController.gateways.isEmpty {
+            Text("No gateways found yet.")
                 .foregroundStyle(.secondary)
         } else {
-            let connectedID = self.appModel.connectedBridgeID
-            let rows = self.bridgeController.bridges.filter { bridge in
-                let isConnected = bridge.stableID == connectedID
+            let connectedID = self.appModel.connectedGatewayID
+            let rows = self.gatewayController.gateways.filter { gateway in
+                let isConnected = gateway.stableID == connectedID
                 switch showing {
                 case .all:
                     return true
@@ -265,14 +293,14 @@ struct SettingsTab: View {
             }
 
             if rows.isEmpty, showing == .availableOnly {
-                Text("No other bridges found.")
+                Text("No other gateways found.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(rows) { bridge in
+                ForEach(rows) { gateway in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(bridge.name)
-                            let detailLines = self.bridgeDetailLines(bridge)
+                            Text(gateway.name)
+                            let detailLines = self.gatewayDetailLines(gateway)
                             ForEach(detailLines, id: \.self) { line in
                                 Text(line)
                                     .font(.footnote)
@@ -282,29 +310,25 @@ struct SettingsTab: View {
                         Spacer()
 
                         Button {
-                            Task { await self.connect(bridge) }
+                            Task { await self.connect(gateway) }
                         } label: {
-                            if self.connectingBridgeID == bridge.id {
+                            if self.connectingGatewayID == gateway.id {
                                 ProgressView()
                                     .progressViewStyle(.circular)
                             } else {
                                 Text("Connect")
                             }
                         }
-                        .disabled(self.connectingBridgeID != nil)
+                        .disabled(self.connectingGatewayID != nil)
                     }
                 }
             }
         }
     }
 
-    private enum BridgeListMode: Equatable {
+    private enum GatewayListMode: Equatable {
         case all
         case availableOnly
-    }
-
-    private func keychainAccount() -> String {
-        "bridge-token.\(self.instanceId)"
     }
 
     private func platformString() -> String {
@@ -341,228 +365,37 @@ struct SettingsTab: View {
         return trimmed.isEmpty ? "unknown" : trimmed
     }
 
-    private func currentCaps() -> [String] {
-        var caps = [ClawdbotCapability.canvas.rawValue, ClawdbotCapability.screen.rawValue]
+    private func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
+        self.connectingGatewayID = gateway.id
+        self.manualGatewayEnabled = false
+        self.preferredGatewayStableID = gateway.stableID
+        GatewaySettingsStore.savePreferredGatewayStableID(gateway.stableID)
+        self.lastDiscoveredGatewayStableID = gateway.stableID
+        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(gateway.stableID)
+        defer { self.connectingGatewayID = nil }
 
-        let cameraEnabled =
-            UserDefaults.standard.object(forKey: "camera.enabled") == nil
-                ? true
-                : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(ClawdbotCapability.camera.rawValue) }
-
-        let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(ClawdbotCapability.voiceWake.rawValue) }
-
-        return caps
-    }
-
-    private func currentCommands() -> [String] {
-        var commands: [String] = [
-            ClawdbotCanvasCommand.present.rawValue,
-            ClawdbotCanvasCommand.hide.rawValue,
-            ClawdbotCanvasCommand.navigate.rawValue,
-            ClawdbotCanvasCommand.evalJS.rawValue,
-            ClawdbotCanvasCommand.snapshot.rawValue,
-            ClawdbotCanvasA2UICommand.push.rawValue,
-            ClawdbotCanvasA2UICommand.pushJSONL.rawValue,
-            ClawdbotCanvasA2UICommand.reset.rawValue,
-            ClawdbotScreenCommand.record.rawValue,
-        ]
-
-        let caps = Set(self.currentCaps())
-        if caps.contains(ClawdbotCapability.camera.rawValue) {
-            commands.append(ClawdbotCameraCommand.list.rawValue)
-            commands.append(ClawdbotCameraCommand.snap.rawValue)
-            commands.append(ClawdbotCameraCommand.clip.rawValue)
-        }
-
-        return commands
-    }
-
-    private func connect(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) async {
-        self.connectingBridgeID = bridge.id
-        self.manualBridgeEnabled = false
-        self.preferredBridgeStableID = bridge.stableID
-        BridgeSettingsStore.savePreferredBridgeStableID(bridge.stableID)
-        self.lastDiscoveredBridgeStableID = bridge.stableID
-        BridgeSettingsStore.saveLastDiscoveredBridgeStableID(bridge.stableID)
-        defer { self.connectingBridgeID = nil }
-
-        do {
-            let statusStore = self.connectStatus
-            let existing = KeychainStore.loadString(
-                service: "com.clawdbot.bridge",
-                account: self.keychainAccount())
-            let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
-                existing :
-                nil
-
-            let hello = BridgeHello(
-                nodeId: self.instanceId,
-                displayName: self.displayName,
-                token: existingToken,
-                platform: self.platformString(),
-                version: self.appVersion(),
-                deviceFamily: self.deviceFamily(),
-                modelIdentifier: self.modelIdentifier(),
-                caps: self.currentCaps(),
-                commands: self.currentCommands())
-            let tlsParams = self.resolveDiscoveredTLSParams(bridge: bridge)
-            let token = try await BridgeClient().pairAndHello(
-                endpoint: bridge.endpoint,
-                hello: hello,
-                tls: tlsParams,
-                onStatus: { status in
-                    Task { @MainActor in
-                        statusStore.text = status
-                    }
-                })
-
-            if !token.isEmpty, token != existingToken {
-                _ = KeychainStore.saveString(
-                    token,
-                    service: "com.clawdbot.bridge",
-                    account: self.keychainAccount())
-            }
-
-            self.appModel.connectToBridge(
-                endpoint: bridge.endpoint,
-                bridgeStableID: bridge.stableID,
-                tls: tlsParams,
-                hello: BridgeHello(
-                    nodeId: self.instanceId,
-                    displayName: self.displayName,
-                    token: token,
-                    platform: self.platformString(),
-                    version: self.appVersion(),
-                    deviceFamily: self.deviceFamily(),
-                    modelIdentifier: self.modelIdentifier(),
-                    caps: self.currentCaps(),
-                    commands: self.currentCommands()))
-
-        } catch {
-            self.connectStatus.text = "Failed: \(error.localizedDescription)"
-        }
+        await self.gatewayController.connect(gateway)
     }
 
     private func connectManual() async {
-        let host = self.manualBridgeHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty else {
             self.connectStatus.text = "Failed: host required"
             return
         }
-        guard self.manualBridgePort > 0, self.manualBridgePort <= 65535 else {
-            self.connectStatus.text = "Failed: invalid port"
-            return
-        }
-        guard let port = NWEndpoint.Port(rawValue: UInt16(self.manualBridgePort)) else {
+        guard self.manualGatewayPort > 0, self.manualGatewayPort <= 65535 else {
             self.connectStatus.text = "Failed: invalid port"
             return
         }
 
-        self.connectingBridgeID = "manual"
-        self.manualBridgeEnabled = true
-        defer { self.connectingBridgeID = nil }
+        self.connectingGatewayID = "manual"
+        self.manualGatewayEnabled = true
+        defer { self.connectingGatewayID = nil }
 
-        let endpoint: NWEndpoint = .hostPort(host: NWEndpoint.Host(host), port: port)
-        let stableID = BridgeEndpointID.stableID(endpoint)
-        let tlsParams = self.resolveManualTLSParams(stableID: stableID)
-
-        do {
-            let statusStore = self.connectStatus
-            let existing = KeychainStore.loadString(
-                service: "com.clawdbot.bridge",
-                account: self.keychainAccount())
-            let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
-                existing :
-                nil
-
-            let hello = BridgeHello(
-                nodeId: self.instanceId,
-                displayName: self.displayName,
-                token: existingToken,
-                platform: self.platformString(),
-                version: self.appVersion(),
-                deviceFamily: self.deviceFamily(),
-                modelIdentifier: self.modelIdentifier(),
-                caps: self.currentCaps(),
-                commands: self.currentCommands())
-            let token = try await BridgeClient().pairAndHello(
-                endpoint: endpoint,
-                hello: hello,
-                tls: tlsParams,
-                onStatus: { status in
-                    Task { @MainActor in
-                        statusStore.text = status
-                    }
-                })
-
-            if !token.isEmpty, token != existingToken {
-                _ = KeychainStore.saveString(
-                    token,
-                    service: "com.clawdbot.bridge",
-                    account: self.keychainAccount())
-            }
-
-            self.appModel.connectToBridge(
-                endpoint: endpoint,
-                bridgeStableID: stableID,
-                tls: tlsParams,
-                hello: BridgeHello(
-                    nodeId: self.instanceId,
-                    displayName: self.displayName,
-                    token: token,
-                    platform: self.platformString(),
-                    version: self.appVersion(),
-                    deviceFamily: self.deviceFamily(),
-                    modelIdentifier: self.modelIdentifier(),
-                    caps: self.currentCaps(),
-                    commands: self.currentCommands()))
-
-        } catch {
-            self.connectStatus.text = "Failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func resolveDiscoveredTLSParams(
-        bridge: BridgeDiscoveryModel.DiscoveredBridge) -> BridgeTLSParams?
-    {
-        let stableID = bridge.stableID
-        let stored = BridgeTLSStore.loadFingerprint(stableID: stableID)
-
-        if bridge.tlsEnabled || bridge.tlsFingerprintSha256 != nil {
-            return BridgeTLSParams(
-                required: true,
-                expectedFingerprint: bridge.tlsFingerprintSha256 ?? stored,
-                allowTOFU: stored == nil,
-                storeKey: stableID)
-        }
-
-        if let stored {
-            return BridgeTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        return nil
-    }
-
-    private func resolveManualTLSParams(stableID: String) -> BridgeTLSParams? {
-        if let stored = BridgeTLSStore.loadFingerprint(stableID: stableID) {
-            return BridgeTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
-                storeKey: stableID)
-        }
-
-        return BridgeTLSParams(
-            required: false,
-            expectedFingerprint: nil,
-            allowTOFU: true,
-            storeKey: stableID)
+        await self.gatewayController.connectManual(
+            host: host,
+            port: self.manualGatewayPort,
+            useTLS: self.manualGatewayTLS)
     }
 
     private static func primaryIPv4Address() -> String? {
@@ -611,23 +444,21 @@ struct SettingsTab: View {
         SettingsNetworkingHelpers.httpURLString(host: host, port: port, fallback: fallback)
     }
 
-    private func bridgeDetailLines(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) -> [String] {
+    private func gatewayDetailLines(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> [String] {
         var lines: [String] = []
-        if let lanHost = bridge.lanHost { lines.append("LAN: \(lanHost)") }
-        if let tailnet = bridge.tailnetDns { lines.append("Tailnet: \(tailnet)") }
+        if let lanHost = gateway.lanHost { lines.append("LAN: \(lanHost)") }
+        if let tailnet = gateway.tailnetDns { lines.append("Tailnet: \(tailnet)") }
 
-        let gatewayPort = bridge.gatewayPort
-        let bridgePort = bridge.bridgePort
-        let canvasPort = bridge.canvasPort
-        if gatewayPort != nil || bridgePort != nil || canvasPort != nil {
+        let gatewayPort = gateway.gatewayPort
+        let canvasPort = gateway.canvasPort
+        if gatewayPort != nil || canvasPort != nil {
             let gw = gatewayPort.map(String.init) ?? "—"
-            let br = bridgePort.map(String.init) ?? "—"
             let canvas = canvasPort.map(String.init) ?? "—"
-            lines.append("Ports: gw \(gw) · bridge \(br) · canvas \(canvas)")
+            lines.append("Ports: gateway \(gw) · canvas \(canvas)")
         }
 
         if lines.isEmpty {
-            lines.append(bridge.debugID)
+            lines.append(gateway.debugID)
         }
 
         return lines

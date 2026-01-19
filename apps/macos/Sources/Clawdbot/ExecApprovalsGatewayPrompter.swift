@@ -1,3 +1,4 @@
+import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import OSLog

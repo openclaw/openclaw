@@ -26,13 +26,6 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "ClawdbotProtocol",
-            dependencies: [],
-            path: "Sources/ClawdbotProtocol",
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-            ]),
-        .target(
             name: "ClawdbotIPC",
             dependencies: [],
             swiftSettings: [
@@ -52,9 +45,9 @@ let package = Package(
             dependencies: [
                 "ClawdbotIPC",
                 "ClawdbotDiscovery",
-                "ClawdbotProtocol",
                 .product(name: "ClawdbotKit", package: "ClawdbotKit"),
                 .product(name: "ClawdbotChatUI", package: "ClawdbotKit"),
+                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
@@ -85,7 +78,7 @@ let package = Package(
         .executableTarget(
             name: "ClawdbotWizardCLI",
             dependencies: [
-                "ClawdbotProtocol",
+                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
             ],
             path: "Sources/ClawdbotWizardCLI",
             swiftSettings: [
@@ -97,7 +90,7 @@ let package = Package(
                 "ClawdbotIPC",
                 "Clawdbot",
                 "ClawdbotDiscovery",
-                "ClawdbotProtocol",
+                .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
                 .product(name: "SwabbleKit", package: "swabble"),
             ],
             swiftSettings: [

@@ -2,14 +2,21 @@ import CryptoKit
 import Foundation
 import Security
 
-struct GatewayTLSParams: Sendable {
-    let required: Bool
-    let expectedFingerprint: String?
-    let allowTOFU: Bool
-    let storeKey: String?
+public struct GatewayTLSParams: Sendable {
+    public let required: Bool
+    public let expectedFingerprint: String?
+    public let allowTOFU: Bool
+    public let storeKey: String?
+
+    public init(required: Bool, expectedFingerprint: String?, allowTOFU: Bool, storeKey: String?) {
+        self.required = required
+        self.expectedFingerprint = expectedFingerprint
+        self.allowTOFU = allowTOFU
+        self.storeKey = storeKey
+    }
 }
 
-enum GatewayTLSStore {
+public enum GatewayTLSStore {
     private static let suiteName = "com.clawdbot.shared"
     private static let keyPrefix = "gateway.tls."
 
@@ -17,19 +24,19 @@ enum GatewayTLSStore {
         UserDefaults(suiteName: suiteName) ?? .standard
     }
 
-    static func loadFingerprint(stableID: String) -> String? {
+    public static func loadFingerprint(stableID: String) -> String? {
         let key = self.keyPrefix + stableID
         let raw = self.defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
-    static func saveFingerprint(_ value: String, stableID: String) {
+    public static func saveFingerprint(_ value: String, stableID: String) {
         let key = self.keyPrefix + stableID
         self.defaults.set(value, forKey: key)
     }
 }
 
-final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate {
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate {
     private let params: GatewayTLSParams
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -37,18 +44,18 @@ final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionD
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
-    init(params: GatewayTLSParams) {
+    public init(params: GatewayTLSParams) {
         self.params = params
         super.init()
     }
 
-    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+    public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.session.webSocketTask(with: url)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }
 
-    func urlSession(
+    public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
