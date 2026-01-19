@@ -76,6 +76,9 @@ importers:
       chromium-bidi:
         specifier: 12.0.1
         version: 12.0.1(devtools-protocol@0.0.1561482)
+      cli-highlight:
+        specifier: ^2.1.11
+        version: 2.1.11
       commander:
         specifier: ^14.0.2
         version: 14.0.2
