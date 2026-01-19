@@ -88,10 +88,7 @@ describe("gateway SIGTERM", () => {
     const err: string[] = [];
 
     const nodeBin = process.execPath;
-    const args = [
-      "--import",
-      "tsx",
-      "src/entry.ts",
+    const entryArgs = [
       "gateway",
       "--port",
       String(port),
@@ -99,21 +96,53 @@ describe("gateway SIGTERM", () => {
       "loopback",
       "--allow-unconfigured",
     ];
+    const env = {
+      ...process.env,
+      CLAWDBOT_NO_RESPAWN: "1",
+      CLAWDBOT_STATE_DIR: stateDir,
+      CLAWDBOT_CONFIG_PATH: configPath,
+      CLAWDBOT_SKIP_CHANNELS: "1",
+      CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
+      CLAWDBOT_SKIP_CANVAS_HOST: "1",
+      // Avoid port collisions with other test processes that may also start a gateway server.
+      CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
+      CLAWDBOT_BRIDGE_PORT: "0",
+    };
+    let childArgs: string[];
+    if (process.platform === "win32") {
+      const bootstrapPath = path.join(stateDir, "clawdbot-entry-bootstrap.mjs");
+      fs.writeFileSync(
+        bootstrapPath,
+        [
+          'import { pathToFileURL } from "node:url";',
+          "const entry = process.env.CLAWDBOT_ENTRY_PATH;",
+          'const rawArgs = process.env.CLAWDBOT_ENTRY_ARGS ?? "[]";',
+          "if (!entry) {",
+          '  console.error("Missing CLAWDBOT_ENTRY_PATH");',
+          "  process.exit(1);",
+          "}",
+          "let entryArgs = [];",
+          "try {",
+          "  entryArgs = JSON.parse(rawArgs);",
+          "} catch (err) {",
+          '  console.error("Failed to parse CLAWDBOT_ENTRY_ARGS", err);',
+          "  process.exit(1);",
+          "}",
+          "process.argv = [process.argv[0], entry, ...entryArgs];",
+          "await import(pathToFileURL(entry).href);",
+        ].join("\n"),
+        "utf8",
+      );
+      childArgs = ["--import", "tsx", bootstrapPath];
+      env.CLAWDBOT_ENTRY_PATH = path.resolve("src/entry.ts");
+      env.CLAWDBOT_ENTRY_ARGS = JSON.stringify(entryArgs);
+    } else {
+      childArgs = ["--import", "tsx", "src/entry.ts", ...entryArgs];
+    }
 
-    child = spawn(nodeBin, args, {
+    child = spawn(nodeBin, childArgs, {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        CLAWDBOT_NO_RESPAWN: "1",
-        CLAWDBOT_STATE_DIR: stateDir,
-        CLAWDBOT_CONFIG_PATH: configPath,
-        CLAWDBOT_SKIP_CHANNELS: "1",
-        CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
-        CLAWDBOT_SKIP_CANVAS_HOST: "1",
-        // Avoid port collisions with other test processes that may also start a gateway server.
-        CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
-        CLAWDBOT_BRIDGE_PORT: "0",
-      },
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
