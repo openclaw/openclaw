@@ -107,4 +107,35 @@ describe("sanitizeSessionHistory", () => {
     expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("google-gemini");
     expect(helpers.downgradeGeminiHistory).toHaveBeenCalled();
   });
+
+  it("drops reasoning-only assistant messages for openai-responses", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thinkingSignature: "sig",
+          },
+        ],
+      },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("openai-responses");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.role).toBe("user");
+  });
 });
