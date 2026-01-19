@@ -20,10 +20,9 @@ export async function probeZalouser(
     return { ok: false, error: result.stderr || "Failed to probe" };
   }
 
-  try {
-    const user = parseJsonOutput<ZcaUserInfo>(result.stdout);
-    return { ok: true, user: user ?? undefined };
-  } catch {
+  const user = parseJsonOutput<ZcaUserInfo>(result.stdout);
+  if (!user) {
     return { ok: false, error: "Failed to parse user info" };
   }
+  return { ok: true, user };
 }
