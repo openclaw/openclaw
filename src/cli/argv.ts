@@ -45,19 +45,13 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return undefined;
 }
 
-export function getVerboseFlag(
-  argv: string[],
-  options?: { includeDebug?: boolean },
-): boolean {
+export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
   if (hasFlag(argv, "--verbose")) return true;
   if (options?.includeDebug && hasFlag(argv, "--debug")) return true;
   return false;
 }
 
-export function getPositiveIntFlagValue(
-  argv: string[],
-  name: string,
-): number | null | undefined {
+export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {
   const raw = getFlagValue(argv, name);
   if (raw === null || raw === undefined) return raw;
   return parsePositiveInt(raw);

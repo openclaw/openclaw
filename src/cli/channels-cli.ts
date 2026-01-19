@@ -197,8 +197,7 @@ export function registerChannelsCli(program: Command) {
     .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
     .action(async (opts) => {
-      await runChannelsCommandWithDanger(
-        async () => {
+      await runChannelsCommandWithDanger(async () => {
         await runChannelLogin(
           {
             channel: opts.channel as string | undefined,
@@ -207,9 +206,7 @@ export function registerChannelsCli(program: Command) {
           },
           defaultRuntime,
         );
-        },
-        "Channel login failed",
-      );
+      }, "Channel login failed");
     });
 
   channels
@@ -218,8 +215,7 @@ export function registerChannelsCli(program: Command) {
     .option("--channel <channel>", "Channel alias (default: whatsapp)")
     .option("--account <id>", "Account id (accountId)")
     .action(async (opts) => {
-      await runChannelsCommandWithDanger(
-        async () => {
+      await runChannelsCommandWithDanger(async () => {
         await runChannelLogout(
           {
             channel: opts.channel as string | undefined,
@@ -227,8 +223,6 @@ export function registerChannelsCli(program: Command) {
           },
           defaultRuntime,
         );
-        },
-        "Channel logout failed",
-      );
+      }, "Channel logout failed");
     });
 }
