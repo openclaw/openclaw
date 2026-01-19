@@ -17,6 +17,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Tests: stabilize Windows gateway/CLI tests by skipping sidecars, normalizing argv, and extending timeouts.
+- CLI: skip runner rebuilds when dist is fresh. (#1231) — thanks @mukhtharcm, @thewilloftheshadow.
 
 ## 2026.1.19-1
 
