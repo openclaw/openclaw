@@ -158,7 +158,7 @@ describe("SearchableSelectList", () => {
     list.handleInput("z");
 
     const output = list.render(80);
-    expect(output.some((line) => line.includes("No matching"))).toBe(true);
+    expect(output.some((line) => line.includes("No matches"))).toBe(true);
   });
 
   it("navigates with arrow keys", () => {
