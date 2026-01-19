@@ -1,4 +1,4 @@
-package com.clawdbot.android.bridge
+package com.clawdbot.android.gateway
 
 object BonjourEscapes {
   fun decode(input: String): String {
