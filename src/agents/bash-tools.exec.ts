@@ -478,7 +478,10 @@ export function createExecTool(
 
         let approvedByAsk = false;
         if (requiresAsk) {
-          const decisionResult = (await callGatewayTool("exec.approval.request", {}, {
+          const decisionResult = (await callGatewayTool(
+            "exec.approval.request",
+            { timeoutMs: 130_000 },
+            {
             command: params.command,
             cwd: workdir,
             host: "node",
@@ -488,7 +491,8 @@ export function createExecTool(
             resolvedPath: resolution?.resolvedPath ?? null,
             sessionKey: defaults?.sessionKey ?? null,
             timeoutMs: 120_000,
-          })) as { decision?: string } | null;
+            },
+          )) as { decision?: string } | null;
           const decision =
             decisionResult && typeof decisionResult === "object"
               ? decisionResult.decision ?? null
@@ -603,7 +607,10 @@ export function createExecTool(
 
         let approvedByAsk = false;
         if (requiresAsk) {
-          const decisionResult = (await callGatewayTool("exec.approval.request", {}, {
+          const decisionResult = (await callGatewayTool(
+            "exec.approval.request",
+            { timeoutMs: 130_000 },
+            {
             command: params.command,
             cwd: workdir,
             host: "gateway",
@@ -613,7 +620,8 @@ export function createExecTool(
             resolvedPath: resolution?.resolvedPath ?? null,
             sessionKey: defaults?.sessionKey ?? null,
             timeoutMs: 120_000,
-          })) as { decision?: string } | null;
+            },
+          )) as { decision?: string } | null;
           const decision =
             decisionResult && typeof decisionResult === "object"
               ? decisionResult.decision ?? null
