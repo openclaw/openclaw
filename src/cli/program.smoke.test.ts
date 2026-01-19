@@ -73,6 +73,12 @@ describe("cli program (smoke)", () => {
     expect(statusCommand).toHaveBeenCalled();
   });
 
+  it("registers memory command", () => {
+    const program = buildProgram();
+    const names = program.commands.map((command) => command.name());
+    expect(names).toContain("memory");
+  });
+
   it("runs tui without overriding timeout", async () => {
     const program = buildProgram();
     await program.parseAsync(["tui"], { from: "user" });
