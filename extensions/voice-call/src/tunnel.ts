@@ -230,12 +230,13 @@ export async function startTailscaleTunnel(config: {
     throw new Error("Could not get Tailscale DNS name. Is Tailscale running?");
   }
 
-  const localUrl = `http://127.0.0.1:${config.port}`;
+  const path = config.path.startsWith("/") ? config.path : `/${config.path}`;
+  const localUrl = `http://127.0.0.1:${config.port}${path}`;
 
   return new Promise((resolve, reject) => {
     const proc = spawn(
       "tailscale",
-      [config.mode, "--bg", "--yes", "--set-path", config.path, localUrl],
+      [config.mode, "--bg", "--yes", "--set-path", path, localUrl],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
 
@@ -247,7 +248,7 @@ export async function startTailscaleTunnel(config: {
     proc.on("close", (code) => {
       clearTimeout(timeout);
       if (code === 0) {
-        const publicUrl = `https://${dnsName}${config.path}`;
+        const publicUrl = `https://${dnsName}${path}`;
         console.log(
           `[voice-call] Tailscale ${config.mode} active: ${publicUrl}`,
         );
@@ -256,7 +257,7 @@ export async function startTailscaleTunnel(config: {
           publicUrl,
           provider: `tailscale-${config.mode}`,
           stop: async () => {
-            await stopTailscaleTunnel(config.mode, config.path);
+            await stopTailscaleTunnel(config.mode, path);
           },
         });
       } else {
