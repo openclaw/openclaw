@@ -27,6 +27,8 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import type { ImageContent } from "../commands/agent/types.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -74,16 +76,157 @@ function extractTextContent(content: string | ContentPart[]): string {
     .join("\n");
 }
 
-function hasUnsupportedContent(content: string | ContentPart[]): string | null {
-  if (typeof content === "string") return null;
-  for (const part of content) {
-    if (part.type === "input_image") return "input_image content is not supported in Phase 1";
-    if (part.type === "input_file") return "input_file content is not supported in Phase 1";
-  }
-  return null;
+const PRIVATE_IP_PATTERNS = [
+  /^127\./, // Loopback
+  /^192\.168\./, // Private network
+  /^10\./, // Private network
+  /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // Private network
+  /^::1$/, // IPv6 loopback
+  /^fe80:/, // IPv6 link-local
+  /^fec0:/, // IPv6 site-local
+];
+
+function isPrivateIp(hostname: string): boolean {
+  return PRIVATE_IP_PATTERNS.some((pattern) => pattern.test(hostname));
 }
 
-function buildAgentPrompt(input: string | ItemParam[]): {
+// Fetch with SSRF protection, timeout, and size limits
+async function fetchWithGuard(
+  url: string,
+  maxBytes: number,
+  timeoutMs: number = 10000,
+): Promise<{ data: string; mimeType: string }> {
+  const parsedUrl = new URL(url);
+
+  // Only allow HTTP/HTTPS
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    throw new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`);
+  }
+
+  // Block private IPs (SSRF protection)
+  if (isPrivateIp(parsedUrl.hostname)) {
+    throw new Error(`Private IP addresses are not allowed: ${parsedUrl.hostname}`);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": "Clawdbot-Gateway/1.0" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const size = parseInt(contentLength, 10);
+      if (size > maxBytes) {
+        throw new Error(`Content too large: ${size} bytes (limit: ${maxBytes} bytes)`);
+      }
+    }
+
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(`Content too large: ${buffer.byteLength} bytes (limit: ${maxBytes} bytes)`);
+    }
+
+    const mimeType = response.headers.get("content-type") || "application/octet-stream";
+
+    return {
+      data: Buffer.from(buffer).toString("base64"),
+      mimeType,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+const ALLOWED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_BYTES = 5 * 1024 * 1024; // 5MB
+const ALLOWED_FILE_MIMES = new Set([
+  "text/plain",
+  "text/markdown",
+  "text/html",
+  "text/csv",
+  "application/pdf",
+  "application/json",
+]);
+
+async function extractImageContent(part: ContentPart): Promise<ImageContent | null> {
+  if (part.type !== "input_image") return null;
+
+  const source = part.source as { type: string; url?: string; data?: string; media_type?: string };
+
+  if (source.type === "base64") {
+    if (!source.data) {
+      throw new Error("input_image base64 source missing 'data' field");
+    }
+    const mimeType = source.media_type || "image/png";
+    if (!ALLOWED_IMAGE_MIMES.has(mimeType)) {
+      throw new Error(`Unsupported image MIME type: ${mimeType}`);
+    }
+    return { type: "image", data: source.data, mimeType };
+  }
+
+  if (source.type === "url" && source.url) {
+    const result = await fetchWithGuard(source.url, MAX_IMAGE_BYTES);
+    if (!ALLOWED_IMAGE_MIMES.has(result.mimeType)) {
+      throw new Error(`Unsupported image MIME type from URL: ${result.mimeType}`);
+    }
+    return { type: "image", data: result.data, mimeType: result.mimeType };
+  }
+
+  throw new Error("input_image must have 'source.url' or 'source.data'");
+}
+
+async function extractFileContent(part: ContentPart): Promise<string | null> {
+  if (part.type !== "input_file") return null;
+
+  const source = part.source as {
+    type: string;
+    url?: string;
+    data?: string;
+    media_type?: string;
+    filename?: string;
+  };
+  const filename = source.filename || "file";
+
+  let content: string;
+
+  if (source.type === "base64") {
+    if (!source.data) {
+      throw new Error("input_file base64 source missing 'data' field");
+    }
+    const buffer = Buffer.from(source.data, "base64");
+    if (buffer.byteLength > MAX_FILE_BYTES) {
+      throw new Error(
+        `File too large: ${buffer.byteLength} bytes (limit: ${MAX_FILE_BYTES} bytes)`,
+      );
+    }
+    content = buffer.toString("utf-8");
+  } else if (source.type === "url" && source.url) {
+    const result = await fetchWithGuard(source.url, MAX_FILE_BYTES);
+    if (!ALLOWED_FILE_MIMES.has(result.mimeType)) {
+      throw new Error(`Unsupported file MIME type: ${result.mimeType}`);
+    }
+    content = Buffer.from(result.data, "base64").toString("utf-8");
+  } else {
+    throw new Error("input_file must have 'source.url' or 'source.data'");
+  }
+
+  return `<file name="${filename}">\n${content}\n</file>`;
+}
+
+function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
+  return (body.tools ?? []) as ClientToolDefinition[];
+}
+
+export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
 } {
@@ -293,33 +436,44 @@ export async function handleOpenResponsesHttpRequest(
   const model = payload.model;
   const user = payload.user;
 
-  // Check for unsupported content types (Phase 1)
+  // Extract images, files, and tools from input (Phase 2)
+  let images: ImageContent[] = [];
+  let fileContents: string[] = [];
   if (Array.isArray(payload.input)) {
     for (const item of payload.input) {
       if (item.type === "message" && typeof item.content !== "string") {
-        const unsupported = hasUnsupportedContent(item.content);
-        if (unsupported) {
-          sendJson(res, 400, {
-            error: { message: unsupported, type: "invalid_request_error" },
-          });
-          return true;
+        for (const part of item.content) {
+          const image = await extractImageContent(part);
+          if (image) {
+            images.push(image);
+            continue;
+          }
+          const file = await extractFileContent(part);
+          if (file) {
+            fileContents.push(file);
+          }
         }
       }
     }
   }
 
+  const clientTools = extractClientTools(payload);
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveSessionKey({ req, agentId, user });
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
 
+  // Append file contents to the message
+  const fullMessage =
+    fileContents.length > 0 ? `${prompt.message}\n\n${fileContents.join("\n\n")}` : prompt.message;
+
   // Handle instructions as extra system prompt
   const extraSystemPrompt = [payload.instructions, prompt.extraSystemPrompt]
     .filter(Boolean)
     .join("\n\n");
 
-  if (!prompt.message) {
+  if (!fullMessage) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `input`.",
@@ -337,7 +491,9 @@ export async function handleOpenResponsesHttpRequest(
     try {
       const result = await agentCommand(
         {
-          message: prompt.message,
+          message: fullMessage,
+          images: images.length > 0 ? images : undefined,
+          clientTools: clientTools.length > 0 ? clientTools : undefined,
           extraSystemPrompt: extraSystemPrompt || undefined,
           sessionKey,
           runId: responseId,
@@ -350,6 +506,36 @@ export async function handleOpenResponsesHttpRequest(
       );
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const meta = (result as { meta?: unknown } | null)?.meta;
+      const stopReason =
+        meta && typeof meta === "object" ? (meta as { stopReason?: string }).stopReason : undefined;
+      const pendingToolCalls =
+        meta && typeof meta === "object"
+          ? (meta as { pendingToolCalls?: Array<{ id: string; name: string; arguments: string }> })
+              .pendingToolCalls
+          : undefined;
+
+      // If agent called a client tool, return function_call instead of text
+      if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+        const functionCall = pendingToolCalls[0];
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "incomplete",
+          output: [
+            {
+              type: "function_call",
+              id: functionCall.id,
+              call_id: functionCall.id,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            },
+          ],
+        });
+        sendJson(res, 200, response);
+        return true;
+      }
+
       const content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
@@ -511,7 +697,9 @@ export async function handleOpenResponsesHttpRequest(
     try {
       const result = await agentCommand(
         {
-          message: prompt.message,
+          message: fullMessage,
+          images: images.length > 0 ? images : undefined,
+          clientTools: clientTools.length > 0 ? clientTools : undefined,
           extraSystemPrompt: extraSystemPrompt || undefined,
           sessionKey,
           runId: responseId,
@@ -527,7 +715,90 @@ export async function handleOpenResponsesHttpRequest(
 
       // Fallback: if no streaming deltas were received, send the full response
       if (!sawAssistantDelta) {
-        const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+        const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+        const payloads = resultAny.payloads;
+        const meta = resultAny.meta;
+        const stopReason =
+          meta && typeof meta === "object"
+            ? (meta as { stopReason?: string }).stopReason
+            : undefined;
+        const pendingToolCalls =
+          meta && typeof meta === "object"
+            ? (
+                meta as {
+                  pendingToolCalls?: Array<{ id: string; name: string; arguments: string }>;
+                }
+              ).pendingToolCalls
+            : undefined;
+
+        // If agent called a client tool, emit function_call instead of text
+        if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+          const functionCall = pendingToolCalls[0];
+          // Complete the text content part
+          writeSseEvent(res, {
+            type: "response.output_text.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            text: "",
+          });
+          writeSseEvent(res, {
+            type: "response.content_part.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "" },
+          });
+
+          // Complete the message item
+          const completedItem = createAssistantOutputItem({
+            id: outputItemId,
+            text: "",
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: completedItem,
+          });
+
+          // Send function_call item
+          const functionCallItemId = `call_${randomUUID()}`;
+          const functionCallItem = {
+            type: "function_call" as const,
+            id: functionCallItemId,
+            call_id: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          };
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: functionCallItem,
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: { ...functionCallItem, status: "completed" as const },
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: { ...functionCallItem, status: "completed" as const },
+          });
+
+          const incompleteResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "incomplete",
+            output: [completedItem, functionCallItem],
+          });
+          writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+          writeDone(res);
+          res.end();
+          return;
+        }
+
         const content =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads

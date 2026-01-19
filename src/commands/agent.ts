@@ -415,6 +415,7 @@ export async function agentCommand(
             skillsSnapshot,
             prompt: body,
             images: opts.images,
+            clientTools: opts.clientTools,
             provider: providerOverride,
             model: modelOverride,
             authProfileId,

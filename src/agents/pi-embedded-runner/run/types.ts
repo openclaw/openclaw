@@ -9,6 +9,7 @@ import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { ClientToolDefinition } from "./params.js";
 
 type AuthStorage = ReturnType<typeof discoverAuthStorage>;
 type ModelRegistry = ReturnType<typeof discoverModels>;
@@ -30,6 +31,8 @@ export type EmbeddedRunAttemptParams = {
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   images?: ImageContent[];
+  /** Optional client-provided tools (OpenResponses hosted tools). */
+  clientTools?: ClientToolDefinition[];
   provider: string;
   modelId: string;
   model: Model<Api>;
@@ -79,4 +82,6 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
   cloudCodeAssistFormatError: boolean;
+  /** Client tool call detected (OpenResponses hosted tools). */
+  clientToolCall?: { name: string; params: Record<string, unknown> };
 };

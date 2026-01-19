@@ -90,7 +90,7 @@ export class GatewayClient {
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = (_host: string, cert: CertMeta) => {
+      wsOptions.checkServerIdentity = ((_host: string, cert: CertMeta) => {
         const fingerprintValue =
           typeof cert === "object" && cert && "fingerprint256" in cert
             ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
@@ -99,9 +99,17 @@ export class GatewayClient {
           typeof fingerprintValue === "string" ? fingerprintValue : "",
         );
         const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
-        if (!expected || !fingerprint) return false;
-        return fingerprint === expected;
-      };
+        if (!expected) {
+          return new Error("gateway tls fingerprint missing");
+        }
+        if (!fingerprint) {
+          return new Error("gateway tls fingerprint unavailable");
+        }
+        if (fingerprint !== expected) {
+          return new Error("gateway tls fingerprint mismatch");
+        }
+        return undefined;
+      }) as any;
     }
     this.ws = new WebSocket(url, wsOptions);
 
