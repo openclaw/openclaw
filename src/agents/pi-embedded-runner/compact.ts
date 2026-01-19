@@ -286,7 +286,10 @@ export async function compactEmbeddedPiSession(params: {
         });
         try {
           await prewarmSessionFile(params.sessionFile);
-          const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile));
+          const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+          });
           trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
           ensurePiCompactionReserveTokens({

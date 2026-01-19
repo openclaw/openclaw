@@ -30,6 +30,9 @@ import type {
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
   PluginHookToolContext,
+  PluginHookToolResultPersistContext,
+  PluginHookToolResultPersistEvent,
+  PluginHookToolResultPersistResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -49,6 +52,9 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookToolResultPersistContext,
+  PluginHookToolResultPersistEvent,
+  PluginHookToolResultPersistResult,
   PluginHookSessionContext,
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
@@ -302,6 +308,59 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("after_tool_call", event, ctx);
   }
 
+  /**
+   * Run tool_result_persist hook.
+   *
+   * This hook is intentionally synchronous: it runs in hot paths where session
+   * transcripts are appended synchronously.
+   *
+   * Handlers are executed sequentially in priority order (higher first). Each
+   * handler may return `{ message }` to replace the message passed to the next
+   * handler.
+   */
+  function runToolResultPersist(
+    event: PluginHookToolResultPersistEvent,
+    ctx: PluginHookToolResultPersistContext,
+  ): PluginHookToolResultPersistResult | undefined {
+    const hooks = getHooksForName(registry, "tool_result_persist");
+    if (hooks.length === 0) return undefined;
+
+    let current = event.message;
+
+    for (const hook of hooks) {
+      try {
+        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+          | PluginHookToolResultPersistResult
+          | void
+          | Promise<unknown>;
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        if (out && typeof (out as any).then === "function") {
+          const msg =
+            `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (catchErrors) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const next = (out as PluginHookToolResultPersistResult | undefined)?.message;
+        if (next) current = next;
+      } catch (err) {
+        const msg = `[hooks] tool_result_persist handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg);
+        }
+      }
+    }
+
+    return { message: current };
+  }
+
   // =========================================================================
   // Session Hooks
   // =========================================================================
@@ -385,6 +444,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runToolResultPersist,
     // Session hooks
     runSessionStart,
     runSessionEnd,
