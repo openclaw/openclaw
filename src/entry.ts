@@ -63,9 +63,10 @@ function normalizeWindowsArgv(argv: string[]): string[] {
   const execPath = process.execPath;
   const execPathLower = execPath.toLowerCase();
   const execBase = path.basename(execPath).toLowerCase();
+  const normalizeArg = (value: string): string => value.replace(/^"+|"+$/g, "");
   const isExecPath = (value: string | undefined): boolean => {
     if (!value) return false;
-    const lower = value.toLowerCase();
+    const lower = normalizeArg(value).toLowerCase();
     return lower === execPathLower || path.basename(lower) === execBase;
   };
   const arg1 = path.basename(argv[1] ?? "").toLowerCase();
