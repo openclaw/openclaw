@@ -58,6 +58,7 @@ import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
+import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 
@@ -222,6 +223,10 @@ export async function startGatewayServer(
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
+  const gatewayTls = await loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls"));
+  if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
+    throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
+  }
   const {
     canvasHost,
     httpServer,
@@ -244,6 +249,7 @@ export async function startGatewayServer(
     controlUiBasePath,
     openAiChatCompletionsEnabled,
     resolvedAuth,
+    gatewayTls,
     hooksConfig: () => hooksConfig,
     pluginRegistry,
     deps,
@@ -279,6 +285,9 @@ export async function startGatewayServer(
   const bridgeRuntime = await startGatewayBridgeRuntime({
     cfg: cfgAtStart,
     port,
+    gatewayTls: gatewayTls.enabled
+      ? { enabled: true, fingerprintSha256: gatewayTls.fingerprintSha256 }
+      : undefined,
     canvasHostEnabled,
     canvasHost,
     canvasRuntime,
@@ -412,6 +421,7 @@ export async function startGatewayServer(
     cfg: cfgAtStart,
     bindHost,
     port,
+    tlsEnabled: gatewayTls.enabled,
     log,
     isNixMode,
   });

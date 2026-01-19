@@ -250,6 +250,9 @@ actor GatewayEndpointStore {
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: ClawdbotConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
+        let scheme = GatewayEndpointStore.resolveGatewayScheme(
+            root: ClawdbotConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment)
         let host = GatewayEndpointStore.resolveLocalGatewayHost(bindMode: bind, tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
@@ -257,7 +260,7 @@ actor GatewayEndpointStore {
         case .local:
             self.state = .ready(
                 mode: .local,
-                url: URL(string: "ws://\(host):\(port)")!,
+                url: URL(string: "\(scheme)://\(host):\(port)")!,
                 token: token,
                 password: password)
         case .remote:
@@ -294,9 +297,12 @@ actor GatewayEndpointStore {
             self.cancelRemoteEnsure()
             let port = self.deps.localPort()
             let host = await self.deps.localHost()
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .local,
-                url: URL(string: "ws://\(host):\(port)")!,
+                url: URL(string: "\(scheme)://\(host):\(port)")!,
                 token: token,
                 password: password))
         case .remote:
@@ -307,9 +313,12 @@ actor GatewayEndpointStore {
                 return
             }
             self.cancelRemoteEnsure()
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
             self.setState(.ready(
                 mode: .remote,
-                url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
+                url: URL(string: "\(scheme)://127.0.0.1:\(Int(port))")!,
                 token: token,
                 password: password))
         case .unconfigured:
@@ -476,6 +485,24 @@ actor GatewayEndpointStore {
             }
         }
         return nil
+    }
+
+    private static func resolveGatewayScheme(
+        root: [String: Any],
+        env: [String: String]) -> String
+    {
+        if let envValue = env["CLAWDBOT_GATEWAY_TLS"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envValue.isEmpty
+        {
+            return (envValue == "1" || envValue.lowercased() == "true") ? "wss" : "ws"
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let tls = gateway["tls"] as? [String: Any],
+           let enabled = tls["enabled"] as? Bool
+        {
+            return enabled ? "wss" : "ws"
+        }
+        return "ws"
     }
 
     private static func resolveLocalGatewayHost(

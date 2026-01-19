@@ -127,6 +127,8 @@ export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
 };
 
+export type GatewayTlsConfig = BridgeTlsConfig;
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -151,5 +153,6 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
 };

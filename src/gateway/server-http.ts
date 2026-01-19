@@ -4,6 +4,8 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
+import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
@@ -193,6 +195,7 @@ export function createGatewayHttpServer(opts: {
   handleHooksRequest: HooksRequestHandler;
   handlePluginRequest?: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
+  tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
     canvasHost,
@@ -203,11 +206,19 @@ export function createGatewayHttpServer(opts: {
     handlePluginRequest,
     resolvedAuth,
   } = opts;
-  const httpServer: HttpServer = createHttpServer((req, res) => {
+  const httpServer: HttpServer = opts.tlsOptions
+    ? createHttpsServer(opts.tlsOptions, (req, res) => {
+        void handleRequest(req, res);
+      })
+    : createHttpServer((req, res) => {
+        void handleRequest(req, res);
+      });
+
+  async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
 
-    void (async () => {
+    try {
       if (await handleHooksRequest(req, res)) return;
       if (await handleSlackHttpRequest(req, res)) return;
       if (handlePluginRequest && (await handlePluginRequest(req, res))) return;
@@ -230,12 +241,12 @@ export function createGatewayHttpServer(opts: {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    })().catch((err) => {
+    } catch (err) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end(String(err));
-    });
-  });
+    }
+  }
 
   return httpServer;
 }

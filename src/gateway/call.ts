@@ -56,14 +56,16 @@ export function buildGatewayConnectionDetails(
     options.configPath ?? resolveConfigPath(process.env, resolveStateDir(process.env));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
+  const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort = resolveGatewayPort(config);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
   const preferTailnet = bindMode === "auto" && !!tailnetIPv4;
+  const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl =
     preferTailnet && tailnetIPv4
-      ? `ws://${tailnetIPv4}:${localPort}`
-      : `ws://127.0.0.1:${localPort}`;
+      ? `${scheme}://${tailnetIPv4}:${localPort}`
+      : `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()

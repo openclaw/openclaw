@@ -300,6 +300,15 @@ export const ClawdbotSchema = z
           })
           .strict()
           .optional(),
+        tls: z
+          .object({
+            enabled: z.boolean().optional(),
+            autoGenerate: z.boolean().optional(),
+            certPath: z.string().optional(),
+            keyPath: z.string().optional(),
+            caPath: z.string().optional(),
+          })
+          .optional(),
         http: z
           .object({
             endpoints: z

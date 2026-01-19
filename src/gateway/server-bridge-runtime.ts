@@ -37,6 +37,7 @@ export type GatewayBridgeRuntime = {
 export async function startGatewayBridgeRuntime(params: {
   cfg: ClawdbotConfig;
   port: number;
+  gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasHostEnabled: boolean;
   canvasHost: CanvasHostHandler | null;
   canvasRuntime: RuntimeEnv;
@@ -221,6 +222,7 @@ export async function startGatewayBridgeRuntime(params: {
   const discovery = await startGatewayDiscovery({
     machineDisplayName: params.machineDisplayName,
     port: params.port,
+    gatewayTls: params.gatewayTls,
     bridgePort: bridge?.port,
     bridgeTls: bridgeTls.enabled
       ? { enabled: true, fingerprintSha256: bridgeTls.fingerprintSha256 }

@@ -10,6 +10,7 @@ import {
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
+  gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   bridgePort?: number;
   bridgeTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
@@ -31,6 +32,8 @@ export async function startGatewayDiscovery(params: {
     const bonjour = await startGatewayBonjourAdvertiser({
       instanceName: formatBonjourInstanceName(params.machineDisplayName),
       gatewayPort: params.port,
+      gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
+      gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
       bridgePort: params.bridgePort,
       canvasPort: params.canvasPort,
       bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,

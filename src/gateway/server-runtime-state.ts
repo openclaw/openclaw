@@ -18,6 +18,7 @@ import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import type { GatewayTlsRuntime } from "./server/tls.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").ClawdbotConfig;
@@ -27,6 +28,7 @@ export async function createGatewayRuntimeState(params: {
   controlUiBasePath: string;
   openAiChatCompletionsEnabled: boolean;
   resolvedAuth: ResolvedGatewayAuth;
+  gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
@@ -104,6 +106,7 @@ export async function createGatewayRuntimeState(params: {
     handleHooksRequest,
     handlePluginRequest,
     resolvedAuth: params.resolvedAuth,
+    tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
   });
 
   await listenGatewayHttpServer({
