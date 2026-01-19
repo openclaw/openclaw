@@ -46,7 +46,6 @@ export function dedupeBeacons(beacons: GatewayBonjourBeacon[]): GatewayBonjourBe
       b.displayName ?? "",
       host,
       String(b.port ?? ""),
-      String(b.bridgePort ?? ""),
       String(b.gatewayPort ?? ""),
     ].join("|");
     if (seen.has(key)) continue;

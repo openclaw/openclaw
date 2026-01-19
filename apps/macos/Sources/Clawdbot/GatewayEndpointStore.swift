@@ -15,7 +15,13 @@ enum GatewayEndpointState: Sendable, Equatable {
 /// - The endpoint store owns observation + explicit "ensure tunnel" actions.
 actor GatewayEndpointStore {
     static let shared = GatewayEndpointStore()
-    private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let supportedBindModes: Set<String> = [
+        "loopback",
+        "tailnet",
+        "lan",
+        "auto",
+        "custom",
+    ]
     private static let remoteConnectingDetail = "Connecting to remote gateway…"
     private static let staticLogger = Logger(subsystem: "com.clawdbot", category: "gateway-endpoint")
     private enum EnvOverrideWarningKind: Sendable {
@@ -60,9 +66,11 @@ actor GatewayEndpointStore {
                 let bind = GatewayEndpointStore.resolveGatewayBindMode(
                     root: root,
                     env: ProcessInfo.processInfo.environment)
+                let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
                 let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
                 return GatewayEndpointStore.resolveLocalGatewayHost(
                     bindMode: bind,
+                    customBindHost: customBindHost,
                     tailscaleIP: tailscaleIP)
             },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
@@ -250,10 +258,14 @@ actor GatewayEndpointStore {
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
             root: ClawdbotConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
+        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: ClawdbotConfigFile.loadDict())
         let scheme = GatewayEndpointStore.resolveGatewayScheme(
             root: ClawdbotConfigFile.loadDict(),
             env: ProcessInfo.processInfo.environment)
-        let host = GatewayEndpointStore.resolveLocalGatewayHost(bindMode: bind, tailscaleIP: nil)
+        let host = GatewayEndpointStore.resolveLocalGatewayHost(
+            bindMode: bind,
+            customBindHost: customBindHost,
+            tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
         switch initialMode {
@@ -417,7 +429,10 @@ actor GatewayEndpointStore {
 
             let token = self.deps.token()
             let password = self.deps.password()
-            let url = URL(string: "ws://127.0.0.1:\(Int(forwarded))")!
+            let scheme = GatewayEndpointStore.resolveGatewayScheme(
+                root: ClawdbotConfigFile.loadDict(),
+                env: ProcessInfo.processInfo.environment)
+            let url = URL(string: "\(scheme)://127.0.0.1:\(Int(forwarded))")!
             self.setState(.ready(mode: .remote, url: url, token: token, password: password))
             return (url, token, password)
         } catch let err as CancellationError {
@@ -487,6 +502,16 @@ actor GatewayEndpointStore {
         return nil
     }
 
+    private static func resolveGatewayCustomBindHost(root: [String: Any]) -> String? {
+        if let gateway = root["gateway"] as? [String: Any],
+           let customBindHost = gateway["customBindHost"] as? String
+        {
+            let trimmed = customBindHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return nil
+    }
+
     private static func resolveGatewayScheme(
         root: [String: Any],
         env: [String: String]) -> String
@@ -507,11 +532,14 @@ actor GatewayEndpointStore {
 
     private static func resolveLocalGatewayHost(
         bindMode: String?,
+        customBindHost: String?,
         tailscaleIP: String?) -> String
     {
         switch bindMode {
         case "tailnet", "auto":
             tailscaleIP ?? "127.0.0.1"
+        case "custom":
+            customBindHost ?? "127.0.0.1"
         default:
             "127.0.0.1"
         }
@@ -586,7 +614,10 @@ extension GatewayEndpointStore {
         bindMode: String?,
         tailscaleIP: String?) -> String
     {
-        self.resolveLocalGatewayHost(bindMode: bindMode, tailscaleIP: tailscaleIP)
+        self.resolveLocalGatewayHost(
+            bindMode: bindMode,
+            customBindHost: nil,
+            tailscaleIP: tailscaleIP)
     }
 }
 #endif

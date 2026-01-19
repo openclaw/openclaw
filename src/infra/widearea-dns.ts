@@ -65,14 +65,13 @@ function computeContentHash(body: string): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
-export type WideAreaBridgeZoneOpts = {
-  bridgePort: number;
-  gatewayPort?: number;
+export type WideAreaGatewayZoneOpts = {
+  gatewayPort: number;
   displayName: string;
   tailnetIPv4: string;
   tailnetIPv6?: string;
-  bridgeTlsEnabled?: boolean;
-  bridgeTlsFingerprintSha256?: string;
+  gatewayTlsEnabled?: boolean;
+  gatewayTlsFingerprintSha256?: string;
   instanceLabel?: string;
   hostLabel?: string;
   tailnetDns?: string;
@@ -80,23 +79,20 @@ export type WideAreaBridgeZoneOpts = {
   cliPath?: string;
 };
 
-function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
+function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
   const hostname = os.hostname().split(".")[0] ?? "clawdbot";
   const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "clawdbot");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-bridge`, "clawdbot-bridge");
+  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "clawdbot-gateway");
 
   const txt = [
     `displayName=${opts.displayName.trim() || hostname}`,
-    `transport=bridge`,
-    `bridgePort=${opts.bridgePort}`,
+    `transport=gateway`,
+    `gatewayPort=${opts.gatewayPort}`,
   ];
-  if (typeof opts.gatewayPort === "number" && opts.gatewayPort > 0) {
-    txt.push(`gatewayPort=${opts.gatewayPort}`);
-  }
-  if (opts.bridgeTlsEnabled) {
-    txt.push(`bridgeTls=1`);
-    if (opts.bridgeTlsFingerprintSha256) {
-      txt.push(`bridgeTlsSha256=${opts.bridgeTlsFingerprintSha256}`);
+  if (opts.gatewayTlsEnabled) {
+    txt.push(`gatewayTls=1`);
+    if (opts.gatewayTlsFingerprintSha256) {
+      txt.push(`gatewayTlsSha256=${opts.gatewayTlsFingerprintSha256}`);
     }
   }
   if (opts.tailnetDns?.trim()) {
@@ -122,9 +118,11 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
 
-  records.push(`_clawdbot-bridge._tcp IN PTR ${instanceLabel}._clawdbot-bridge._tcp`);
-  records.push(`${instanceLabel}._clawdbot-bridge._tcp IN SRV 0 0 ${opts.bridgePort} ${hostLabel}`);
-  records.push(`${instanceLabel}._clawdbot-bridge._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
+  records.push(`_clawdbot-gateway._tcp IN PTR ${instanceLabel}._clawdbot-gateway._tcp`);
+  records.push(
+    `${instanceLabel}._clawdbot-gateway._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`,
+  );
+  records.push(`${instanceLabel}._clawdbot-gateway._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
 
   const contentBody = `${records.join("\n")}\n`;
   const hashBody = `${records
@@ -137,14 +135,14 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
   return `; clawdbot-content-hash: ${contentHash}\n${contentBody}`;
 }
 
-export function renderWideAreaBridgeZoneText(
-  opts: WideAreaBridgeZoneOpts & { serial: number },
+export function renderWideAreaGatewayZoneText(
+  opts: WideAreaGatewayZoneOpts & { serial: number },
 ): string {
   return renderZone(opts);
 }
 
-export async function writeWideAreaBridgeZone(
-  opts: WideAreaBridgeZoneOpts,
+export async function writeWideAreaGatewayZone(
+  opts: WideAreaGatewayZoneOpts,
 ): Promise<{ zonePath: string; changed: boolean }> {
   const zonePath = getWideAreaZonePath();
   await ensureDir(path.dirname(zonePath));
@@ -157,7 +155,7 @@ export async function writeWideAreaBridgeZone(
     }
   })();
 
-  const nextNoSerial = renderWideAreaBridgeZoneText({ ...opts, serial: 0 });
+  const nextNoSerial = renderWideAreaGatewayZoneText({ ...opts, serial: 0 });
   const nextHash = extractContentHash(nextNoSerial);
   const existingHash = existing ? extractContentHash(existing) : null;
 
@@ -167,7 +165,7 @@ export async function writeWideAreaBridgeZone(
 
   const existingSerial = existing ? extractSerial(existing) : null;
   const serial = nextSerial(existingSerial, new Date());
-  const next = renderWideAreaBridgeZoneText({ ...opts, serial });
+  const next = renderWideAreaGatewayZoneText({ ...opts, serial });
   fs.writeFileSync(zonePath, next, "utf-8");
   return { zonePath, changed: true };
 }

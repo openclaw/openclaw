@@ -19,7 +19,7 @@ struct GatewayDiscoveryInlineList: View {
             }
 
             if self.discovery.gateways.isEmpty {
-                Text("No bridges found yet.")
+                Text("No gateways found yet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -40,7 +40,7 @@ struct GatewayDiscoveryInlineList: View {
                                         .font(.callout.weight(.semibold))
                                         .lineLimit(1)
                                         .truncationMode(.tail)
-                                    Text(target ?? "Bridge pairing only")
+                                    Text(target ?? "Gateway pairing only")
                                         .font(.caption.monospaced())
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
@@ -83,7 +83,7 @@ struct GatewayDiscoveryInlineList: View {
                         .fill(Color(NSColor.controlBackgroundColor)))
             }
         }
-        .help("Click a discovered bridge to fill the SSH target.")
+        .help("Click a discovered gateway to fill the SSH target.")
     }
 
     private func suggestedSSHTarget(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
@@ -130,6 +130,6 @@ struct GatewayDiscoveryMenu: View {
         } label: {
             Image(systemName: "dot.radiowaves.left.and.right")
         }
-        .help("Discover Clawdbot bridges on your LAN")
+        .help("Discover Clawdbot gateways on your LAN")
     }
 }

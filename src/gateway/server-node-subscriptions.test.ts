@@ -1,9 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { createBridgeSubscriptionManager } from "./server-bridge-subscriptions.js";
+import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 
-describe("bridge subscription manager", () => {
+describe("node subscription manager", () => {
   test("routes events to subscribed nodes", () => {
-    const manager = createBridgeSubscriptionManager();
+    const manager = createNodeSubscriptionManager();
     const sent: Array<{
       nodeId: string;
       event: string;
@@ -22,7 +22,7 @@ describe("bridge subscription manager", () => {
   });
 
   test("unsubscribeAll clears session mappings", () => {
-    const manager = createBridgeSubscriptionManager();
+    const manager = createNodeSubscriptionManager();
     const sent: string[] = [];
     const sendEvent = (evt: { nodeId: string; event: string }) =>
       sent.push(`${evt.nodeId}:${evt.event}`);

@@ -1,6 +1,6 @@
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
-import { WIDE_AREA_DISCOVERY_DOMAIN, writeWideAreaBridgeZone } from "../infra/widearea-dns.js";
+import { WIDE_AREA_DISCOVERY_DOMAIN, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -11,8 +11,6 @@ export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
-  bridgePort?: number;
-  bridgeTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -34,10 +32,7 @@ export async function startGatewayDiscovery(params: {
       gatewayPort: params.port,
       gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
       gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
-      bridgePort: params.bridgePort,
       canvasPort: params.canvasPort,
-      bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
-      bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
       sshPort,
       tailnetDns,
       cliPath: resolveBonjourCliPath(),
@@ -47,7 +42,7 @@ export async function startGatewayDiscovery(params: {
     params.logDiscovery.warn(`bonjour advertising failed: ${String(err)}`);
   }
 
-  if (params.wideAreaDiscoveryEnabled && params.bridgePort) {
+  if (params.wideAreaDiscoveryEnabled) {
     const tailnetIPv4 = pickPrimaryTailnetIPv4();
     if (!tailnetIPv4) {
       params.logDiscovery.warn(
@@ -56,14 +51,13 @@ export async function startGatewayDiscovery(params: {
     } else {
       try {
         const tailnetIPv6 = pickPrimaryTailnetIPv6();
-        const result = await writeWideAreaBridgeZone({
-          bridgePort: params.bridgePort,
+        const result = await writeWideAreaGatewayZone({
           gatewayPort: params.port,
           displayName: formatBonjourInstanceName(params.machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
-          bridgeTlsEnabled: params.bridgeTls?.enabled ?? false,
-          bridgeTlsFingerprintSha256: params.bridgeTls?.fingerprintSha256,
+          gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
+          gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
           tailnetDns,
           sshPort,
           cliPath: resolveBonjourCliPath(),

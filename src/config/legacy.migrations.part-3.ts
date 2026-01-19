@@ -145,7 +145,7 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
   },
   {
     id: "bind-tailnet->auto",
-    describe: "Remap gateway/bridge bind 'tailnet' to 'auto'",
+    describe: "Remap gateway bind 'tailnet' to 'auto'",
     apply: (raw, changes) => {
       const migrateBind = (obj: Record<string, unknown> | null | undefined, key: string) => {
         if (!obj) return;
@@ -158,9 +158,6 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
 
       const gateway = getRecord(raw.gateway);
       migrateBind(gateway, "gateway");
-
-      const bridge = getRecord(raw.bridge);
-      migrateBind(bridge, "bridge");
     },
   },
 ];

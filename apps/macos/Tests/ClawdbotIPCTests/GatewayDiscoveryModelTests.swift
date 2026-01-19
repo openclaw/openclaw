@@ -48,7 +48,7 @@ struct GatewayDiscoveryModelTests {
             lanHost: "other.local",
             tailnetDns: "other.tailnet.example",
             displayName: "Other Mac",
-            serviceName: "other-bridge",
+            serviceName: "other-gateway",
             local: local))
     }
 
@@ -60,7 +60,7 @@ struct GatewayDiscoveryModelTests {
             lanHost: nil,
             tailnetDns: nil,
             displayName: nil,
-            serviceName: "studio-bridge",
+            serviceName: "studio-gateway",
             local: local))
     }
 

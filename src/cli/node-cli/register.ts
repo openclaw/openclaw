@@ -30,17 +30,17 @@ export function registerNodeCli(program: Command) {
   node
     .command("start")
     .description("Start the headless node host (foreground)")
-    .option("--host <host>", "Gateway bridge host")
-    .option("--port <port>", "Gateway bridge port")
-    .option("--tls", "Use TLS for the bridge connection", false)
+    .option("--host <host>", "Gateway host")
+    .option("--port <port>", "Gateway port")
+    .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override node id")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
       const host =
         (opts.host as string | undefined)?.trim() || existing?.gateway?.host || "127.0.0.1";
-      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18790);
+      const port = parsePortWithFallback(opts.port, existing?.gateway?.port ?? 18789);
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
@@ -63,11 +63,11 @@ export function registerNodeCli(program: Command) {
     cmd
       .command("install")
       .description("Install the node service (launchd/systemd/schtasks)")
-      .option("--host <host>", "Gateway bridge host")
-      .option("--port <port>", "Gateway bridge port")
-      .option("--tls", "Use TLS for the bridge connection", false)
+      .option("--host <host>", "Gateway host")
+      .option("--port <port>", "Gateway port")
+      .option("--tls", "Use TLS for the gateway connection", false)
       .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-      .option("--node-id <id>", "Override node id (clears pairing token)")
+      .option("--node-id <id>", "Override node id")
       .option("--display-name <name>", "Override node display name")
       .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
       .option("--force", "Reinstall/overwrite if already installed", false)

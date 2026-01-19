@@ -222,7 +222,6 @@ export async function gatewayStatusCommand(
               host: b.host ?? null,
               lanHost: b.lanHost ?? null,
               tailnetDns: b.tailnetDns ?? null,
-              bridgePort: b.bridgePort ?? null,
               gatewayPort: b.gatewayPort ?? null,
               sshPort: b.sshPort ?? null,
               wsUrl: (() => {
@@ -309,17 +308,12 @@ export async function gatewayStatusCommand(
     }
     if (p.configSummary) {
       const c = p.configSummary;
-      const bridge =
-        c.bridge.enabled === false ? "disabled" : c.bridge.enabled === true ? "enabled" : "unknown";
       const wideArea =
         c.discovery.wideAreaEnabled === true
           ? "enabled"
           : c.discovery.wideAreaEnabled === false
             ? "disabled"
             : "unknown";
-      runtime.log(
-        `  ${colorize(rich, theme.info, "Bridge")}: ${bridge}${c.bridge.bind ? ` · bind ${c.bridge.bind}` : ""}${c.bridge.port ? ` · port ${c.bridge.port}` : ""}`,
-      );
       runtime.log(`  ${colorize(rich, theme.info, "Wide-area discovery")}: ${wideArea}`);
     }
     runtime.log("");

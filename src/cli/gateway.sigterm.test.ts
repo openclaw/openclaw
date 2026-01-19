@@ -110,7 +110,7 @@ describe("gateway SIGTERM", () => {
         CLAWDBOT_SKIP_CHANNELS: "1",
         CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
         CLAWDBOT_SKIP_CANVAS_HOST: "1",
-        // Avoid port collisions with other test processes that may also start a bridge server.
+        // Avoid port collisions with other test processes that may also start a gateway server.
         CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
         CLAWDBOT_BRIDGE_PORT: "0",
       },

@@ -247,6 +247,11 @@ export async function connectReq(
       modelIdentifier?: string;
       instanceId?: string;
     };
+    role?: string;
+    scopes?: string[];
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -265,7 +270,11 @@ export async function connectReq(
           platform: "test",
           mode: GATEWAY_CLIENT_MODES.TEST,
         },
-        caps: [],
+        caps: opts?.caps ?? [],
+        commands: opts?.commands ?? [],
+        permissions: opts?.permissions ?? undefined,
+        role: opts?.role,
+        scopes: opts?.scopes,
         auth:
           opts?.token || opts?.password
             ? {

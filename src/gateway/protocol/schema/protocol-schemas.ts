@@ -85,7 +85,10 @@ import {
 } from "./logs-chat.js";
 import {
   NodeDescribeParamsSchema,
+  NodeEventParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeResultParamsSchema,
+  NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairListParamsSchema,
@@ -140,6 +143,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeListParams: NodeListParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
+  NodeInvokeResultParams: NodeInvokeResultParamsSchema,
+  NodeEventParams: NodeEventParamsSchema,
+  NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,

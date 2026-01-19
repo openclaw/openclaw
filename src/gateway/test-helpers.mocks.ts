@@ -13,34 +13,6 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-export type BridgeClientInfo = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  remoteIp?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  caps?: string[];
-  commands?: string[];
-};
-
-export type BridgeStartOpts = {
-  onAuthenticated?: (node: BridgeClientInfo) => Promise<void> | void;
-  onDisconnected?: (node: BridgeClientInfo) => Promise<void> | void;
-  onPairRequested?: (request: unknown) => Promise<void> | void;
-  onEvent?: (
-    nodeId: string,
-    evt: { event: string; payloadJSON?: string | null },
-  ) => Promise<void> | void;
-  onRequest?: (
-    nodeId: string,
-    req: { id: string; method: string; paramsJSON?: string | null },
-  ) => Promise<
-    | { ok: true; payloadJSON?: string | null }
-    | { ok: false; error: { code: string; message: string; details?: unknown } }
-  >;
-};
 
 type StubChannelOptions = {
   id: ChannelPlugin["id"];
@@ -173,16 +145,6 @@ const createStubPluginRegistry = (): PluginRegistry => ({
 });
 
 const hoisted = vi.hoisted(() => ({
-  bridgeStartCalls: [] as BridgeStartOpts[],
-  bridgeInvoke: vi.fn(async () => ({
-    type: "invoke-res",
-    id: "1",
-    ok: true,
-    payloadJSON: JSON.stringify({ ok: true }),
-    error: null,
-  })),
-  bridgeListConnected: vi.fn(() => [] as BridgeClientInfo[]),
-  bridgeSendEvent: vi.fn(),
   testTailnetIPv4: { value: undefined as string | undefined },
   piSdkMock: {
     enabled: false,
@@ -232,10 +194,6 @@ export const setTestConfigRoot = (root: string) => {
   process.env.CLAWDBOT_CONFIG_PATH = path.join(root, "clawdbot.json");
 };
 
-export const bridgeStartCalls = hoisted.bridgeStartCalls;
-export const bridgeInvoke = hoisted.bridgeInvoke;
-export const bridgeListConnected = hoisted.bridgeListConnected;
-export const bridgeSendEvent = hoisted.bridgeSendEvent;
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
@@ -281,19 +239,6 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     },
   };
 });
-
-vi.mock("../infra/bridge/server.js", () => ({
-  startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
-    bridgeStartCalls.push(opts);
-    return {
-      port: 18790,
-      close: async () => {},
-      listConnected: bridgeListConnected,
-      invoke: bridgeInvoke,
-      sendEvent: bridgeSendEvent,
-    };
-  }),
-}));
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: (...args: unknown[]) =>

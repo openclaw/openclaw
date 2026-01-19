@@ -191,7 +191,7 @@ async function isPortFree(port: number): Promise<boolean> {
 }
 
 async function getFreeGatewayPort(): Promise<number> {
-  // Gateway uses derived ports (bridge/browser/canvas). Avoid flaky collisions by
+  // Gateway uses derived ports (browser/canvas). Avoid flaky collisions by
   // ensuring the common derived offsets are free too.
   for (let attempt = 0; attempt < 25; attempt += 1) {
     const port = await getFreePort();

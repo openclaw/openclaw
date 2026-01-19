@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
+import { WebSocket } from "ws";
 import {
-  bridgeListConnected,
-  bridgeSendEvent,
-  bridgeStartCalls,
   connectOk,
   installGatewayTestHooks,
   onceMessage,
@@ -13,6 +11,7 @@ import {
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
+import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
 
 installGatewayTestHooks();
 
@@ -116,42 +115,50 @@ describe("gateway server models + voicewake", () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const restoreHome = setTempHome(homeDir);
 
-    bridgeSendEvent.mockClear();
-    bridgeListConnected.mockReturnValue([{ nodeId: "n1" }]);
-
-    const { server, ws } = await startServerWithClient();
+    const { server, ws, port } = await startServerWithClient();
     await connectOk(ws);
 
-    const startCall = bridgeStartCalls.at(-1);
-    expect(startCall).toBeTruthy();
+    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
+    const firstEventP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+      nodeWs,
+      (o) => o.type === "event" && o.event === "voicewake.changed",
+    );
+    await connectOk(nodeWs, {
+      role: "node",
+      client: {
+        id: "n1",
+        version: "1.0.0",
+        platform: "ios",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+      },
+    });
 
-    await startCall?.onAuthenticated?.({ nodeId: "n1" });
+    const first = await firstEventP;
+    expect(first.event).toBe("voicewake.changed");
+    expect((first.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+      "clawd",
+      "claude",
+      "computer",
+    ]);
 
-    const first = bridgeSendEvent.mock.calls.find(
-      (c) => c[0]?.event === "voicewake.changed" && c[0]?.nodeId === "n1",
-    )?.[0] as { payloadJSON?: string | null } | undefined;
-    expect(first?.payloadJSON).toBeTruthy();
-    const firstPayload = JSON.parse(String(first?.payloadJSON)) as {
-      triggers?: unknown;
-    };
-    expect(firstPayload.triggers).toEqual(["clawd", "claude", "computer"]);
-
-    bridgeSendEvent.mockClear();
-
+    const broadcastP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
+      nodeWs,
+      (o) => o.type === "event" && o.event === "voicewake.changed",
+    );
     const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
       triggers: ["clawd", "computer"],
     });
     expect(setRes.ok).toBe(true);
 
-    const broadcast = bridgeSendEvent.mock.calls.find(
-      (c) => c[0]?.event === "voicewake.changed" && c[0]?.nodeId === "n1",
-    )?.[0] as { payloadJSON?: string | null } | undefined;
-    expect(broadcast?.payloadJSON).toBeTruthy();
-    const broadcastPayload = JSON.parse(String(broadcast?.payloadJSON)) as {
-      triggers?: unknown;
-    };
-    expect(broadcastPayload.triggers).toEqual(["clawd", "computer"]);
+    const broadcast = await broadcastP;
+    expect(broadcast.event).toBe("voicewake.changed");
+    expect((broadcast.payload as { triggers?: unknown } | undefined)?.triggers).toEqual([
+      "clawd",
+      "computer",
+    ]);
 
+    nodeWs.close();
     ws.close();
     await server.close();
 
@@ -254,36 +261,4 @@ describe("gateway server models + voicewake", () => {
     await server.close();
   });
 
-  test("bridge RPC supports models.list and validates params", async () => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    const startCall = bridgeStartCalls.at(-1);
-    expect(startCall).toBeTruthy();
-
-    const okRes = await startCall?.onRequest?.("n1", {
-      id: "1",
-      method: "models.list",
-      paramsJSON: "{}",
-    });
-    expect(okRes?.ok).toBe(true);
-    const okPayload = JSON.parse(String(okRes?.payloadJSON ?? "{}")) as {
-      models?: unknown;
-    };
-    expect(Array.isArray(okPayload.models)).toBe(true);
-
-    const badRes = await startCall?.onRequest?.("n1", {
-      id: "2",
-      method: "models.list",
-      paramsJSON: JSON.stringify({ extra: true }),
-    });
-    expect(badRes?.ok).toBe(false);
-    expect(badRes && "error" in badRes ? badRes.error.code : "").toBe("INVALID_REQUEST");
-
-    ws.close();
-    await server.close();
-  });
 });

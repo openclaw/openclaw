@@ -2,10 +2,10 @@ import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import type { NodeBridgeServer } from "./bridge/server.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import type { NodeRegistry } from "../gateway/node-registry.js";
 
 type RemoteNodeRecord = {
   nodeId: string;
@@ -19,7 +19,7 @@ type RemoteNodeRecord = {
 
 const log = createSubsystemLogger("gateway/skills-remote");
 const remoteNodes = new Map<string, RemoteNodeRecord>();
-let remoteBridge: NodeBridgeServer | null = null;
+let remoteRegistry: NodeRegistry | null = null;
 
 function describeNode(nodeId: string): string {
   const record = remoteNodes.get(nodeId);
@@ -55,20 +55,14 @@ function extractErrorMessage(err: unknown): string | undefined {
 function logRemoteBinProbeFailure(nodeId: string, err: unknown) {
   const message = extractErrorMessage(err);
   const label = describeNode(nodeId);
-  if (message?.includes("UNAVAILABLE: node not connected")) {
+  if (message?.includes("node not connected")) {
     log.info(
       `remote bin probe skipped: node not connected (${label}); check nodes list/status for ${label}`,
     );
     return;
   }
-  if (message?.includes("UNAVAILABLE: invoke timeout")) {
+  if (message?.includes("invoke timed out") || message?.includes("timeout")) {
     log.warn(`remote bin probe timed out (${label}); check node connectivity for ${label}`);
-    return;
-  }
-  if (message?.includes("bridge connection closed")) {
-    log.warn(
-      `remote bin probe aborted: bridge connection closed (${label}); check nodes list/status for ${label}`,
-    );
     return;
   }
   log.warn(`remote bin probe error (${label}): ${message ?? "unknown"}`);
@@ -117,8 +111,8 @@ function upsertNode(record: {
   });
 }
 
-export function setSkillsRemoteBridge(bridge: NodeBridgeServer | null) {
-  remoteBridge = bridge;
+export function setSkillsRemoteRegistry(registry: NodeRegistry | null) {
+  remoteRegistry = registry;
 }
 
 export async function primeRemoteSkillsCache() {
@@ -198,10 +192,12 @@ function buildBinProbeScript(bins: string[]): string {
   return `for b in ${escaped}; do if command -v "$b" >/dev/null 2>&1; then echo "$b"; fi; done`;
 }
 
-function parseBinProbePayload(payloadJSON: string | null | undefined): string[] {
-  if (!payloadJSON) return [];
+function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: unknown): string[] {
+  if (!payloadJSON && !payload) return [];
   try {
-    const parsed = JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown };
+    const parsed = payloadJSON
+      ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
+      : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
       return parsed.bins.map((bin) => String(bin).trim()).filter(Boolean);
     }
@@ -225,7 +221,7 @@ export async function refreshRemoteNodeBins(params: {
   cfg: ClawdbotConfig;
   timeoutMs?: number;
 }) {
-  if (!remoteBridge) return;
+  if (!remoteRegistry) return;
   if (!isMacPlatform(params.platform, params.deviceFamily)) return;
   const canWhich = supportsSystemWhich(params.commands);
   const canRun = supportsSystemRun(params.commands);
@@ -243,20 +239,20 @@ export async function refreshRemoteNodeBins(params: {
 
   try {
     const binsList = [...requiredBins];
-    const res = await remoteBridge.invoke(
+    const res = await remoteRegistry.invoke(
       canWhich
         ? {
             nodeId: params.nodeId,
             command: "system.which",
-            paramsJSON: JSON.stringify({ bins: binsList }),
+            params: { bins: binsList },
             timeoutMs: params.timeoutMs ?? 15_000,
           }
         : {
             nodeId: params.nodeId,
             command: "system.run",
-            paramsJSON: JSON.stringify({
+            params: {
               command: ["/bin/sh", "-lc", buildBinProbeScript(binsList)],
-            }),
+            },
             timeoutMs: params.timeoutMs ?? 15_000,
           },
     );
@@ -264,7 +260,7 @@ export async function refreshRemoteNodeBins(params: {
       logRemoteBinProbeFailure(params.nodeId, res.error?.message ?? "unknown");
       return;
     }
-    const bins = parseBinProbePayload(res.payloadJSON);
+    const bins = parseBinProbePayload(res.payloadJSON, res.payload);
     recordRemoteNodeBins(params.nodeId, bins);
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
@@ -296,8 +292,8 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
 }
 
 export async function refreshRemoteBinsForConnectedNodes(cfg: ClawdbotConfig) {
-  if (!remoteBridge) return;
-  const connected = remoteBridge.listConnected();
+  if (!remoteRegistry) return;
+  const connected = remoteRegistry.listConnected();
   for (const node of connected) {
     await refreshRemoteNodeBins({
       nodeId: node.nodeId,

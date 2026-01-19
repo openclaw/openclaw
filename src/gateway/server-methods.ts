@@ -29,6 +29,7 @@ const APPROVALS_SCOPE = "operator.approvals";
 const PAIRING_SCOPE = "operator.pairing";
 
 const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
+const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event"]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
   "node.pair.list",
@@ -45,6 +46,10 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (!client?.connect) return null;
   const role = client.connect.role ?? "operator";
   const scopes = client.connect.scopes ?? [];
+  if (role === "node") {
+    if (NODE_ROLE_METHODS.has(method)) return null;
+    return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
+  }
   if (role !== "operator") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }

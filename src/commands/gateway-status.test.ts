@@ -45,7 +45,6 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
         valid: true,
         config: {
           gateway: { mode: "local" },
-          bridge: { enabled: true, port: 18790 },
         },
         issues: [],
         legacyIssues: [],
@@ -73,7 +72,7 @@ const probeGateway = vi.fn(async ({ url }: { url: string }) => {
       path: "/tmp/remote.json",
       exists: true,
       valid: true,
-      config: { gateway: { mode: "remote" }, bridge: { enabled: false } },
+      config: { gateway: { mode: "remote" } },
       issues: [],
       legacyIssues: [],
     },

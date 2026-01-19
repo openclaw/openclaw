@@ -63,7 +63,7 @@ extension OnboardingView {
             await self.ensureDefaultWorkspace()
             self.refreshAnthropicOAuthStatus()
             self.refreshBootstrapStatus()
-            self.preferredGatewayID = BridgeDiscoveryPreferences.preferredStableID()
+            self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
     }
 

@@ -107,9 +107,9 @@ export function registerServiceCli(program: Command) {
   node
     .command("install")
     .description("Install the node host service (launchd/systemd/schtasks)")
-    .option("--host <host>", "Gateway bridge host")
-    .option("--port <port>", "Gateway bridge port")
-    .option("--tls", "Use TLS for the bridge connection", false)
+    .option("--host <host>", "Gateway host")
+    .option("--port <port>", "Gateway port")
+    .option("--tls", "Use TLS for the Gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")

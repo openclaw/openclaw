@@ -716,7 +716,7 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredBridgeStableID(gateway.stableID)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
 
         let host = gateway.tailnetDns ?? gateway.lanHost
         guard let host else { return }

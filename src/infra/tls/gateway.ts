@@ -5,12 +5,12 @@ import path from "node:path";
 import tls from "node:tls";
 import { promisify } from "node:util";
 
-import type { BridgeTlsConfig } from "../../../config/types.gateway.js";
-import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../../utils.js";
+import type { GatewayTlsConfig } from "../../config/types.gateway.js";
+import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
 
 const execFileAsync = promisify(execFile);
 
-export type BridgeTlsRuntime = {
+export type GatewayTlsRuntime = {
   enabled: boolean;
   required: boolean;
   certPath?: string;
@@ -59,25 +59,25 @@ async function generateSelfSignedCert(params: {
     "-out",
     params.certPath,
     "-subj",
-    "/CN=clawdbot-bridge",
+    "/CN=clawdbot-gateway",
   ]);
   await fs.chmod(params.keyPath, 0o600).catch(() => {});
   await fs.chmod(params.certPath, 0o600).catch(() => {});
   params.log?.info?.(
-    `bridge tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
+    `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );
 }
 
-export async function loadBridgeTlsRuntime(
-  cfg: BridgeTlsConfig | undefined,
+export async function loadGatewayTlsRuntime(
+  cfg: GatewayTlsConfig | undefined,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
-): Promise<BridgeTlsRuntime> {
+): Promise<GatewayTlsRuntime> {
   if (!cfg || cfg.enabled !== true) return { enabled: false, required: false };
 
   const autoGenerate = cfg.autoGenerate !== false;
-  const baseDir = path.join(CONFIG_DIR, "bridge", "tls");
-  const certPath = resolveUserPath(cfg.certPath ?? path.join(baseDir, "bridge-cert.pem"));
-  const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "bridge-key.pem"));
+  const baseDir = path.join(CONFIG_DIR, "gateway", "tls");
+  const certPath = resolveUserPath(cfg.certPath ?? path.join(baseDir, "gateway-cert.pem"));
+  const keyPath = resolveUserPath(cfg.keyPath ?? path.join(baseDir, "gateway-key.pem"));
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
 
   const hasCert = await fileExists(certPath);
@@ -92,7 +92,7 @@ export async function loadBridgeTlsRuntime(
         required: true,
         certPath,
         keyPath,
-        error: `bridge tls: failed to generate cert (${String(err)})`,
+        error: `gateway tls: failed to generate cert (${String(err)})`,
       };
     }
   }
@@ -103,7 +103,7 @@ export async function loadBridgeTlsRuntime(
       required: true,
       certPath,
       keyPath,
-      error: "bridge tls: cert/key missing",
+      error: "gateway tls: cert/key missing",
     };
   }
 
@@ -121,7 +121,7 @@ export async function loadBridgeTlsRuntime(
         certPath,
         keyPath,
         caPath,
-        error: "bridge tls: unable to compute certificate fingerprint",
+        error: "gateway tls: unable to compute certificate fingerprint",
       };
     }
 
@@ -146,7 +146,7 @@ export async function loadBridgeTlsRuntime(
       certPath,
       keyPath,
       caPath,
-      error: `bridge tls: failed to load cert (${String(err)})`,
+      error: `gateway tls: failed to load cert (${String(err)})`,
     };
   }
 }

@@ -34,7 +34,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .version(ctx.programVersion)
     .option(
       "--dev",
-      "Dev profile: isolate state under ~/.clawdbot-dev, default gateway port 19001, and shift derived ports (bridge/browser/canvas)",
+      "Dev profile: isolate state under ~/.clawdbot-dev, default gateway port 19001, and shift derived ports (browser/canvas)",
     )
     .option(
       "--profile <name>",

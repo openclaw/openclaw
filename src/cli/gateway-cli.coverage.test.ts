@@ -146,7 +146,6 @@ describe("gateway-cli coverage", () => {
         lanHost: "studio.local",
         tailnetDns: "studio.tailnet.ts.net",
         gatewayPort: 18789,
-        bridgePort: 18790,
         sshPort: 22,
       },
     ]);
@@ -179,7 +178,6 @@ describe("gateway-cli coverage", () => {
         lanHost: "studio.local",
         tailnetDns: "studio.tailnet.ts.net",
         gatewayPort: 18789,
-        bridgePort: 18790,
         sshPort: 22,
       },
     ]);

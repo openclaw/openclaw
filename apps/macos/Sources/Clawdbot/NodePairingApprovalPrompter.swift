@@ -543,7 +543,7 @@ final class NodePairingApprovalPrompter {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
-        let preferred = BridgeDiscoveryPreferences.preferredStableID()
+        let preferred = GatewayDiscoveryPreferences.preferredStableID()
         let gateway = model.gateways.first { $0.stableID == preferred } ?? model.gateways.first
         guard let gateway else { return nil }
         let host = (gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ??

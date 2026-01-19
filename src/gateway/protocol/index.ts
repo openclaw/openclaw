@@ -93,8 +93,12 @@ import {
   ModelsListParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
+  type NodeEventParams,
+  NodeEventParamsSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
+  type NodeInvokeResultParams,
+  NodeInvokeResultParamsSchema,
   type NodeListParams,
   NodeListParamsSchema,
   type NodePairApproveParams,
@@ -207,6 +211,10 @@ export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRename
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
 export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
+export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
+  NodeInvokeResultParamsSchema,
+);
+export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
@@ -422,6 +430,8 @@ export type {
   NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,
+  NodeInvokeResultParams,
+  NodeEventParams,
   SessionsListParams,
   SessionsResolveParams,
   SessionsPatchParams,

@@ -1,12 +1,12 @@
-export type BridgeSendEventFn = (opts: {
+export type NodeSendEventFn = (opts: {
   nodeId: string;
   event: string;
   payloadJSON?: string | null;
 }) => void;
 
-export type BridgeListConnectedFn = () => Array<{ nodeId: string }>;
+export type NodeListConnectedFn = () => Array<{ nodeId: string }>;
 
-export type BridgeSubscriptionManager = {
+export type NodeSubscriptionManager = {
   subscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribe: (nodeId: string, sessionKey: string) => void;
   unsubscribeAll: (nodeId: string) => void;
@@ -14,25 +14,25 @@ export type BridgeSubscriptionManager = {
     sessionKey: string,
     event: string,
     payload: unknown,
-    sendEvent?: BridgeSendEventFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => void;
   sendToAllSubscribed: (
     event: string,
     payload: unknown,
-    sendEvent?: BridgeSendEventFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => void;
   sendToAllConnected: (
     event: string,
     payload: unknown,
-    listConnected?: BridgeListConnectedFn | null,
-    sendEvent?: BridgeSendEventFn | null,
+    listConnected?: NodeListConnectedFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => void;
   clear: () => void;
 };
 
-export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
-  const bridgeNodeSubscriptions = new Map<string, Set<string>>();
-  const bridgeSessionSubscribers = new Map<string, Set<string>>();
+export function createNodeSubscriptionManager(): NodeSubscriptionManager {
+  const nodeSubscriptions = new Map<string, Set<string>>();
+  const sessionSubscribers = new Map<string, Set<string>>();
 
   const toPayloadJSON = (payload: unknown) => (payload ? JSON.stringify(payload) : null);
 
@@ -41,18 +41,18 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedNodeId || !normalizedSessionKey) return;
 
-    let nodeSet = bridgeNodeSubscriptions.get(normalizedNodeId);
+    let nodeSet = nodeSubscriptions.get(normalizedNodeId);
     if (!nodeSet) {
       nodeSet = new Set<string>();
-      bridgeNodeSubscriptions.set(normalizedNodeId, nodeSet);
+      nodeSubscriptions.set(normalizedNodeId, nodeSet);
     }
     if (nodeSet.has(normalizedSessionKey)) return;
     nodeSet.add(normalizedSessionKey);
 
-    let sessionSet = bridgeSessionSubscribers.get(normalizedSessionKey);
+    let sessionSet = sessionSubscribers.get(normalizedSessionKey);
     if (!sessionSet) {
       sessionSet = new Set<string>();
-      bridgeSessionSubscribers.set(normalizedSessionKey, sessionSet);
+      sessionSubscribers.set(normalizedSessionKey, sessionSet);
     }
     sessionSet.add(normalizedNodeId);
   };
@@ -62,36 +62,36 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedNodeId || !normalizedSessionKey) return;
 
-    const nodeSet = bridgeNodeSubscriptions.get(normalizedNodeId);
+    const nodeSet = nodeSubscriptions.get(normalizedNodeId);
     nodeSet?.delete(normalizedSessionKey);
-    if (nodeSet?.size === 0) bridgeNodeSubscriptions.delete(normalizedNodeId);
+    if (nodeSet?.size === 0) nodeSubscriptions.delete(normalizedNodeId);
 
-    const sessionSet = bridgeSessionSubscribers.get(normalizedSessionKey);
+    const sessionSet = sessionSubscribers.get(normalizedSessionKey);
     sessionSet?.delete(normalizedNodeId);
-    if (sessionSet?.size === 0) bridgeSessionSubscribers.delete(normalizedSessionKey);
+    if (sessionSet?.size === 0) sessionSubscribers.delete(normalizedSessionKey);
   };
 
   const unsubscribeAll = (nodeId: string) => {
     const normalizedNodeId = nodeId.trim();
-    const nodeSet = bridgeNodeSubscriptions.get(normalizedNodeId);
+    const nodeSet = nodeSubscriptions.get(normalizedNodeId);
     if (!nodeSet) return;
     for (const sessionKey of nodeSet) {
-      const sessionSet = bridgeSessionSubscribers.get(sessionKey);
+      const sessionSet = sessionSubscribers.get(sessionKey);
       sessionSet?.delete(normalizedNodeId);
-      if (sessionSet?.size === 0) bridgeSessionSubscribers.delete(sessionKey);
+      if (sessionSet?.size === 0) sessionSubscribers.delete(sessionKey);
     }
-    bridgeNodeSubscriptions.delete(normalizedNodeId);
+    nodeSubscriptions.delete(normalizedNodeId);
   };
 
   const sendToSession = (
     sessionKey: string,
     event: string,
     payload: unknown,
-    sendEvent?: BridgeSendEventFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => {
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey || !sendEvent) return;
-    const subs = bridgeSessionSubscribers.get(normalizedSessionKey);
+    const subs = sessionSubscribers.get(normalizedSessionKey);
     if (!subs || subs.size === 0) return;
 
     const payloadJSON = toPayloadJSON(payload);
@@ -103,11 +103,11 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
   const sendToAllSubscribed = (
     event: string,
     payload: unknown,
-    sendEvent?: BridgeSendEventFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => {
     if (!sendEvent) return;
     const payloadJSON = toPayloadJSON(payload);
-    for (const nodeId of bridgeNodeSubscriptions.keys()) {
+    for (const nodeId of nodeSubscriptions.keys()) {
       sendEvent({ nodeId, event, payloadJSON });
     }
   };
@@ -115,8 +115,8 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
   const sendToAllConnected = (
     event: string,
     payload: unknown,
-    listConnected?: BridgeListConnectedFn | null,
-    sendEvent?: BridgeSendEventFn | null,
+    listConnected?: NodeListConnectedFn | null,
+    sendEvent?: NodeSendEventFn | null,
   ) => {
     if (!sendEvent || !listConnected) return;
     const payloadJSON = toPayloadJSON(payload);
@@ -126,8 +126,8 @@ export function createBridgeSubscriptionManager(): BridgeSubscriptionManager {
   };
 
   const clear = () => {
-    bridgeNodeSubscriptions.clear();
-    bridgeSessionSubscribers.clear();
+    nodeSubscriptions.clear();
+    sessionSubscribers.clear();
   };
 
   return {
