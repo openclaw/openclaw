@@ -9,7 +9,6 @@ Docs: https://docs.clawd.bot
 - Android: send structured payloads in node events/invokes and include user-agent metadata in gateway connects.
 
 ### Fixes
-- Gateway: restart heartbeat runner on agents.list hot reloads so per-agent heartbeat changes apply without a full restart. (#1221)
 - Config: allow Perplexity as a web_search provider in config validation. (#1230)
 
 ## 2026.1.19-2
