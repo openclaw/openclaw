@@ -81,12 +81,12 @@ describe("gateway server sessions", () => {
         },
         "discord:group:dev": {
           sessionId: "sess-group",
-          updatedAt: now - 120_000,
+          updatedAt: now - 10 * 60_000,
           totalTokens: 50,
         },
         "agent:main:subagent:one": {
           sessionId: "sess-subagent",
-          updatedAt: now - 120_000,
+          updatedAt: now - 10 * 60_000,
           spawnedBy: "agent:main:main",
         },
         global: {
@@ -147,7 +147,7 @@ describe("gateway server sessions", () => {
     }>(ws, "sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
-      activeMinutes: 1,
+      activeMinutes: 5,
     });
     expect(active.ok).toBe(true);
     expect(active.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:main"]);

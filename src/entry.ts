@@ -60,17 +60,39 @@ function ensureExperimentalWarningSuppressed(): boolean {
 function normalizeWindowsArgv(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
   if (argv.length < 3) return argv;
-  const execBase = path.basename(process.execPath).toLowerCase();
+  const execPath = process.execPath;
+  const execPathLower = execPath.toLowerCase();
+  const execBase = path.basename(execPath).toLowerCase();
+  const isExecPath = (value: string | undefined): boolean => {
+    if (!value) return false;
+    const lower = value.toLowerCase();
+    return lower === execPathLower || path.basename(lower) === execBase;
+  };
   const arg1 = path.basename(argv[1] ?? "").toLowerCase();
   const arg2 = path.basename(argv[2] ?? "").toLowerCase();
   const looksLikeEntry = arg1 === "entry.ts" || arg1 === "entry.js";
+  let next = argv;
   if (arg1 === execBase) {
-    return [argv[0], ...argv.slice(2)];
+    next = [argv[0], ...argv.slice(2)];
+  } else if (looksLikeEntry && arg2 === execBase) {
+    next = [argv[0], argv[1], ...argv.slice(3)];
   }
-  if (looksLikeEntry && arg2 === execBase) {
-    return [argv[0], argv[1], ...argv.slice(3)];
+
+  if (next.length < 3) return next;
+  const cleaned = [...next];
+  for (let i = 2; i < cleaned.length; ) {
+    const arg = cleaned[i];
+    if (!arg || arg.startsWith("-")) {
+      i += 1;
+      continue;
+    }
+    if (isExecPath(arg)) {
+      cleaned.splice(i, 1);
+      continue;
+    }
+    break;
   }
-  return argv;
+  return cleaned;
 }
 
 process.argv = normalizeWindowsArgv(process.argv);
