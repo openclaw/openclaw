@@ -44,7 +44,16 @@ export function extractContentFromMessage(message: unknown): string {
   const content = record.content;
 
   if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
+
+  // Check for error BEFORE returning empty for non-array content
+  if (!Array.isArray(content)) {
+    const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
+    if (stopReason === "error") {
+      const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
+      return formatRawAssistantErrorForUi(errorMessage);
+    }
+    return "";
+  }
 
   const parts: string[] = [];
   for (const block of content) {
