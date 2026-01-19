@@ -5,7 +5,7 @@ read_when:
 ---
 # Gateway architecture
 
-Last updated: 2026-01-05
+Last updated: 2026-01-19
 
 ## Overview
 
@@ -14,10 +14,9 @@ Last updated: 2026-01-05
 - Control-plane clients (macOS app, CLI, web UI, automations) connect to the
   Gateway over **WebSocket** on the configured bind host (default
   `127.0.0.1:18789`).
-- **Nodes** (macOS/iOS/Android) use the **Bridge** protocol (TCP JSONL) instead
-  of the WebSocket control plane.
+- **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
+  declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
-- A **bridge** (default `18790`) is used for nodes (macOS/iOS/Android).
 - A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
 
 ## Components and flows
@@ -33,14 +32,13 @@ Last updated: 2026-01-05
 - Send requests (`health`, `status`, `send`, `agent`, `system-presence`).
 - Subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
 
-### Nodes (macOS / iOS / Android)
-- Connect to the **bridge** (TCP JSONL) rather than the WS server.
+### Nodes (macOS / iOS / Android / headless)
+- Connect to the **same WS server** with `role: node`.
 - Pair with the Gateway to receive a token.
 - Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
 
 Protocol details:
 - [Gateway protocol](/gateway/protocol)
-- [Bridge protocol](/gateway/bridge-protocol)
 
 ### WebChat
 - Static UI that uses the Gateway WS API for chat history and sends.
@@ -77,6 +75,7 @@ Client                    Gateway
   must match or the socket closes.
 - Idempotency keys are required for side‑effecting methods (`send`, `agent`) to
   safely retry; the server keeps a short‑lived dedupe cache.
+- Nodes must include `role: "node"` plus caps/commands/permissions in `connect`.
 
 ## Protocol typing and codegen
 
@@ -92,6 +91,7 @@ Client                    Gateway
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
 - The same handshake + auth token apply over the tunnel.
+- TLS + optional pinning can be enabled for WS in remote setups.
 
 ## Operations snapshot
 

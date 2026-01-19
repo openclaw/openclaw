@@ -57,7 +57,7 @@ The macOS app presents itself as a node. Common commands:
 The node reports a `permissions` map so agents can decide what’s allowed.
 
 Node service + app IPC:
-- When the headless node service is running (remote mode), it connects to the Gateway bridge.
+- When the headless node service is running (remote mode), it connects to the Gateway WS as a node.
 - `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
 
 Diagram (SCI):
@@ -161,11 +161,10 @@ the Node CLI’s `dns-sd` based discovery.
 
 ## Remote connection plumbing (SSH tunnels)
 
-When the macOS app runs in **Remote** mode, it opens SSH tunnels so local UI
-components can talk to a remote Gateway as if it were on localhost. There are
-two independent tunnels:
+When the macOS app runs in **Remote** mode, it opens an SSH tunnel so local UI
+components can talk to a remote Gateway as if it were on localhost.
 
-### Control tunnel (Gateway control/WebSocket port)
+### Control tunnel (Gateway WebSocket port)
 - **Purpose:** health checks, status, Web Chat, config, and other control-plane calls.
 - **Local port:** the Gateway port (default `18789`), always stable.
 - **Remote port:** the same Gateway port on the remote host.
@@ -174,16 +173,8 @@ two independent tunnels:
 - **SSH shape:** `ssh -N -L <local>:127.0.0.1:<remote>` with BatchMode +
   ExitOnForwardFailure + keepalive options.
 
-### Node bridge tunnel (macOS node mode)
-- **Purpose:** connect the macOS node to the Gateway **Bridge** protocol (TCP JSONL).
-- **Remote port:** `gatewayPort + 1` (default `18790`), derived from the Gateway port.
-- **Local port preference:** `CLAWDBOT_BRIDGE_PORT` or the default `18790`.
-- **Behavior:** prefer the default bridge port for consistency; fall back to a
-  random local port if the preferred one is busy. The node then connects to the
-  resolved local port.
-
 For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
-details, see [Bridge protocol](/gateway/bridge-protocol).
+details, see [Gateway protocol](/gateway/protocol).
 
 ## Related docs
 

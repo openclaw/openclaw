@@ -3,7 +3,7 @@ summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshoo
 read_when:
   - Pairing or reconnecting the iOS node
   - Running the iOS app from source
-  - Debugging bridge discovery or canvas commands
+  - Debugging gateway discovery or canvas commands
 ---
 # iOS App (Node)
 
@@ -11,14 +11,13 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## What it does
 
-- Connects to a Gateway over the bridge (LAN or tailnet).
+- Connects to a Gateway over WebSocket (LAN or tailnet).
 - Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
 - Receives `node.invoke` commands and reports node status events.
 
 ## Requirements
 
 - Gateway running on another device (macOS, Linux, or Windows via WSL2).
-- Bridge enabled (default).
 - Network path:
   - Same LAN via Bonjour, **or**
   - Tailnet via unicast DNS-SD (`clawdbot.internal.`), **or**
@@ -26,13 +25,13 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## Quick start (pair + connect)
 
-1) Start the Gateway (bridge enabled by default):
+1) Start the Gateway:
 
 ```bash
 clawdbot gateway --port 18789
 ```
 
-2) In the iOS app, open Settings and pick a discovered gateway (or enable Manual Bridge and enter host/port).
+2) In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
 
 3) Approve the pairing request on the gateway host:
 
@@ -52,7 +51,7 @@ clawdbot gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-The Gateway advertises `_clawdbot-bridge._tcp` on `local.`. The iOS app lists these automatically.
+The Gateway advertises `_clawdbot._tcp` on `local.`. The iOS app lists these automatically.
 
 ### Tailnet (cross-network)
 
@@ -61,7 +60,7 @@ See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### Manual host/port
 
-In Settings, enable **Manual Bridge** and enter the gateway host + port (default `18790`).
+In Settings, enable **Manual Host** and enter the gateway host + port (default `18789`).
 
 ## Canvas + A2UI
 
