@@ -24,35 +24,35 @@ export const ModelCompatSchema = z
 
 export const ModelDefinitionSchema = z
   .object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  api: ModelApiSchema.optional(),
-  reasoning: z.boolean(),
-  input: z.array(z.union([z.literal("text"), z.literal("image")])),
-  cost: z
-    .object({
-      input: z.number(),
-      output: z.number(),
-      cacheRead: z.number(),
-      cacheWrite: z.number(),
-    })
-    .strict(),
-  contextWindow: z.number().positive(),
-  maxTokens: z.number().positive(),
-  headers: z.record(z.string(), z.string()).optional(),
-  compat: ModelCompatSchema,
-})
+    id: z.string().min(1),
+    name: z.string().min(1),
+    api: ModelApiSchema.optional(),
+    reasoning: z.boolean(),
+    input: z.array(z.union([z.literal("text"), z.literal("image")])),
+    cost: z
+      .object({
+        input: z.number(),
+        output: z.number(),
+        cacheRead: z.number(),
+        cacheWrite: z.number(),
+      })
+      .strict(),
+    contextWindow: z.number().positive(),
+    maxTokens: z.number().positive(),
+    headers: z.record(z.string(), z.string()).optional(),
+    compat: ModelCompatSchema,
+  })
   .strict();
 
 export const ModelProviderSchema = z
   .object({
-  baseUrl: z.string().min(1),
-  apiKey: z.string().optional(),
-  api: ModelApiSchema.optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  authHeader: z.boolean().optional(),
-  models: z.array(ModelDefinitionSchema),
-})
+    baseUrl: z.string().min(1),
+    apiKey: z.string().optional(),
+    api: ModelApiSchema.optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    authHeader: z.boolean().optional(),
+    models: z.array(ModelDefinitionSchema),
+  })
   .strict();
 
 export const ModelsConfigSchema = z
@@ -151,7 +151,9 @@ export const CliBackendSchema = z
     sessionArg: z.string().optional(),
     sessionArgs: z.array(z.string()).optional(),
     resumeArgs: z.array(z.string()).optional(),
-    sessionMode: z.union([z.literal("always"), z.literal("existing"), z.literal("none")]).optional(),
+    sessionMode: z
+      .union([z.literal("always"), z.literal("existing"), z.literal("none")])
+      .optional(),
     sessionIdFields: z.array(z.string()).optional(),
     systemPromptArg: z.string().optional(),
     systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),

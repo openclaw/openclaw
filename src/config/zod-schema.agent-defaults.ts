@@ -139,10 +139,12 @@ export const AgentDefaultsSchema = z
         model: z
           .union([
             z.string(),
-            z.object({
-              primary: z.string().optional(),
-              fallbacks: z.array(z.string()).optional(),
-            }).strict(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
           ])
           .optional(),
       })

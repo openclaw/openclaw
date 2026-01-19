@@ -79,46 +79,46 @@ const validateTelegramCustomCommands = (
 
 export const TelegramAccountSchemaBase = z
   .object({
-  name: z.string().optional(),
-  capabilities: TelegramCapabilitiesSchema.optional(),
-  enabled: z.boolean().optional(),
-  commands: ProviderCommandsSchema,
-  customCommands: z.array(TelegramCustomCommandSchema).optional(),
-  configWrites: z.boolean().optional(),
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  botToken: z.string().optional(),
-  tokenFile: z.string().optional(),
-  replyToMode: ReplyToModeSchema.optional(),
-  groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  blockStreaming: z.boolean().optional(),
-  draftChunk: BlockStreamingChunkSchema.optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
-  mediaMaxMb: z.number().positive().optional(),
-  timeoutSeconds: z.number().int().positive().optional(),
-  retry: RetryConfigSchema,
-  proxy: z.string().optional(),
-  webhookUrl: z.string().optional(),
-  webhookSecret: z.string().optional(),
-  webhookPath: z.string().optional(),
-  actions: z
-    .object({
-      reactions: z.boolean().optional(),
-      sendMessage: z.boolean().optional(),
-      deleteMessage: z.boolean().optional(),
-    })
-    .strict()
-    .optional(),
-  reactionNotifications: z.enum(["off", "own", "all"]).optional(),
-  reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-})
+    name: z.string().optional(),
+    capabilities: TelegramCapabilitiesSchema.optional(),
+    enabled: z.boolean().optional(),
+    commands: ProviderCommandsSchema,
+    customCommands: z.array(TelegramCustomCommandSchema).optional(),
+    configWrites: z.boolean().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    botToken: z.string().optional(),
+    tokenFile: z.string().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    blockStreaming: z.boolean().optional(),
+    draftChunk: BlockStreamingChunkSchema.optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
+    mediaMaxMb: z.number().positive().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    retry: RetryConfigSchema,
+    proxy: z.string().optional(),
+    webhookUrl: z.string().optional(),
+    webhookSecret: z.string().optional(),
+    webhookPath: z.string().optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        sendMessage: z.boolean().optional(),
+        deleteMessage: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    reactionNotifications: z.enum(["off", "own", "all"]).optional(),
+    reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
+  })
   .strict();
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
@@ -191,50 +191,50 @@ export const DiscordGuildSchema = z
 
 export const DiscordAccountSchema = z
   .object({
-  name: z.string().optional(),
-  capabilities: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  commands: ProviderCommandsSchema,
-  configWrites: z.boolean().optional(),
-  token: z.string().optional(),
-  allowBots: z.boolean().optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  maxLinesPerMessage: z.number().int().positive().optional(),
-  mediaMaxMb: z.number().positive().optional(),
-  retry: RetryConfigSchema,
-  actions: z
-    .object({
-      reactions: z.boolean().optional(),
-      stickers: z.boolean().optional(),
-      emojiUploads: z.boolean().optional(),
-      stickerUploads: z.boolean().optional(),
-      polls: z.boolean().optional(),
-      permissions: z.boolean().optional(),
-      messages: z.boolean().optional(),
-      threads: z.boolean().optional(),
-      pins: z.boolean().optional(),
-      search: z.boolean().optional(),
-      memberInfo: z.boolean().optional(),
-      roleInfo: z.boolean().optional(),
-      roles: z.boolean().optional(),
-      channelInfo: z.boolean().optional(),
-      voiceStatus: z.boolean().optional(),
-      events: z.boolean().optional(),
-      moderation: z.boolean().optional(),
-      channels: z.boolean().optional(),
-    })
-    .strict()
-    .optional(),
-  replyToMode: ReplyToModeSchema.optional(),
-  dm: DiscordDmSchema.optional(),
-  guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
-})
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    commands: ProviderCommandsSchema,
+    configWrites: z.boolean().optional(),
+    token: z.string().optional(),
+    allowBots: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    maxLinesPerMessage: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    retry: RetryConfigSchema,
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        stickers: z.boolean().optional(),
+        emojiUploads: z.boolean().optional(),
+        stickerUploads: z.boolean().optional(),
+        polls: z.boolean().optional(),
+        permissions: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        threads: z.boolean().optional(),
+        pins: z.boolean().optional(),
+        search: z.boolean().optional(),
+        memberInfo: z.boolean().optional(),
+        roleInfo: z.boolean().optional(),
+        roles: z.boolean().optional(),
+        channelInfo: z.boolean().optional(),
+        voiceStatus: z.boolean().optional(),
+        events: z.boolean().optional(),
+        moderation: z.boolean().optional(),
+        channels: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    dm: DiscordDmSchema.optional(),
+    guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
+  })
   .strict();
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
@@ -282,57 +282,57 @@ export const SlackThreadSchema = z
 
 export const SlackAccountSchema = z
   .object({
-  name: z.string().optional(),
-  mode: z.enum(["socket", "http"]).optional(),
-  signingSecret: z.string().optional(),
-  webhookPath: z.string().optional(),
-  capabilities: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  commands: ProviderCommandsSchema,
-  configWrites: z.boolean().optional(),
-  botToken: z.string().optional(),
-  appToken: z.string().optional(),
-  userToken: z.string().optional(),
-  userTokenReadOnly: z.boolean().optional().default(true),
-  allowBots: z.boolean().optional(),
-  requireMention: z.boolean().optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  mediaMaxMb: z.number().positive().optional(),
-  reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-  reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
-  replyToMode: ReplyToModeSchema.optional(),
-  thread: SlackThreadSchema.optional(),
-  actions: z
-    .object({
-      reactions: z.boolean().optional(),
-      messages: z.boolean().optional(),
-      pins: z.boolean().optional(),
-      search: z.boolean().optional(),
-      permissions: z.boolean().optional(),
-      memberInfo: z.boolean().optional(),
-      channelInfo: z.boolean().optional(),
-      emojiList: z.boolean().optional(),
-    })
-    .strict()
-    .optional(),
-  slashCommand: z
-    .object({
-      enabled: z.boolean().optional(),
-      name: z.string().optional(),
-      sessionPrefix: z.string().optional(),
-      ephemeral: z.boolean().optional(),
-    })
-    .strict()
-    .optional(),
-  dm: SlackDmSchema.optional(),
-  channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
-})
+    name: z.string().optional(),
+    mode: z.enum(["socket", "http"]).optional(),
+    signingSecret: z.string().optional(),
+    webhookPath: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    commands: ProviderCommandsSchema,
+    configWrites: z.boolean().optional(),
+    botToken: z.string().optional(),
+    appToken: z.string().optional(),
+    userToken: z.string().optional(),
+    userTokenReadOnly: z.boolean().optional().default(true),
+    allowBots: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    mediaMaxMb: z.number().positive().optional(),
+    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    thread: SlackThreadSchema.optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        pins: z.boolean().optional(),
+        search: z.boolean().optional(),
+        permissions: z.boolean().optional(),
+        memberInfo: z.boolean().optional(),
+        channelInfo: z.boolean().optional(),
+        emojiList: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    slashCommand: z
+      .object({
+        enabled: z.boolean().optional(),
+        name: z.string().optional(),
+        sessionPrefix: z.string().optional(),
+        ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    dm: SlackDmSchema.optional(),
+    channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
+  })
   .strict();
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
@@ -369,34 +369,34 @@ export const SlackConfigSchema = SlackAccountSchema.extend({
 
 export const SignalAccountSchemaBase = z
   .object({
-  name: z.string().optional(),
-  capabilities: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
-  account: z.string().optional(),
-  httpUrl: z.string().optional(),
-  httpHost: z.string().optional(),
-  httpPort: z.number().int().positive().optional(),
-  cliPath: ExecutableTokenSchema.optional(),
-  autoStart: z.boolean().optional(),
-  receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
-  ignoreAttachments: z.boolean().optional(),
-  ignoreStories: z.boolean().optional(),
-  sendReadReceipts: z.boolean().optional(),
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
-  reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-  reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
-})
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    account: z.string().optional(),
+    httpUrl: z.string().optional(),
+    httpHost: z.string().optional(),
+    httpPort: z.number().int().positive().optional(),
+    cliPath: ExecutableTokenSchema.optional(),
+    autoStart: z.boolean().optional(),
+    receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
+    ignoreAttachments: z.boolean().optional(),
+    ignoreStories: z.boolean().optional(),
+    sendReadReceipts: z.boolean().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+  })
   .strict();
 
 export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
@@ -423,39 +423,39 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
 
 export const IMessageAccountSchemaBase = z
   .object({
-  name: z.string().optional(),
-  capabilities: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  configWrites: z.boolean().optional(),
-  cliPath: ExecutableTokenSchema.optional(),
-  dbPath: z.string().optional(),
-  remoteHost: z.string().optional(),
-  service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
-  region: z.string().optional(),
-  dmPolicy: DmPolicySchema.optional().default("pairing"),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
-  includeAttachments: z.boolean().optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  blockStreaming: z.boolean().optional(),
-  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-  groups: z
-    .record(
-      z.string(),
-      z
-        .object({
-          requireMention: z.boolean().optional(),
-        })
-        .strict()
-        .optional(),
-    )
-    .optional(),
-})
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    cliPath: ExecutableTokenSchema.optional(),
+    dbPath: z.string().optional(),
+    remoteHost: z.string().optional(),
+    service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
+    region: z.string().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    includeAttachments: z.boolean().optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    groups: z
+      .record(
+        z.string(),
+        z
+          .object({
+            requireMention: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      )
+      .optional(),
+  })
   .strict();
 
 export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {

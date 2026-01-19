@@ -429,9 +429,7 @@ async function migrateLegacySessions(
     await saveSessionStore(detected.sessions.targetStorePath, normalized);
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
-      changes.push(
-        `Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`,
-      );
+      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
     }
   }
 

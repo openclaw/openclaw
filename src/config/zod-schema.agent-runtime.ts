@@ -67,10 +67,12 @@ export const SandboxDockerSchema = z
         z.union([
           z.string(),
           z.number(),
-          z.object({
-            soft: z.number().int().nonnegative().optional(),
-            hard: z.number().int().nonnegative().optional(),
-          }).strict(),
+          z
+            .object({
+              soft: z.number().int().nonnegative().optional(),
+              hard: z.number().int().nonnegative().optional(),
+            })
+            .strict(),
         ]),
       )
       .optional(),
@@ -334,35 +336,37 @@ export const AgentModelSchema = z.union([
 ]);
 export const AgentEntrySchema = z
   .object({
-  id: z.string(),
-  default: z.boolean().optional(),
-  name: z.string().optional(),
-  workspace: z.string().optional(),
-  agentDir: z.string().optional(),
-  model: AgentModelSchema.optional(),
-  memorySearch: MemorySearchSchema,
-  humanDelay: HumanDelaySchema.optional(),
-  heartbeat: HeartbeatSchema,
-  identity: IdentitySchema,
-  groupChat: GroupChatSchema,
-  subagents: z
-    .object({
-      allowAgents: z.array(z.string()).optional(),
-      model: z
-        .union([
-          z.string(),
-          z.object({
-            primary: z.string().optional(),
-            fallbacks: z.array(z.string()).optional(),
-          }).strict(),
-        ])
-        .optional(),
-    })
-    .strict()
-    .optional(),
-  sandbox: AgentSandboxSchema,
-  tools: AgentToolsSchema,
-})
+    id: z.string(),
+    default: z.boolean().optional(),
+    name: z.string().optional(),
+    workspace: z.string().optional(),
+    agentDir: z.string().optional(),
+    model: AgentModelSchema.optional(),
+    memorySearch: MemorySearchSchema,
+    humanDelay: HumanDelaySchema.optional(),
+    heartbeat: HeartbeatSchema,
+    identity: IdentitySchema,
+    groupChat: GroupChatSchema,
+    subagents: z
+      .object({
+        allowAgents: z.array(z.string()).optional(),
+        model: z
+          .union([
+            z.string(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ])
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    sandbox: AgentSandboxSchema,
+    tools: AgentToolsSchema,
+  })
   .strict();
 
 export const ToolsSchema = z
