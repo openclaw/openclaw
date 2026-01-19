@@ -857,17 +857,20 @@ final class NodeAppModel {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
-    private func locationMode() -> ClawdbotLocationMode {
+}
+
+private extension NodeAppModel {
+    func locationMode() -> ClawdbotLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         return ClawdbotLocationMode(rawValue: raw) ?? .off
     }
 
-    private func isLocationPreciseEnabled() -> Bool {
+    func isLocationPreciseEnabled() -> Bool {
         if UserDefaults.standard.object(forKey: "location.preciseEnabled") == nil { return true }
         return UserDefaults.standard.bool(forKey: "location.preciseEnabled")
     }
 
-    private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
+    static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
@@ -876,7 +879,7 @@ final class NodeAppModel {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    private static func encodePayload(_ obj: some Encodable) throws -> String {
+    static func encodePayload(_ obj: some Encodable) throws -> String {
         let data = try JSONEncoder().encode(obj)
         guard let json = String(bytes: data, encoding: .utf8) else {
             throw NSError(domain: "NodeAppModel", code: 21, userInfo: [
@@ -886,17 +889,17 @@ final class NodeAppModel {
         return json
     }
 
-    private func isCameraEnabled() -> Bool {
+    func isCameraEnabled() -> Bool {
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
         return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
-    private func triggerCameraFlash() {
+    func triggerCameraFlash() {
         self.cameraFlashNonce &+= 1
     }
 
-    private func showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
+    func showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
         self.cameraHUDDismissTask?.cancel()
 
         withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {

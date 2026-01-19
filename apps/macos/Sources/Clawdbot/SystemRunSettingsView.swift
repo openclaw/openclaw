@@ -80,10 +80,7 @@ struct SystemRunSettingsView: View {
             .labelsHidden()
             .pickerStyle(.menu)
 
-            Text(self.model.isDefaultsScope
-                ? "Defaults apply when an agent has no overrides. Ask controls prompt behavior; fallback is used when no companion UI is reachable."
-                :
-                "Security controls whether system.run can execute on this Mac when paired as a node. Ask controls prompt behavior; fallback is used when no companion UI is reachable.")
+            Text(self.scopeMessage)
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -137,6 +134,15 @@ struct SystemRunSettingsView: View {
                 }
             }
         }
+    }
+
+    private var scopeMessage: String {
+        if self.model.isDefaultsScope {
+            return "Defaults apply when an agent has no overrides. " +
+                "Ask controls prompt behavior; fallback is used when no companion UI is reachable."
+        }
+        return "Security controls whether system.run can execute on this Mac when paired as a node. " +
+            "Ask controls prompt behavior; fallback is used when no companion UI is reachable."
     }
 }
 

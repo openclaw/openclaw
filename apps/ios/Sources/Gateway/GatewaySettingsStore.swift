@@ -89,7 +89,9 @@ enum GatewaySettingsStore {
     }
 
     static func loadGatewayPassword(instanceId: String) -> String? {
-        KeychainStore.loadString(service: self.gatewayService, account: self.gatewayPasswordAccount(instanceId: instanceId))?
+        KeychainStore.loadString(
+            service: self.gatewayService,
+            account: self.gatewayPasswordAccount(instanceId: instanceId))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -193,7 +195,9 @@ enum GatewaySettingsStore {
         if defaults.object(forKey: self.manualEnabledDefaultsKey) == nil,
            defaults.object(forKey: self.legacyManualEnabledDefaultsKey) != nil
         {
-            defaults.set(defaults.bool(forKey: self.legacyManualEnabledDefaultsKey), forKey: self.manualEnabledDefaultsKey)
+            defaults.set(
+                defaults.bool(forKey: self.legacyManualEnabledDefaultsKey),
+                forKey: self.manualEnabledDefaultsKey)
         }
 
         if defaults.string(forKey: self.manualHostDefaultsKey)?.isEmpty != false,
@@ -206,7 +210,9 @@ enum GatewaySettingsStore {
         if defaults.integer(forKey: self.manualPortDefaultsKey) == 0,
            defaults.integer(forKey: self.legacyManualPortDefaultsKey) > 0
         {
-            defaults.set(defaults.integer(forKey: self.legacyManualPortDefaultsKey), forKey: self.manualPortDefaultsKey)
+            defaults.set(
+                defaults.integer(forKey: self.legacyManualPortDefaultsKey),
+                forKey: self.manualPortDefaultsKey)
         }
 
         if defaults.object(forKey: self.discoveryDebugLogsDefaultsKey) == nil,

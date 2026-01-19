@@ -87,16 +87,19 @@ enum ExecApprovalsSocketClient {
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPath.isEmpty, !trimmedToken.isEmpty else { return nil }
         do {
-            return try await AsyncTimeout.withTimeoutMs(timeoutMs: timeoutMs, onTimeout: {
-                TimeoutError(message: "exec approvals socket timeout")
-            }, operation: {
-                try await Task.detached {
-                    try self.requestDecisionSync(
-                        socketPath: trimmedPath,
-                        token: trimmedToken,
-                        request: request)
-                }.value
-            })
+            return try await AsyncTimeout.withTimeoutMs(
+                timeoutMs: timeoutMs,
+                onTimeout: {
+                    TimeoutError(message: "exec approvals socket timeout")
+                },
+                operation: {
+                    try await Task.detached {
+                        try self.requestDecisionSync(
+                            socketPath: trimmedPath,
+                            token: trimmedToken,
+                            request: request)
+                    }.value
+                })
         } catch {
             return nil
         }

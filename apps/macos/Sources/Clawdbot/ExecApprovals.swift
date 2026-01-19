@@ -86,9 +86,9 @@ enum ExecApprovalDecision: String, Codable, Sendable {
 
 struct ExecAllowlistEntry: Codable, Hashable {
     var pattern: String
-    var lastUsedAt: Double? = nil
-    var lastUsedCommand: String? = nil
-    var lastResolvedPath: String? = nil
+    var lastUsedAt: Double?
+    var lastUsedCommand: String?
+    var lastResolvedPath: String?
 }
 
 struct ExecApprovalsDefaults: Codable {
