@@ -1,4 +1,9 @@
-import type { GatewayAuthConfig, GatewayBindMode, GatewayTailscaleConfig, loadConfig } from "../config/config.js";
+import type {
+  GatewayAuthConfig,
+  GatewayBindMode,
+  GatewayTailscaleConfig,
+  loadConfig,
+} from "../config/config.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,

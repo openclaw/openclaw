@@ -79,11 +79,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentity {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
     const colonIndex = cleaned.indexOf(":");
     if (colonIndex === -1) continue;
-    const label = cleaned
-      .slice(0, colonIndex)
-      .replace(/[*_]/g, "")
-      .trim()
-      .toLowerCase();
+    const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
     const value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")

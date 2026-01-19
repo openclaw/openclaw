@@ -499,7 +499,9 @@ export function attachGatewayWsMessageHandler(params: {
             commands: nodeSession.commands,
             cfg: loadConfig(),
           }).catch((err) =>
-            logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
+            logGateway.warn(
+              `remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+            ),
           );
           void loadVoiceWakeConfig()
             .then((cfg) => {

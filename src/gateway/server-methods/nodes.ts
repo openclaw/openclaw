@@ -453,14 +453,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         logGateway: { warn: context.logGateway.warn },
       };
-      await handleNodeEvent(
-        nodeContext,
-        "node",
-        {
-          event: p.event,
-          payloadJSON,
-        },
-      );
+      await handleNodeEvent(nodeContext, "node", {
+        event: p.event,
+        payloadJSON,
+      });
       respond(true, { ok: true }, undefined);
     });
   },

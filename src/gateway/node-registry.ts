@@ -45,7 +45,7 @@ export class NodeRegistry {
     const nodeId = connect.device?.id ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const commands = Array.isArray((connect as { commands?: string[] }).commands)
-      ? (connect as { commands?: string[] }).commands ?? []
+      ? ((connect as { commands?: string[] }).commands ?? [])
       : [];
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"

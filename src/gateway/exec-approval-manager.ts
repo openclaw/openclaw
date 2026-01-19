@@ -45,7 +45,10 @@ export class ExecApprovalManager {
     return record;
   }
 
-  async waitForDecision(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
+  async waitForDecision(
+    record: ExecApprovalRecord,
+    timeoutMs: number,
+  ): Promise<ExecApprovalDecision | null> {
     return await new Promise<ExecApprovalDecision | null>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(record.id);

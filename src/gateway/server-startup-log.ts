@@ -22,7 +22,9 @@ export function logGatewayStartup(params: {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
   const scheme = params.tlsEnabled ? "wss" : "ws";
-  params.log.info(`listening on ${scheme}://${params.bindHost}:${params.port} (PID ${process.pid})`);
+  params.log.info(
+    `listening on ${scheme}://${params.bindHost}:${params.port} (PID ${process.pid})`,
+  );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");

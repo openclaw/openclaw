@@ -93,7 +93,12 @@ describe("agents set-identity command", () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseSnapshot,
       config: {
-        agents: { list: [{ id: "main", workspace }, { id: "ops", workspace }] },
+        agents: {
+          list: [
+            { id: "main", workspace },
+            { id: "ops", workspace },
+          ],
+        },
       },
     });
 

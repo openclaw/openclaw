@@ -13,7 +13,6 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-
 type StubChannelOptions = {
   id: ChannelPlugin["id"];
   label: string;

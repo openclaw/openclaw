@@ -9,9 +9,7 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-export function createExecApprovalHandlers(
-  manager: ExecApprovalManager,
-): GatewayRequestHandlers {
+export function createExecApprovalHandlers(manager: ExecApprovalManager): GatewayRequestHandlers {
   return {
     "exec.approval.request": async ({ params, respond, context }) => {
       if (!validateExecApprovalRequestParams(params)) {
@@ -61,12 +59,16 @@ export function createExecApprovalHandlers(
         { dropIfSlow: true },
       );
       const decision = await manager.waitForDecision(record, timeoutMs);
-      respond(true, {
-        id: record.id,
-        decision,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      }, undefined);
+      respond(
+        true,
+        {
+          id: record.id,
+          decision,
+          createdAtMs: record.createdAtMs,
+          expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
     },
     "exec.approval.resolve": async ({ params, respond, client, context }) => {
       if (!validateExecApprovalResolveParams(params)) {

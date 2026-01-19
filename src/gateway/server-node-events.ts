@@ -11,11 +11,7 @@ import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js"
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
-export const handleNodeEvent = async (
-  ctx: NodeEventContext,
-  nodeId: string,
-  evt: NodeEvent,
-) => {
+export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
       if (!evt.payloadJSON) return;

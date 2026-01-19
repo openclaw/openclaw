@@ -26,10 +26,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadConfig } from "../config/config.js";
 import { VERSION } from "../version.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { GatewayClient } from "../gateway/client.js";
@@ -804,8 +801,7 @@ function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | n
         ? JSON.stringify(obj.params)
         : null;
   const timeoutMs = typeof obj.timeoutMs === "number" ? obj.timeoutMs : null;
-  const idempotencyKey =
-    typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
+  const idempotencyKey = typeof obj.idempotencyKey === "string" ? obj.idempotencyKey : null;
   return {
     id,
     nodeId,
@@ -840,11 +836,7 @@ async function sendInvokeResult(
   }
 }
 
-async function sendNodeEvent(
-  client: GatewayClient,
-  event: string,
-  payload: unknown,
-) {
+async function sendNodeEvent(client: GatewayClient, event: string, payload: unknown) {
   try {
     await client.request("node.event", {
       event,

@@ -136,10 +136,7 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
   });
   const url = connectionDetails.url;
   const useLocalTls =
-    config.gateway?.tls?.enabled === true &&
-    !urlOverride &&
-    !remoteUrl &&
-    url.startsWith("wss://");
+    config.gateway?.tls?.enabled === true && !urlOverride && !remoteUrl && url.startsWith("wss://");
   const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(config.gateway?.tls) : undefined;
   const tlsFingerprint = tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
   const token =

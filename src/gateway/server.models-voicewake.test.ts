@@ -260,5 +260,4 @@ describe("gateway server models + voicewake", () => {
     ws.close();
     await server.close();
   });
-
 });

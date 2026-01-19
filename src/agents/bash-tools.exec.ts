@@ -482,20 +482,20 @@ export function createExecTool(
             "exec.approval.request",
             { timeoutMs: 130_000 },
             {
-            command: params.command,
-            cwd: workdir,
-            host: "node",
-            security: hostSecurity,
-            ask: hostAsk,
-            agentId: defaults?.agentId,
-            resolvedPath: resolution?.resolvedPath ?? null,
-            sessionKey: defaults?.sessionKey ?? null,
-            timeoutMs: 120_000,
+              command: params.command,
+              cwd: workdir,
+              host: "node",
+              security: hostSecurity,
+              ask: hostAsk,
+              agentId: defaults?.agentId,
+              resolvedPath: resolution?.resolvedPath ?? null,
+              sessionKey: defaults?.sessionKey ?? null,
+              timeoutMs: 120_000,
             },
           )) as { decision?: string } | null;
           const decision =
             decisionResult && typeof decisionResult === "object"
-              ? decisionResult.decision ?? null
+              ? (decisionResult.decision ?? null)
               : null;
 
           if (decision === "deny") {
@@ -506,9 +506,7 @@ export function createExecTool(
               approvedByAsk = true;
             } else if (askFallback === "allowlist") {
               if (!allowlistMatch) {
-                throw new Error(
-                  "exec denied: approval required (approval UI not available)",
-                );
+                throw new Error("exec denied: approval required (approval UI not available)");
               }
               approvedByAsk = true;
             } else {
@@ -611,20 +609,20 @@ export function createExecTool(
             "exec.approval.request",
             { timeoutMs: 130_000 },
             {
-            command: params.command,
-            cwd: workdir,
-            host: "gateway",
-            security: hostSecurity,
-            ask: hostAsk,
-            agentId: defaults?.agentId,
-            resolvedPath: resolution?.resolvedPath ?? null,
-            sessionKey: defaults?.sessionKey ?? null,
-            timeoutMs: 120_000,
+              command: params.command,
+              cwd: workdir,
+              host: "gateway",
+              security: hostSecurity,
+              ask: hostAsk,
+              agentId: defaults?.agentId,
+              resolvedPath: resolution?.resolvedPath ?? null,
+              sessionKey: defaults?.sessionKey ?? null,
+              timeoutMs: 120_000,
             },
           )) as { decision?: string } | null;
           const decision =
             decisionResult && typeof decisionResult === "object"
-              ? decisionResult.decision ?? null
+              ? (decisionResult.decision ?? null)
               : null;
 
           if (decision === "deny") {
@@ -635,9 +633,7 @@ export function createExecTool(
               approvedByAsk = true;
             } else if (askFallback === "allowlist") {
               if (!allowlistMatch) {
-                throw new Error(
-                  "exec denied: approval required (approval UI not available)",
-                );
+                throw new Error("exec denied: approval required (approval UI not available)");
               }
               approvedByAsk = true;
             } else {

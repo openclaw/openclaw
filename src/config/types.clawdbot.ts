@@ -4,7 +4,12 @@ import type { LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CronConfig } from "./types.cron.js";
-import type { CanvasHostConfig, DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
+import type {
+  CanvasHostConfig,
+  DiscoveryConfig,
+  GatewayConfig,
+  TalkConfig,
+} from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type {
   AudioConfig,

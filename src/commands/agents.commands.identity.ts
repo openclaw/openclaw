@@ -55,7 +55,9 @@ function resolveAgentIdByWorkspace(
 ): string[] {
   const list = listAgentEntries(cfg);
   const ids =
-    list.length > 0 ? list.map((entry) => normalizeAgentId(entry.id)) : [resolveDefaultAgentId(cfg)];
+    list.length > 0
+      ? list.map((entry) => normalizeAgentId(entry.id))
+      : [resolveDefaultAgentId(cfg)];
   const normalizedTarget = normalizeWorkspacePath(workspaceDir);
   return ids.filter(
     (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
@@ -134,10 +136,7 @@ export async function agentsSetIdentityCommand(
   }
 
   const fileTheme =
-    identityFromFile?.theme ??
-    identityFromFile?.creature ??
-    identityFromFile?.vibe ??
-    undefined;
+    identityFromFile?.theme ?? identityFromFile?.creature ?? identityFromFile?.vibe ?? undefined;
   const incomingIdentity: IdentityConfig = {
     ...(nameRaw || identityFromFile?.name ? { name: nameRaw ?? identityFromFile?.name } : {}),
     ...(emojiRaw || identityFromFile?.emoji ? { emoji: emojiRaw ?? identityFromFile?.emoji } : {}),
