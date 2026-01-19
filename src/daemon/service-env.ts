@@ -75,6 +75,7 @@ export function buildServiceEnvironment(params: {
     (process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
+    HOME: env.HOME,
     PATH: buildMinimalServicePath({ env }),
     CLAWDBOT_PROFILE: profile,
     CLAWDBOT_STATE_DIR: env.CLAWDBOT_STATE_DIR,
@@ -94,6 +95,7 @@ export function buildNodeServiceEnvironment(params: {
 }): Record<string, string | undefined> {
   const { env } = params;
   return {
+    HOME: env.HOME,
     PATH: buildMinimalServicePath({ env }),
     CLAWDBOT_STATE_DIR: env.CLAWDBOT_STATE_DIR,
     CLAWDBOT_CONFIG_PATH: env.CLAWDBOT_CONFIG_PATH,
