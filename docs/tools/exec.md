@@ -40,6 +40,28 @@ Notes:
 - `tools.exec.security` (default: `deny`)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
+- `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
+
+Example:
+```json5
+{
+  tools: {
+    exec: {
+      pathPrepend: ["~/bin", "/opt/oss/bin"]
+    }
+  }
+}
+```
+
+### PATH handling
+
+- `host=gateway`: uses the Gateway process `PATH`. Daemons install a minimal `PATH`:
+  - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
+  - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
+- `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
+  Clawdbot prepends `env.PATH` after profile sourcing; `tools.exec.pathPrepend` applies here too.
+- `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
+  if the exec call already sets `env.PATH`.
 
 Per-agent node binding (use the agent list index in config):
 

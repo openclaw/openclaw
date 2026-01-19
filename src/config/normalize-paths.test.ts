@@ -11,6 +11,7 @@ describe("normalizeConfigPaths", () => {
       const { normalizeConfigPaths } = await import("./normalize-paths.js");
 
       const cfg = normalizeConfigPaths({
+        tools: { exec: { pathPrepend: ["~/bin"] } },
         plugins: { load: { paths: ["~/plugins/a"] } },
         logging: { file: "~/.clawdbot/logs/clawdbot.log" },
         hooks: {
@@ -49,6 +50,7 @@ describe("normalizeConfigPaths", () => {
       expect(cfg.logging?.file).toBe(path.join(home, ".clawdbot", "logs", "clawdbot.log"));
       expect(cfg.hooks?.path).toBe(path.join(home, ".clawdbot", "hooks.json5"));
       expect(cfg.hooks?.transformsDir).toBe(path.join(home, "hooks-xform"));
+      expect(cfg.tools?.exec?.pathPrepend?.[0]).toBe(path.join(home, "bin"));
       expect(cfg.channels?.telegram?.accounts?.personal?.tokenFile).toBe(
         path.join(home, ".clawdbot", "telegram.token"),
       );

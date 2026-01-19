@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 - Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels.
 - TUI: add searchable model picker for quicker model selection. (#1198) — thanks @vignesh07.
 - Docs: clarify allowlist input types and onboarding behavior for messaging channels.
+- Exec: add `tools.exec.pathPrepend` for prepending PATH entries on exec runs.
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.

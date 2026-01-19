@@ -183,6 +183,25 @@ export const AgentToolsSchema = z
         allowFrom: ElevatedAllowFromSchema,
       })
       .optional(),
+    exec: z
+      .object({
+        host: z.enum(["sandbox", "gateway", "node"]).optional(),
+        security: z.enum(["deny", "allowlist", "full"]).optional(),
+        ask: z.enum(["off", "on-miss", "always"]).optional(),
+        node: z.string().optional(),
+        pathPrepend: z.array(z.string()).optional(),
+        backgroundMs: z.number().int().positive().optional(),
+        timeoutSec: z.number().int().positive().optional(),
+        cleanupMs: z.number().int().positive().optional(),
+        notifyOnExit: z.boolean().optional(),
+        applyPatch: z
+          .object({
+            enabled: z.boolean().optional(),
+            allowModels: z.array(z.string()).optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -362,6 +381,7 @@ export const ToolsSchema = z
         security: z.enum(["deny", "allowlist", "full"]).optional(),
         ask: z.enum(["off", "on-miss", "always"]).optional(),
         node: z.string().optional(),
+        pathPrepend: z.array(z.string()).optional(),
         backgroundMs: z.number().int().positive().optional(),
         timeoutSec: z.number().int().positive().optional(),
         cleanupMs: z.number().int().positive().optional(),

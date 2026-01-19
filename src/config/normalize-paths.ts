@@ -4,7 +4,7 @@ import type { ClawdbotConfig } from "./types.js";
 const PATH_VALUE_RE = /^~(?=$|[\\/])/;
 
 const PATH_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
-const PATH_LIST_KEYS = new Set(["paths"]);
+const PATH_LIST_KEYS = new Set(["paths", "pathPrepend"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

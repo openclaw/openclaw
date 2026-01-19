@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
@@ -89,6 +90,7 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
+  pathPrepend?: string[];
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
@@ -207,6 +209,47 @@ function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizePathPrepend(entries?: string[]) {
+  if (!Array.isArray(entries)) return [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "string") continue;
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function mergePathPrepend(existing: string | undefined, prepend: string[]) {
+  if (prepend.length === 0) return existing;
+  const partsExisting = (existing ?? "")
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const part of [...prepend, ...partsExisting]) {
+    if (seen.has(part)) continue;
+    seen.add(part);
+    merged.push(part);
+  }
+  return merged.join(path.delimiter);
+}
+
+function applyPathPrepend(
+  env: Record<string, string>,
+  prepend: string[],
+  options?: { requireExisting?: boolean },
+) {
+  if (prepend.length === 0) return;
+  if (options?.requireExisting && !env.PATH) return;
+  const merged = mergePathPrepend(env.PATH, prepend);
+  if (merged) env.PATH = merged;
+}
+
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) return;
   const sessionKey = session.sessionKey?.trim();
@@ -240,6 +283,7 @@ export function createExecTool(
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
       : 1800;
+  const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
 
@@ -379,6 +423,7 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+      applyPathPrepend(env, defaultPathPrepend);
 
       if (host === "node") {
         if (security === "deny") {
@@ -417,6 +462,10 @@ export function createExecTool(
           );
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+        const nodeEnv = params.env ? { ...params.env } : undefined;
+        if (nodeEnv) {
+          applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
+        }
         const invokeParams: Record<string, unknown> = {
           nodeId,
           command: "system.run",
@@ -424,7 +473,7 @@ export function createExecTool(
             command: argv,
             rawCommand: params.command,
             cwd: workdir,
-            env: params.env,
+            env: nodeEnv,
             timeoutMs: typeof params.timeout === "number" ? params.timeout * 1000 : undefined,
             agentId: defaults?.agentId,
             sessionKey: defaults?.sessionKey,
