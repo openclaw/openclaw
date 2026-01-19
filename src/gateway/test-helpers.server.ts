@@ -291,7 +291,12 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(ws: WebSocket, method: string, params?: unknown) {
+export async function rpcReq<T = unknown>(
+  ws: WebSocket,
+  method: string,
+  params?: unknown,
+  timeoutMs?: number,
+) {
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   ws.send(JSON.stringify({ type: "req", id, method, params }));
@@ -301,11 +306,15 @@ export async function rpcReq<T = unknown>(ws: WebSocket, method: string, params?
     ok: boolean;
     payload?: T;
     error?: { message?: string; code?: string };
-  }>(ws, (o) => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) return false;
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  });
+  }>(
+    ws,
+    (o) => {
+      if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+      const rec = o as Record<string, unknown>;
+      return rec.type === "res" && rec.id === id;
+    },
+    timeoutMs,
+  );
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

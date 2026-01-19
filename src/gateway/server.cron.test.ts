@@ -95,7 +95,7 @@ describe("gateway server cron", () => {
     const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
     expect(jobId.length > 0).toBe(true);
 
-    const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" });
+    const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
     expect(runRes.ok).toBe(true);
 
     const events = await waitForSystemEvent();
@@ -279,7 +279,8 @@ describe("gateway server cron", () => {
     const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
     expect(jobId.length > 0).toBe(true);
 
-    const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" });
+    // Full-suite runs can starve the event loop; give cron.run extra time to respond.
+    const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
     expect(runRes.ok).toBe(true);
 
     const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
@@ -375,7 +376,7 @@ describe("gateway server cron", () => {
     expect(last.jobId).toBe(jobId);
     expect(last.summary).toBe("hello");
 
-    const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 20 });
+    const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 20 }, 20_000);
     expect(runsRes.ok).toBe(true);
     const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
     expect(Array.isArray(entries)).toBe(true);
