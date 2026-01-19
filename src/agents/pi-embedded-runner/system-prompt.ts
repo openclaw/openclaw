@@ -23,6 +23,7 @@ export function buildEmbeddedSystemPrompt(params: {
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   runtimeInfo: {
+    agentId?: string;
     host: string;
     os: string;
     arch: string;
