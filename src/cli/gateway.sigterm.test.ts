@@ -123,9 +123,11 @@ describe("gateway SIGTERM", () => {
         '  console.error("Failed to parse CLAWDBOT_ENTRY_ARGS", err);',
         "  process.exit(1);",
         "}",
+        "if (!Array.isArray(entryArgs)) entryArgs = [];",
+        'entryArgs = entryArgs.filter((arg) => typeof arg === "string" && !arg.toLowerCase().includes("node.exe"));',
         `const runMainUrl = ${JSON.stringify(pathToFileURL(runMainPath).href)};`,
         "const { runCli } = await import(runMainUrl);",
-        'await runCli([process.execPath, "clawdbot", ...entryArgs]);',
+        'await runCli(["node", "clawdbot", ...entryArgs]);',
       ].join("\n"),
       "utf8",
     );
