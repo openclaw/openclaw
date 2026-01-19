@@ -78,6 +78,7 @@ extension OnboardingView {
             title: "Action",
             subtitle: "Action subtitle",
             systemImage: "gearshape",
+            buttonTitle: "Action",
             action: {})
         _ = view.gatewaySubtitle(for: gateway)
         _ = view.isSelectedGateway(gateway)
