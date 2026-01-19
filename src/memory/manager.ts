@@ -100,6 +100,7 @@ const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
 const EMBEDDING_RETRY_MAX_DELAY_MS = 8000;
+const BATCH_FAILURE_LIMIT = 2;
 
 const log = createSubsystemLogger("memory");
 
@@ -127,6 +128,10 @@ export class MemoryIndexManager {
     pollIntervalMs: number;
     timeoutMs: number;
   };
+  private batchFailureCount = 0;
+  private batchFailureLastError?: string;
+  private batchFailureLastProvider?: string;
+  private batchFailureLock: Promise<void> = Promise.resolve();
   private db: DatabaseSync;
   private readonly sources: Set<MemorySource>;
   private providerKey: string;
@@ -419,6 +424,17 @@ export class MemoryIndexManager {
       loadError?: string;
       dims?: number;
     };
+    batch?: {
+      enabled: boolean;
+      failures: number;
+      limit: number;
+      wait: boolean;
+      concurrency: number;
+      pollIntervalMs: number;
+      timeoutMs: number;
+      lastError?: string;
+      lastProvider?: string;
+    };
   } {
     const sourceFilter = this.buildSourceFilter();
     const files = this.db
@@ -497,6 +513,17 @@ export class MemoryIndexManager {
         extensionPath: this.vector.extensionPath,
         loadError: this.vector.loadError,
         dims: this.vector.dims,
+      },
+      batch: {
+        enabled: this.batch.enabled,
+        failures: this.batchFailureCount,
+        limit: BATCH_FAILURE_LIMIT,
+        wait: this.batch.wait,
+        concurrency: this.batch.concurrency,
+        pollIntervalMs: this.batch.pollIntervalMs,
+        timeoutMs: this.batch.timeoutMs,
+        lastError: this.batchFailureLastError,
+        lastProvider: this.batchFailureLastProvider,
       },
     };
   }
@@ -1538,7 +1565,8 @@ export class MemoryIndexManager {
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
   ): Promise<number[][]> {
-    if (!this.openAi) {
+    const openAi = this.openAi;
+    if (!openAi) {
       return this.embedChunksInBatches(chunks);
     }
     if (chunks.length === 0) return [];
@@ -1576,16 +1604,23 @@ export class MemoryIndexManager {
         },
       });
     }
-    const byCustomId = await runOpenAiEmbeddingBatches({
-      openAi: this.openAi,
-      agentId: this.agentId,
-      requests,
-      wait: this.batch.wait,
-      concurrency: this.batch.concurrency,
-      pollIntervalMs: this.batch.pollIntervalMs,
-      timeoutMs: this.batch.timeoutMs,
-      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+    const batchResult = await this.runBatchWithFallback({
+      provider: "openai",
+      run: async () =>
+        await runOpenAiEmbeddingBatches({
+          openAi,
+          agentId: this.agentId,
+          requests,
+          wait: this.batch.wait,
+          concurrency: this.batch.concurrency,
+          pollIntervalMs: this.batch.pollIntervalMs,
+          timeoutMs: this.batch.timeoutMs,
+          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+        }),
+      fallback: async () => await this.embedChunksInBatches(chunks),
     });
+    if (Array.isArray(batchResult)) return batchResult;
+    const byCustomId = batchResult;
 
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of byCustomId.entries()) {
@@ -1603,7 +1638,8 @@ export class MemoryIndexManager {
     entry: MemoryFileEntry | SessionFileEntry,
     source: MemorySource,
   ): Promise<number[][]> {
-    if (!this.gemini) {
+    const gemini = this.gemini;
+    if (!gemini) {
       return this.embedChunksInBatches(chunks);
     }
     if (chunks.length === 0) return [];
@@ -1638,16 +1674,23 @@ export class MemoryIndexManager {
       });
     }
 
-    const byCustomId = await runGeminiEmbeddingBatches({
-      gemini: this.gemini,
-      agentId: this.agentId,
-      requests,
-      wait: this.batch.wait,
-      concurrency: this.batch.concurrency,
-      pollIntervalMs: this.batch.pollIntervalMs,
-      timeoutMs: this.batch.timeoutMs,
-      debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+    const batchResult = await this.runBatchWithFallback({
+      provider: "gemini",
+      run: async () =>
+        await runGeminiEmbeddingBatches({
+          gemini,
+          agentId: this.agentId,
+          requests,
+          wait: this.batch.wait,
+          concurrency: this.batch.concurrency,
+          pollIntervalMs: this.batch.pollIntervalMs,
+          timeoutMs: this.batch.timeoutMs,
+          debug: (message, data) => log.debug(message, { ...data, source, chunks: chunks.length }),
+        }),
+      fallback: async () => await this.embedChunksInBatches(chunks),
     });
+    if (Array.isArray(batchResult)) return batchResult;
+    const byCustomId = batchResult;
 
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     for (const [customId, embedding] of byCustomId.entries()) {
@@ -1715,6 +1758,111 @@ export class MemoryIndexManager {
     await Promise.allSettled(workers);
     if (firstError) throw firstError;
     return results;
+  }
+
+  private async withBatchFailureLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const wait = this.batchFailureLock;
+    this.batchFailureLock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await wait;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
+
+  private async resetBatchFailureCount(): Promise<void> {
+    await this.withBatchFailureLock(async () => {
+      if (this.batchFailureCount > 0) {
+        log.debug("memory embeddings: batch recovered; resetting failure count");
+      }
+      this.batchFailureCount = 0;
+      this.batchFailureLastError = undefined;
+      this.batchFailureLastProvider = undefined;
+    });
+  }
+
+  private async recordBatchFailure(params: {
+    provider: string;
+    message: string;
+    attempts?: number;
+    forceDisable?: boolean;
+  }): Promise<{ disabled: boolean; count: number }> {
+    return await this.withBatchFailureLock(async () => {
+      if (!this.batch.enabled) {
+        return { disabled: true, count: this.batchFailureCount };
+      }
+      const increment = params.forceDisable ? BATCH_FAILURE_LIMIT : Math.max(1, params.attempts ?? 1);
+      this.batchFailureCount += increment;
+      this.batchFailureLastError = params.message;
+      this.batchFailureLastProvider = params.provider;
+      const disabled = params.forceDisable || this.batchFailureCount >= BATCH_FAILURE_LIMIT;
+      if (disabled) {
+        this.batch.enabled = false;
+      }
+      return { disabled, count: this.batchFailureCount };
+    });
+  }
+
+  private isBatchTimeoutError(message: string): boolean {
+    return /timed out|timeout/i.test(message);
+  }
+
+  private async runBatchWithTimeoutRetry<T>(params: {
+    provider: string;
+    run: () => Promise<T>;
+  }): Promise<T> {
+    try {
+      return await params.run();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.isBatchTimeoutError(message)) {
+        log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
+        try {
+          return await params.run();
+        } catch (retryErr) {
+          (retryErr as { batchAttempts?: number }).batchAttempts = 2;
+          throw retryErr;
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async runBatchWithFallback<T>(params: {
+    provider: string;
+    run: () => Promise<T>;
+    fallback: () => Promise<number[][]>;
+  }): Promise<T | number[][]> {
+    if (!this.batch.enabled) {
+      return await params.fallback();
+    }
+    try {
+      const result = await this.runBatchWithTimeoutRetry({
+        provider: params.provider,
+        run: params.run,
+      });
+      await this.resetBatchFailureCount();
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const attempts = (err as { batchAttempts?: number }).batchAttempts ?? 1;
+      const forceDisable = /asyncBatchEmbedContent not available/i.test(message);
+      const failure = await this.recordBatchFailure({
+        provider: params.provider,
+        message,
+        attempts,
+        forceDisable,
+      });
+      const suffix = failure.disabled ? "disabling batch" : "keeping batch enabled";
+      log.warn(
+        `memory embeddings: ${params.provider} batch failed (${failure.count}/${BATCH_FAILURE_LIMIT}); ${suffix}; falling back to non-batch embeddings: ${message}`,
+      );
+      return await params.fallback();
+    }
   }
 
   private getIndexConcurrency(): number {

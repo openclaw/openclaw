@@ -70,7 +70,19 @@ export async function listMemoryFiles(workspaceDir: string): Promise<string[]> {
   if (await exists(memoryDir)) {
     await walkDir(memoryDir, result);
   }
-  return result;
+  if (result.length <= 1) return result;
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const entry of result) {
+    let key = entry;
+    try {
+      key = await fs.realpath(entry);
+    } catch {}
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(entry);
+  }
+  return deduped;
 }
 
 export function hashText(value: string): string {

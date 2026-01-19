@@ -1,3 +1,5 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -5,10 +7,12 @@ import type { Command } from "commander";
 
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
+import { listMemoryFiles } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -23,6 +27,20 @@ type MemoryCommandOptions = {
 };
 
 type MemoryManager = NonNullable<MemorySearchManagerResult["manager"]>;
+
+type MemorySourceName = "memory" | "sessions";
+
+type SourceScan = {
+  source: MemorySourceName;
+  totalFiles: number | null;
+  issues: string[];
+};
+
+type MemorySourceScan = {
+  sources: SourceScan[];
+  totalFiles: number | null;
+  issues: string[];
+};
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
@@ -51,6 +69,117 @@ function resolveAgentIds(cfg: ReturnType<typeof loadConfig>, agent?: string): st
   return [resolveDefaultAgentId(cfg)];
 }
 
+async function checkReadableFile(pathname: string): Promise<{ exists: boolean; issue?: string }> {
+  try {
+    await fs.access(pathname, fsSync.constants.R_OK);
+    return { exists: true };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { exists: false };
+    return { exists: true, issue: `${pathname} not readable (${code ?? "error"})` };
+  }
+}
+
+async function scanSessionFiles(agentId: string): Promise<SourceScan> {
+  const issues: string[] = [];
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  try {
+    const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
+    const totalFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .length;
+    return { source: "sessions", totalFiles, issues };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      issues.push(`sessions directory missing (${sessionsDir})`);
+      return { source: "sessions", totalFiles: 0, issues };
+    }
+    issues.push(`sessions directory not accessible (${sessionsDir}): ${code ?? "error"}`);
+    return { source: "sessions", totalFiles: null, issues };
+  }
+}
+
+async function scanMemoryFiles(workspaceDir: string): Promise<SourceScan> {
+  const issues: string[] = [];
+  const memoryFile = path.join(workspaceDir, "MEMORY.md");
+  const altMemoryFile = path.join(workspaceDir, "memory.md");
+  const memoryDir = path.join(workspaceDir, "memory");
+
+  const primary = await checkReadableFile(memoryFile);
+  const alt = await checkReadableFile(altMemoryFile);
+  if (primary.issue) issues.push(primary.issue);
+  if (alt.issue) issues.push(alt.issue);
+
+  let dirReadable: boolean | null = null;
+  try {
+    await fs.access(memoryDir, fsSync.constants.R_OK);
+    dirReadable = true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      issues.push(`memory directory missing (${memoryDir})`);
+      dirReadable = false;
+    } else {
+      issues.push(`memory directory not accessible (${memoryDir}): ${code ?? "error"}`);
+      dirReadable = null;
+    }
+  }
+
+  let listed: string[] = [];
+  let listedOk = false;
+  try {
+    listed = await listMemoryFiles(workspaceDir);
+    listedOk = true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (dirReadable !== null) {
+      issues.push(`memory directory scan failed (${memoryDir}): ${code ?? "error"}`);
+      dirReadable = null;
+    }
+  }
+
+  let totalFiles: number | null = 0;
+  if (dirReadable === null) {
+    totalFiles = null;
+  } else {
+    const files = new Set<string>(listedOk ? listed : []);
+    if (!listedOk) {
+      if (primary.exists) files.add(memoryFile);
+      if (alt.exists) files.add(altMemoryFile);
+    }
+    totalFiles = files.size;
+  }
+
+  if ((totalFiles ?? 0) === 0 && issues.length === 0) {
+    issues.push(`no memory files found in ${workspaceDir}`);
+  }
+
+  return { source: "memory", totalFiles, issues };
+}
+
+async function scanMemorySources(params: {
+  workspaceDir: string;
+  agentId: string;
+  sources: MemorySourceName[];
+}): Promise<MemorySourceScan> {
+  const scans: SourceScan[] = [];
+  for (const source of params.sources) {
+    if (source === "memory") {
+      scans.push(await scanMemoryFiles(params.workspaceDir));
+    }
+    if (source === "sessions") {
+      scans.push(await scanSessionFiles(params.agentId));
+    }
+  }
+  const issues = scans.flatMap((scan) => scan.issues);
+  const totals = scans.map((scan) => scan.totalFiles);
+  const numericTotals = totals.filter((total): total is number => total !== null);
+  const totalFiles = totals.some((total) => total === null)
+    ? null
+    : numericTotals.reduce((sum, total) => sum + total, 0);
+  return { sources: scans, totalFiles, issues };
+}
+
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
   const cfg = loadConfig();
@@ -60,6 +189,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     status: ReturnType<MemoryManager["status"]>;
     embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
     indexError?: string;
+    scan?: MemorySourceScan;
   }> = [];
 
   for (const agentId of agentIds) {
@@ -116,7 +246,13 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           await manager.probeVectorAvailability();
         }
         const status = manager.status();
-        allResults.push({ agentId, status, embeddingProbe, indexError });
+        const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+        const scan = await scanMemorySources({
+          workspaceDir: status.workspaceDir,
+          agentId,
+          sources,
+        });
+        allResults.push({ agentId, status, embeddingProbe, indexError, scan });
       },
     });
   }
@@ -136,7 +272,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
-    const { agentId, status, embeddingProbe, indexError } = result;
+    const { agentId, status, embeddingProbe, indexError, scan } = result;
+    const totalFiles = scan?.totalFiles ?? null;
+    const indexedLabel =
+      totalFiles === null
+        ? `${status.files}/? files · ${status.chunks} chunks`
+        : `${status.files}/${totalFiles} files · ${status.chunks} chunks`;
     if (opts.index) {
       const line = indexError ? `Memory index failed: ${indexError}` : "Memory index complete.";
       defaultRuntime.log(line);
@@ -148,7 +289,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       )}`,
       `${label("Model")} ${info(status.model)}`,
       status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
-      `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
+      `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(status.dbPath)}`,
       `${label("Workspace")} ${info(status.workspaceDir)}`,
@@ -164,7 +305,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {
-        const counts = `${entry.files} files · ${entry.chunks} chunks`;
+        const total = scan?.sources.find((scanEntry) => scanEntry.source === entry.source)
+          ?.totalFiles;
+        const counts =
+          total === null
+            ? `${entry.files}/? files · ${entry.chunks} chunks`
+            : `${entry.files}/${total} files · ${entry.chunks} chunks`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
       }
     }
@@ -223,11 +369,26 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
       }
     }
+    if (status.batch) {
+      const batchState = status.batch.enabled ? "enabled" : "disabled";
+      const batchColor = status.batch.enabled ? theme.success : theme.warn;
+      const batchSuffix = ` (failures ${status.batch.failures}/${status.batch.limit})`;
+      lines.push(`${label("Batch")} ${colorize(rich, batchColor, batchState)}${muted(batchSuffix)}`);
+      if (status.batch.lastError) {
+        lines.push(`${label("Batch error")} ${warn(status.batch.lastError)}`);
+      }
+    }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));
     }
     if (indexError) {
       lines.push(`${label("Index error")} ${warn(indexError)}`);
+    }
+    if (scan?.issues.length) {
+      lines.push(label("Issues"));
+      for (const issue of scan.issues) {
+        lines.push(`  ${warn(issue)}`);
+      }
     }
     defaultRuntime.log(lines.join("\n"));
     defaultRuntime.log("");
