@@ -284,7 +284,10 @@ export async function runEmbeddedAttempt(
         .catch(() => false);
 
       await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile));
+      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+      });
       trackSessionManagerAccess(params.sessionFile);
 
       await prepareSessionManagerForRun({
