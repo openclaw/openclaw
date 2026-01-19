@@ -1,9 +1,8 @@
-import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import OSLog
 
-protocol WebSocketTasking: AnyObject {
+public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
@@ -14,31 +13,33 @@ protocol WebSocketTasking: AnyObject {
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
 
-struct WebSocketTaskBox: @unchecked Sendable {
-    let task: any WebSocketTasking
+public struct WebSocketTaskBox: @unchecked Sendable {
+    public let task: any WebSocketTasking
 
-    var state: URLSessionTask.State { self.task.state }
+    public var state: URLSessionTask.State { self.task.state }
 
-    func resume() { self.task.resume() }
+    public func resume() { self.task.resume() }
 
-    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+    public func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         self.task.cancel(with: closeCode, reason: reason)
     }
 
-    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+    public func send(_ message: URLSessionWebSocketTask.Message) async throws {
         try await self.task.send(message)
     }
 
-    func receive() async throws -> URLSessionWebSocketTask.Message {
+    public func receive() async throws -> URLSessionWebSocketTask.Message {
         try await self.task.receive()
     }
 
-    func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
+    public func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
         self.task.receive(completionHandler: completionHandler)
     }
 }
 
-protocol WebSocketSessioning: AnyObject {
+public protocol WebSocketSessioning: AnyObject {
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox
 }
 
@@ -51,25 +52,45 @@ extension URLSession: WebSocketSessioning {
     }
 }
 
-struct WebSocketSessionBox: @unchecked Sendable {
-    let session: any WebSocketSessioning
+public struct WebSocketSessionBox: @unchecked Sendable {
+    public let session: any WebSocketSessioning
 }
 
-struct GatewayConnectOptions: Sendable {
-    var role: String
-    var scopes: [String]
-    var caps: [String]
-    var commands: [String]
-    var permissions: [String: Bool]
-    var clientId: String
-    var clientMode: String
-    var clientDisplayName: String?
+public struct GatewayConnectOptions: Sendable {
+    public var role: String
+    public var scopes: [String]
+    public var caps: [String]
+    public var commands: [String]
+    public var permissions: [String: Bool]
+    public var clientId: String
+    public var clientMode: String
+    public var clientDisplayName: String?
+
+    public init(
+        role: String,
+        scopes: [String],
+        caps: [String],
+        commands: [String],
+        permissions: [String: Bool],
+        clientId: String,
+        clientMode: String,
+        clientDisplayName: String?)
+    {
+        self.role = role
+        self.scopes = scopes
+        self.caps = caps
+        self.commands = commands
+        self.permissions = permissions
+        self.clientId = clientId
+        self.clientMode = clientMode
+        self.clientDisplayName = clientDisplayName
+    }
 }
 
 // Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
 
-actor GatewayChannelActor {
+public actor GatewayChannelActor {
     private let logger = Logger(subsystem: "com.clawdbot", category: "gateway")
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
@@ -95,7 +116,7 @@ actor GatewayChannelActor {
     private let connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String) async -> Void)?
 
-    init(
+    public init(
         url: URL,
         token: String?,
         password: String? = nil,
@@ -116,7 +137,7 @@ actor GatewayChannelActor {
         }
     }
 
-    func shutdown() async {
+    public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
 
@@ -167,7 +188,7 @@ actor GatewayChannelActor {
         }
     }
 
-    func connect() async throws {
+    public func connect() async throws {
         if self.connected, self.task?.state == .running { return }
         if self.isConnecting {
             try await withCheckedThrowingContinuation { cont in
@@ -217,8 +238,7 @@ actor GatewayChannelActor {
     }
 
     private func sendConnect() async throws {
-        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
-        let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
+        let platform = InstanceIdentity.platformString
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
@@ -243,7 +263,7 @@ actor GatewayChannelActor {
             "mode": ProtoAnyCodable(clientMode),
             "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
         ]
-        client["deviceFamily"] = ProtoAnyCodable("Mac")
+        client["deviceFamily"] = ProtoAnyCodable(InstanceIdentity.deviceFamily)
         if let model = InstanceIdentity.modelIdentifier {
             client["modelIdentifier"] = ProtoAnyCodable(model)
         }
@@ -450,7 +470,7 @@ actor GatewayChannelActor {
         }
     }
 
-    func request(
+    public func request(
         method: String,
         params: [String: ClawdbotProtocol.AnyCodable]?,
         timeoutMs: Double? = nil) async throws -> Data

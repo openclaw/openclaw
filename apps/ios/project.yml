@@ -35,6 +35,8 @@ targets:
       - package: ClawdbotKit
       - package: ClawdbotKit
         product: ClawdbotChatUI
+      - package: ClawdbotKit
+        product: ClawdbotProtocol
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -86,12 +88,12 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Clawdbot discovers and connects to your Clawdbot bridge on the local network.
+        NSLocalNetworkUsageDescription: Clawdbot discovers and connects to your Clawdbot gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _clawdbot-bridge._tcp
-        NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the bridge.
+          - _clawdbot-gateway._tcp
+        NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the gateway.
         NSLocationWhenInUseUsageDescription: Clawdbot uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: Clawdbot can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: Clawdbot needs microphone access for voice wake.

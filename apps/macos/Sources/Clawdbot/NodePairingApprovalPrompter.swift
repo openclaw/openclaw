@@ -1,6 +1,7 @@
 import AppKit
 import ClawdbotDiscovery
 import ClawdbotIPC
+import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import Observation

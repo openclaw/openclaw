@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-struct BridgeDiscoveryDebugLogView: View {
-    @Environment(BridgeConnectionController.self) private var bridgeController
-    @AppStorage("bridge.discovery.debugLogs") private var debugLogsEnabled: Bool = false
+struct GatewayDiscoveryDebugLogView: View {
+    @Environment(GatewayConnectionController.self) private var gatewayController
+    @AppStorage("gateway.discovery.debugLogs") private var debugLogsEnabled: Bool = false
 
     var body: some View {
         List {
@@ -12,11 +12,11 @@ struct BridgeDiscoveryDebugLogView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if self.bridgeController.discoveryDebugLog.isEmpty {
+            if self.gatewayController.discoveryDebugLog.isEmpty {
                 Text("No log entries yet.")
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(self.bridgeController.discoveryDebugLog) { entry in
+                ForEach(self.gatewayController.discoveryDebugLog) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.formatTime(entry.ts))
                             .font(.caption)
@@ -35,13 +35,13 @@ struct BridgeDiscoveryDebugLogView: View {
                 Button("Copy") {
                     UIPasteboard.general.string = self.formattedLog()
                 }
-                .disabled(self.bridgeController.discoveryDebugLog.isEmpty)
+                .disabled(self.gatewayController.discoveryDebugLog.isEmpty)
             }
         }
     }
 
     private func formattedLog() -> String {
-        self.bridgeController.discoveryDebugLog
+        self.gatewayController.discoveryDebugLog
             .map { "\(Self.formatISO($0.ts)) \($0.message)" }
             .joined(separator: "\n")
     }

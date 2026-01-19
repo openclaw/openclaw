@@ -18,15 +18,15 @@ final class NodeAppModel {
     let screen = ScreenController()
     let camera = CameraController()
     private let screenRecorder = ScreenRecordService()
-    var bridgeStatusText: String = "Offline"
-    var bridgeServerName: String?
-    var bridgeRemoteAddress: String?
-    var connectedBridgeID: String?
+    var gatewayStatusText: String = "Offline"
+    var gatewayServerName: String?
+    var gatewayRemoteAddress: String?
+    var connectedGatewayID: String?
     var seamColorHex: String?
     var mainSessionKey: String = "main"
 
-    private let bridge = BridgeSession()
-    private var bridgeTask: Task<Void, Never>?
+    private let gateway = GatewayNodeSession()
+    private var gatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
@@ -34,7 +34,8 @@ final class NodeAppModel {
     private let locationService = LocationService()
     private var lastAutoA2uiURL: String?
 
-    var bridgeSession: BridgeSession { self.bridge }
+    private var gatewayConnected = false
+    var gatewaySession: GatewayNodeSession { self.gateway }
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -54,7 +55,7 @@ final class NodeAppModel {
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
         self.voiceWake.setEnabled(enabled)
-        self.talkMode.attachBridge(self.bridge)
+        self.talkMode.attachGateway(self.gateway)
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.talkMode.setEnabled(talkEnabled)
 
@@ -120,9 +121,9 @@ final class NodeAppModel {
 
         let ok: Bool
         var errorText: String?
-        if await !self.isBridgeConnected() {
+        if await !self.isGatewayConnected() {
             ok = false
-            errorText = "bridge not connected"
+            errorText = "gateway not connected"
         } else {
             do {
                 try await self.sendAgentRequest(link: AgentDeepLink(
@@ -150,7 +151,7 @@ final class NodeAppModel {
     }
 
     private func resolveA2UIHostURL() async -> String? {
-        guard let raw = await self.bridge.currentCanvasHostUrl() else { return nil }
+        guard let raw = await self.gateway.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
         return base.appendingPathComponent("__clawdbot__/a2ui/").absoluteString + "?platform=ios"
@@ -202,55 +203,69 @@ final class NodeAppModel {
         }
     }
 
-    func connectToBridge(
-        endpoint: NWEndpoint,
-        bridgeStableID: String,
-        tls: BridgeTLSParams?,
-        hello: BridgeHello)
+    func connectToGateway(
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams?,
+        token: String?,
+        password: String?,
+        connectOptions: GatewayConnectOptions)
     {
-        self.bridgeTask?.cancel()
-        self.bridgeServerName = nil
-        self.bridgeRemoteAddress = nil
-        let id = bridgeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.connectedBridgeID = id.isEmpty ? BridgeEndpointID.stableID(endpoint) : id
+        self.gatewayTask?.cancel()
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        let id = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.connectedGatewayID = id.isEmpty ? url.absoluteString : id
+        self.gatewayConnected = false
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
+        let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
 
-        self.bridgeTask = Task {
+        self.gatewayTask = Task {
             var attempt = 0
             while !Task.isCancelled {
                 await MainActor.run {
                     if attempt == 0 {
-                        self.bridgeStatusText = "Connecting…"
+                        self.gatewayStatusText = "Connecting…"
                     } else {
-                        self.bridgeStatusText = "Reconnecting…"
+                        self.gatewayStatusText = "Reconnecting…"
                     }
-                    self.bridgeServerName = nil
-                    self.bridgeRemoteAddress = nil
+                    self.gatewayServerName = nil
+                    self.gatewayRemoteAddress = nil
                 }
 
                 do {
-                    try await self.bridge.connect(
-                        endpoint: endpoint,
-                        hello: hello,
-                        tls: tls,
-                        onConnected: { [weak self] serverName, mainSessionKey in
+                    try await self.gateway.connect(
+                        url: url,
+                        token: token,
+                        password: password,
+                        connectOptions: connectOptions,
+                        sessionBox: sessionBox,
+                        onConnected: { [weak self] in
                             guard let self else { return }
                             await MainActor.run {
-                                self.bridgeStatusText = "Connected"
-                                self.bridgeServerName = serverName
+                                self.gatewayStatusText = "Connected"
+                                self.gatewayServerName = url.host ?? "gateway"
+                                self.gatewayConnected = true
                             }
-                            await MainActor.run {
-                                self.applyMainSessionKey(mainSessionKey)
-                            }
-                            if let addr = await self.bridge.currentRemoteAddress() {
+                            if let addr = await self.gateway.currentRemoteAddress() {
                                 await MainActor.run {
-                                    self.bridgeRemoteAddress = addr
+                                    self.gatewayRemoteAddress = addr
                                 }
                             }
                             await self.refreshBrandingFromGateway()
                             await self.startVoiceWakeSync()
                             await self.showA2UIOnConnectIfNeeded()
+                        },
+                        onDisconnected: { [weak self] reason in
+                            guard let self else { return }
+                            await MainActor.run {
+                                self.gatewayStatusText = "Disconnected"
+                                self.gatewayRemoteAddress = nil
+                                self.gatewayConnected = false
+                                self.showLocalCanvasOnDisconnect()
+                            }
+                            self.gatewayStatusText = "Disconnected: \(reason)"
                         },
                         onInvoke: { [weak self] req in
                             guard let self else {
@@ -265,19 +280,16 @@ final class NodeAppModel {
                         })
 
                     if Task.isCancelled { break }
-                    await MainActor.run {
-                        self.showLocalCanvasOnDisconnect()
-                    }
-                    attempt += 1
-                    let sleepSeconds = min(6.0, 0.35 * pow(1.7, Double(attempt)))
-                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                    attempt = 0
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                 } catch {
                     if Task.isCancelled { break }
                     attempt += 1
                     await MainActor.run {
-                        self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
-                        self.bridgeServerName = nil
-                        self.bridgeRemoteAddress = nil
+                        self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
+                        self.gatewayServerName = nil
+                        self.gatewayRemoteAddress = nil
+                        self.gatewayConnected = false
                         self.showLocalCanvasOnDisconnect()
                     }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
@@ -286,10 +298,11 @@ final class NodeAppModel {
             }
 
             await MainActor.run {
-                self.bridgeStatusText = "Offline"
-                self.bridgeServerName = nil
-                self.bridgeRemoteAddress = nil
-                self.connectedBridgeID = nil
+                self.gatewayStatusText = "Offline"
+                self.gatewayServerName = nil
+                self.gatewayRemoteAddress = nil
+                self.connectedGatewayID = nil
+                self.gatewayConnected = false
                 self.seamColorHex = nil
                 if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
                     self.mainSessionKey = "main"
@@ -300,16 +313,17 @@ final class NodeAppModel {
         }
     }
 
-    func disconnectBridge() {
-        self.bridgeTask?.cancel()
-        self.bridgeTask = nil
+    func disconnectGateway() {
+        self.gatewayTask?.cancel()
+        self.gatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        Task { await self.bridge.disconnect() }
-        self.bridgeStatusText = "Offline"
-        self.bridgeServerName = nil
-        self.bridgeRemoteAddress = nil
-        self.connectedBridgeID = nil
+        Task { await self.gateway.disconnect() }
+        self.gatewayStatusText = "Offline"
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        self.connectedGatewayID = nil
+        self.gatewayConnected = false
         self.seamColorHex = nil
         if !SessionKey.isCanonicalMainSessionKey(self.mainSessionKey) {
             self.mainSessionKey = "main"
@@ -347,7 +361,7 @@ final class NodeAppModel {
 
     private func refreshBrandingFromGateway() async {
         do {
-            let res = try await self.bridge.request(method: "config.get", paramsJSON: "{}", timeoutSeconds: 8)
+            let res = try await self.gateway.request(method: "config.get", paramsJSON: "{}", timeoutSeconds: 8)
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
             let ui = config["ui"] as? [String: Any]
@@ -378,7 +392,7 @@ final class NodeAppModel {
         else { return }
 
         do {
-            _ = try await self.bridge.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
+            _ = try await self.gateway.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
         } catch {
             // Best-effort only.
         }
@@ -391,7 +405,7 @@ final class NodeAppModel {
 
             await self.refreshWakeWordsFromGateway()
 
-            let stream = await self.bridge.subscribeServerEvents(bufferingNewest: 200)
+            let stream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
             for await evt in stream {
                 if Task.isCancelled { return }
                 guard evt.event == "voicewake.changed" else { continue }
@@ -404,7 +418,7 @@ final class NodeAppModel {
 
     private func refreshWakeWordsFromGateway() async {
         do {
-            let data = try await self.bridge.request(method: "voicewake.get", paramsJSON: "{}", timeoutSeconds: 8)
+            let data = try await self.gateway.request(method: "voicewake.get", paramsJSON: "{}", timeoutSeconds: 8)
             guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: data) else { return }
             VoiceWakePreferences.saveTriggerWords(triggers)
         } catch {
@@ -413,6 +427,11 @@ final class NodeAppModel {
     }
 
     func sendVoiceTranscript(text: String, sessionKey: String?) async throws {
+        if await !self.isGatewayConnected() {
+            throw NSError(domain: "Gateway", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "Gateway not connected",
+            ])
+        }
         struct Payload: Codable {
             var text: String
             var sessionKey: String?
@@ -424,7 +443,7 @@ final class NodeAppModel {
                 NSLocalizedDescriptionKey: "Failed to encode voice transcript payload as UTF-8",
             ])
         }
-        try await self.bridge.sendEvent(event: "voice.transcript", payloadJSON: json)
+        await self.gateway.sendEvent(event: "voice.transcript", payloadJSON: json)
     }
 
     func handleDeepLink(url: URL) async {
@@ -445,8 +464,8 @@ final class NodeAppModel {
             return
         }
 
-        guard await self.isBridgeConnected() else {
-            self.screen.errorText = "Bridge not connected (cannot forward deep link)."
+        guard await self.isGatewayConnected() else {
+            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
             return
         }
 
@@ -465,7 +484,7 @@ final class NodeAppModel {
             ])
         }
 
-        // iOS bridge forwards to the gateway; no local auth prompts here.
+        // iOS gateway forwards to the gateway; no local auth prompts here.
         // (Key-based unattended auth is handled on macOS for clawdbot:// links.)
         let data = try JSONEncoder().encode(link)
         guard let json = String(bytes: data, encoding: .utf8) else {
@@ -473,12 +492,11 @@ final class NodeAppModel {
                 NSLocalizedDescriptionKey: "Failed to encode agent request payload as UTF-8",
             ])
         }
-        try await self.bridge.sendEvent(event: "agent.request", payloadJSON: json)
+        await self.gateway.sendEvent(event: "agent.request", payloadJSON: json)
     }
 
-    private func isBridgeConnected() async -> Bool {
-        if case .connected = await self.bridge.state { return true }
-        return false
+    private func isGatewayConnected() async -> Bool {
+        self.gatewayConnected
     }
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -849,7 +867,7 @@ final class NodeAppModel {
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
-            throw NSError(domain: "Bridge", code: 20, userInfo: [
+            throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }

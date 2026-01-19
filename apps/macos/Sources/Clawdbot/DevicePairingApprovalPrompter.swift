@@ -1,4 +1,5 @@
 import AppKit
+import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import Observation

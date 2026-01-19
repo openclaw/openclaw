@@ -9,7 +9,7 @@ final class MacNodeModeCoordinator {
     private let logger = Logger(subsystem: "com.clawdbot", category: "mac-node")
     private var task: Task<Void, Never>?
     private let runtime = MacNodeRuntime()
-    private let session = MacNodeGatewaySession()
+    private let session = GatewayNodeSession()
 
     func start() {
         guard self.task == nil else { return }

@@ -3,14 +3,14 @@ import SwiftUI
 @main
 struct ClawdbotApp: App {
     @State private var appModel: NodeAppModel
-    @State private var bridgeController: BridgeConnectionController
+    @State private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        BridgeSettingsStore.bootstrapPersistence()
+        GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
         _appModel = State(initialValue: appModel)
-        _bridgeController = State(initialValue: BridgeConnectionController(appModel: appModel))
+        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
     }
 
     var body: some Scene {
@@ -18,13 +18,13 @@ struct ClawdbotApp: App {
             RootCanvas()
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
-                .environment(self.bridgeController)
+                .environment(self.gatewayController)
                 .onOpenURL { url in
                     Task { await self.appModel.handleDeepLink(url: url) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
-                    self.bridgeController.setScenePhase(newValue)
+                    self.gatewayController.setScenePhase(newValue)
                 }
         }
     }

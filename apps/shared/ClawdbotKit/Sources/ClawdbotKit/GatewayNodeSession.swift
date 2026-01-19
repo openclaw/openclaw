@@ -1,4 +1,3 @@
-import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import OSLog
@@ -12,7 +11,7 @@ private struct NodeInvokeRequestPayload: Codable, Sendable {
     var idempotencyKey: String?
 }
 
-actor MacNodeGatewaySession {
+public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "com.clawdbot", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -24,8 +23,10 @@ actor MacNodeGatewaySession {
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+    private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
+    private var canvasHostUrl: String?
 
-    func connect(
+    public func connect(
         url: URL,
         token: String?,
         password: String?,
@@ -82,7 +83,7 @@ actor MacNodeGatewaySession {
         }
     }
 
-    func disconnect() async {
+    public func disconnect() async {
         await self.channel?.shutdown()
         self.channel = nil
         self.activeURL = nil
@@ -90,7 +91,21 @@ actor MacNodeGatewaySession {
         self.activePassword = nil
     }
 
-    func sendEvent(event: String, payloadJSON: String?) async {
+    public func currentCanvasHostUrl() -> String? {
+        self.canvasHostUrl
+    }
+
+    public func currentRemoteAddress() -> String? {
+        guard let url = self.activeURL else { return nil }
+        guard let host = url.host else { return url.absoluteString }
+        let port = url.port ?? (url.scheme == "wss" ? 443 : 80)
+        if host.contains(":") {
+            return "[\(host)]:\(port)"
+        }
+        return "\(host):\(port)"
+    }
+
+    public func sendEvent(event: String, payloadJSON: String?) async {
         guard let channel = self.channel else { return }
         let params: [String: ClawdbotProtocol.AnyCodable] = [
             "event": ClawdbotProtocol.AnyCodable(event),
@@ -103,8 +118,37 @@ actor MacNodeGatewaySession {
         }
     }
 
+    public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
+        guard let channel = self.channel else {
+            throw NSError(domain: "Gateway", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
+
+        let params = try self.decodeParamsJSON(paramsJSON)
+        return try await channel.request(
+            method: method,
+            params: params,
+            timeoutMs: Double(timeoutSeconds * 1000))
+    }
+
+    public func subscribeServerEvents(bufferingNewest: Int = 200) -> AsyncStream<EventFrame> {
+        let id = UUID()
+        let session = self
+        return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
+            self.serverEventSubscribers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await session.removeServerEventSubscriber(id) }
+            }
+        }
+    }
+
     private func handlePush(_ push: GatewayPush) async {
         switch push {
+        case let .snapshot(ok):
+            let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.canvasHostUrl = (raw?.isEmpty == false) ? raw : nil
+            await self.onConnected?()
         case let .event(evt):
             await self.handleEvent(evt)
         default:
@@ -113,6 +157,7 @@ actor MacNodeGatewaySession {
     }
 
     private func handleEvent(_ evt: EventFrame) async {
+        self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
         guard let payload = evt.payload else { return }
         do {
@@ -146,5 +191,35 @@ actor MacNodeGatewaySession {
         } catch {
             self.logger.error("node invoke result failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    private func decodeParamsJSON(
+        _ paramsJSON: String?) throws -> [String: ClawdbotProtocol.AnyCodable]?
+    {
+        guard let paramsJSON, !paramsJSON.isEmpty else { return nil }
+        guard let data = paramsJSON.data(using: .utf8) else {
+            throw NSError(domain: "Gateway", code: 12, userInfo: [
+                NSLocalizedDescriptionKey: "paramsJSON not UTF-8",
+            ])
+        }
+        let raw = try JSONSerialization.jsonObject(with: data)
+        guard let dict = raw as? [String: Any] else {
+            return nil
+        }
+        return dict.reduce(into: [:]) { acc, entry in
+            acc[entry.key] = ClawdbotProtocol.AnyCodable(entry.value)
+        }
+    }
+
+    private func broadcastServerEvent(_ evt: EventFrame) {
+        for (id, continuation) in self.serverEventSubscribers {
+            if continuation.yield(evt) == .terminated {
+                self.serverEventSubscribers.removeValue(forKey: id)
+            }
+        }
+    }
+
+    private func removeServerEventSubscriber(_ id: UUID) {
+        self.serverEventSubscribers.removeValue(forKey: id)
     }
 }

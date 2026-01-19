@@ -1,4 +1,5 @@
 import ClawdbotChatUI
+import ClawdbotKit
 import SwiftUI
 
 struct ChatSheet: View {
@@ -6,8 +7,8 @@ struct ChatSheet: View {
     @State private var viewModel: ClawdbotChatViewModel
     private let userAccent: Color?
 
-    init(bridge: BridgeSession, sessionKey: String, userAccent: Color? = nil) {
-        let transport = IOSBridgeChatTransport(bridge: bridge)
+    init(gateway: GatewayNodeSession, sessionKey: String, userAccent: Color? = nil) {
+        let transport = IOSGatewayChatTransport(gateway: gateway)
         self._viewModel = State(
             initialValue: ClawdbotChatViewModel(
                 sessionKey: sessionKey,

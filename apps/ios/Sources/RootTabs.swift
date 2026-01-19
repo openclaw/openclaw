@@ -24,7 +24,7 @@ struct RootTabs: View {
         }
         .overlay(alignment: .topLeading) {
             StatusPill(
-                bridge: self.bridgeStatus,
+                gateway: self.gatewayStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
                 activity: self.statusActivity,
                 onTap: { self.selectedTab = 2 })
@@ -64,10 +64,10 @@ struct RootTabs: View {
         }
     }
 
-    private var bridgeStatus: StatusPill.BridgeState {
-        if self.appModel.bridgeServerName != nil { return .connected }
+    private var gatewayStatus: StatusPill.GatewayState {
+        if self.appModel.gatewayServerName != nil { return .connected }
 
-        let text = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.localizedCaseInsensitiveContains("connecting") ||
             text.localizedCaseInsensitiveContains("reconnecting")
         {
@@ -90,15 +90,15 @@ struct RootTabs: View {
                 tint: .orange)
         }
 
-        let bridgeStatus = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bridgeLower = bridgeStatus.lowercased()
-        if bridgeLower.contains("repair") {
+        let gatewayStatus = self.appModel.gatewayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let gatewayLower = gatewayStatus.lowercased()
+        if gatewayLower.contains("repair") {
             return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
         }
-        if bridgeLower.contains("approval") || bridgeLower.contains("pairing") {
+        if gatewayLower.contains("approval") || gatewayLower.contains("pairing") {
             return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
         }
-        // Avoid duplicating the primary bridge status ("Connecting…") in the activity slot.
+        // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
 
         if self.appModel.screenRecordActive {
             return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)

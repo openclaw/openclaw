@@ -6,40 +6,23 @@ import Observation
 import SwiftUI
 import UIKit
 
-protocol BridgePairingClient: Sendable {
-    func pairAndHello(
-        endpoint: NWEndpoint,
-        hello: BridgeHello,
-        tls: BridgeTLSParams?,
-        onStatus: (@Sendable (String) -> Void)?) async throws -> String
-}
-
-extension BridgeClient: BridgePairingClient {}
-
 @MainActor
 @Observable
-final class BridgeConnectionController {
-    private(set) var bridges: [BridgeDiscoveryModel.DiscoveredBridge] = []
+final class GatewayConnectionController {
+    private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
     private(set) var discoveryStatusText: String = "Idle"
-    private(set) var discoveryDebugLog: [BridgeDiscoveryModel.DebugLogEntry] = []
+    private(set) var discoveryDebugLog: [GatewayDiscoveryModel.DebugLogEntry] = []
 
-    private let discovery = BridgeDiscoveryModel()
+    private let discovery = GatewayDiscoveryModel()
     private weak var appModel: NodeAppModel?
     private var didAutoConnect = false
 
-    private let bridgeClientFactory: @Sendable () -> any BridgePairingClient
-
-    init(
-        appModel: NodeAppModel,
-        startDiscovery: Bool = true,
-        bridgeClientFactory: @escaping @Sendable () -> any BridgePairingClient = { BridgeClient() })
-    {
+    init(appModel: NodeAppModel, startDiscovery: Bool = true) {
         self.appModel = appModel
-        self.bridgeClientFactory = bridgeClientFactory
 
-        BridgeSettingsStore.bootstrapPersistence()
+        GatewaySettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
-        self.discovery.setDebugLoggingEnabled(defaults.bool(forKey: "bridge.discovery.debugLogs"))
+        self.discovery.setDebugLoggingEnabled(defaults.bool(forKey: "gateway.discovery.debugLogs"))
 
         self.updateFromDiscovery()
         self.observeDiscovery()
@@ -64,18 +47,53 @@ final class BridgeConnectionController {
         }
     }
 
+    func connect(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
+        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        guard let host = self.resolveGatewayHost(gateway) else { return }
+        let port = gateway.gatewayPort ?? 18789
+        let tlsParams = self.resolveDiscoveredTLSParams(gateway: gateway)
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true) else { return }
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: gateway.stableID,
+            tls: tlsParams,
+            token: token,
+            password: password)
+    }
+
+    func connectManual(host: String, port: Int, useTLS: Bool) async {
+        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let stableID = self.manualStableID(host: host, port: port)
+        let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true) else { return }
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: stableID,
+            tls: tlsParams,
+            token: token,
+            password: password)
+    }
+
     private func updateFromDiscovery() {
-        let newBridges = self.discovery.bridges
-        self.bridges = newBridges
+        let newGateways = self.discovery.gateways
+        self.gateways = newGateways
         self.discoveryStatusText = self.discovery.statusText
         self.discoveryDebugLog = self.discovery.debugLog
-        self.updateLastDiscoveredBridge(from: newBridges)
+        self.updateLastDiscoveredGateway(from: newGateways)
         self.maybeAutoConnect()
     }
 
     private func observeDiscovery() {
         withObservationTracking {
-            _ = self.discovery.bridges
+            _ = self.discovery.gateways
             _ = self.discovery.statusText
             _ = self.discovery.debugLog
         } onChange: { [weak self] in
@@ -90,181 +108,176 @@ final class BridgeConnectionController {
     private func maybeAutoConnect() {
         guard !self.didAutoConnect else { return }
         guard let appModel = self.appModel else { return }
-        guard appModel.bridgeServerName == nil else { return }
+        guard appModel.gatewayServerName == nil else { return }
 
         let defaults = UserDefaults.standard
-        let manualEnabled = defaults.bool(forKey: "bridge.manual.enabled")
+        let manualEnabled = defaults.bool(forKey: "gateway.manual.enabled")
 
         let instanceId = defaults.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !instanceId.isEmpty else { return }
 
-        let token = KeychainStore.loadString(
-            service: "com.clawdbot.bridge",
-            account: self.keychainAccount(instanceId: instanceId))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !token.isEmpty else { return }
+        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         if manualEnabled {
-            let manualHost = defaults.string(forKey: "bridge.manual.host")?
+            let manualHost = defaults.string(forKey: "gateway.manual.host")?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !manualHost.isEmpty else { return }
 
-            let manualPort = defaults.integer(forKey: "bridge.manual.port")
-            let resolvedPort = manualPort > 0 ? manualPort : 18790
-            guard let port = NWEndpoint.Port(rawValue: UInt16(resolvedPort)) else { return }
+            let manualPort = defaults.integer(forKey: "gateway.manual.port")
+            let resolvedPort = manualPort > 0 ? manualPort : 18789
+            let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
+
+            let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
+            let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: manualTLS)
+
+            guard let url = self.buildGatewayURL(
+                host: manualHost,
+                port: resolvedPort,
+                useTLS: tlsParams?.required == true)
+            else { return }
 
             self.didAutoConnect = true
-            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(manualHost), port: port)
-            let stableID = BridgeEndpointID.stableID(endpoint)
-            let tlsParams = self.resolveManualTLSParams(stableID: stableID)
             self.startAutoConnect(
-                endpoint: endpoint,
-                bridgeStableID: stableID,
+                url: url,
+                gatewayStableID: stableID,
                 tls: tlsParams,
                 token: token,
-                instanceId: instanceId)
+                password: password)
             return
         }
 
-        let preferredStableID = defaults.string(forKey: "bridge.preferredStableID")?
+        let preferredStableID = defaults.string(forKey: "gateway.preferredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lastDiscoveredStableID = defaults.string(forKey: "bridge.lastDiscoveredStableID")?
+        let lastDiscoveredStableID = defaults.string(forKey: "gateway.lastDiscoveredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let candidates = [preferredStableID, lastDiscoveredStableID].filter { !$0.isEmpty }
         guard let targetStableID = candidates.first(where: { id in
-            self.bridges.contains(where: { $0.stableID == id })
+            self.gateways.contains(where: { $0.stableID == id })
         }) else { return }
 
-        guard let target = self.bridges.first(where: { $0.stableID == targetStableID }) else { return }
+        guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
+        guard let host = self.resolveGatewayHost(target) else { return }
+        let port = target.gatewayPort ?? 18789
+        let tlsParams = self.resolveDiscoveredTLSParams(gateway: target)
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+        else { return }
 
-        let tlsParams = self.resolveDiscoveredTLSParams(bridge: target)
         self.didAutoConnect = true
         self.startAutoConnect(
-            endpoint: target.endpoint,
-            bridgeStableID: target.stableID,
+            url: url,
+            gatewayStableID: target.stableID,
             tls: tlsParams,
             token: token,
-            instanceId: instanceId)
+            password: password)
     }
 
-    private func updateLastDiscoveredBridge(from bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
+    private func updateLastDiscoveredGateway(from gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
         let defaults = UserDefaults.standard
-        let preferred = defaults.string(forKey: "bridge.preferredStableID")?
+        let preferred = defaults.string(forKey: "gateway.preferredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let existingLast = defaults.string(forKey: "bridge.lastDiscoveredStableID")?
+        let existingLast = defaults.string(forKey: "gateway.lastDiscoveredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         // Avoid overriding user intent (preferred/lastDiscovered are also set on manual Connect).
         guard preferred.isEmpty, existingLast.isEmpty else { return }
-        guard let first = bridges.first else { return }
+        guard let first = gateways.first else { return }
 
-        defaults.set(first.stableID, forKey: "bridge.lastDiscoveredStableID")
-        BridgeSettingsStore.saveLastDiscoveredBridgeStableID(first.stableID)
-    }
-
-    private func makeHello(token: String) -> BridgeHello {
-        let defaults = UserDefaults.standard
-        let nodeId = defaults.string(forKey: "node.instanceId") ?? "ios-node"
-        let displayName = self.resolvedDisplayName(defaults: defaults)
-
-        return BridgeHello(
-            nodeId: nodeId,
-            displayName: displayName,
-            token: token,
-            platform: self.platformString(),
-            version: self.appVersion(),
-            deviceFamily: self.deviceFamily(),
-            modelIdentifier: self.modelIdentifier(),
-            caps: self.currentCaps(),
-            commands: self.currentCommands())
-    }
-
-    private func keychainAccount(instanceId: String) -> String {
-        "bridge-token.\(instanceId)"
+        defaults.set(first.stableID, forKey: "gateway.lastDiscoveredStableID")
+        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
     }
 
     private func startAutoConnect(
-        endpoint: NWEndpoint,
-        bridgeStableID: String,
-        tls: BridgeTLSParams?,
-        token: String,
-        instanceId: String)
+        url: URL,
+        gatewayStableID: String,
+        tls: GatewayTLSParams?,
+        token: String?,
+        password: String?)
     {
         guard let appModel else { return }
+        let connectOptions = self.makeConnectOptions()
+
         Task { [weak self] in
             guard let self else { return }
-            do {
-                let hello = self.makeHello(token: token)
-                let refreshed = try await self.bridgeClientFactory().pairAndHello(
-                    endpoint: endpoint,
-                    hello: hello,
-                    tls: tls,
-                    onStatus: { status in
-                        Task { @MainActor in
-                            appModel.bridgeStatusText = status
-                        }
-                    })
-                let resolvedToken = refreshed.isEmpty ? token : refreshed
-                if !refreshed.isEmpty, refreshed != token {
-                    _ = KeychainStore.saveString(
-                        refreshed,
-                        service: "com.clawdbot.bridge",
-                        account: self.keychainAccount(instanceId: instanceId))
-                }
-                appModel.connectToBridge(
-                    endpoint: endpoint,
-                    bridgeStableID: bridgeStableID,
-                    tls: tls,
-                    hello: self.makeHello(token: resolvedToken))
-            } catch {
-                await MainActor.run {
-                    appModel.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
-                }
+            await MainActor.run {
+                appModel.gatewayStatusText = "Connecting…"
             }
+            appModel.connectToGateway(
+                url: url,
+                gatewayStableID: gatewayStableID,
+                tls: tls,
+                token: token,
+                password: password,
+                connectOptions: connectOptions)
         }
     }
 
-    private func resolveDiscoveredTLSParams(
-        bridge: BridgeDiscoveryModel.DiscoveredBridge) -> BridgeTLSParams?
-    {
-        let stableID = bridge.stableID
-        let stored = BridgeTLSStore.loadFingerprint(stableID: stableID)
+    private func resolveDiscoveredTLSParams(gateway: GatewayDiscoveryModel.DiscoveredGateway) -> GatewayTLSParams? {
+        let stableID = gateway.stableID
+        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
 
-        if bridge.tlsEnabled || bridge.tlsFingerprintSha256 != nil {
-            return BridgeTLSParams(
+        if gateway.tlsEnabled || gateway.tlsFingerprintSha256 != nil || stored != nil {
+            return GatewayTLSParams(
                 required: true,
-                expectedFingerprint: bridge.tlsFingerprintSha256 ?? stored,
+                expectedFingerprint: gateway.tlsFingerprintSha256 ?? stored,
                 allowTOFU: stored == nil,
-                storeKey: stableID)
-        }
-
-        if let stored {
-            return BridgeTLSParams(
-                required: true,
-                expectedFingerprint: stored,
-                allowTOFU: false,
                 storeKey: stableID)
         }
 
         return nil
     }
 
-    private func resolveManualTLSParams(stableID: String) -> BridgeTLSParams? {
-        if let stored = BridgeTLSStore.loadFingerprint(stableID: stableID) {
-            return BridgeTLSParams(
+    private func resolveManualTLSParams(stableID: String, tlsEnabled: Bool) -> GatewayTLSParams? {
+        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+        if tlsEnabled || stored != nil {
+            return GatewayTLSParams(
                 required: true,
                 expectedFingerprint: stored,
-                allowTOFU: false,
+                allowTOFU: stored == nil,
                 storeKey: stableID)
         }
 
-        return BridgeTLSParams(
-            required: false,
-            expectedFingerprint: nil,
-            allowTOFU: true,
-            storeKey: stableID)
+        return nil
+    }
+
+    private func resolveGatewayHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
+        if let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines), !lanHost.isEmpty {
+            return lanHost
+        }
+        if let tailnet = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines), !tailnet.isEmpty {
+            return tailnet
+        }
+        return nil
+    }
+
+    private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
+        let scheme = useTLS ? "wss" : "ws"
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = port
+        return components.url
+    }
+
+    private func manualStableID(host: String, port: Int) -> String {
+        "manual|\(host.lowercased())|\(port)"
+    }
+
+    private func makeConnectOptions() -> GatewayConnectOptions {
+        let defaults = UserDefaults.standard
+        let displayName = self.resolvedDisplayName(defaults: defaults)
+
+        return GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: self.currentCaps(),
+            commands: self.currentCommands(),
+            permissions: [:],
+            clientId: "clawdbot-ios",
+            clientMode: "node",
+            clientDisplayName: displayName)
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -313,6 +326,11 @@ final class BridgeConnectionController {
             ClawdbotCanvasA2UICommand.pushJSONL.rawValue,
             ClawdbotCanvasA2UICommand.reset.rawValue,
             ClawdbotScreenCommand.record.rawValue,
+            ClawdbotSystemCommand.notify.rawValue,
+            ClawdbotSystemCommand.which.rawValue,
+            ClawdbotSystemCommand.run.rawValue,
+            ClawdbotSystemCommand.execApprovalsGet.rawValue,
+            ClawdbotSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
@@ -368,11 +386,7 @@ final class BridgeConnectionController {
 }
 
 #if DEBUG
-extension BridgeConnectionController {
-    func _test_makeHello(token: String) -> BridgeHello {
-        self.makeHello(token: token)
-    }
-
+extension GatewayConnectionController {
     func _test_resolvedDisplayName(defaults: UserDefaults) -> String {
         self.resolvedDisplayName(defaults: defaults)
     }
@@ -401,8 +415,8 @@ extension BridgeConnectionController {
         self.appVersion()
     }
 
-    func _test_setBridges(_ bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
-        self.bridges = bridges
+    func _test_setGateways(_ gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
+        self.gateways = gateways
     }
 
     func _test_triggerAutoConnect() {

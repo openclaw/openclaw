@@ -1,9 +1,9 @@
 import Testing
 @testable import Clawdbot
 
-@Suite(.serialized) struct BridgeDiscoveryModelTests {
+@Suite(.serialized) struct GatewayDiscoveryModelTests {
     @Test @MainActor func debugLoggingCapturesLifecycleAndResets() {
-        let model = BridgeDiscoveryModel()
+        let model = GatewayDiscoveryModel()
 
         #expect(model.debugLog.isEmpty)
         #expect(model.statusText == "Idle")
@@ -13,7 +13,7 @@ import Testing
 
         model.stop()
         #expect(model.statusText == "Stopped")
-        #expect(model.bridges.isEmpty)
+        #expect(model.gateways.isEmpty)
         #expect(model.debugLog.count >= 3)
 
         model.setDebugLoggingEnabled(false)

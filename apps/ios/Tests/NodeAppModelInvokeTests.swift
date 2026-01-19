@@ -159,7 +159,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let appModel = NodeAppModel()
         let url = URL(string: "clawdbot://agent?message=hello")!
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.screen.errorText?.contains("Bridge not connected") == true)
+        #expect(appModel.screen.errorText?.contains("Gateway not connected") == true)
     }
 
     @Test @MainActor func handleDeepLinkRejectsOversizedMessage() async {
@@ -170,7 +170,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
     }
 
-    @Test @MainActor func sendVoiceTranscriptThrowsWhenBridgeOffline() async {
+    @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {
         let appModel = NodeAppModel()
         await #expect(throws: Error.self) {
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")

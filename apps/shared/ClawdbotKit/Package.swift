@@ -9,6 +9,7 @@ let package = Package(
         .macOS(.v15),
     ],
     products: [
+        .library(name: "ClawdbotProtocol", targets: ["ClawdbotProtocol"]),
         .library(name: "ClawdbotKit", targets: ["ClawdbotKit"]),
         .library(name: "ClawdbotChatUI", targets: ["ClawdbotChatUI"]),
     ],
@@ -18,8 +19,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "ClawdbotProtocol",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
+        .target(
             name: "ClawdbotKit",
             dependencies: [
+                "ClawdbotProtocol",
                 .product(name: "ElevenLabsKit", package: "ElevenLabsKit"),
             ],
             resources: [

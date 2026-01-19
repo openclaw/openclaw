@@ -1,5 +1,6 @@
 import AppKit
 import ClawdbotIPC
+import ClawdbotKit
 import Foundation
 import OSLog
 
