@@ -88,6 +88,7 @@ const syntaxTheme = {
  */
 function highlightCode(code: string, lang?: string): string[] {
   try {
+    // Auto-detect can be slow for very large blocks; prefer explicit language when available.
     // Check if language is supported, fall back to auto-detect
     const language = lang && supportsLanguage(lang) ? lang : undefined;
     const highlighted = highlight(code, {

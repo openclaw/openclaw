@@ -102,7 +102,8 @@ console.log(message);`;
       const result = markdownTheme.highlightCode!(code, "javascript");
 
       // Strip ANSI codes to verify content is preserved
-      const stripAnsi = (str: string) => str.replace(/\x1b\[[0-9;]*m/g, "");
+      const stripAnsi = (str: string) =>
+        str.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
       expect(stripAnsi(result[0])).toBe(`const message = "Hello, World!";`);
       expect(stripAnsi(result[1])).toBe("console.log(message);");
     });
