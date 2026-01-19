@@ -14,6 +14,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -134,6 +135,13 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
+  const useLocalTls =
+    config.gateway?.tls?.enabled === true &&
+    !urlOverride &&
+    !remoteUrl &&
+    url.startsWith("wss://");
+  const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(config.gateway?.tls) : undefined;
+  const tlsFingerprint = tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
@@ -183,6 +191,7 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
       url,
       token,
       password,
+      tlsFingerprint,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: opts.clientDisplayName,
