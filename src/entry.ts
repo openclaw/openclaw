@@ -60,9 +60,18 @@ function ensureExperimentalWarningSuppressed(): boolean {
 function normalizeWindowsArgv(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
   if (argv.length < 3) return argv;
+  const stripControlChars = (value: string): string => {
+    let out = "";
+    for (let i = 0; i < value.length; i += 1) {
+      const code = value.charCodeAt(i);
+      if (code >= 32 && code !== 127) {
+        out += value[i];
+      }
+    }
+    return out;
+  };
   const normalizeArg = (value: string): string =>
-    value
-      .replace(/[\u0000-\u001f\u007f]/g, "")
+    stripControlChars(value)
       .replace(/^['"]+|['"]+$/g, "")
       .trim();
   const normalizeCandidate = (value: string): string =>
