@@ -1,18 +1,17 @@
 ---
-summary: "Bridge protocol (nodes): TCP JSONL, pairing, scoped RPC"
+summary: "Bridge protocol (legacy nodes): TCP JSONL, pairing, scoped RPC"
 read_when:
   - Building or debugging node clients (iOS/Android/macOS node mode)
   - Investigating pairing or bridge auth failures
   - Auditing the node surface exposed by the gateway
 ---
 
-# Bridge protocol (Node transport)
+# Bridge protocol (legacy node transport)
 
-The Bridge protocol is a **narrow, authenticated** transport for nodes
-(iOS/Android/macOS node mode). It keeps the Gateway WS control plane loopback‑only
-and exposes only a scoped set of methods for nodes.
+The Bridge protocol is a **legacy** node transport (TCP JSONL). New node clients
+should use the unified Gateway WebSocket protocol instead.
 
-If you are building an operator client (CLI, web UI, automations), use the
+If you are building an operator or node client, use the
 [Gateway protocol](/gateway/protocol).
 
 ## Why we have both

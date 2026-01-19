@@ -2,7 +2,7 @@
 summary: "Android app (node): connection runbook + Canvas/Chat/Camera"
 read_when:
   - Pairing or reconnecting the Android node
-  - Debugging Android bridge discovery or auth
+  - Debugging Android gateway discovery or auth
   - Verifying chat history parity across clients
 ---
 
@@ -13,40 +13,38 @@ read_when:
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
 - Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
-  - Protocols: [Bridge protocol](/gateway/bridge-protocol) (nodes) and [Gateway protocol](/gateway/protocol) (control plane).
+  - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
 ## System control
 System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
 
 ## Connection Runbook
 
-Android node app ⇄ (mDNS/NSD + TCP bridge) ⇄ **Gateway bridge** ⇄ (loopback WS) ⇄ **Gateway**
+Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
-The Gateway WebSocket stays loopback-only (`ws://127.0.0.1:18789`). Android talks to the LAN-facing **bridge** (default `tcp://0.0.0.0:18790`) and uses Gateway-owned pairing.
+Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses Gateway-owned pairing.
 
 ### Prerequisites
 
 - You can run the Gateway on the “master” machine.
-- Android device/emulator can reach the gateway bridge:
+- Android device/emulator can reach the gateway WebSocket:
   - Same LAN with mDNS/NSD, **or**
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
-  - Manual bridge host/port (fallback)
+  - Manual gateway host/port (fallback)
 - You can run the CLI (`clawdbot`) on the gateway machine (or via SSH).
 
-### 1) Start the Gateway (with bridge enabled)
-
-Bridge is enabled by default (disable via `CLAWDBOT_BRIDGE_ENABLED=0`).
+### 1) Start the Gateway
 
 ```bash
 clawdbot gateway --port 18789 --verbose
 ```
 
 Confirm in logs you see something like:
-- `bridge listening on tcp://0.0.0.0:18790 (node)`
+- `listening on ws://0.0.0.0:18789`
 
-For tailnet-only setups (recommended for Vienna ⇄ London), bind the bridge to the gateway machine’s Tailscale IP instead:
+For tailnet-only setups (recommended for Vienna ⇄ London), bind the gateway to the tailnet IP:
 
-- Set `bridge.bind: "tailnet"` in `~/.clawdbot/clawdbot.json` on the gateway host.
+- Set `gateway.bind: "tailnet"` in `~/.clawdbot/clawdbot.json` on the gateway host.
 - Restart the Gateway / macOS menubar app.
 
 ### 2) Verify discovery (optional)
@@ -54,7 +52,7 @@ For tailnet-only setups (recommended for Vienna ⇄ London), bind the bridge to 
 From the gateway machine:
 
 ```bash
-dns-sd -B _clawdbot-bridge._tcp local.
+dns-sd -B _clawdbot._tcp local.
 ```
 
 More debugging notes: [Bonjour](/gateway/bonjour).
@@ -63,7 +61,7 @@ More debugging notes: [Bonjour](/gateway/bonjour).
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
 
-1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot-bridge._tcp` records.
+1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot._tcp` records.
 2) Configure Tailscale split DNS for `clawdbot.internal` pointing at that DNS server.
 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
@@ -72,14 +70,14 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 
 In the Android app:
 
-- The app keeps its bridge connection alive via a **foreground service** (persistent notification).
+- The app keeps its gateway connection alive via a **foreground service** (persistent notification).
 - Open **Settings**.
-- Under **Discovered Bridges**, select your gateway and hit **Connect**.
-- If mDNS is blocked, use **Advanced → Manual Bridge** (host + port) and **Connect (Manual)**.
+- Under **Discovered Gateways**, select your gateway and hit **Connect**.
+- If mDNS is blocked, use **Advanced → Manual Gateway** (host + port) and **Connect (Manual)**.
 
 After the first successful pairing, Android auto-reconnects on launch:
 - Manual endpoint (if enabled), otherwise
-- The last discovered bridge (best-effort).
+- The last discovered gateway (best-effort).
 
 ### 4) Approve pairing (CLI)
 
@@ -117,7 +115,7 @@ The Android node’s Chat sheet uses the gateway’s **primary session key** (`m
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-Note: nodes always use the standalone canvas host on `canvasHost.port` (default `18793`), bound to the bridge interface.
+Note: nodes use the standalone canvas host on `canvasHost.port` (default `18793`).
 
 1) Create `~/clawd/canvas/index.html` on the gateway host.
 
