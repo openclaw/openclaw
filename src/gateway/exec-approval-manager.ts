@@ -25,7 +25,7 @@ export type ExecApprovalRecord = {
 
 type PendingEntry = {
   record: ExecApprovalRecord;
-  resolve: (decision: ExecApprovalDecision) => void;
+  resolve: (decision: ExecApprovalDecision | null) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
@@ -45,11 +45,11 @@ export class ExecApprovalManager {
     return record;
   }
 
-  async waitForDecision(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision> {
-    return await new Promise<ExecApprovalDecision>((resolve, reject) => {
+  async waitForDecision(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
+    return await new Promise<ExecApprovalDecision | null>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(record.id);
-        resolve("deny");
+        resolve(null);
       }, timeoutMs);
       this.pending.set(record.id, { record, resolve, reject, timer });
     });
