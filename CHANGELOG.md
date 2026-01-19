@@ -22,6 +22,7 @@ Docs: https://docs.clawd.bot
 - macOS: use label colors for session preview text so previews render in menu subviews.
 - macOS: suppress usage error text in the menubar cost view.
 - Telegram: honor pairing allowlists for native slash commands.
+- TUI: highlight model search matches and stabilize search ordering.
 - CLI: keep banners on routed commands, restore config guarding outside fast-path routing, and tighten fast-path flag parsing while skipping console capture for extra speed. (#1195) — thanks @gumadeiras.
 - Slack: resolve Bolt import interop for Bun + Node. (#1191) — thanks @CoreyH.
 

@@ -80,6 +80,21 @@ describe("SearchableSelectList", () => {
     expect(selected?.value).toBe("provider/opus-model");
   });
 
+  it("orders description matches by earliest index", () => {
+    const items = [
+      { value: "first", label: "first", description: "prefix opus value" },
+      { value: "second", label: "second", description: "opus suffix value" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+
+    for (const ch of "opus") {
+      list.handleInput(ch);
+    }
+
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe("second");
+  });
+
   it("filters items with fuzzy matching", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
@@ -105,6 +120,17 @@ describe("SearchableSelectList", () => {
 
     const selected = list.getSelectedItem();
     expect(selected?.value).toBe("gpt-4");
+  });
+
+  it("highlights matches in rendered output", () => {
+    const list = new SearchableSelectList(testItems, 5, mockTheme);
+
+    for (const ch of "gpt") {
+      list.handleInput(ch);
+    }
+
+    const output = list.render(80).join("\n");
+    expect(output).toContain("*gpt*");
   });
 
   it("shows no match message when filter yields no results", () => {
