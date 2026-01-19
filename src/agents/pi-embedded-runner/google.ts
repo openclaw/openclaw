@@ -52,6 +52,42 @@ function shouldSanitizeToolCallIds(modelApi?: string | null): boolean {
   return isGoogleModelApi(modelApi) || OPENAI_TOOL_CALL_ID_APIS.has(modelApi);
 }
 
+function filterOpenAIReasoningOnlyMessages(
+  messages: AgentMessage[],
+  modelApi?: string | null,
+): AgentMessage[] {
+  if (modelApi !== "openai-responses") return messages;
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object") return true;
+    if ((msg as { role?: unknown }).role !== "assistant") return true;
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const content = assistant.content;
+    if (!Array.isArray(content) || content.length === 0) return true;
+    let hasThinking = false;
+    let hasPairedContent = false;
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      const type = (block as { type?: unknown }).type;
+      if (type === "thinking") {
+        hasThinking = true;
+        continue;
+      }
+      if (type === "toolCall" || type === "toolUse" || type === "functionCall") {
+        hasPairedContent = true;
+        break;
+      }
+      if (type === "text") {
+        const text = (block as { text?: unknown }).text;
+        if (typeof text === "string" && text.trim().length > 0) {
+          hasPairedContent = true;
+          break;
+        }
+      }
+    }
+    return !(hasThinking && !hasPairedContent);
+  });
+}
+
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") return [];
   if (Array.isArray(schema)) {
@@ -206,7 +242,12 @@ export async function sanitizeSessionHistory(params: {
       ? { allowBase64Only: true, includeCamelCase: true }
       : undefined,
   });
-  const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
+  // TODO REMOVE when https://github.com/badlogic/pi-mono/pull/838 is merged.
+  const openaiReasoningFiltered = filterOpenAIReasoningOnlyMessages(
+    sanitizedImages,
+    params.modelApi,
+  );
+  const repairedTools = sanitizeToolUseResultPairing(openaiReasoningFiltered);
   const isAntigravityProvider =
     provider === "google-antigravity" || params.modelApi === "google-antigravity";
   const shouldDowngradeThinking = isGeminiLike && !isAntigravityClaudeModel;
