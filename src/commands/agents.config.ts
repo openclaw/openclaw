@@ -28,11 +28,12 @@ export type AgentSummary = {
 
 type AgentEntry = NonNullable<NonNullable<ClawdbotConfig["agents"]>["list"]>[number];
 
-type AgentIdentity = {
+export type AgentIdentity = {
   name?: string;
   emoji?: string;
   creature?: string;
   vibe?: string;
+  theme?: string;
 };
 
 export function listAgentEntries(cfg: ClawdbotConfig): AgentEntry[] {
@@ -71,29 +72,40 @@ function resolveAgentModel(cfg: ClawdbotConfig, agentId: string) {
   return raw?.primary?.trim() || undefined;
 }
 
-function parseIdentityMarkdown(content: string): AgentIdentity {
+export function parseIdentityMarkdown(content: string): AgentIdentity {
   const identity: AgentIdentity = {};
   const lines = content.split(/\r?\n/);
   for (const line of lines) {
-    const match = line.match(/^\s*(?:-\s*)?([A-Za-z ]+):\s*(.+?)\s*$/);
-    if (!match) continue;
-    const label = match[1]?.trim().toLowerCase();
-    const value = match[2]?.trim();
+    const cleaned = line.trim().replace(/^\s*-\s*/, "");
+    const colonIndex = cleaned.indexOf(":");
+    if (colonIndex === -1) continue;
+    const label = cleaned
+      .slice(0, colonIndex)
+      .replace(/[*_]/g, "")
+      .trim()
+      .toLowerCase();
+    const value = cleaned
+      .slice(colonIndex + 1)
+      .replace(/^[*_]+|[*_]+$/g, "")
+      .trim();
     if (!value) continue;
     if (label === "name") identity.name = value;
     if (label === "emoji") identity.emoji = value;
     if (label === "creature") identity.creature = value;
     if (label === "vibe") identity.vibe = value;
+    if (label === "theme") identity.theme = value;
   }
   return identity;
 }
 
-function loadAgentIdentity(workspace: string): AgentIdentity | null {
+export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   const identityPath = path.join(workspace, DEFAULT_IDENTITY_FILENAME);
   try {
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
-    if (!parsed.name && !parsed.emoji) return null;
+    if (!parsed.name && !parsed.emoji && !parsed.theme && !parsed.creature && !parsed.vibe) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;

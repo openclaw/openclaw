@@ -1,7 +1,12 @@
 import type { Command } from "commander";
 import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
-import { agentsAddCommand, agentsDeleteCommand, agentsListCommand } from "../../commands/agents.js";
+import {
+  agentsAddCommand,
+  agentsDeleteCommand,
+  agentsListCommand,
+  agentsSetIdentityCommand,
+} from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -116,6 +121,45 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
           },
           defaultRuntime,
           { hasFlags },
+        );
+      });
+    });
+
+  agents
+    .command("set-identity")
+    .description("Update an agent identity (name/theme/emoji)")
+    .option("--agent <id>", "Agent id to update")
+    .option("--workspace <dir>", "Workspace directory used to locate the agent + IDENTITY.md")
+    .option("--identity-file <path>", "Explicit IDENTITY.md path to read")
+    .option("--from-identity", "Read values from IDENTITY.md", false)
+    .option("--name <name>", "Identity name")
+    .option("--theme <theme>", "Identity theme")
+    .option("--emoji <emoji>", "Identity emoji")
+    .option("--json", "Output JSON summary", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+Examples:
+  clawdbot agents set-identity --agent main --name "Clawd" --emoji "🦞"
+  clawdbot agents set-identity --workspace ~/clawd --from-identity
+  clawdbot agents set-identity --identity-file ~/clawd/IDENTITY.md --agent main
+`,
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsSetIdentityCommand(
+          {
+            agent: opts.agent as string | undefined,
+            workspace: opts.workspace as string | undefined,
+            identityFile: opts.identityFile as string | undefined,
+            fromIdentity: Boolean(opts.fromIdentity),
+            name: opts.name as string | undefined,
+            theme: opts.theme as string | undefined,
+            emoji: opts.emoji as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
         );
       });
     });

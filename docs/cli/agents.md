@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `clawdbot agents` (list/add/delete isolated agents)"
+summary: "CLI reference for `clawdbot agents` (list/add/delete/set identity)"
 read_when:
   - You want multiple isolated agents (workspaces + routing + auth)
 ---
@@ -17,6 +17,6 @@ Related:
 ```bash
 clawdbot agents list
 clawdbot agents add work --workspace ~/clawd-work
+clawdbot agents set-identity --workspace ~/clawd --from-identity
 clawdbot agents delete work
 ```
-

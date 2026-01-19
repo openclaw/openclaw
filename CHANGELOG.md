@@ -14,6 +14,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - UI: enable shell mode for sync Windows spawns to avoid `pnpm ui:build` EINVAL. (#1212) — thanks @longmaba.
+- Agents: add `clawdbot agents set-identity` helper and update bootstrap guidance for multi-agent setups. (#1222) — thanks @ThePickle31.
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
 - Agents: propagate accountId into embedded runs so sub-agent announce routing honors the originating account. (#1058)
 - Compaction: include tool failure summaries in safeguard compaction to prevent retry loops. (#1084)
