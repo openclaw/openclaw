@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - TUI: add syntax highlighting for code blocks. (#1200) — thanks @vignesh07.
 
 ### Fixes
+- UI: enable shell mode for sync Windows spawns to avoid `pnpm ui:build` EINVAL. (#1212) — thanks @longmaba.
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
 - Agents: propagate accountId into embedded runs so sub-agent announce routing honors the originating account. (#1058)
 - Compaction: include tool failure summaries in safeguard compaction to prevent retry loops. (#1084)
