@@ -310,6 +310,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         deliveryTargetMode,
         channel: resolvedChannel,
         accountId: resolvedAccountId,
+        runContext: {
+          messageChannel: resolvedChannel,
+          accountId: resolvedAccountId,
+        },
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
         messageChannel: resolvedChannel,

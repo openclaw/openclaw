@@ -7,6 +7,15 @@ export type ImageContent = {
   mimeType: string;
 };
 
+export type AgentRunContext = {
+  messageChannel?: string;
+  accountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  replyToMode?: "off" | "first" | "all";
+  hasRepliedRef?: { value: boolean };
+};
+
 export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
@@ -33,6 +42,8 @@ export type AgentCommandOpts = {
   channel?: string; // delivery channel (whatsapp|telegram|...)
   /** Account ID for multi-account channel routing (e.g., WhatsApp account). */
   accountId?: string;
+  /** Context for embedded run routing (channel/account/thread). */
+  runContext?: AgentRunContext;
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;

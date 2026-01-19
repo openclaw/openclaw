@@ -9,7 +9,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.
-- Web: trim HTML error bodies in web_fetch failures. (#1193) — thanks @sebslight.
+- Agents: propagate accountId into embedded runs so sub-agent announce routing honors the originating account. (#1058)
 
 ## 2026.1.18-5
 
@@ -18,7 +18,6 @@ Docs: https://docs.clawd.bot
 - Onboarding: add allowlist prompts and username-to-id resolution across core and extension channels.
 - TUI: add searchable model picker for quicker model selection. (#1198) — thanks @vignesh07.
 - Docs: clarify allowlist input types and onboarding behavior for messaging channels.
-- Exec: add `tools.exec.pathPrepend` for prepending PATH entries on exec runs.
 
 ### Fixes
 - Configure: hide OpenRouter auto routing model from the model picker. (#1182) — thanks @zerone0x.

@@ -335,6 +335,42 @@ describe("agentCommand", () => {
     });
   });
 
+  it("prefers runContext for embedded routing", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "hi",
+          to: "+1555",
+          channel: "whatsapp",
+          runContext: { messageChannel: "slack", accountId: "acct-2" },
+        },
+        runtime,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.messageChannel).toBe("slack");
+      expect(callArgs?.agentAccountId).toBe("acct-2");
+    });
+  });
+
+  it("forwards accountId to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await agentCommand(
+        { message: "hi", to: "+1555", accountId: "kev" },
+        runtime,
+      );
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.agentAccountId).toBe("kev");
+    });
+  });
+
   it("logs output when delivery is disabled", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");

@@ -51,6 +51,7 @@ import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
+import { resolveAgentRunContext } from "./agent/run-context.js";
 import { resolveSession } from "./agent/session.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import type { AgentCommandOpts } from "./agent/types.js";
@@ -367,8 +368,9 @@ export async function agentCommand(
     let fallbackProvider = provider;
     let fallbackModel = model;
     try {
+      const runContext = resolveAgentRunContext(opts);
       const messageChannel = resolveMessageChannel(
-        opts.messageChannel,
+        runContext.messageChannel,
         opts.replyChannel ?? opts.channel,
       );
       const fallbackResult = await runWithModelFallback({
@@ -402,6 +404,11 @@ export async function agentCommand(
             sessionId,
             sessionKey,
             messageChannel,
+            agentAccountId: runContext.accountId,
+            currentChannelId: runContext.currentChannelId,
+            currentThreadTs: runContext.currentThreadTs,
+            replyToMode: runContext.replyToMode,
+            hasRepliedRef: runContext.hasRepliedRef,
             sessionFile,
             workspaceDir,
             config: cfg,

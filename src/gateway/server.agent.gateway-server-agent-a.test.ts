@@ -49,6 +49,8 @@ const BASE_IMAGE_PNG =
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
+  const runContext = call.runContext as { messageChannel?: string } | undefined;
+  expect(runContext?.messageChannel).toBe(channel);
 }
 
 const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry => ({
@@ -325,6 +327,8 @@ describe("gateway server agent", () => {
     expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.accountId).toBe("kev");
+    const runContext = call.runContext as { accountId?: string } | undefined;
+    expect(runContext?.accountId).toBe("kev");
 
     ws.close();
     await server.close();
