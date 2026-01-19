@@ -547,13 +547,17 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  lines.push("## Runtime", buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel), `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`);
+  lines.push(
+    "## Runtime",
+    buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
+    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
+  );
 
   return lines.filter(Boolean).join("\n");
 }
 
 export function buildRuntimeLine(
-  runtimeInfo: {
+  runtimeInfo?: {
     agentId?: string;
     host?: string;
     os?: string;
