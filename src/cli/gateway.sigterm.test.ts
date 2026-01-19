@@ -104,6 +104,7 @@ describe("gateway SIGTERM", () => {
       cwd: process.cwd(),
       env: {
         ...process.env,
+        CLAWDBOT_NO_RESPAWN: "1",
         CLAWDBOT_STATE_DIR: stateDir,
         CLAWDBOT_CONFIG_PATH: configPath,
         CLAWDBOT_SKIP_CHANNELS: "1",
