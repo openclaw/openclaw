@@ -6,6 +6,7 @@ import { uninstallCommand } from "../../commands/uninstall.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerMaintenanceCommands(program: Command) {
   program
@@ -24,7 +25,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
@@ -34,10 +35,7 @@ export function registerMaintenanceCommands(program: Command) {
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   program
@@ -50,14 +48,11 @@ export function registerMaintenanceCommands(program: Command) {
     )
     .option("--no-open", "Print URL but do not launch a browser", false)
     .action(async (opts) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
           noOpen: Boolean(opts.noOpen),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   program
@@ -73,17 +68,14 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await resetCommand(defaultRuntime, {
           scope: opts.scope,
           yes: Boolean(opts.yes),
           nonInteractive: Boolean(opts.nonInteractive),
           dryRun: Boolean(opts.dryRun),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   program
@@ -103,7 +95,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--non-interactive", "Disable prompts (requires --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await uninstallCommand(defaultRuntime, {
           service: Boolean(opts.service),
           state: Boolean(opts.state),
@@ -114,9 +106,6 @@ export function registerMaintenanceCommands(program: Command) {
           nonInteractive: Boolean(opts.nonInteractive),
           dryRun: Boolean(opts.dryRun),
         });
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

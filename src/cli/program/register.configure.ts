@@ -7,6 +7,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerConfigureCommand(program: Command) {
   program
@@ -24,7 +25,7 @@ export function registerConfigureCommand(program: Command) {
       [] as string[],
     )
     .action(async (opts) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const sections: string[] = Array.isArray(opts.section)
           ? opts.section
               .map((value: unknown) => (typeof value === "string" ? value.trim() : ""))
@@ -45,9 +46,6 @@ export function registerConfigureCommand(program: Command) {
         }
 
         await configureCommandWithSections(sections as never, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

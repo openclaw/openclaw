@@ -11,6 +11,14 @@ import {
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
+
+function runBrowserDebug(action: () => Promise<void>) {
+  return runCommandWithRuntime(defaultRuntime, action, (err) => {
+    defaultRuntime.error(danger(String(err)));
+    defaultRuntime.exit(1);
+  });
+}
 
 export function registerBrowserDebugCommands(
   browser: Command,
@@ -25,7 +33,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
-      try {
+      await runBrowserDebug(async () => {
         const result = await browserHighlight(baseUrl, {
           ref: ref.trim(),
           targetId: opts.targetId?.trim() || undefined,
@@ -36,10 +44,7 @@ export function registerBrowserDebugCommands(
           return;
         }
         defaultRuntime.log(`highlighted ${ref.trim()}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -51,7 +56,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
-      try {
+      await runBrowserDebug(async () => {
         const result = await browserPageErrors(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
           clear: Boolean(opts.clear),
@@ -70,10 +75,7 @@ export function registerBrowserDebugCommands(
             .map((e) => `${e.timestamp} ${e.name ? `${e.name}: ` : ""}${e.message}`)
             .join("\n"),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   browser
@@ -86,7 +88,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
-      try {
+      await runBrowserDebug(async () => {
         const result = await browserRequests(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
           filter: opts.filter?.trim() || undefined,
@@ -111,10 +113,7 @@ export function registerBrowserDebugCommands(
             })
             .join("\n"),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const trace = browser.command("trace").description("Record a Playwright trace");
@@ -130,7 +129,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
-      try {
+      await runBrowserDebug(async () => {
         const result = await browserTraceStart(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
           screenshots: Boolean(opts.screenshots),
@@ -143,10 +142,7 @@ export function registerBrowserDebugCommands(
           return;
         }
         defaultRuntime.log("trace started");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   trace
@@ -158,7 +154,7 @@ export function registerBrowserDebugCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
-      try {
+      await runBrowserDebug(async () => {
         const result = await browserTraceStop(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
           path: opts.out?.trim() || undefined,
@@ -169,9 +165,6 @@ export function registerBrowserDebugCommands(
           return;
         }
         defaultRuntime.log(`TRACE:${result.path}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

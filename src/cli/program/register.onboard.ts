@@ -11,6 +11,7 @@ import type {
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -94,7 +95,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--json", "Output JSON summary", false)
     .action(async (opts, command) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const installDaemon = resolveInstallDaemonFlag(command, {
           installDaemon: Boolean(opts.installDaemon),
         });
@@ -147,9 +148,6 @@ export function registerOnboardCommand(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

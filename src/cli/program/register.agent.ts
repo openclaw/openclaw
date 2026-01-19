@@ -8,8 +8,8 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { createDefaultDeps } from "../deps.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 import { collectOption } from "./helpers.js";
-import { ensureConfigReady } from "./config-guard.js";
 
 export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
   program
@@ -54,17 +54,13 @@ Examples:
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent")}`,
     )
     .action(async (opts) => {
-      await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await agentCliCommand(opts, defaultRuntime, deps);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const agents = program
@@ -82,16 +78,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--json", "Output JSON instead of text", false)
     .option("--bindings", "Include routing bindings", false)
     .action(async (opts) => {
-      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   agents
@@ -104,8 +96,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
-      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const hasFlags = hasExplicitOptions(command, [
           "workspace",
           "model",
@@ -126,10 +117,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
           defaultRuntime,
           { hasFlags },
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   agents
@@ -138,8 +126,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
     .option("--force", "Skip confirmation", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts) => {
-      await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsDeleteCommand(
           {
             id: String(id),
@@ -148,19 +135,12 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.clawd.bot/cli/agent
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   agents.action(async () => {
-    await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
-    try {
+    await runCommandWithRuntime(defaultRuntime, async () => {
       await agentsListCommand({}, defaultRuntime);
-    } catch (err) {
-      defaultRuntime.error(String(err));
-      defaultRuntime.exit(1);
-    }
+    });
   });
 }

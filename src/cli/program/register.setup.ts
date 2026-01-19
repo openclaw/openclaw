@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerSetupCommand(program: Command) {
   program
@@ -25,7 +26,7 @@ export function registerSetupCommand(program: Command) {
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
     .action(async (opts, command) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const hasWizardFlags = hasExplicitOptions(command, [
           "wizard",
           "nonInteractive",
@@ -47,9 +48,6 @@ export function registerSetupCommand(program: Command) {
           return;
         }
         await setupCommand({ workspace: opts.workspace as string | undefined }, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

@@ -29,6 +29,11 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
+
+function runModelsCommand(action: () => Promise<void>) {
+  return runCommandWithRuntime(defaultRuntime, action);
+}
 
 export function registerModelsCli(program: Command) {
   const models = program
@@ -51,12 +56,9 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain line output", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsListCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   models
@@ -70,12 +72,9 @@ export function registerModelsCli(program: Command) {
       false,
     )
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsStatusCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   models
@@ -83,12 +82,9 @@ export function registerModelsCli(program: Command) {
     .description("Set the default model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsSetCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   models
@@ -96,12 +92,9 @@ export function registerModelsCli(program: Command) {
     .description("Set the image model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsSetImageCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const aliases = models.command("aliases").description("Manage model aliases");
@@ -112,12 +105,9 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAliasesListCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   aliases
@@ -126,12 +116,9 @@ export function registerModelsCli(program: Command) {
     .argument("<alias>", "Alias name")
     .argument("<model>", "Model id or alias")
     .action(async (alias: string, model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAliasesAddCommand(alias, model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   aliases
@@ -139,12 +126,9 @@ export function registerModelsCli(program: Command) {
     .description("Remove a model alias")
     .argument("<alias>", "Alias name")
     .action(async (alias: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAliasesRemoveCommand(alias, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const fallbacks = models.command("fallbacks").description("Manage model fallback list");
@@ -155,12 +139,9 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsFallbacksListCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   fallbacks
@@ -168,12 +149,9 @@ export function registerModelsCli(program: Command) {
     .description("Add a fallback model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsFallbacksAddCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   fallbacks
@@ -181,24 +159,18 @@ export function registerModelsCli(program: Command) {
     .description("Remove a fallback model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsFallbacksRemoveCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   fallbacks
     .command("clear")
     .description("Clear all fallback models")
     .action(async () => {
-      try {
+      await runModelsCommand(async () => {
         await modelsFallbacksClearCommand(defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const imageFallbacks = models
@@ -211,12 +183,9 @@ export function registerModelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsImageFallbacksListCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   imageFallbacks
@@ -224,12 +193,9 @@ export function registerModelsCli(program: Command) {
     .description("Add an image fallback model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsImageFallbacksAddCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   imageFallbacks
@@ -237,24 +203,18 @@ export function registerModelsCli(program: Command) {
     .description("Remove an image fallback model")
     .argument("<model>", "Model id or alias")
     .action(async (model: string) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsImageFallbacksRemoveCommand(model, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   imageFallbacks
     .command("clear")
     .description("Clear all image fallback models")
     .action(async () => {
-      try {
+      await runModelsCommand(async () => {
         await modelsImageFallbacksClearCommand(defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   models
@@ -273,16 +233,13 @@ export function registerModelsCli(program: Command) {
     .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsScanCommand(opts, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   models.action(async (opts) => {
-    try {
+    await runModelsCommand(async () => {
       await modelsStatusCommand(
         {
           json: Boolean(opts?.statusJson),
@@ -290,10 +247,7 @@ export function registerModelsCli(program: Command) {
         },
         defaultRuntime,
       );
-    } catch (err) {
-      defaultRuntime.error(String(err));
-      defaultRuntime.exit(1);
-    }
+    });
   });
 
   const auth = models.command("auth").description("Manage model auth profiles");
@@ -302,12 +256,9 @@ export function registerModelsCli(program: Command) {
     .command("add")
     .description("Interactive auth helper (setup-token or paste token)")
     .action(async () => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   auth
@@ -317,7 +268,7 @@ export function registerModelsCli(program: Command) {
     .option("--method <id>", "Provider auth method id")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthLoginCommand(
           {
             provider: opts.provider as string | undefined,
@@ -326,10 +277,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   auth
@@ -338,7 +286,7 @@ export function registerModelsCli(program: Command) {
     .option("--provider <name>", "Provider id (default: anthropic)")
     .option("--yes", "Skip confirmation", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthSetupTokenCommand(
           {
             provider: opts.provider as string | undefined,
@@ -346,10 +294,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   auth
@@ -362,7 +307,7 @@ export function registerModelsCli(program: Command) {
       "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
     )
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthPasteTokenCommand(
           {
             provider: opts.provider as string | undefined,
@@ -371,10 +316,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   auth
@@ -383,7 +325,7 @@ export function registerModelsCli(program: Command) {
     .option("--profile-id <id>", "Auth profile id (default: github-copilot:github)")
     .option("--yes", "Overwrite existing profile without prompting", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await githubCopilotLoginCommand(
           {
             profileId: opts.profileId as string | undefined,
@@ -391,10 +333,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   const order = auth.command("order").description("Manage per-agent auth profile order overrides");
@@ -406,7 +345,7 @@ export function registerModelsCli(program: Command) {
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthOrderGetCommand(
           {
             provider: opts.provider as string,
@@ -415,10 +354,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   order
@@ -428,7 +364,7 @@ export function registerModelsCli(program: Command) {
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:claude-cli)")
     .action(async (profileIds: string[], opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthOrderSetCommand(
           {
             provider: opts.provider as string,
@@ -437,10 +373,7 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   order
@@ -449,7 +382,7 @@ export function registerModelsCli(program: Command) {
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .action(async (opts) => {
-      try {
+      await runModelsCommand(async () => {
         await modelsAuthOrderClearCommand(
           {
             provider: opts.provider as string,
@@ -457,9 +390,6 @@ export function registerModelsCli(program: Command) {
           },
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

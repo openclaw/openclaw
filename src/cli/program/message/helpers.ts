@@ -4,7 +4,7 @@ import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { createDefaultDeps } from "../../deps.js";
-import { ensureConfigReady } from "../config-guard.js";
+import { runCommandWithRuntime } from "../../cli-utils.js";
 
 export type MessageCliHelpers = {
   withMessageBase: (command: Command) => Command;
@@ -31,10 +31,11 @@ export function createMessageCliHelpers(
     command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
 
   const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
-    await ensureConfigReady({ runtime: defaultRuntime, migrateState: true });
     setVerbose(Boolean(opts.verbose));
     const deps = createDefaultDeps();
-    try {
+    await runCommandWithRuntime(
+      defaultRuntime,
+      async () => {
       await messageCommand(
         {
           ...(() => {
@@ -49,10 +50,12 @@ export function createMessageCliHelpers(
         deps,
         defaultRuntime,
       );
-    } catch (err) {
-      defaultRuntime.error(danger(String(err)));
-      defaultRuntime.exit(1);
-    }
+      },
+      (err) => {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      },
+    );
   };
 
   // `message` is only used for `message.help({ error: true })`, keep the
