@@ -9,8 +9,8 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { runExec } from "../../process/exec.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
+import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
@@ -172,10 +172,19 @@ export function buildSystemPrompt(params: {
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
+  agentId?: string;
 }) {
-  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
+    config: params.config,
+    agentId: params.agentId,
+    runtime: {
+      host: "clawdbot",
+      os: `${os.type()} ${os.release()}`,
+      arch: os.arch(),
+      node: process.version,
+      model: params.modelDisplay,
+    },
+  });
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -184,13 +193,7 @@ export function buildSystemPrompt(params: {
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
-    runtimeInfo: {
-      host: "clawdbot",
-      os: `${os.type()} ${os.release()}`,
-      arch: os.arch(),
-      node: process.version,
-      model: params.modelDisplay,
-    },
+    runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),
     userTimezone,

@@ -149,6 +149,7 @@ export function buildAgentSystemPrompt(params: {
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
   runtimeInfo?: {
+    agentId?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -546,27 +547,40 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
-  lines.push(
-    "## Runtime",
-    `Runtime: ${[
-      runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
-      runtimeInfo?.os
-        ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
-        : runtimeInfo?.arch
-          ? `arch=${runtimeInfo.arch}`
-          : "",
-      runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
-      runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
-      runtimeChannel ? `channel=${runtimeChannel}` : "",
-      runtimeChannel
-        ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
-        : "",
-      `thinking=${params.defaultThinkLevel ?? "off"}`,
-    ]
-      .filter(Boolean)
-      .join(" | ")}`,
-    `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
-  );
+  lines.push("## Runtime", buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel), `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`);
 
   return lines.filter(Boolean).join("\n");
+}
+
+export function buildRuntimeLine(
+  runtimeInfo: {
+    agentId?: string;
+    host?: string;
+    os?: string;
+    arch?: string;
+    node?: string;
+    model?: string;
+  },
+  runtimeChannel?: string,
+  runtimeCapabilities: string[] = [],
+  defaultThinkLevel?: ThinkLevel,
+): string {
+  return `Runtime: ${[
+    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
+    runtimeInfo?.os
+      ? `os=${runtimeInfo.os}${runtimeInfo?.arch ? ` (${runtimeInfo.arch})` : ""}`
+      : runtimeInfo?.arch
+        ? `arch=${runtimeInfo.arch}`
+        : "",
+    runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
+    runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+    runtimeChannel ? `channel=${runtimeChannel}` : "",
+    runtimeChannel
+      ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
+      : "",
+    `thinking=${defaultThinkLevel ?? "off"}`,
+  ]
+    .filter(Boolean)
+    .join(" | ")}`;
 }
