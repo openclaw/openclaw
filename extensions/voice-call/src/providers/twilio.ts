@@ -389,12 +389,12 @@ export class TwilioProvider implements VoiceCallProvider {
 
     // Build request params - always use URL-based TwiML.
     // Twilio silently ignores `StatusCallback` when using the inline `Twiml` parameter.
-    const params: Record<string, string> = {
+    const params: Record<string, string | string[]> = {
       To: input.to,
       From: input.from,
       Url: url.toString(), // TwiML serving endpoint
       StatusCallback: statusUrl.toString(), // Separate status callback endpoint
-      StatusCallbackEvent: "initiated ringing answered completed",
+      StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
     };
 
