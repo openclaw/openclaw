@@ -41,7 +41,6 @@ describe("resolveHeartbeatIntervalMs", () => {
             heartbeat: {
               every: "5m",
               target: "whatsapp",
-              to: "+1555",
               ackMaxChars: 0,
             },
           },
@@ -58,6 +57,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -102,7 +102,6 @@ describe("resolveHeartbeatIntervalMs", () => {
             heartbeat: {
               every: "5m",
               target: "whatsapp",
-              to: "+1555",
             },
           },
         },
@@ -118,6 +117,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -164,7 +164,6 @@ describe("resolveHeartbeatIntervalMs", () => {
             heartbeat: {
               every: "5m",
               target: "whatsapp",
-              to: "+1555",
             },
           },
         },
@@ -180,6 +179,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: originalUpdatedAt,
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -231,7 +231,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
-            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+            heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
@@ -246,6 +246,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -291,7 +292,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
-            heartbeat: { every: "5m", target: "telegram", to: "123456" },
+            heartbeat: { every: "5m", target: "telegram" },
           },
         },
         channels: { telegram: { botToken: "test-bot-token-123" } },
@@ -306,6 +307,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "telegram",
               lastProvider: "telegram",
               lastTo: "123456",
             },
@@ -357,7 +359,7 @@ describe("resolveHeartbeatIntervalMs", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
-            heartbeat: { every: "5m", target: "telegram", to: "123456" },
+            heartbeat: { every: "5m", target: "telegram" },
           },
         },
         channels: {
@@ -378,6 +380,7 @@ describe("resolveHeartbeatIntervalMs", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "telegram",
               lastProvider: "telegram",
               lastTo: "123456",
             },

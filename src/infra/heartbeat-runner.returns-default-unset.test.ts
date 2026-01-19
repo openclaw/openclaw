@@ -11,6 +11,7 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
@@ -332,7 +333,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
-            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+            heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
@@ -395,7 +396,7 @@ describe("runHeartbeatOnce", () => {
             { id: "main", default: true },
             {
               id: "ops",
-              heartbeat: { every: "5m", target: "whatsapp", to: "+1555", prompt: "Ops check" },
+              heartbeat: { every: "5m", target: "whatsapp", prompt: "Ops check" },
             },
           ],
         },
@@ -451,6 +452,86 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("runs heartbeats in the explicit session key when configured", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const groupId = "120363401234567890@g.us";
+      const cfg: ClawdbotConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const groupSessionKey = buildAgentPeerSessionKey({
+        agentId,
+        channel: "whatsapp",
+        peerKind: "group",
+        peerId: groupId,
+      });
+      cfg.agents?.defaults?.heartbeat && (cfg.agents.defaults.heartbeat.session = groupSessionKey);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [mainSessionKey]: {
+              sessionId: "sid-main",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+            [groupSessionKey]: {
+              sessionId: "sid-group",
+              updatedAt: Date.now() + 10_000,
+              lastChannel: "whatsapp",
+              lastTo: groupId,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      replySpy.mockResolvedValue([{ text: "Group alert" }]);
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(groupId, "Group alert", expect.any(Object));
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ SessionKey: groupSessionKey }),
+        { isHeartbeat: true },
+        cfg,
+      );
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
@@ -459,7 +540,7 @@ describe("runHeartbeatOnce", () => {
       const cfg: ClawdbotConfig = {
         agents: {
           defaults: {
-            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+            heartbeat: { every: "5m", target: "whatsapp" },
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
@@ -517,7 +598,6 @@ describe("runHeartbeatOnce", () => {
             heartbeat: {
               every: "5m",
               target: "whatsapp",
-              to: "+1555",
               includeReasoning: true,
             },
           },
@@ -534,6 +614,7 @@ describe("runHeartbeatOnce", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -588,7 +669,6 @@ describe("runHeartbeatOnce", () => {
             heartbeat: {
               every: "5m",
               target: "whatsapp",
-              to: "+1555",
               includeReasoning: true,
             },
           },
@@ -605,6 +685,7 @@ describe("runHeartbeatOnce", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },
@@ -672,6 +753,7 @@ describe("runHeartbeatOnce", () => {
             [sessionKey]: {
               sessionId: "sid",
               updatedAt: Date.now(),
+              lastChannel: "whatsapp",
               lastProvider: "whatsapp",
               lastTo: "+1555",
             },

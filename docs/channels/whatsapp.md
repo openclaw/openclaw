@@ -334,6 +334,7 @@ WhatsApp sends audio as **voice notes** (PTT bubble).
 - `agents.defaults.heartbeat.model` (optional override)
 - `agents.defaults.heartbeat.target`
 - `agents.defaults.heartbeat.to`
+- `agents.defaults.heartbeat.session`
 - `agents.list[].heartbeat.*` (per-agent overrides)
 - `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable channel startup when false)
