@@ -1,8 +1,3 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadClawdbotPlugins } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
 import { resolveCliChannelOptions } from "../channel-options.js";
 
