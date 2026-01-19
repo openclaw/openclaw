@@ -24,6 +24,7 @@ export const DevicePairRequestedEventSchema = Type.Object(
     clientId: Type.Optional(NonEmptyString),
     clientMode: Type.Optional(NonEmptyString),
     role: Type.Optional(NonEmptyString),
+    roles: Type.Optional(Type.Array(NonEmptyString)),
     scopes: Type.Optional(Type.Array(NonEmptyString)),
     remoteIp: Type.Optional(NonEmptyString),
     silent: Type.Optional(Type.Boolean()),

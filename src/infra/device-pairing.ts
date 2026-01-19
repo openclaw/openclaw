@@ -12,6 +12,7 @@ export type DevicePairingPendingRequest = {
   clientId?: string;
   clientMode?: string;
   role?: string;
+  roles?: string[];
   scopes?: string[];
   remoteIp?: string;
   silent?: boolean;
@@ -27,6 +28,7 @@ export type PairedDevice = {
   clientId?: string;
   clientMode?: string;
   role?: string;
+  roles?: string[];
   scopes?: string[];
   remoteIp?: string;
   createdAtMs: number;
@@ -134,6 +136,24 @@ function normalizeDeviceId(deviceId: string) {
   return deviceId.trim();
 }
 
+function mergeRoles(...items: Array<string | string[] | undefined>): string[] | undefined {
+  const roles = new Set<string>();
+  for (const item of items) {
+    if (!item) continue;
+    if (Array.isArray(item)) {
+      for (const role of item) {
+        const trimmed = role.trim();
+        if (trimmed) roles.add(trimmed);
+      }
+    } else {
+      const trimmed = item.trim();
+      if (trimmed) roles.add(trimmed);
+    }
+  }
+  if (roles.size === 0) return undefined;
+  return [...roles];
+}
+
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).sort((a, b) => b.ts - a.ts);
@@ -179,6 +199,7 @@ export async function requestDevicePairing(
       clientId: req.clientId,
       clientMode: req.clientMode,
       role: req.role,
+      roles: req.role ? [req.role] : undefined,
       scopes: req.scopes,
       remoteIp: req.remoteIp,
       silent: req.silent,
@@ -201,6 +222,7 @@ export async function approveDevicePairing(
     if (!pending) return null;
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
+    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
     const device: PairedDevice = {
       deviceId: pending.deviceId,
       publicKey: pending.publicKey,
@@ -209,6 +231,7 @@ export async function approveDevicePairing(
       clientId: pending.clientId,
       clientMode: pending.clientMode,
       role: pending.role,
+      roles,
       scopes: pending.scopes,
       remoteIp: pending.remoteIp,
       createdAtMs: existing?.createdAtMs ?? now,
@@ -244,12 +267,15 @@ export async function updatePairedDeviceMetadata(
     const state = await loadState(baseDir);
     const existing = state.pairedByDeviceId[normalizeDeviceId(deviceId)];
     if (!existing) return;
+    const roles = mergeRoles(existing.roles, existing.role, patch.role);
     state.pairedByDeviceId[deviceId] = {
       ...existing,
       ...patch,
       deviceId: existing.deviceId,
       createdAtMs: existing.createdAtMs,
       approvedAtMs: existing.approvedAtMs,
+      role: patch.role ?? existing.role,
+      roles,
     };
     await persistState(state, baseDir);
   });

@@ -30,6 +30,12 @@ import {
 } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+function isNodeEntry(entry: { role?: string; roles?: string[] }) {
+  if (entry.role === "node") return true;
+  if (Array.isArray(entry.roles) && entry.roles.includes("node")) return true;
+  return false;
+}
+
 export const nodeHandlers: GatewayRequestHandlers = {
   "node.pair.request": async ({ params, respond, context }) => {
     if (!validateNodePairRequestParams(params)) {
@@ -207,7 +213,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const list = await listDevicePairing();
       const pairedById = new Map(
         list.paired
-          .filter((entry) => entry.role === "node")
+          .filter((entry) => isNodeEntry(entry))
           .map((entry) => [
             entry.deviceId,
             {
@@ -284,7 +290,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const list = await listDevicePairing();
-      const paired = list.paired.find((n) => n.deviceId === id && n.role === "node");
+      const paired = list.paired.find((n) => n.deviceId === id && isNodeEntry(n));
       const connected = context.nodeRegistry.listConnected();
       const live = connected.find((n) => n.nodeId === id);
 
