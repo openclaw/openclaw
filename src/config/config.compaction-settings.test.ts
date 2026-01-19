@@ -45,4 +45,35 @@ describe("config compaction settings", () => {
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe("Flush memory now.");
     });
   });
+
+  it("defaults compaction mode to safeguard", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  reserveTokensFloor: 9000,
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(9000);
+    });
+  });
 });
