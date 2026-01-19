@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { WebSocket } from "ws";
+import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -85,18 +85,21 @@ export class GatewayClient {
     if (this.closed) return;
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     // Allow node screen snapshots and other large responses.
-    const wsOptions: ConstructorParameters<typeof WebSocket>[1] = {
+    const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = (_host, cert) => {
+      wsOptions.checkServerIdentity = (_host: string, cert: CertMeta) => {
+        const fingerprintValue =
+          typeof cert === "object" && cert && "fingerprint256" in cert
+            ? (cert as { fingerprint256?: string }).fingerprint256 ?? ""
+            : "";
         const fingerprint = normalizeFingerprint(
-          typeof cert?.fingerprint256 === "string" ? cert.fingerprint256 : "",
+          typeof fingerprintValue === "string" ? fingerprintValue : "",
         );
         const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
-        if (fingerprint && fingerprint === expected) return undefined;
-        return new Error("gateway tls fingerprint mismatch");
+        return Boolean(fingerprint && fingerprint === expected);
       };
     }
     this.ws = new WebSocket(url, wsOptions);

@@ -4,6 +4,8 @@ import {
   loadGatewayTlsRuntime as loadGatewayTlsRuntimeConfig,
 } from "../../infra/tls/gateway.js";
 
+export type { GatewayTlsRuntime } from "../../infra/tls/gateway.js";
+
 export async function loadGatewayTlsRuntime(
   cfg: GatewayTlsConfig | undefined,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },

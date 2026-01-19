@@ -356,13 +356,15 @@ export async function startGatewayServer(
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager);
 
+  const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
+
   attachGatewayWsHandlers({
     wss,
     clients,
     port,
     gatewayHost: bindHost ?? undefined,
     canvasHostEnabled: Boolean(canvasHost),
-    canvasHostServerPort: canvasHostServer?.port ?? undefined,
+    canvasHostServerPort,
     resolvedAuth,
     gatewayMethods,
     events: GATEWAY_EVENTS,

@@ -264,8 +264,8 @@ final class NodeAppModel {
                                 self.gatewayRemoteAddress = nil
                                 self.gatewayConnected = false
                                 self.showLocalCanvasOnDisconnect()
+                                self.gatewayStatusText = "Disconnected: \(reason)"
                             }
-                            self.gatewayStatusText = "Disconnected: \(reason)"
                         },
                         onInvoke: { [weak self] req in
                             guard let self else {
@@ -409,8 +409,10 @@ final class NodeAppModel {
             for await evt in stream {
                 if Task.isCancelled { return }
                 guard evt.event == "voicewake.changed" else { continue }
-                guard let payloadJSON = evt.payloadJSON else { continue }
-                guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: payloadJSON) else { continue }
+                guard let payload = evt.payload else { continue }
+                struct Payload: Decodable { var triggers: [String] }
+                guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { continue }
+                let triggers = VoiceWakePreferences.sanitizeTriggerWords(decoded.triggers)
                 VoiceWakePreferences.saveTriggerWords(triggers)
             }
         }

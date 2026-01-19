@@ -44,7 +44,7 @@ public protocol WebSocketSessioning: AnyObject {
 }
 
 extension URLSession: WebSocketSessioning {
-    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+    public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
         let task = self.webSocketTask(with: url)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
         task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
@@ -54,6 +54,10 @@ extension URLSession: WebSocketSessioning {
 
 public struct WebSocketSessionBox: @unchecked Sendable {
     public let session: any WebSocketSessioning
+
+    public init(session: any WebSocketSessioning) {
+        self.session = session
+    }
 }
 
 public struct GatewayConnectOptions: Sendable {
@@ -472,7 +476,7 @@ public actor GatewayChannelActor {
 
     public func request(
         method: String,
-        params: [String: ClawdbotProtocol.AnyCodable]?,
+        params: [String: AnyCodable]?,
         timeoutMs: Double? = nil) async throws -> Data
     {
         do {
@@ -525,8 +529,8 @@ public actor GatewayChannelActor {
         if res.ok == false {
             let code = res.error?["code"]?.value as? String
             let msg = res.error?["message"]?.value as? String
-            let details: [String: ClawdbotProtocol.AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
-                acc[pair.key] = ClawdbotProtocol.AnyCodable(pair.value.value)
+            let details: [String: AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
+                acc[pair.key] = AnyCodable(pair.value.value)
             }
             throw GatewayResponseError(method: method, code: code, message: msg, details: details)
         }

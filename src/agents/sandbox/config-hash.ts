@@ -20,7 +20,9 @@ function normalizeForHash(value: unknown): unknown {
       .filter((item): item is unknown => item !== undefined);
     const primitives = normalized.filter(isPrimitive);
     if (primitives.length === normalized.length) {
-      return [...primitives].sort((a, b) => String(a).localeCompare(String(b)));
+      return [...primitives].sort((a, b) =>
+        primitiveToString(a).localeCompare(primitiveToString(b)),
+      );
     }
     return normalized;
   }
@@ -34,6 +36,14 @@ function normalizeForHash(value: unknown): unknown {
     return normalized;
   }
   return value;
+}
+
+function primitiveToString(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return JSON.stringify(value);
 }
 
 export function computeSandboxConfigHash(input: SandboxHashInput): string {

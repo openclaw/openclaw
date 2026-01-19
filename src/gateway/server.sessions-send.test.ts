@@ -32,6 +32,7 @@ describe("sessions_send gateway loopback", () => {
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const port = await getFreePort();
     vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
 
     const server = await startGatewayServer(port);
     const spy = vi.mocked(agentCommand);
@@ -105,6 +106,7 @@ describe("sessions_send label lookup", () => {
   it("finds session by label and sends message", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
 
     const server = await startGatewayServer(port);
     servers.push(server);
@@ -171,6 +173,7 @@ describe("sessions_send label lookup", () => {
   it("returns error when label not found", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
 
     const server = await startGatewayServer(port);
     servers.push(server);
@@ -191,6 +194,7 @@ describe("sessions_send label lookup", () => {
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
     const port = await getFreePort();
     vi.stubEnv("CLAWDBOT_GATEWAY_PORT", String(port));
+    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "test-token");
 
     const server = await startGatewayServer(port);
     servers.push(server);

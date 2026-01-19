@@ -451,7 +451,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
         nodeContext,
         "node",
         {
-          type: "event",
           event: p.event,
           payloadJSON,
         },

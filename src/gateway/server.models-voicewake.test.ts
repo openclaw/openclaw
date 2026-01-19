@@ -11,7 +11,7 @@ import {
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
-import { GATEWAY_CLIENT_MODES } from "../utils/message-channel.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 installGatewayTestHooks();
 
@@ -127,7 +127,7 @@ describe("gateway server models + voicewake", () => {
     await connectOk(nodeWs, {
       role: "node",
       client: {
-        id: "n1",
+        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
         version: "1.0.0",
         platform: "ios",
         mode: GATEWAY_CLIENT_MODES.NODE,

@@ -26,6 +26,8 @@ public actor GatewayNodeSession {
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
     private var canvasHostUrl: String?
 
+    public init() {}
+
     public func connect(
         url: URL,
         token: String?,
@@ -107,9 +109,9 @@ public actor GatewayNodeSession {
 
     public func sendEvent(event: String, payloadJSON: String?) async {
         guard let channel = self.channel else { return }
-        let params: [String: ClawdbotProtocol.AnyCodable] = [
-            "event": ClawdbotProtocol.AnyCodable(event),
-            "payloadJSON": ClawdbotProtocol.AnyCodable(payloadJSON ?? NSNull()),
+        let params: [String: AnyCodable] = [
+            "event": AnyCodable(event),
+            "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
         ]
         do {
             _ = try await channel.request(method: "node.event", params: params, timeoutMs: 8000)
@@ -174,16 +176,16 @@ public actor GatewayNodeSession {
 
     private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
         guard let channel = self.channel else { return }
-        var params: [String: ClawdbotProtocol.AnyCodable] = [
-            "id": ClawdbotProtocol.AnyCodable(request.id),
-            "nodeId": ClawdbotProtocol.AnyCodable(request.nodeId),
-            "ok": ClawdbotProtocol.AnyCodable(response.ok),
-            "payloadJSON": ClawdbotProtocol.AnyCodable(response.payloadJSON ?? NSNull()),
+        var params: [String: AnyCodable] = [
+            "id": AnyCodable(request.id),
+            "nodeId": AnyCodable(request.nodeId),
+            "ok": AnyCodable(response.ok),
+            "payloadJSON": AnyCodable(response.payloadJSON ?? NSNull()),
         ]
         if let error = response.error {
-            params["error"] = ClawdbotProtocol.AnyCodable([
-                "code": ClawdbotProtocol.AnyCodable(error.code.rawValue),
-                "message": ClawdbotProtocol.AnyCodable(error.message),
+            params["error"] = AnyCodable([
+                "code": AnyCodable(error.code.rawValue),
+                "message": AnyCodable(error.message),
             ])
         }
         do {
@@ -194,7 +196,7 @@ public actor GatewayNodeSession {
     }
 
     private func decodeParamsJSON(
-        _ paramsJSON: String?) throws -> [String: ClawdbotProtocol.AnyCodable]?
+        _ paramsJSON: String?) throws -> [String: AnyCodable]?
     {
         guard let paramsJSON, !paramsJSON.isEmpty else { return nil }
         guard let data = paramsJSON.data(using: .utf8) else {
@@ -207,13 +209,13 @@ public actor GatewayNodeSession {
             return nil
         }
         return dict.reduce(into: [:]) { acc, entry in
-            acc[entry.key] = ClawdbotProtocol.AnyCodable(entry.value)
+            acc[entry.key] = AnyCodable(entry.value)
         }
     }
 
     private func broadcastServerEvent(_ evt: EventFrame) {
         for (id, continuation) in self.serverEventSubscribers {
-            if continuation.yield(evt) == .terminated {
+            if case .terminated = continuation.yield(evt) {
                 self.serverEventSubscribers.removeValue(forKey: id)
             }
         }

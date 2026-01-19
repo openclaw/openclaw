@@ -119,7 +119,7 @@ export class NodeRegistry {
       timeoutMs: params.timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
-    const ok = this.sendEvent(node, "node.invoke.request", payload);
+    const ok = this.sendEventToSession(node, "node.invoke.request", payload);
     if (!ok) {
       return {
         ok: false,
@@ -172,7 +172,7 @@ export class NodeRegistry {
     return this.sendEventToSession(node, event, payload);
   }
 
-  private sendEvent(node: NodeSession, event: string, payload: unknown): boolean {
+  private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
     try {
       node.client.socket.send(
         JSON.stringify({
@@ -188,6 +188,6 @@ export class NodeRegistry {
   }
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
-    return this.sendEvent(node, event, payload);
+    return this.sendEventInternal(node, event, payload);
   }
 }
