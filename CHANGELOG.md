@@ -9,6 +9,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
+- Agents: clarify node_modules read-only guidance in agent instructions.
 
 ### Fixes
 - Plugins: surface plugin load/register/config errors in gateway logs with plugin/source context.

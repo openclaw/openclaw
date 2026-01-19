@@ -84,6 +84,7 @@
 
 ## Agent-Specific Notes
 - Vocabulary: "makeup" = "mac app".
+- Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Never update the Carbon dependency.
