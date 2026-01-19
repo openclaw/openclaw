@@ -1,4 +1,4 @@
-package com.clawdbot.android.bridge
+package com.clawdbot.android.gateway
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

@@ -8,7 +8,6 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.CancellationSignal
 import android.util.Log
-import com.clawdbot.android.bridge.BonjourEscapes
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
