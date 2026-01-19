@@ -295,6 +295,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   detectLegacyStateMigrations: vi.fn().mockResolvedValue({
     targetAgentId: "main",
     targetMainKey: "main",
+    targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
     sessions: {
@@ -303,6 +304,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
       targetDir: "/tmp/state/agents/main/sessions",
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: false,
+      legacyKeys: [],
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",
