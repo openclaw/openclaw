@@ -51,15 +51,25 @@ export async function runCli(argv: string[] = process.argv) {
 
 function stripWindowsNodeExec(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
-  const execPath = process.execPath;
+  const normalizeArg = (value: string): string => value.replace(/^"+|"+$/g, "");
+  const execPath = normalizeArg(process.execPath);
   const execPathLower = execPath.toLowerCase();
   const execBase = path.basename(execPath).toLowerCase();
-  return argv.filter((arg, index) => {
-    if (index === 0) return true;
-    if (!arg) return true;
-    const lower = arg.toLowerCase();
-    return lower !== execPathLower && path.basename(lower) !== execBase;
-  });
+  const isExecPath = (value: string | undefined): boolean => {
+    if (!value) return false;
+    const lower = normalizeArg(value).toLowerCase();
+    return lower === execPathLower || path.basename(lower) === execBase;
+  };
+  const filtered = argv.filter((arg, index) => index === 0 || !isExecPath(arg));
+  if (filtered.length < 3) return filtered;
+  const cleaned = [...filtered];
+  if (isExecPath(cleaned[1])) {
+    cleaned.splice(1, 1);
+  }
+  if (isExecPath(cleaned[2])) {
+    cleaned.splice(2, 1);
+  }
+  return cleaned;
 }
 
 export function isCliMainModule(): boolean {
