@@ -293,6 +293,9 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
 }
 ```
 
+Note: `setupCommand` lives under `sandbox.docker` and runs once on container creation.
+Per-agent `sandbox.docker.*` overrides are ignored when the resolved scope is `"shared"`.
+
 **Benefits:**
 - **Security isolation**: Restrict tools for untrusted agents
 - **Resource control**: Sandbox specific agents while keeping others on host
