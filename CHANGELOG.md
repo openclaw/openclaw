@@ -9,6 +9,9 @@ Docs: https://docs.clawd.bot
 - Android: bump okhttp + dnsjava to satisfy lint dependency checks.
 - Docs: refresh Android node discovery docs for the Gateway WS service type.
 
+### Fixes
+- Tests: stabilize Windows gateway/CLI tests by skipping sidecars and normalizing argv.
+
 ## 2026.1.19-1
 
 ### Breaking

@@ -13,6 +13,7 @@ async function startServerWithDefaultConfig(port: number) {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
     controlUiEnabled: false,
+    openAiChatCompletionsEnabled: false,
   });
 }
 
