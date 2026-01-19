@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -74,11 +75,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
+  val manualTls by viewModel.manualTls.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
-  val bridges by viewModel.bridges.collectAsState()
+  val gateways by viewModel.gateways.collectAsState()
   val discoveryStatusText by viewModel.discoveryStatusText.collectAsState()
 
   val listState = rememberLazyListState()
@@ -163,7 +165,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val smsPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       smsPermissionGranted = granted
-      viewModel.refreshBridgeHello()
+      viewModel.refreshGatewayConnection()
     }
 
   fun setCameraEnabledChecked(checked: Boolean) {
@@ -223,20 +225,20 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   }
 
-  val visibleBridges =
+  val visibleGateways =
     if (isConnected && remoteAddress != null) {
-      bridges.filterNot { "${it.host}:${it.port}" == remoteAddress }
+      gateways.filterNot { "${it.host}:${it.port}" == remoteAddress }
     } else {
-      bridges
+      gateways
     }
 
-  val bridgeDiscoveryFooterText =
-    if (visibleBridges.isEmpty()) {
+  val gatewayDiscoveryFooterText =
+    if (visibleGateways.isEmpty()) {
       discoveryStatusText
     } else if (isConnected) {
-      "Discovery active • ${visibleBridges.size} other bridge${if (visibleBridges.size == 1) "" else "s"} found"
+      "Discovery active • ${visibleGateways.size} other gateway${if (visibleGateways.size == 1) "" else "s"} found"
     } else {
-      "Discovery active • ${visibleBridges.size} bridge${if (visibleBridges.size == 1) "" else "s"} found"
+      "Discovery active • ${visibleGateways.size} gateway${if (visibleGateways.size == 1) "" else "s"} found"
     }
 
   LazyColumn(
@@ -250,7 +252,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    // Order parity: Node → Bridge → Voice → Camera → Messaging → Location → Screen.
+    // Order parity: Node → Gateway → Voice → Camera → Messaging → Location → Screen.
     item { Text("Node", style = MaterialTheme.typography.titleSmall) }
     item {
       OutlinedTextField(
@@ -266,8 +268,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
     item { HorizontalDivider() }
 
-    // Bridge
-    item { Text("Bridge", style = MaterialTheme.typography.titleSmall) }
+    // Gateway
+    item { Text("Gateway", style = MaterialTheme.typography.titleSmall) }
     item { ListItem(headlineContent = { Text("Status") }, supportingContent = { Text(statusText) }) }
     if (serverName != null) {
       item { ListItem(headlineContent = { Text("Server") }, supportingContent = { Text(serverName!!) }) }
@@ -291,31 +293,31 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
     item { HorizontalDivider() }
 
-    if (!isConnected || visibleBridges.isNotEmpty()) {
+    if (!isConnected || visibleGateways.isNotEmpty()) {
       item {
         Text(
-          if (isConnected) "Other Bridges" else "Discovered Bridges",
+          if (isConnected) "Other Gateways" else "Discovered Gateways",
           style = MaterialTheme.typography.titleSmall,
         )
       }
-      if (!isConnected && visibleBridges.isEmpty()) {
-        item { Text("No bridges found yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+      if (!isConnected && visibleGateways.isEmpty()) {
+        item { Text("No gateways found yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
       } else {
-        items(items = visibleBridges, key = { it.stableId }) { bridge ->
+        items(items = visibleGateways, key = { it.stableId }) { gateway ->
           val detailLines =
             buildList {
-              add("IP: ${bridge.host}:${bridge.port}")
-              bridge.lanHost?.let { add("LAN: $it") }
-              bridge.tailnetDns?.let { add("Tailnet: $it") }
-              if (bridge.gatewayPort != null || bridge.bridgePort != null || bridge.canvasPort != null) {
-                val gw = bridge.gatewayPort?.toString() ?: "—"
-                val br = (bridge.bridgePort ?: bridge.port).toString()
-                val canvas = bridge.canvasPort?.toString() ?: "—"
+              add("IP: ${gateway.host}:${gateway.port}")
+              gateway.lanHost?.let { add("LAN: $it") }
+              gateway.tailnetDns?.let { add("Tailnet: $it") }
+              if (gateway.gatewayPort != null || gateway.bridgePort != null || gateway.canvasPort != null) {
+                val gw = gateway.gatewayPort?.toString() ?: "—"
+                val br = (gateway.bridgePort ?: gateway.port).toString()
+                val canvas = gateway.canvasPort?.toString() ?: "—"
                 add("Ports: gw $gw · bridge $br · canvas $canvas")
               }
             }
           ListItem(
-            headlineContent = { Text(bridge.name) },
+            headlineContent = { Text(gateway.name) },
             supportingContent = {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 detailLines.forEach { line ->
@@ -327,7 +329,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               Button(
                 onClick = {
                   NodeForegroundService.start(context)
-                  viewModel.connect(bridge)
+                  viewModel.connect(gateway)
                 },
               ) {
                 Text("Connect")
@@ -338,7 +340,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item {
         Text(
-          bridgeDiscoveryFooterText,
+          gatewayDiscoveryFooterText,
           modifier = Modifier.fillMaxWidth(),
           textAlign = TextAlign.Center,
           style = MaterialTheme.typography.labelMedium,
@@ -352,7 +354,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     item {
       ListItem(
         headlineContent = { Text("Advanced") },
-        supportingContent = { Text("Manual bridge connection") },
+        supportingContent = { Text("Manual gateway connection") },
         trailingContent = {
           Icon(
             imageVector = if (advancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
@@ -369,7 +371,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       AnimatedVisibility(visible = advancedExpanded) {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
           ListItem(
-            headlineContent = { Text("Use Manual Bridge") },
+            headlineContent = { Text("Use Manual Gateway") },
             supportingContent = { Text("Use this when discovery is blocked.") },
             trailingContent = { Switch(checked = manualEnabled, onCheckedChange = viewModel::setManualEnabled) },
           )
@@ -387,6 +389,12 @@ fun SettingsSheet(viewModel: MainViewModel) {
             label = { Text("Port") },
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
+          )
+          ListItem(
+            headlineContent = { Text("Require TLS") },
+            supportingContent = { Text("Pin the gateway certificate on first connect.") },
+            trailingContent = { Switch(checked = manualTls, onCheckedChange = viewModel::setManualTls, enabled = manualEnabled) },
+            modifier = Modifier.alpha(if (manualEnabled) 1f else 0.5f),
           )
 
           val hostOk = manualHost.trim().isNotEmpty()
@@ -496,7 +504,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     item {
       Text(
         if (isConnected) {
-          "Any node can edit wake words. Changes sync via the gateway bridge."
+          "Any node can edit wake words. Changes sync via the gateway."
         } else {
           "Connect to a gateway to sync wake words globally."
         },
@@ -511,7 +519,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     item {
       ListItem(
         headlineContent = { Text("Allow Camera") },
-        supportingContent = { Text("Allows the bridge to request photos or short video clips (foreground only).") },
+        supportingContent = { Text("Allows the gateway to request photos or short video clips (foreground only).") },
         trailingContent = { Switch(checked = cameraEnabled, onCheckedChange = ::setCameraEnabledChecked) },
       )
     }
@@ -538,7 +546,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         supportingContent = {
           Text(
             if (smsPermissionAvailable) {
-              "Allow the bridge to send SMS from this device."
+              "Allow the gateway to send SMS from this device."
             } else {
               "SMS requires a device with telephony hardware."
             },

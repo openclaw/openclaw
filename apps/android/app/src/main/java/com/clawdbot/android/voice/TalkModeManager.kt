@@ -20,7 +20,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.clawdbot.android.bridge.BridgeSession
+import com.clawdbot.android.gateway.GatewaySession
 import com.clawdbot.android.isCanonicalMainSessionKey
 import com.clawdbot.android.normalizeMainKey
 import java.net.HttpURLConnection
@@ -46,6 +46,9 @@ import kotlin.math.max
 class TalkModeManager(
   private val context: Context,
   private val scope: CoroutineScope,
+  private val session: GatewaySession,
+  private val supportsChatSubscribe: Boolean,
+  private val isConnected: () -> Boolean,
 ) {
   companion object {
     private const val tag = "TalkMode"
@@ -99,7 +102,6 @@ class TalkModeManager(
   private var modelOverrideActive = false
   private var mainSessionKey: String = "main"
 
-  private var session: BridgeSession? = null
   private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
   private var chatSubscribedSessionKey: String? = null
@@ -111,11 +113,6 @@ class TalkModeManager(
   private var systemTts: TextToSpeech? = null
   private var systemTtsPending: CompletableDeferred<Unit>? = null
   private var systemTtsPendingId: String? = null
-
-  fun attachSession(session: BridgeSession) {
-    this.session = session
-    chatSubscribedSessionKey = null
-  }
 
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
@@ -136,7 +133,7 @@ class TalkModeManager(
     }
   }
 
-  fun handleBridgeEvent(event: String, payloadJson: String?) {
+  fun handleGatewayEvent(event: String, payloadJson: String?) {
     if (event != "chat") return
     if (payloadJson.isNullOrBlank()) return
     val pending = pendingRunId ?: return
@@ -306,25 +303,24 @@ class TalkModeManager(
 
     reloadConfig()
     val prompt = buildPrompt(transcript)
-    val bridge = session
-    if (bridge == null) {
-      _statusText.value = "Bridge not connected"
-      Log.w(tag, "finalize: bridge not connected")
+    if (!isConnected()) {
+      _statusText.value = "Gateway not connected"
+      Log.w(tag, "finalize: gateway not connected")
       start()
       return
     }
 
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      subscribeChatIfNeeded(bridge = bridge, sessionKey = mainSessionKey)
+      subscribeChatIfNeeded(session = session, sessionKey = mainSessionKey)
       Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
-      val runId = sendChat(prompt, bridge)
+      val runId = sendChat(prompt, session)
       Log.d(tag, "chat.send ok runId=$runId")
       val ok = waitForChatFinal(runId)
       if (!ok) {
         Log.w(tag, "chat final timeout runId=$runId; attempting history fallback")
       }
-      val assistant = waitForAssistantText(bridge, startedAt, if (ok) 12_000 else 25_000)
+      val assistant = waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
       if (assistant.isNullOrBlank()) {
         _statusText.value = "No reply"
         Log.w(tag, "assistant text timeout runId=$runId")
@@ -343,12 +339,13 @@ class TalkModeManager(
     }
   }
 
-  private suspend fun subscribeChatIfNeeded(bridge: BridgeSession, sessionKey: String) {
+  private suspend fun subscribeChatIfNeeded(session: GatewaySession, sessionKey: String) {
+    if (!supportsChatSubscribe) return
     val key = sessionKey.trim()
     if (key.isEmpty()) return
     if (chatSubscribedSessionKey == key) return
     try {
-      bridge.sendEvent("chat.subscribe", """{"sessionKey":"$key"}""")
+      session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
       chatSubscribedSessionKey = key
       Log.d(tag, "chat.subscribe ok sessionKey=$key")
     } catch (err: Throwable) {
@@ -370,7 +367,7 @@ class TalkModeManager(
     return lines.joinToString("\n")
   }
 
-  private suspend fun sendChat(message: String, bridge: BridgeSession): String {
+  private suspend fun sendChat(message: String, session: GatewaySession): String {
     val runId = UUID.randomUUID().toString()
     val params =
       buildJsonObject {
@@ -380,7 +377,7 @@ class TalkModeManager(
         put("timeoutMs", JsonPrimitive(30_000))
         put("idempotencyKey", JsonPrimitive(runId))
       }
-    val res = bridge.request("chat.send", params.toString())
+    val res = session.request("chat.send", params.toString())
     val parsed = parseRunId(res) ?: runId
     if (parsed != runId) {
       pendingRunId = parsed
@@ -411,13 +408,13 @@ class TalkModeManager(
   }
 
   private suspend fun waitForAssistantText(
-    bridge: BridgeSession,
+    session: GatewaySession,
     sinceSeconds: Double,
     timeoutMs: Long,
   ): String? {
     val deadline = SystemClock.elapsedRealtime() + timeoutMs
     while (SystemClock.elapsedRealtime() < deadline) {
-      val text = fetchLatestAssistantText(bridge, sinceSeconds)
+      val text = fetchLatestAssistantText(session, sinceSeconds)
       if (!text.isNullOrBlank()) return text
       delay(300)
     }
@@ -425,11 +422,11 @@ class TalkModeManager(
   }
 
   private suspend fun fetchLatestAssistantText(
-    bridge: BridgeSession,
+    session: GatewaySession,
     sinceSeconds: Double? = null,
   ): String? {
     val key = mainSessionKey.ifBlank { "main" }
-    val res = bridge.request("chat.history", "{\"sessionKey\":\"$key\"}")
+    val res = session.request("chat.history", "{\"sessionKey\":\"$key\"}")
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null
     for (item in messages.reversed()) {
@@ -813,12 +810,11 @@ class TalkModeManager(
   }
 
   private suspend fun reloadConfig() {
-    val bridge = session ?: return
     val envVoice = System.getenv("ELEVENLABS_VOICE_ID")?.trim()
     val sagVoice = System.getenv("SAG_VOICE_ID")?.trim()
     val envKey = System.getenv("ELEVENLABS_API_KEY")?.trim()
     try {
-      val res = bridge.request("config.get", "{}")
+      val res = session.request("config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val talk = config?.get("talk").asObjectOrNull()

@@ -118,7 +118,7 @@ fun RootScreen(viewModel: MainViewModel) {
           contentDescription = "Approval pending",
         )
       }
-      // Avoid duplicating the primary bridge status ("Connecting…") in the activity slot.
+      // Avoid duplicating the primary gateway status ("Connecting…") in the activity slot.
 
       if (screenRecordActive) {
         return@remember StatusActivity(
@@ -179,14 +179,14 @@ fun RootScreen(viewModel: MainViewModel) {
       null
     }
 
-  val bridgeState =
+  val gatewayState =
     remember(serverName, statusText) {
       when {
-        serverName != null -> BridgeState.Connected
+        serverName != null -> GatewayState.Connected
         statusText.contains("connecting", ignoreCase = true) ||
-          statusText.contains("reconnecting", ignoreCase = true) -> BridgeState.Connecting
-        statusText.contains("error", ignoreCase = true) -> BridgeState.Error
-        else -> BridgeState.Disconnected
+          statusText.contains("reconnecting", ignoreCase = true) -> GatewayState.Connecting
+        statusText.contains("error", ignoreCase = true) -> GatewayState.Error
+        else -> GatewayState.Disconnected
       }
     }
 
@@ -206,7 +206,7 @@ fun RootScreen(viewModel: MainViewModel) {
   // Keep the overlay buttons above the WebView canvas (AndroidView), otherwise they may not receive touches.
   Popup(alignment = Alignment.TopStart, properties = PopupProperties(focusable = false)) {
     StatusPill(
-      bridge = bridgeState,
+      gateway = gatewayState,
       voiceEnabled = voiceEnabled,
       activity = activity,
       onClick = { sheet = Sheet.Settings },

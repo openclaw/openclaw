@@ -2,6 +2,12 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.19-2
+
+### Changes
+- Android: migrate node transport to the Gateway WebSocket protocol with TLS pinning support + gateway discovery naming.
+- Docs: refresh Android node discovery docs for the Gateway WS service type.
+
 ## 2026.1.19-1
 
 ### Breaking

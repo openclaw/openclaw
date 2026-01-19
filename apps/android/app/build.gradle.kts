@@ -103,6 +103,7 @@ dependencies {
 
   implementation("androidx.security:security-crypto:1.1.0")
   implementation("androidx.exifinterface:exifinterface:1.4.2")
+  implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")

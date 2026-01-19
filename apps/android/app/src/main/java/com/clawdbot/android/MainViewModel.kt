@@ -2,7 +2,7 @@ package com.clawdbot.android
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
-import com.clawdbot.android.bridge.BridgeEndpoint
+import com.clawdbot.android.gateway.GatewayEndpoint
 import com.clawdbot.android.chat.OutgoingAttachment
 import com.clawdbot.android.node.CameraCaptureManager
 import com.clawdbot.android.node.CanvasController
@@ -18,7 +18,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val screenRecorder: ScreenRecordManager = runtime.screenRecorder
   val sms: SmsManager = runtime.sms
 
-  val bridges: StateFlow<List<BridgeEndpoint>> = runtime.bridges
+  val gateways: StateFlow<List<GatewayEndpoint>> = runtime.gateways
   val discoveryStatusText: StateFlow<String> = runtime.discoveryStatusText
 
   val isConnected: StateFlow<Boolean> = runtime.isConnected
@@ -50,6 +50,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
+  val manualTls: StateFlow<Boolean> = runtime.manualTls
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
@@ -99,6 +100,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setManualPort(value)
   }
 
+  fun setManualTls(value: Boolean) {
+    runtime.setManualTls(value)
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     runtime.setCanvasDebugStatusEnabled(value)
   }
@@ -119,11 +124,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setTalkEnabled(enabled)
   }
 
-  fun refreshBridgeHello() {
-    runtime.refreshBridgeHello()
+  fun refreshGatewayConnection() {
+    runtime.refreshGatewayConnection()
   }
 
-  fun connect(endpoint: BridgeEndpoint) {
+  fun connect(endpoint: GatewayEndpoint) {
     runtime.connect(endpoint)
   }
 
