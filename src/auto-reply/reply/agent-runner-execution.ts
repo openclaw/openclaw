@@ -421,7 +421,8 @@ export async function runAgentTurnWithFallback(params: {
       const message = err instanceof Error ? err.message : String(err);
       const isContextOverflow =
         isContextOverflowError(message) ||
-        /context.*overflow|too large|context window/i.test(message);
+        (/context.*overflow|too large|context window/i.test(message) &&
+          !/too small|minimum is/i.test(message));
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
