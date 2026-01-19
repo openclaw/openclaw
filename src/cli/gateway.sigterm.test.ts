@@ -125,7 +125,7 @@ describe("gateway SIGTERM", () => {
         "}",
         `const runMainUrl = ${JSON.stringify(pathToFileURL(runMainPath).href)};`,
         "const { runCli } = await import(runMainUrl);",
-        "await runCli([process.execPath, \"clawdbot\", ...entryArgs]);",
+        'await runCli([process.execPath, "clawdbot", ...entryArgs]);',
       ].join("\n"),
       "utf8",
     );
