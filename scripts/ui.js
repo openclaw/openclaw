@@ -55,6 +55,7 @@ function run(cmd, args) {
     cwd: uiDir,
     stdio: "inherit",
     env: process.env,
+    shell: process.platform === "win32",
   });
   child.on("exit", (code, signal) => {
     if (signal) process.exit(1);
