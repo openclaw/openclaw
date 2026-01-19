@@ -357,10 +357,55 @@ export function buildWorkspaceSkillCommandSpecs(
       rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
         ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
         : rawDescription;
+    const dispatch = (() => {
+      const kindRaw = (
+        entry.frontmatter?.["command-dispatch"] ??
+        entry.frontmatter?.["command_dispatch"] ??
+        ""
+      )
+        .trim()
+        .toLowerCase();
+      if (!kindRaw) return undefined;
+      if (kindRaw !== "tool") return undefined;
+
+      const toolName = (
+        entry.frontmatter?.["command-tool"] ??
+        entry.frontmatter?.["command_tool"] ??
+        ""
+      ).trim();
+      if (!toolName) {
+        debugSkillCommandOnce(
+          `dispatch:missingTool:${rawName}`,
+          `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
+          { skillName: rawName, command: unique },
+        );
+        return undefined;
+      }
+
+      const argModeRaw = (
+        entry.frontmatter?.["command-arg-mode"] ??
+        entry.frontmatter?.["command_arg_mode"] ??
+        ""
+      )
+        .trim()
+        .toLowerCase();
+      const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
+      if (!argMode) {
+        debugSkillCommandOnce(
+          `dispatch:badArgMode:${rawName}:${argModeRaw}`,
+          `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
+          { skillName: rawName, command: unique, argMode: argModeRaw },
+        );
+      }
+
+      return { kind: "tool", toolName, argMode: "raw" } as const;
+    })();
+
     specs.push({
       name: unique,
       skillName: rawName,
       description,
+      ...(dispatch ? { dispatch } : {}),
     });
   }
   return specs;

@@ -31,10 +31,23 @@ export type SkillInvocationPolicy = {
   disableModelInvocation: boolean;
 };
 
+export type SkillCommandDispatchSpec = {
+  kind: "tool";
+  /** Name of the tool to invoke (AnyAgentTool.name). */
+  toolName: string;
+  /**
+   * How to forward user-provided args to the tool.
+   * - raw: forward the raw args string (no core parsing).
+   */
+  argMode?: "raw";
+};
+
 export type SkillCommandSpec = {
   name: string;
   skillName: string;
   description: string;
+  /** Optional deterministic dispatch behavior for this command. */
+  dispatch?: SkillCommandDispatchSpec;
 };
 
 export type SkillsInstallPreferences = {

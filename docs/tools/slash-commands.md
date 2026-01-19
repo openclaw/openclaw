@@ -102,6 +102,8 @@ Notes:
 - Currently: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
 - **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
+  - By default, skill commands are forwarded to the model as a normal request.
+  - Skills may optionally declare `command-dispatch: tool` to route the command directly to a tool (deterministic, no model).
 - **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
 ## Usage surfaces (what shows where)

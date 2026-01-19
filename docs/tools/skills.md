@@ -82,6 +82,12 @@ Notes:
   - `homepage` — URL surfaced as “Website” in the macOS Skills UI (also supported via `metadata.clawdbot.homepage`).
   - `user-invocable` — `true|false` (default: `true`). When `true`, the skill is exposed as a user slash command.
   - `disable-model-invocation` — `true|false` (default: `false`). When `true`, the skill is excluded from the model prompt (still available via user invocation).
+  - `command-dispatch` — `tool` (optional). When set to `tool`, the slash command bypasses the model and dispatches directly to a tool.
+  - `command-tool` — tool name to invoke when `command-dispatch: tool` is set.
+  - `command-arg-mode` — `raw` (default). For tool dispatch, forwards the raw args string to the tool (no core parsing).
+
+    The tool is invoked with params:
+    `{ command: "<raw args>", commandName: "<slash command>", skillName: "<skill name>" }`.
 
 ## Gating (load-time filters)
 

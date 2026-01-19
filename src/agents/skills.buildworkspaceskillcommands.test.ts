@@ -89,4 +89,18 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(longCmd?.description.endsWith("…")).toBe(true);
     expect(shortCmd?.description).toBe("Short description");
   });
+
+  it("includes tool-dispatch metadata from frontmatter", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-"));
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "tool-dispatch"),
+      name: "tool-dispatch",
+      description: "Dispatch to a tool",
+      frontmatterExtra: "command-dispatch: tool\ncommand-tool: sessions_send",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir);
+    const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
+    expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+  });
 });

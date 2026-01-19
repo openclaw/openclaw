@@ -14,6 +14,8 @@ import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 import { listSkillCommandsForWorkspace, resolveSkillCommandInvocation } from "../skill-commands.js";
 import { logVerbose } from "../../globals.js";
+import { createClawdbotTools } from "../../agents/clawdbot-tools.js";
+import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 
 export type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
@@ -23,11 +25,34 @@ export type InlineActionResult =
       abortedLastRun: boolean;
     };
 
+function extractTextFromToolResult(result: any): string | null {
+  if (!result || typeof result !== "object") return null;
+  const content = (result as { content?: unknown }).content;
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed ? trimmed : null;
+  }
+  if (!Array.isArray(content)) return null;
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type === "text" && typeof rec.text === "string") {
+      parts.push(rec.text);
+    }
+  }
+  const out = parts.join("");
+  const trimmed = out.trim();
+  return trimmed ? trimmed : null;
+}
+
 export async function handleInlineActions(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: ClawdbotConfig;
   agentId: string;
+  agentDir?: string;
   sessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -67,6 +92,7 @@ export async function handleInlineActions(params: {
     sessionCtx,
     cfg,
     agentId,
+    agentDir,
     sessionEntry,
     previousSessionEntry,
     sessionStore,
@@ -129,6 +155,47 @@ export async function handleInlineActions(params: {
       typing.cleanup();
       return { kind: "reply", reply: undefined };
     }
+
+    const dispatch = skillInvocation.command.dispatch;
+    if (dispatch?.kind === "tool") {
+      const rawArgs = (skillInvocation.args ?? "").trim();
+      const channel =
+        resolveGatewayMessageChannel(ctx.Surface) ??
+        resolveGatewayMessageChannel(ctx.Provider) ??
+        undefined;
+
+      const tools = createClawdbotTools({
+        agentSessionKey: sessionKey,
+        agentChannel: channel,
+        agentAccountId: (ctx as { AccountId?: string }).AccountId,
+        agentDir,
+        workspaceDir,
+        config: cfg,
+      });
+
+      const tool = tools.find((candidate) => candidate.name === dispatch.toolName);
+      if (!tool) {
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+      }
+
+      const toolCallId = `cmd_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      try {
+        const result = await tool.execute(toolCallId, {
+          command: rawArgs,
+          commandName: skillInvocation.command.name,
+          skillName: skillInvocation.command.skillName,
+        } as any);
+        const text = extractTextFromToolResult(result) ?? "✅ Done.";
+        typing.cleanup();
+        return { kind: "reply", reply: { text } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        typing.cleanup();
+        return { kind: "reply", reply: { text: `❌ ${message}` } };
+      }
+    }
+
     const promptParts = [
       `Use the "${skillInvocation.command.skillName}" skill for this request.`,
       skillInvocation.args ? `User input:\n${skillInvocation.args}` : null,
