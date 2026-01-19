@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -20,7 +21,7 @@ export function registerNodesLocationCommands(nodes: Command) {
       .option("--location-timeout <ms>", "Location fix timeout (ms)", "10000")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
-        try {
+        await runNodesCommand("location get", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const maxAgeMs = opts.maxAge ? Number.parseInt(String(opts.maxAge), 10) : undefined;
           const desiredAccuracyRaw =
@@ -73,10 +74,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             return;
           }
           defaultRuntime.log(JSON.stringify(payload));
-        } catch (err) {
-          defaultRuntime.error(`nodes location get failed: ${String(err)}`);
-          defaultRuntime.exit(1);
-        }
+        });
       }),
     { timeoutMs: 30_000 },
   );
