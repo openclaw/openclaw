@@ -59,7 +59,7 @@ function ensureExperimentalWarningSuppressed(): boolean {
 
 function normalizeWindowsArgv(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
-  if (argv.length < 3) return argv;
+  if (argv.length < 2) return argv;
   const stripControlChars = (value: string): string => {
     let out = "";
     for (let i = 0; i < value.length; i += 1) {
@@ -90,16 +90,14 @@ function normalizeWindowsArgv(argv: string[]): string[] {
       lower.includes("node.exe")
     );
   };
-  const arg1 = path.basename(argv[1] ?? "").toLowerCase();
-  const arg2 = path.basename(argv[2] ?? "").toLowerCase();
-  const looksLikeEntry = arg1 === "entry.ts" || arg1 === "entry.js";
-  let next = argv;
-  if (arg1 === execBase) {
-    next = [argv[0], ...argv.slice(2)];
-  } else if (looksLikeEntry && arg2 === execBase) {
-    next = [argv[0], argv[1], ...argv.slice(3)];
+  const next = [...argv];
+  for (let i = 1; i <= 3 && i < next.length; ) {
+    if (isExecPath(next[i])) {
+      next.splice(i, 1);
+      continue;
+    }
+    i += 1;
   }
-
   const filtered = next.filter((arg, index) => index === 0 || !isExecPath(arg));
   if (filtered.length < 3) return filtered;
   const cleaned = [...filtered];

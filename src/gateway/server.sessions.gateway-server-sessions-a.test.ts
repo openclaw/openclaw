@@ -51,6 +51,8 @@ describe("gateway server sessions", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     const now = Date.now();
+    const recent = now - 30_000;
+    const stale = now - 15 * 60_000;
     testState.sessionStorePath = storePath;
 
     await fs.writeFile(
@@ -70,7 +72,7 @@ describe("gateway server sessions", () => {
       entries: {
         main: {
           sessionId: "sess-main",
-          updatedAt: now - 30_000,
+          updatedAt: recent,
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -81,12 +83,12 @@ describe("gateway server sessions", () => {
         },
         "discord:group:dev": {
           sessionId: "sess-group",
-          updatedAt: now - 10 * 60_000,
+          updatedAt: stale,
           totalTokens: 50,
         },
         "agent:main:subagent:one": {
           sessionId: "sess-subagent",
-          updatedAt: now - 10 * 60_000,
+          updatedAt: stale,
           spawnedBy: "agent:main:main",
         },
         global: {
