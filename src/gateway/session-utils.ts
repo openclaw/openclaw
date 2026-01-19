@@ -22,7 +22,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
-import { readFirstUserMessageFromTranscript } from "./session-utils.fs.js";
+import {
+  readFirstUserMessageFromTranscript,
+  readLastMessagePreviewFromTranscript,
+} from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -34,6 +37,7 @@ export {
   archiveFileOnDisk,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
+  readLastMessagePreviewFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -389,6 +393,7 @@ export function listSessionsFromStore(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -503,15 +508,26 @@ export function listSessionsFromStore(params: {
   const finalSessions: GatewaySessionRow[] = sessions.map((s) => {
     const { entry, ...rest } = s;
     let derivedTitle: string | undefined;
-    if (includeDerivedTitles && entry?.sessionId) {
-      const firstUserMsg = readFirstUserMessageFromTranscript(
-        entry.sessionId,
-        storePath,
-        entry.sessionFile,
-      );
-      derivedTitle = deriveSessionTitle(entry, firstUserMsg);
+    let lastMessagePreview: string | undefined;
+    if (entry?.sessionId) {
+      if (includeDerivedTitles) {
+        const firstUserMsg = readFirstUserMessageFromTranscript(
+          entry.sessionId,
+          storePath,
+          entry.sessionFile,
+        );
+        derivedTitle = deriveSessionTitle(entry, firstUserMsg);
+      }
+      if (includeLastMessage) {
+        const lastMsg = readLastMessagePreviewFromTranscript(
+          entry.sessionId,
+          storePath,
+          entry.sessionFile,
+        );
+        if (lastMsg) lastMessagePreview = lastMsg;
+      }
     }
-    return { ...rest, derivedTitle } satisfies GatewaySessionRow;
+    return { ...rest, derivedTitle, lastMessagePreview } satisfies GatewaySessionRow;
   });
 
   return {

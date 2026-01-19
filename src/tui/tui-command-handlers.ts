@@ -155,21 +155,30 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         includeGlobal: false,
         includeUnknown: false,
         includeDerivedTitles: true,
+        includeLastMessage: true,
         agentId: state.currentAgentId,
       });
       const items = result.sessions.map((session) => {
         const title = session.derivedTitle ?? session.displayName;
         const formattedKey = formatSessionKey(session.key);
+        // Avoid redundant "title (key)" when title matches key
+        const label =
+          title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
+        // Build description: time + message preview
+        const timePart = session.updatedAt ? formatRelativeTime(session.updatedAt) : "";
+        const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
+        const description = preview ? `${timePart} · ${preview}` : timePart;
         return {
           value: session.key,
-          label: title ? `${title} (${formattedKey})` : formattedKey,
-          description: session.updatedAt ? formatRelativeTime(session.updatedAt) : "",
+          label,
+          description,
           searchText: [
             session.displayName,
             session.label,
             session.subject,
             session.sessionId,
             session.key,
+            session.lastMessagePreview,
           ]
             .filter(Boolean)
             .join(" "),

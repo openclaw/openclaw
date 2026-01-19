@@ -65,6 +65,7 @@ export type GatewaySessionList = {
     lastTo?: string;
     lastAccountId?: string;
     derivedTitle?: string;
+    lastMessagePreview?: string;
   }>;
 };
 
@@ -185,6 +186,7 @@ export class GatewayChatClient {
       includeGlobal: opts?.includeGlobal,
       includeUnknown: opts?.includeUnknown,
       includeDerivedTitles: opts?.includeDerivedTitles,
+      includeLastMessage: opts?.includeLastMessage,
       agentId: opts?.agentId,
     });
   }
