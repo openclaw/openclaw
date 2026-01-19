@@ -13,6 +13,12 @@ function isValueToken(arg: string | undefined): boolean {
   return /^-\d+(?:\.\d+)?$/.test(arg);
 }
 
+function parsePositiveInt(value: string): number | undefined {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return undefined;
+  return parsed;
+}
+
 export function hasFlag(argv: string[], name: string): boolean {
   const args = argv.slice(2);
   for (const arg of args) {
@@ -37,6 +43,24 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     }
   }
   return undefined;
+}
+
+export function getVerboseFlag(
+  argv: string[],
+  options?: { includeDebug?: boolean },
+): boolean {
+  if (hasFlag(argv, "--verbose")) return true;
+  if (options?.includeDebug && hasFlag(argv, "--debug")) return true;
+  return false;
+}
+
+export function getPositiveIntFlagValue(
+  argv: string[],
+  name: string,
+): number | null | undefined {
+  const raw = getFlagValue(argv, name);
+  if (raw === null || raw === undefined) return raw;
+  return parsePositiveInt(raw);
 }
 
 export function getCommandPath(argv: string[], depth = 2): string[] {
@@ -83,12 +107,15 @@ export function buildParseArgv(params: {
   return ["node", programName || "clawdbot", ...normalizedArgv];
 }
 
-export function isReadOnlyCommand(argv: string[]): boolean {
-  const path = getCommandPath(argv, 2);
-  if (path.length === 0) return false;
+export function shouldMigrateStateFromPath(path: string[]): boolean {
+  if (path.length === 0) return true;
   const [primary, secondary] = path;
-  if (primary === "health" || primary === "status" || primary === "sessions") return true;
-  if (primary === "memory" && secondary === "status") return true;
-  if (primary === "agents" && secondary === "list") return true;
-  return false;
+  if (primary === "health" || primary === "status" || primary === "sessions") return false;
+  if (primary === "memory" && secondary === "status") return false;
+  if (primary === "agent") return false;
+  return true;
+}
+
+export function shouldMigrateState(argv: string[]): boolean {
+  return shouldMigrateStateFromPath(getCommandPath(argv, 2));
 }

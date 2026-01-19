@@ -13,7 +13,6 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { resolveStateDir } from "../config/paths.js";
-import { ensureConfigReady } from "./program/config-guard.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -53,7 +52,6 @@ function resolveAgentIds(cfg: ReturnType<typeof loadConfig>, agent?: string): st
 }
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
-  await ensureConfigReady({ runtime: defaultRuntime, migrateState: false });
   setVerbose(Boolean(opts.verbose));
   const cfg = loadConfig();
   const agentIds = resolveAgentIds(cfg, opts.agent);

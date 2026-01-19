@@ -17,10 +17,6 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
 }));
 
-vi.mock("./program/config-guard.js", () => ({
-  ensureConfigReady: vi.fn(async () => {}),
-}));
-
 afterEach(async () => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockReset();

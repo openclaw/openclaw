@@ -5,8 +5,12 @@ import {
   getFlagValue,
   getCommandPath,
   getPrimaryCommand,
+  getPositiveIntFlagValue,
+  getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  shouldMigrateState,
+  shouldMigrateStateFromPath,
 } from "./argv.js";
 
 describe("argv helpers", () => {
@@ -46,6 +50,27 @@ describe("argv helpers", () => {
     expect(getFlagValue(["node", "clawdbot", "--", "--timeout=99"], "--timeout")).toBeUndefined();
   });
 
+  it("parses verbose flags", () => {
+    expect(getVerboseFlag(["node", "clawdbot", "status", "--verbose"])).toBe(true);
+    expect(getVerboseFlag(["node", "clawdbot", "status", "--debug"])).toBe(false);
+    expect(getVerboseFlag(["node", "clawdbot", "status", "--debug"], { includeDebug: true })).toBe(
+      true,
+    );
+  });
+
+  it("parses positive integer flag values", () => {
+    expect(getPositiveIntFlagValue(["node", "clawdbot", "status"], "--timeout")).toBeUndefined();
+    expect(
+      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout"], "--timeout"),
+    ).toBeNull();
+    expect(
+      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout", "5000"], "--timeout"),
+    ).toBe(5000);
+    expect(
+      getPositiveIntFlagValue(["node", "clawdbot", "status", "--timeout", "nope"], "--timeout"),
+    ).toBeUndefined();
+  });
+
   it("builds parse argv from raw args", () => {
     const nodeArgv = buildParseArgv({
       programName: "clawdbot",
@@ -72,5 +97,20 @@ describe("argv helpers", () => {
       fallbackArgv: ["status"],
     });
     expect(fallbackArgv).toEqual(["node", "clawdbot", "status"]);
+  });
+
+  it("decides when to migrate state", () => {
+    expect(shouldMigrateState(["node", "clawdbot", "status"])).toBe(false);
+    expect(shouldMigrateState(["node", "clawdbot", "health"])).toBe(false);
+    expect(shouldMigrateState(["node", "clawdbot", "sessions"])).toBe(false);
+    expect(shouldMigrateState(["node", "clawdbot", "memory", "status"])).toBe(false);
+    expect(shouldMigrateState(["node", "clawdbot", "agent", "--message", "hi"])).toBe(false);
+    expect(shouldMigrateState(["node", "clawdbot", "agents", "list"])).toBe(true);
+    expect(shouldMigrateState(["node", "clawdbot", "message", "send"])).toBe(true);
+  });
+
+  it("reuses command path for migrate state decisions", () => {
+    expect(shouldMigrateStateFromPath(["status"])).toBe(false);
+    expect(shouldMigrateStateFromPath(["agents", "list"])).toBe(true);
   });
 });
