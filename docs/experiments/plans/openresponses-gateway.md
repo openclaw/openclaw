@@ -8,6 +8,7 @@ last_updated: "2026-01-19"
 # OpenResponses Gateway Integration Plan
 
 ## Context
+
 Clawdbot Gateway currently exposes a minimal OpenAI-compatible Chat Completions endpoint at
 `/v1/chat/completions` (see [OpenAI Chat Completions](/gateway/openai-http-api)).
 
@@ -16,19 +17,23 @@ for agentic workflows and uses item-based inputs plus semantic streaming events.
 spec defines `/v1/responses`, not `/v1/chat/completions`.
 
 ## Goals
+
 - Add a `/v1/responses` endpoint that adheres to OpenResponses semantics.
 - Keep Chat Completions as a compatibility layer that is easy to disable and eventually remove.
 - Standardize validation and parsing with isolated, reusable schemas.
 
 ## Non-goals
+
 - Full OpenResponses feature parity in the first pass (images, files, hosted tools).
 - Replacing internal agent execution logic or tool orchestration.
 - Changing the existing `/v1/chat/completions` behavior during the first phase.
 
 ## Research Summary
+
 Sources: OpenResponses OpenAPI, OpenResponses specification site, and the Hugging Face blog post.
 
 Key points extracted:
+
 - `POST /v1/responses` accepts `CreateResponseBody` fields like `model`, `input` (string or
   `ItemParam[]`), `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens`, and
   `max_tool_calls`.
@@ -52,6 +57,7 @@ Key points extracted:
 - HF examples include `OpenResponses-Version: latest` in requests (optional header).
 
 ## Proposed Architecture
+
 - Add `src/gateway/open-responses.schema.ts` containing Zod schemas only (no gateway imports).
 - Add `src/gateway/openresponses-http.ts` (or `open-responses-http.ts`) for `/v1/responses`.
 - Keep `src/gateway/openai-http.ts` intact as a legacy compatibility adapter.
@@ -61,6 +67,7 @@ Key points extracted:
 - Emit a startup warning when Chat Completions is enabled to signal legacy status.
 
 ## Deprecation Path for Chat Completions
+
 - Maintain strict module boundaries: no shared schema types between responses and chat completions.
 - Make Chat Completions opt-in by config so it can be disabled without code changes.
 - Update docs to label Chat Completions as legacy once `/v1/responses` is stable.
@@ -68,6 +75,7 @@ Key points extracted:
   removal path.
 
 ## Phase 1 Support Subset
+
 - Accept `input` as string or `ItemParam[]` with message roles and `function_call_output`.
 - Extract system and developer messages into `extraSystemPrompt`.
 - Use the most recent `user` or `function_call_output` as the current message for agent runs.
@@ -76,6 +84,7 @@ Key points extracted:
 - Return `usage` with zeroed values until token accounting is wired.
 
 ## Validation Strategy (No SDK)
+
 - Implement Zod schemas for the supported subset of:
   - `CreateResponseBody`
   - `ItemParam` + message content part unions
@@ -84,6 +93,7 @@ Key points extracted:
 - Keep schemas in a single, isolated module to avoid drift and allow future codegen.
 
 ## Streaming Implementation (Phase 1)
+
 - SSE lines with both `event:` and `data:`.
 - Required sequence (minimum viable):
   - `response.created`
@@ -96,6 +106,7 @@ Key points extracted:
   - `[DONE]`
 
 ## Tests and Verification Plan
+
 - Add e2e coverage for `/v1/responses`:
   - Auth required
   - Non-stream response shape
@@ -106,5 +117,6 @@ Key points extracted:
   `[DONE]`.
 
 ## Doc Updates (Follow-up)
+
 - Add a new docs page for `/v1/responses` usage and examples.
 - Update `/gateway/openai-http-api` with a legacy note and pointer to `/v1/responses`.

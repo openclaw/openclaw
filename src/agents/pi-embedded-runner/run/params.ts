@@ -6,6 +6,16 @@ import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
 
+// Simplified tool definition for client-provided tools (OpenResponses hosted tools)
+export type ClientToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
@@ -27,6 +37,8 @@ export type RunEmbeddedPiAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   images?: ImageContent[];
+  /** Optional client-provided tools (OpenResponses hosted tools). */
+  clientTools?: ClientToolDefinition[];
   provider?: string;
   model?: string;
   authProfileId?: string;

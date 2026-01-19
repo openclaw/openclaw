@@ -27,18 +27,46 @@ export const OutputTextContentPartSchema = z
   })
   .strict();
 
-// For Phase 1, we reject image/file content with helpful errors
+// OpenResponses Image Content: Supports URL or base64 sources
+export const InputImageSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("url"),
+    url: z.string().url(),
+  }),
+  z.object({
+    type: z.literal("base64"),
+    media_type: z.enum(["image/jpeg", "image/png", "image/gif", "image/webp"]),
+    data: z.string().min(1), // base64-encoded
+  }),
+]);
+
 export const InputImageContentPartSchema = z
   .object({
     type: z.literal("input_image"),
+    source: InputImageSourceSchema,
   })
-  .passthrough();
+  .strict();
+
+// OpenResponses File Content: Supports URL or base64 sources
+export const InputFileSourceSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("url"),
+    url: z.string().url(),
+  }),
+  z.object({
+    type: z.literal("base64"),
+    media_type: z.string().min(1), // MIME type
+    data: z.string().min(1), // base64-encoded
+    filename: z.string().optional(),
+  }),
+]);
 
 export const InputFileContentPartSchema = z
   .object({
     type: z.literal("input_file"),
+    source: InputFileSourceSchema,
   })
-  .passthrough();
+  .strict();
 
 export const ContentPartSchema = z.discriminatedUnion("type", [
   InputTextContentPartSchema,
@@ -117,13 +145,14 @@ export const FunctionToolDefinitionSchema = z
   .object({
     type: z.literal("function"),
     function: z.object({
-      name: z.string(),
+      name: z.string().min(1, "Tool name cannot be empty"),
       description: z.string().optional(),
       parameters: z.record(z.string(), z.unknown()).optional(),
     }),
   })
   .strict();
 
+// OpenResponses tool definitions match internal ToolDefinition structure
 export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
 
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
