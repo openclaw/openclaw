@@ -68,6 +68,10 @@ describe("doctor legacy state migrations", () => {
       fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
     ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:main"]?.sessionId).toBe("b");
+    expect(store["agent:main:+1555"]?.sessionId).toBe("a");
+    expect(store["agent:main:+1666"]?.sessionId).toBe("b");
+    expect(store["+1555"]).toBeUndefined();
+    expect(store["+1666"]).toBeUndefined();
     expect(store["agent:main:slack:channel:C123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
@@ -228,5 +232,74 @@ describe("doctor legacy state migrations", () => {
     ) as Record<string, { sessionId: string }>;
     expect(store["agent:main:work"]?.sessionId).toBe("b");
     expect(store["agent:main:main"]).toBeUndefined();
+  });
+
+  it("canonicalizes legacy main keys inside the target sessions store", async () => {
+    const root = await makeTempRoot();
+    const cfg: ClawdbotConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      main: { sessionId: "legacy", updatedAt: 10 },
+      "agent:main:main": { sessionId: "fresh", updatedAt: 20 },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { CLAWDBOT_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string }>;
+    expect(store["main"]).toBeUndefined();
+    expect(store["agent:main:main"]?.sessionId).toBe("fresh");
+  });
+
+  it("prefers the newest entry when collapsing main aliases", async () => {
+    const root = await makeTempRoot();
+    const cfg: ClawdbotConfig = { session: { mainKey: "work" } };
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      "agent:main:main": { sessionId: "legacy", updatedAt: 50 },
+      "agent:main:work": { sessionId: "canonical", updatedAt: 10 },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { CLAWDBOT_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string }>;
+    expect(store["agent:main:work"]?.sessionId).toBe("legacy");
+    expect(store["agent:main:main"]).toBeUndefined();
+  });
+
+  it("auto-migrates when only target sessions contain legacy keys", async () => {
+    const root = await makeTempRoot();
+    const cfg: ClawdbotConfig = {};
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    writeJson5(path.join(targetDir, "sessions.json"), {
+      main: { sessionId: "legacy", updatedAt: 10 },
+    });
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env: { CLAWDBOT_STATE_DIR: root } as NodeJS.ProcessEnv,
+      log,
+    });
+
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string }>;
+    expect(result.migrated).toBe(true);
+    expect(log.info).toHaveBeenCalled();
+    expect(store["main"]).toBeUndefined();
+    expect(store["agent:main:main"]?.sessionId).toBe("legacy");
   });
 });
