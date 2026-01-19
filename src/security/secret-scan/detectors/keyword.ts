@@ -4,9 +4,9 @@ const KEYWORD_PATTERN =
   String.raw`\w*(?:api_?key|auth_?key|service_?key|account_?key|db_?key|database_?key|priv_?key|private_?key|client_?key|db_?pass|database_?pass|key_?pass|password|passwd|pwd|secret)\w*`;
 const KEYWORD_MAX_VALUE_LENGTH = 200;
 const QUOTED_VALUE_PATTERNS = [
-  String.raw`"([^"\r\n]+)"`,
-  String.raw`'([^'\r\n]+)'`,
-  String.raw`\`([^`\r\n]+)\``,
+  "\"([^\"\\r\\n]+)\"",
+  "'([^'\\r\\n]+)'",
+  "`([^`\\r\\n]+)`",
 ];
 const KEYWORD_FAKE_RE = /fake/i;
 const KEYWORD_TEMPLATE_RE = /\$\{[^}]+\}/;
