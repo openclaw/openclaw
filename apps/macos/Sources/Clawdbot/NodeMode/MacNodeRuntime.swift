@@ -482,12 +482,12 @@ actor MacNodeRuntime {
 
         let requiresAsk: Bool = {
             if ask == .always { return true }
-            if ask == .onMiss && security == .allowlist && allowlistMatch == nil && !skillAllow { return true }
+            if ask == .onMiss, security == .allowlist, allowlistMatch == nil, !skillAllow { return true }
             return false
         }()
 
         let approvedByAsk = params.approved == true
-        if requiresAsk && !approvedByAsk {
+        if requiresAsk, !approvedByAsk {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -502,7 +502,7 @@ actor MacNodeRuntime {
                 message: "SYSTEM_RUN_DENIED: approval required")
         }
 
-        if security == .allowlist && allowlistMatch == nil && !skillAllow && !approvedByAsk {
+        if security == .allowlist, allowlistMatch == nil, !skillAllow, !approvedByAsk {
             await self.emitExecEvent(
                 "exec.denied",
                 payload: ExecEventPayload(
@@ -558,7 +558,7 @@ actor MacNodeRuntime {
             env: env,
             timeout: timeoutSec)
         let combined = [result.stdout, result.stderr, result.errorMessage]
-            .compactMap { $0 }
+            .compactMap(\.self)
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
         await self.emitExecEvent(
@@ -668,7 +668,7 @@ actor MacNodeRuntime {
         let resolvedPath = (socketPath?.isEmpty == false)
             ? socketPath!
             : current.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ??
-                ExecApprovalsStore.socketPath()
+            ExecApprovalsStore.socketPath()
         let resolvedToken = (token?.isEmpty == false)
             ? token!
             : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

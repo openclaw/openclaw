@@ -219,7 +219,7 @@ class GatewaySession(
       }
     }
 
-    fun awaitClose() = closedDeferred.await()
+    suspend fun awaitClose() = closedDeferred.await()
 
     fun closeQuietly() {
       if (isClosed.compareAndSet(false, true)) {
@@ -315,41 +315,20 @@ class GatewaySession(
           client.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
         }
 
-      val params =
-        buildJsonObject {
-          put("minProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
-          put("maxProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
-          put("client", clientObj)
-          if (options.caps.isNotEmpty()) put("caps", JsonArray(options.caps.map(::JsonPrimitive)))
-          if (options.commands.isNotEmpty()) put("commands", JsonArray(options.commands.map(::JsonPrimitive)))
-          if (options.permissions.isNotEmpty()) {
-            put(
-              "permissions",
-              buildJsonObject {
-                options.permissions.forEach { (key, value) ->
-                  put(key, JsonPrimitive(value))
-                }
-              },
-            )
-          }
-          put("role", JsonPrimitive(options.role))
-          if (options.scopes.isNotEmpty()) put("scopes", JsonArray(options.scopes.map(::JsonPrimitive)))
-          put("locale", JsonPrimitive(locale))
-        }
-
       val authToken = token?.trim().orEmpty()
       val authPassword = password?.trim().orEmpty()
-      if (authToken.isNotEmpty()) {
-        params["auth"] =
-          buildJsonObject {
-            put("token", JsonPrimitive(authToken))
-          }
-      } else if (authPassword.isNotEmpty()) {
-        params["auth"] =
-          buildJsonObject {
-            put("password", JsonPrimitive(authPassword))
-          }
-      }
+      val authJson =
+        when {
+          authToken.isNotEmpty() ->
+            buildJsonObject {
+              put("token", JsonPrimitive(authToken))
+            }
+          authPassword.isNotEmpty() ->
+            buildJsonObject {
+              put("password", JsonPrimitive(authPassword))
+            }
+          else -> null
+        }
 
       val identity = identityStore.loadOrCreate()
       val signedAtMs = System.currentTimeMillis()
@@ -365,17 +344,40 @@ class GatewaySession(
         )
       val signature = identityStore.signPayload(payload, identity)
       val publicKey = identityStore.publicKeyBase64Url(identity)
-      if (!signature.isNullOrBlank() && !publicKey.isNullOrBlank()) {
-        params["device"] =
+      val deviceJson =
+        if (!signature.isNullOrBlank() && !publicKey.isNullOrBlank()) {
           buildJsonObject {
             put("id", JsonPrimitive(identity.deviceId))
             put("publicKey", JsonPrimitive(publicKey))
             put("signature", JsonPrimitive(signature))
             put("signedAt", JsonPrimitive(signedAtMs))
           }
-      }
+        } else {
+          null
+        }
 
-      return params
+      return buildJsonObject {
+        put("minProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
+        put("maxProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
+        put("client", clientObj)
+        if (options.caps.isNotEmpty()) put("caps", JsonArray(options.caps.map(::JsonPrimitive)))
+        if (options.commands.isNotEmpty()) put("commands", JsonArray(options.commands.map(::JsonPrimitive)))
+        if (options.permissions.isNotEmpty()) {
+          put(
+            "permissions",
+            buildJsonObject {
+              options.permissions.forEach { (key, value) ->
+                put(key, JsonPrimitive(value))
+              }
+            },
+          )
+        }
+        put("role", JsonPrimitive(options.role))
+        if (options.scopes.isNotEmpty()) put("scopes", JsonArray(options.scopes.map(::JsonPrimitive)))
+        authJson?.let { put("auth", it) }
+        deviceJson?.let { put("device", it) }
+        put("locale", JsonPrimitive(locale))
+      }
     }
 
     private suspend fun handleMessage(text: String) {

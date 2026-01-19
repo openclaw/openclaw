@@ -51,7 +51,7 @@ final class ExecApprovalsGatewayPrompter {
                     "id": AnyCodable(request.id),
                     "decision": AnyCodable(decision.rawValue),
                 ],
-                timeoutMs: 10_000)
+                timeoutMs: 10000)
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }

@@ -117,7 +117,7 @@ final class DevicePairingApprovalPrompter {
 
     private func updatePendingCounts() {
         self.pendingCount = self.queue.count
-        self.pendingRepairCount = self.queue.filter { $0.isRepair == true }.count
+        self.pendingRepairCount = self.queue.count(where: { $0.isRepair == true })
     }
 
     private func presentNextIfNeeded() {
@@ -270,7 +270,8 @@ final class DevicePairingApprovalPrompter {
                 let req = try GatewayPayloadDecoding.decode(payload, as: PendingRequest.self)
                 self.enqueue(req)
             } catch {
-                self.logger.error("failed to decode device pairing request: \(error.localizedDescription, privacy: .public)")
+                self.logger
+                    .error("failed to decode device pairing request: \(error.localizedDescription, privacy: .public)")
             }
         case let .event(evt) where evt.event == "device.pair.resolved":
             guard let payload = evt.payload else { return }
@@ -278,7 +279,9 @@ final class DevicePairingApprovalPrompter {
                 let resolved = try GatewayPayloadDecoding.decode(payload, as: PairingResolvedEvent.self)
                 self.handleResolved(resolved)
             } catch {
-                self.logger.error("failed to decode device pairing resolution: \(error.localizedDescription, privacy: .public)")
+                self.logger
+                    .error(
+                        "failed to decode device pairing resolution: \(error.localizedDescription, privacy: .public)")
             }
         default:
             break
@@ -293,11 +296,15 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func handleResolved(_ resolved: PairingResolvedEvent) {
-        let resolution = resolved.decision == PairingResolution.approved.rawValue ? PairingResolution.approved : .rejected
+        let resolution = resolved.decision == PairingResolution.approved.rawValue ? PairingResolution
+            .approved : .rejected
         if let activeRequestId, activeRequestId == resolved.requestId {
             self.resolvedByRequestId.insert(resolved.requestId)
             self.endActiveAlert()
-            self.logger.info("device pairing resolved while active requestId=\(resolved.requestId, privacy: .public) decision=\(resolution.rawValue, privacy: .public)")
+            let decision = resolution.rawValue
+            self.logger.info(
+                "device pairing resolved while active requestId=\(resolved.requestId, privacy: .public) " +
+                    "decision=\(decision, privacy: .public)")
             return
         }
         self.queue.removeAll { $0.requestId == resolved.requestId }
@@ -314,7 +321,7 @@ final class DevicePairingApprovalPrompter {
             lines.append("Role: \(role)")
         }
         if let scopes = req.scopes, !scopes.isEmpty {
-            lines.append("Scopes: \(scopes.joined(separator: \", \"))")
+            lines.append("Scopes: \(scopes.joined(separator: ", "))")
         }
         if let remoteIp = req.remoteIp {
             lines.append("IP: \(remoteIp)")

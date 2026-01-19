@@ -13,6 +13,7 @@ import com.clawdbot.android.chat.ChatPendingToolCall
 import com.clawdbot.android.chat.ChatSessionEntry
 import com.clawdbot.android.chat.OutgoingAttachment
 import com.clawdbot.android.gateway.DeviceIdentityStore
+import com.clawdbot.android.gateway.GatewayClientInfo
 import com.clawdbot.android.gateway.GatewayConnectOptions
 import com.clawdbot.android.gateway.GatewayDiscovery
 import com.clawdbot.android.gateway.GatewayEndpoint
@@ -208,7 +209,7 @@ class NodeRuntime(context: Context) {
       },
     )
 
-  private val chat =
+  private val chat: ChatController =
     ChatController(
       scope = scope,
       session = operatorSession,

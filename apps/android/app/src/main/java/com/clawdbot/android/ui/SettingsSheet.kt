@@ -309,11 +309,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
               add("IP: ${gateway.host}:${gateway.port}")
               gateway.lanHost?.let { add("LAN: $it") }
               gateway.tailnetDns?.let { add("Tailnet: $it") }
-              if (gateway.gatewayPort != null || gateway.bridgePort != null || gateway.canvasPort != null) {
-                val gw = gateway.gatewayPort?.toString() ?: "—"
-                val br = (gateway.bridgePort ?: gateway.port).toString()
+              if (gateway.gatewayPort != null || gateway.canvasPort != null) {
+                val gw = (gateway.gatewayPort ?: gateway.port).toString()
                 val canvas = gateway.canvasPort?.toString() ?: "—"
-                add("Ports: gw $gw · bridge $br · canvas $canvas")
+                add("Ports: gw $gw · canvas $canvas")
               }
             }
           ListItem(
