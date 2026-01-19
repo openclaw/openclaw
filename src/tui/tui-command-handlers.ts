@@ -7,7 +7,11 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
-import { createSearchableSelectList, createSelectList, createSettingsList } from "./components/selectors.js";
+import {
+  createSearchableSelectList,
+  createSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {

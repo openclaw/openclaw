@@ -28,10 +28,9 @@ export const normalizeAllowFromWithStore = (params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: string[];
 }): NormalizedAllowFrom => {
-  const combined = [
-    ...(params.allowFrom ?? []),
-    ...(params.storeAllowFrom ?? []),
-  ].map((value) => String(value).trim()).filter(Boolean);
+  const combined = [...(params.allowFrom ?? []), ...(params.storeAllowFrom ?? [])]
+    .map((value) => String(value).trim())
+    .filter(Boolean);
   return normalizeAllowFrom(combined);
 };
 

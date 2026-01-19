@@ -85,7 +85,7 @@ async function promptSignalAllowFrom(params: {
 }): Promise<ClawdbotConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
-      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
       : resolveDefaultSignalAccountId(params.cfg);
   const resolved = resolveSignalAccount({ cfg: params.cfg, accountId });
   const existing = resolved.config.allowFrom ?? [];

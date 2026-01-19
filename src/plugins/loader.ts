@@ -327,18 +327,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   const pluginSdkAlias = resolvePluginSdkAlias();
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
-    extensions: [
-      ".ts",
-      ".tsx",
-      ".mts",
-      ".cts",
-      ".mtsx",
-      ".ctsx",
-      ".js",
-      ".mjs",
-      ".cjs",
-      ".json",
-    ],
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
   });
 
@@ -393,9 +382,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     try {
       mod = jiti(candidate.source) as ClawdbotPluginModule;
     } catch (err) {
-      logger.error(
-        `[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`,
-      );
+      logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";
       record.error = String(err);
       registry.plugins.push(record);
@@ -480,9 +467,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     if (!validatedConfig.ok) {
-      logger.error(
-        `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
-      );
+      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
       record.status = "error";
       record.error = `invalid config: ${validatedConfig.errors?.join(", ")}`;
       registry.plugins.push(record);

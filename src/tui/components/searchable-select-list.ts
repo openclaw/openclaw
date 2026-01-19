@@ -98,7 +98,11 @@ export class SearchableSelectList implements Component {
     exactLabel.sort(this.compareByScore);
     wordBoundary.sort(this.compareByScore);
     descriptionMatches.sort(this.compareByScore);
-    const fuzzyMatches = fuzzyFilter(fuzzyCandidates, query, (i) => `${i.label} ${i.description ?? ""}`);
+    const fuzzyMatches = fuzzyFilter(
+      fuzzyCandidates,
+      query,
+      (i) => `${i.label} ${i.description ?? ""}`,
+    );
     return [
       ...exactLabel.map((s) => s.item),
       ...wordBoundary.map((s) => s.item),
@@ -133,7 +137,10 @@ export class SearchableSelectList implements Component {
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  private compareByScore = (a: { item: SelectItem; score: number }, b: { item: SelectItem; score: number }) => {
+  private compareByScore = (
+    a: { item: SelectItem; score: number },
+    b: { item: SelectItem; score: number },
+  ) => {
     if (a.score !== b.score) return a.score - b.score;
     return this.getItemLabel(a.item).localeCompare(this.getItemLabel(b.item));
   };
@@ -190,7 +197,10 @@ export class SearchableSelectList implements Component {
     // Calculate visible range with scrolling
     const startIndex = Math.max(
       0,
-      Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible),
+      Math.min(
+        this.selectedIndex - Math.floor(this.maxVisible / 2),
+        this.filteredItems.length - this.maxVisible,
+      ),
     );
     const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
 
@@ -211,7 +221,12 @@ export class SearchableSelectList implements Component {
     return lines;
   }
 
-  private renderItemLine(item: SelectItem, isSelected: boolean, width: number, query: string): string {
+  private renderItemLine(
+    item: SelectItem,
+    isSelected: boolean,
+    width: number,
+    query: string,
+  ): string {
     const prefix = isSelected ? "→ " : "  ";
     const prefixWidth = prefix.length;
     const displayValue = this.getItemLabel(item);

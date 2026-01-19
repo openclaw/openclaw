@@ -427,11 +427,15 @@ vi.mock("../config/config.js", async () => {
       }
 
       const fileAgents =
-        fileConfig.agents && typeof fileConfig.agents === "object" && !Array.isArray(fileConfig.agents)
+        fileConfig.agents &&
+        typeof fileConfig.agents === "object" &&
+        !Array.isArray(fileConfig.agents)
           ? (fileConfig.agents as Record<string, unknown>)
           : {};
       const fileDefaults =
-        fileAgents.defaults && typeof fileAgents.defaults === "object" && !Array.isArray(fileAgents.defaults)
+        fileAgents.defaults &&
+        typeof fileAgents.defaults === "object" &&
+        !Array.isArray(fileAgents.defaults)
           ? (fileAgents.defaults as Record<string, unknown>)
           : {};
       const defaults = {
@@ -449,7 +453,9 @@ vi.mock("../config/config.js", async () => {
         : undefined;
 
       const fileChannels =
-        fileConfig.channels && typeof fileConfig.channels === "object" && !Array.isArray(fileConfig.channels)
+        fileConfig.channels &&
+        typeof fileConfig.channels === "object" &&
+        !Array.isArray(fileConfig.channels)
           ? ({ ...(fileConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
           : {};
       const overrideChannels =
@@ -459,7 +465,9 @@ vi.mock("../config/config.js", async () => {
       const mergedChannels = { ...fileChannels, ...overrideChannels };
       if (testState.allowFrom !== undefined) {
         const existing =
-          mergedChannels.whatsapp && typeof mergedChannels.whatsapp === "object" && !Array.isArray(mergedChannels.whatsapp)
+          mergedChannels.whatsapp &&
+          typeof mergedChannels.whatsapp === "object" &&
+          !Array.isArray(mergedChannels.whatsapp)
             ? (mergedChannels.whatsapp as Record<string, unknown>)
             : {};
         mergedChannels.whatsapp = {
@@ -470,18 +478,23 @@ vi.mock("../config/config.js", async () => {
       const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
 
       const fileSession =
-        fileConfig.session && typeof fileConfig.session === "object" && !Array.isArray(fileConfig.session)
+        fileConfig.session &&
+        typeof fileConfig.session === "object" &&
+        !Array.isArray(fileConfig.session)
           ? (fileConfig.session as Record<string, unknown>)
           : {};
       const session: Record<string, unknown> = {
         ...fileSession,
         mainKey: fileSession.mainKey ?? "main",
       };
-      if (typeof testState.sessionStorePath === "string") session.store = testState.sessionStorePath;
+      if (typeof testState.sessionStorePath === "string")
+        session.store = testState.sessionStorePath;
       if (testState.sessionConfig) Object.assign(session, testState.sessionConfig);
 
       const fileGateway =
-        fileConfig.gateway && typeof fileConfig.gateway === "object" && !Array.isArray(fileConfig.gateway)
+        fileConfig.gateway &&
+        typeof fileConfig.gateway === "object" &&
+        !Array.isArray(fileConfig.gateway)
           ? ({ ...(fileConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
           : {};
       if (testState.gatewayBind) fileGateway.bind = testState.gatewayBind;
@@ -489,14 +502,16 @@ vi.mock("../config/config.js", async () => {
       const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
       const fileCanvasHost =
-        fileConfig.canvasHost && typeof fileConfig.canvasHost === "object" && !Array.isArray(fileConfig.canvasHost)
+        fileConfig.canvasHost &&
+        typeof fileConfig.canvasHost === "object" &&
+        !Array.isArray(fileConfig.canvasHost)
           ? ({ ...(fileConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
           : {};
-      if (typeof testState.canvasHostPort === "number") fileCanvasHost.port = testState.canvasHostPort;
+      if (typeof testState.canvasHostPort === "number")
+        fileCanvasHost.port = testState.canvasHostPort;
       const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
 
-      const hooks =
-        testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
+      const hooks = testState.hooksConfig ?? (fileConfig.hooks as HooksConfig | undefined);
 
       const fileCron =
         fileConfig.cron && typeof fileConfig.cron === "object" && !Array.isArray(fileConfig.cron)

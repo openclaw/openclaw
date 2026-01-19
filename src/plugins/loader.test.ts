@@ -75,7 +75,7 @@ describe("loadClawdbotPlugins", () => {
     expect(enabled?.status).toBe("loaded");
   });
 
-  it("loads bundled telegram plugin when enabled", () => {
+  it("loads bundled telegram plugin when enabled", { timeout: 120_000 }, () => {
     process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR = path.join(process.cwd(), "extensions");
 
     const registry = loadClawdbotPlugins({

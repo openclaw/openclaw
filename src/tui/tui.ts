@@ -22,10 +22,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
-import {
-  buildWaitingStatusMessage,
-  defaultWaitingPhrases,
-} from "./tui-waiting.js";
+import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import type {
@@ -335,8 +332,7 @@ export async function runTui(opts: TuiOptions) {
     // Pick a phrase once per waiting session.
     if (!waitingPhrase) {
       const idx = Math.floor(Math.random() * defaultWaitingPhrases.length);
-      waitingPhrase =
-        defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
+      waitingPhrase = defaultWaitingPhrases[idx] ?? defaultWaitingPhrases[0] ?? "waiting";
     }
 
     waitingTick = 0;

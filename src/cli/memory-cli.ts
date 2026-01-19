@@ -149,9 +149,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         `(requested: ${status.requestedProvider})`,
       )}`,
       `${label("Model")} ${info(status.model)}`,
-      status.sources?.length
-        ? `${label("Sources")} ${info(status.sources.join(", "))}`
-        : null,
+      status.sources?.length ? `${label("Sources")} ${info(status.sources.join(", "))}` : null,
       `${label("Indexed")} ${success(`${status.files} files · ${status.chunks} chunks`)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(status.dbPath)}`,
@@ -222,9 +220,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         status.cache.enabled && typeof status.cache.entries === "number"
           ? ` (${status.cache.entries} entries)`
           : "";
-      lines.push(
-        `${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`,
-      );
+      lines.push(`${label("Embedding cache")} ${colorize(rich, cacheColor, cacheState)}${suffix}`);
       if (status.cache.enabled && typeof status.cache.maxEntries === "number") {
         lines.push(`${label("Cache cap")} ${info(String(status.cache.maxEntries))}`);
       }

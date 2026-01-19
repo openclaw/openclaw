@@ -93,7 +93,8 @@ const parseUsageEntry = (entry: Record<string, unknown>): ParsedUsageEntry | nul
   const role = message?.role;
   if (role !== "assistant") return null;
 
-  const usageRaw = (message?.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
+  const usageRaw =
+    (message?.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
   const usage = normalizeUsage(usageRaw);
   if (!usage) return null;
 
@@ -123,10 +124,7 @@ const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage) => {
   totals.cacheWrite += usage.cacheWrite ?? 0;
   const totalTokens =
     usage.total ??
-    (usage.input ?? 0) +
-      (usage.output ?? 0) +
-      (usage.cacheRead ?? 0) +
-      (usage.cacheWrite ?? 0);
+    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
   totals.totalTokens += totalTokens;
 };
 

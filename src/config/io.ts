@@ -586,13 +586,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 // module scope. `CLAWDBOT_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
 const DEFAULT_CONFIG_CACHE_MS = 200;
-let configCache:
-  | {
-      configPath: string;
-      expiresAt: number;
-      config: ClawdbotConfig;
-    }
-  | null = null;
+let configCache: {
+  configPath: string;
+  expiresAt: number;
+  config: ClawdbotConfig;
+} | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
   const raw = env.CLAWDBOT_CONFIG_CACHE_MS?.trim();

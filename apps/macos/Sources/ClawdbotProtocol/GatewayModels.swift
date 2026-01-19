@@ -424,14 +424,18 @@ public struct PollParams: Codable, Sendable {
 
 public struct AgentParams: Codable, Sendable {
     public let message: String
+    public let agentid: String?
     public let to: String?
+    public let replyto: String?
     public let sessionid: String?
     public let sessionkey: String?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
     public let channel: String?
+    public let replychannel: String?
     public let accountid: String?
+    public let replyaccountid: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -441,14 +445,18 @@ public struct AgentParams: Codable, Sendable {
 
     public init(
         message: String,
+        agentid: String?,
         to: String?,
+        replyto: String?,
         sessionid: String?,
         sessionkey: String?,
         thinking: String?,
         deliver: Bool?,
         attachments: [AnyCodable]?,
         channel: String?,
+        replychannel: String?,
         accountid: String?,
+        replyaccountid: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -457,14 +465,18 @@ public struct AgentParams: Codable, Sendable {
         spawnedby: String?
     ) {
         self.message = message
+        self.agentid = agentid
         self.to = to
+        self.replyto = replyto
         self.sessionid = sessionid
         self.sessionkey = sessionkey
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
         self.channel = channel
+        self.replychannel = replychannel
         self.accountid = accountid
+        self.replyaccountid = replyaccountid
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -474,14 +486,18 @@ public struct AgentParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case message
+        case agentid = "agentId"
         case to
+        case replyto = "replyTo"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
         case thinking
         case deliver
         case attachments
         case channel
+        case replychannel = "replyChannel"
         case accountid = "accountId"
+        case replyaccountid = "replyAccountId"
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"

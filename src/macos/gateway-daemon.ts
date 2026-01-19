@@ -45,10 +45,7 @@ async function main() {
     { startGatewayServer },
     { setGatewayWsLogStyle },
     { setVerbose },
-    {
-      consumeGatewaySigusr1RestartAuthorization,
-      isGatewaySigusr1RestartExternallyAllowed,
-    },
+    { consumeGatewaySigusr1RestartAuthorization, isGatewaySigusr1RestartExternallyAllowed },
     { defaultRuntime },
     { enableConsoleCapture, setConsoleTimestampPrefix },
   ] = await Promise.all([

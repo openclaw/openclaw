@@ -196,8 +196,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           durationMs: 1,
           error: {
             kind: "context_overflow",
-            message:
-              'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+            message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
           },
         },
       }));

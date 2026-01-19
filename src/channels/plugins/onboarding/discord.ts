@@ -180,7 +180,7 @@ async function promptDiscordAllowFrom(params: {
 }): Promise<ClawdbotConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
-      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
       : resolveDefaultDiscordAccountId(params.cfg);
   const resolved = resolveDiscordAccount({ cfg: params.cfg, accountId });
   const token = resolved.token;
@@ -249,9 +249,7 @@ async function promptDiscordAllowFrom(params: {
       continue;
     }
     const ids = results.map((res) => res.id as string);
-    const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-    ];
+    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
     return setDiscordAllowFrom(params.cfg, unique);
   }
 }

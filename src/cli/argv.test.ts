@@ -17,16 +17,9 @@ describe("argv helpers", () => {
   });
 
   it("extracts command path ignoring flags and terminator", () => {
-    expect(getCommandPath(["node", "clawdbot", "status", "--json"], 2)).toEqual([
-      "status",
-    ]);
-    expect(getCommandPath(["node", "clawdbot", "agents", "list"], 2)).toEqual([
-      "agents",
-      "list",
-    ]);
-    expect(getCommandPath(["node", "clawdbot", "status", "--", "ignored"], 2)).toEqual([
-      "status",
-    ]);
+    expect(getCommandPath(["node", "clawdbot", "status", "--json"], 2)).toEqual(["status"]);
+    expect(getCommandPath(["node", "clawdbot", "agents", "list"], 2)).toEqual(["agents", "list"]);
+    expect(getCommandPath(["node", "clawdbot", "status", "--", "ignored"], 2)).toEqual(["status"]);
   });
 
   it("returns primary command", () => {

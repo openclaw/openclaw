@@ -80,9 +80,10 @@ async function promptTelegramAllowFrom(params: {
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
     const url = `https://api.telegram.org/bot${token}/getChat?chat_id=${encodeURIComponent(username)}`;
     const res = await fetch(url);
-    const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; result?: { id?: number | string } }
-      | null;
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      result?: { id?: number | string };
+    } | null;
     const id = data?.ok ? data?.result?.id : undefined;
     if (typeof id === "number" || typeof id === "string") return String(id);
     return null;
@@ -164,7 +165,7 @@ async function promptTelegramAllowFromForAccount(params: {
 }): Promise<ClawdbotConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
-      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
       : resolveDefaultTelegramAccountId(params.cfg);
   return promptTelegramAllowFrom({
     cfg: params.cfg,

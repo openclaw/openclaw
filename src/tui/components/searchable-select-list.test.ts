@@ -13,8 +13,16 @@ const mockTheme: SearchableSelectListTheme = {
 };
 
 const testItems = [
-  { value: "anthropic/claude-3-opus", label: "anthropic/claude-3-opus", description: "Claude 3 Opus" },
-  { value: "anthropic/claude-3-sonnet", label: "anthropic/claude-3-sonnet", description: "Claude 3 Sonnet" },
+  {
+    value: "anthropic/claude-3-opus",
+    label: "anthropic/claude-3-opus",
+    description: "Claude 3 Opus",
+  },
+  {
+    value: "anthropic/claude-3-sonnet",
+    label: "anthropic/claude-3-sonnet",
+    description: "Claude 3 Sonnet",
+  },
   { value: "openai/gpt-4", label: "openai/gpt-4", description: "GPT-4" },
   { value: "openai/gpt-4-turbo", label: "openai/gpt-4-turbo", description: "GPT-4 Turbo" },
   { value: "google/gemini-pro", label: "google/gemini-pro", description: "Gemini Pro" },
@@ -50,7 +58,11 @@ describe("SearchableSelectList", () => {
     const items = [
       { value: "openrouter/auto", label: "openrouter/auto", description: "Routes to best" },
       { value: "opus-direct", label: "opus-direct", description: "Direct opus model" },
-      { value: "anthropic/claude-3-opus", label: "anthropic/claude-3-opus", description: "Claude 3 Opus" },
+      {
+        value: "anthropic/claude-3-opus",
+        label: "anthropic/claude-3-opus",
+        description: "Claude 3 Opus",
+      },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
@@ -66,7 +78,11 @@ describe("SearchableSelectList", () => {
 
   it("exact label match beats description match", () => {
     const items = [
-      { value: "provider/other", label: "provider/other", description: "This mentions opus in description" },
+      {
+        value: "provider/other",
+        label: "provider/other",
+        description: "This mentions opus in description",
+      },
       { value: "provider/opus-model", label: "provider/opus-model", description: "Something else" },
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);

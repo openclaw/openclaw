@@ -232,7 +232,7 @@ async function promptSlackAllowFrom(params: {
 }): Promise<ClawdbotConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
-      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
       : resolveDefaultSlackAccountId(params.cfg);
   const resolved = resolveSlackAccount({ cfg: params.cfg, accountId });
   const token = resolved.config.userToken ?? resolved.config.botToken ?? "";
@@ -299,9 +299,7 @@ async function promptSlackAllowFrom(params: {
       continue;
     }
     const ids = results.map((res) => res.id as string);
-    const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-    ];
+    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
     return setSlackAllowFrom(params.cfg, unique);
   }
 }

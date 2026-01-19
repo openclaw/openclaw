@@ -22,11 +22,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import { createClawdbotTools } from "./clawdbot-tools.js";
 
-const waitForCalls = async (
-  getCount: () => number,
-  count: number,
-  timeoutMs = 2000,
-) => {
+const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2000) => {
   const start = Date.now();
   while (getCount() < count) {
     if (Date.now() - start > timeoutMs) {
@@ -254,18 +250,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "agent").length,
-      4,
-    );
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "agent.wait").length,
-      4,
-    );
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "chat.history").length,
-      4,
-    );
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -279,18 +266,9 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "agent").length,
-      8,
-    );
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "agent.wait").length,
-      8,
-    );
-    await waitForCalls(
-      () => calls.filter((call) => call.method === "chat.history").length,
-      8,
-    );
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");

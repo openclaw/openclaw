@@ -80,7 +80,7 @@ async function promptIMessageAllowFrom(params: {
 }): Promise<ClawdbotConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
-      ? normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID
+      ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
       : resolveDefaultIMessageAccountId(params.cfg);
   const resolved = resolveIMessageAccount({ cfg: params.cfg, accountId });
   const existing = resolved.config.allowFrom ?? [];
