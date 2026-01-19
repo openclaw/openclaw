@@ -1,3 +1,4 @@
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +21,7 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 }
 
 export async function runCli(argv: string[] = process.argv) {
+  const normalizedArgv = stripWindowsNodeExec(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
   ensureClawdbotCliOnPath();
@@ -27,7 +29,7 @@ export async function runCli(argv: string[] = process.argv) {
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
 
-  if (await tryRouteCli(argv)) return;
+  if (await tryRouteCli(normalizedArgv)) return;
 
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
   enableConsoleCapture();
@@ -44,7 +46,20 @@ export async function runCli(argv: string[] = process.argv) {
     process.exit(1);
   });
 
-  await program.parseAsync(rewriteUpdateFlagArgv(argv));
+  await program.parseAsync(rewriteUpdateFlagArgv(normalizedArgv));
+}
+
+function stripWindowsNodeExec(argv: string[]): string[] {
+  if (process.platform !== "win32") return argv;
+  const execPath = process.execPath;
+  const execPathLower = execPath.toLowerCase();
+  const execBase = path.basename(execPath).toLowerCase();
+  return argv.filter((arg, index) => {
+    if (index === 0) return true;
+    if (!arg) return true;
+    const lower = arg.toLowerCase();
+    return lower !== execPathLower && path.basename(lower) !== execBase;
+  });
 }
 
 export function isCliMainModule(): boolean {
