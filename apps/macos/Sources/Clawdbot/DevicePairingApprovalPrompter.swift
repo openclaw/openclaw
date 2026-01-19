@@ -171,11 +171,14 @@ final class DevicePairingApprovalPrompter {
     }
 
     private func handleAlertResponse(_ response: NSApplication.ModalResponse, request: PendingRequest) async {
+        var shouldRemove = response != .alertFirstButtonReturn
         defer {
-            if self.queue.first == request {
-                self.queue.removeFirst()
-            } else {
-                self.queue.removeAll { $0 == request }
+            if shouldRemove {
+                if self.queue.first == request {
+                    self.queue.removeFirst()
+                } else {
+                    self.queue.removeAll { $0 == request }
+                }
             }
             self.updatePendingCounts()
             self.isPresenting = false
@@ -190,6 +193,11 @@ final class DevicePairingApprovalPrompter {
 
         switch response {
         case .alertFirstButtonReturn:
+            shouldRemove = false
+            if let idx = self.queue.firstIndex(of: request) {
+                self.queue.remove(at: idx)
+            }
+            self.queue.append(request)
             return
         case .alertSecondButtonReturn:
             _ = await self.approve(requestId: request.requestId)
