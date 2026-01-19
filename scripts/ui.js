@@ -68,6 +68,7 @@ function runSync(cmd, args, envOverride) {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
+    shell: process.platform === "win32",
   });
   if (result.signal) process.exit(1);
   if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
