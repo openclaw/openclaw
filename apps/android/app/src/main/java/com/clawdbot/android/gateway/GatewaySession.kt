@@ -49,6 +49,7 @@ data class GatewayConnectOptions(
   val commands: List<String>,
   val permissions: Map<String, Boolean>,
   val client: GatewayClientInfo,
+  val userAgent: String? = null,
 )
 
 class GatewaySession(
@@ -131,10 +132,17 @@ class GatewaySession(
 
   suspend fun sendNodeEvent(event: String, payloadJson: String?) {
     val conn = currentConnection ?: return
+    val parsedPayload = payloadJson?.let { parseJsonOrNull(it) }
     val params =
       buildJsonObject {
         put("event", JsonPrimitive(event))
-        if (payloadJson != null) put("payloadJSON", JsonPrimitive(payloadJson)) else put("payloadJSON", JsonNull)
+        if (parsedPayload != null) {
+          put("payload", parsedPayload)
+        } else if (payloadJson != null) {
+          put("payloadJSON", JsonPrimitive(payloadJson))
+        } else {
+          put("payloadJSON", JsonNull)
+        }
       }
     try {
       conn.request("node.event", params, timeoutMs = 8_000)
@@ -377,6 +385,9 @@ class GatewaySession(
         authJson?.let { put("auth", it) }
         deviceJson?.let { put("device", it) }
         put("locale", JsonPrimitive(locale))
+        options.userAgent?.trim()?.takeIf { it.isNotEmpty() }?.let {
+          put("userAgent", JsonPrimitive(it))
+        }
       }
     }
 
@@ -403,7 +414,8 @@ class GatewaySession(
 
     private fun handleEvent(frame: JsonObject) {
       val event = frame["event"].asStringOrNull() ?: return
-      val payloadJson = frame["payload"]?.let { it.toString() }
+      val payloadJson =
+        frame["payload"]?.let { it.toString() } ?: frame["payloadJSON"].asStringOrNull()
       if (event == "node.invoke.request" && payloadJson != null && onInvoke != null) {
         handleInvokeEvent(payloadJson)
         return
@@ -421,7 +433,9 @@ class GatewaySession(
       val id = payload["id"].asStringOrNull() ?: return
       val nodeId = payload["nodeId"].asStringOrNull() ?: return
       val command = payload["command"].asStringOrNull() ?: return
-      val params = payload["paramsJSON"].asStringOrNull()
+      val params =
+        payload["paramsJSON"].asStringOrNull()
+          ?: payload["params"]?.let { value -> if (value is JsonNull) null else value.toString() }
       val timeoutMs = payload["timeoutMs"].asLongOrNull()
       scope.launch {
         val result =
@@ -436,12 +450,17 @@ class GatewaySession(
     }
 
     private suspend fun sendInvokeResult(id: String, nodeId: String, result: InvokeResult) {
+      val parsedPayload = result.payloadJson?.let { parseJsonOrNull(it) }
       val params =
         buildJsonObject {
           put("id", JsonPrimitive(id))
           put("nodeId", JsonPrimitive(nodeId))
           put("ok", JsonPrimitive(result.ok))
-          if (result.payloadJson != null) put("payloadJSON", JsonPrimitive(result.payloadJson))
+          if (parsedPayload != null) {
+            put("payload", parsedPayload)
+          } else if (result.payloadJson != null) {
+            put("payloadJSON", JsonPrimitive(result.payloadJson))
+          }
           result.error?.let { err ->
             put(
               "error",
@@ -599,3 +618,13 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private fun parseJsonOrNull(payload: String): JsonElement? {
+  val trimmed = payload.trim()
+  if (trimmed.isEmpty()) return null
+  return try {
+    Json.parseToJsonElement(trimmed)
+  } catch (_: Throwable) {
+    null
+  }
+}

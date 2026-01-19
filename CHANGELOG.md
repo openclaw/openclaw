@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Android: remove legacy bridge transport code now that nodes use the gateway protocol.
+- Android: send structured payloads in node events/invokes and include user-agent metadata in gateway connects.
 
 ## 2026.1.19-2
 

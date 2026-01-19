@@ -498,6 +498,13 @@ class NodeRuntime(context: Context) {
       .ifEmpty { null }
   }
 
+  private fun buildUserAgent(): String {
+    val version = resolvedVersionName()
+    val release = Build.VERSION.RELEASE?.trim().orEmpty()
+    val releaseLabel = if (release.isEmpty()) "unknown" else release
+    return "ClawdbotAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
+  }
+
   private fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
     return GatewayClientInfo(
       id = clientId,
@@ -519,6 +526,7 @@ class NodeRuntime(context: Context) {
       commands = buildInvokeCommands(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "node-host", clientMode = "node"),
+      userAgent = buildUserAgent(),
     )
   }
 
@@ -530,6 +538,7 @@ class NodeRuntime(context: Context) {
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "clawdbot-control-ui", clientMode = "ui"),
+      userAgent = buildUserAgent(),
     )
   }
 
