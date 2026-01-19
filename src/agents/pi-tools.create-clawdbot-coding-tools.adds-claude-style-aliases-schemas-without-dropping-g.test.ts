@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
+import { createSandboxedReadTool } from "./pi-tools.read.js";
 
 describe("createClawdbotCodingTools", () => {
   describe("Claude/Gemini alias support", () => {
@@ -100,11 +101,8 @@ describe("createClawdbotCodingTools", () => {
         browserAllowHostControl: false,
       };
 
-      const tools = createClawdbotCodingTools({ sandbox });
-      const readTool = tools.find((tool) => tool.name === "read");
-      expect(readTool).toBeDefined();
-
-      await expect(readTool?.execute("tool-sbx-1", { file_path: outsidePath })).rejects.toThrow();
+      const readTool = createSandboxedReadTool(tmpDir);
+      await expect(readTool.execute("tool-sbx-1", { file_path: outsidePath })).rejects.toThrow();
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
       await fs.rm(outsidePath, { force: true });
