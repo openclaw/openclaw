@@ -80,7 +80,6 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "plugins", kind: "restart" },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
-  { prefix: "bridge", kind: "restart" },
   { prefix: "discovery", kind: "restart" },
   { prefix: "canvasHost", kind: "restart" },
 ];

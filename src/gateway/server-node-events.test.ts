@@ -9,21 +9,21 @@ vi.mock("../infra/heartbeat-wake.js", () => ({
 
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { handleBridgeEvent } from "./server-bridge-events.js";
-import type { BridgeHandlersContext } from "./server-bridge-types.js";
+import { handleNodeEvent } from "./server-node-events.js";
+import type { NodeEventContext } from "./server-node-events-types.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { CliDeps } from "../cli/deps.js";
 
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
 
-function buildCtx(): BridgeHandlersContext {
+function buildCtx(): NodeEventContext {
   return {
     deps: {} as CliDeps,
     broadcast: () => {},
-    bridgeSendToSession: () => {},
-    bridgeSubscribe: () => {},
-    bridgeUnsubscribe: () => {},
+    nodeSendToSession: () => {},
+    nodeSubscribe: () => {},
+    nodeUnsubscribe: () => {},
     broadcastVoiceWakeChanged: () => {},
     addChatRun: () => {},
     removeChatRun: () => undefined,
@@ -36,11 +36,11 @@ function buildCtx(): BridgeHandlersContext {
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
-    logBridge: { warn: () => {} },
+    logGateway: { warn: () => {} },
   };
 }
 
-describe("bridge exec events", () => {
+describe("node exec events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockReset();
     requestHeartbeatNowMock.mockReset();
@@ -48,7 +48,7 @@ describe("bridge exec events", () => {
 
   it("enqueues exec.started events", async () => {
     const ctx = buildCtx();
-    await handleBridgeEvent(ctx, "node-1", {
+    await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
         sessionKey: "agent:main:main",
@@ -66,7 +66,7 @@ describe("bridge exec events", () => {
 
   it("enqueues exec.finished events with output", async () => {
     const ctx = buildCtx();
-    await handleBridgeEvent(ctx, "node-2", {
+    await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
         runId: "run-2",
@@ -85,7 +85,7 @@ describe("bridge exec events", () => {
 
   it("enqueues exec.denied events with reason", async () => {
     const ctx = buildCtx();
-    await handleBridgeEvent(ctx, "node-3", {
+    await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
         sessionKey: "agent:demo:main",

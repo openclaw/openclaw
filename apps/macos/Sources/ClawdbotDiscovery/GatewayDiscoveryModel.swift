@@ -81,11 +81,11 @@ public final class GatewayDiscoveryModel {
     public func start() {
         if !self.browsers.isEmpty { return }
 
-        for domain in ClawdbotBonjour.bridgeServiceDomains {
+        for domain in ClawdbotBonjour.gatewayServiceDomains {
             let params = NWParameters.tcp
             params.includePeerToPeer = true
             let browser = NWBrowser(
-                for: .bonjour(type: ClawdbotBonjour.bridgeServiceType, domain: domain),
+                for: .bonjour(type: ClawdbotBonjour.gatewayServiceType, domain: domain),
                 using: params)
 
             browser.stateUpdateHandler = { [weak self] state in
@@ -113,7 +113,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
-        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
@@ -174,7 +174,7 @@ public final class GatewayDiscoveryModel {
         }
 
         // Bonjour can return only "local" results for the wide-area domain (or no results at all),
-        // which makes onboarding look empty even though Tailscale DNS-SD can already see bridges.
+        // which makes onboarding look empty even though Tailscale DNS-SD can already see gateways.
         guard !self.wideAreaFallbackGateways.isEmpty else {
             self.gateways = primaryFiltered
             return
@@ -194,7 +194,7 @@ public final class GatewayDiscoveryModel {
             guard case let .service(name, type, resultDomain, _) = result.endpoint else { return nil }
 
             let decodedName = BonjourEscapes.decode(name)
-            let stableID = BridgeEndpointID.stableID(result.endpoint)
+            let stableID = GatewayEndpointID.stableID(result.endpoint)
             let resolvedTXT = self.resolvedTXTByID[stableID] ?? [:]
             let txt = Self.txtDictionary(from: result).merging(
                 resolvedTXT,
@@ -230,12 +230,12 @@ public final class GatewayDiscoveryModel {
                 gatewayPort: parsedTXT.gatewayPort,
                 cliPath: parsedTXT.cliPath,
                 stableID: stableID,
-                debugID: BridgeEndpointID.prettyDescription(result.endpoint),
+                debugID: GatewayEndpointID.prettyDescription(result.endpoint),
                 isLocal: isLocal)
         }
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
-        if domain == ClawdbotBonjour.wideAreaBridgeServiceDomain,
+        if domain == ClawdbotBonjour.wideAreaGatewayServiceDomain,
            self.hasUsableWideAreaResults
         {
             self.wideAreaFallbackGateways = []
@@ -243,7 +243,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private func scheduleWideAreaFallback() {
-        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
         if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
@@ -276,7 +276,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private var hasUsableWideAreaResults: Bool {
-        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
         guard let gateways = self.gatewaysByDomain[domain], !gateways.isEmpty else { return false }
         if !self.filterLocalGateways { return true }
         return gateways.contains(where: { !$0.isLocal })
@@ -462,7 +462,7 @@ public final class GatewayDiscoveryModel {
 
     private nonisolated static func prettifyServiceName(_ decodedName: String) -> String {
         let normalized = Self.prettifyInstanceName(decodedName)
-        var cleaned = normalized.replacingOccurrences(of: #"\s*-?bridge$"#, with: "", options: .regularExpression)
+        var cleaned = normalized.replacingOccurrences(of: #"\s*-?gateway$"#, with: "", options: .regularExpression)
         cleaned = cleaned
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
@@ -598,11 +598,11 @@ public final class GatewayDiscoveryModel {
     private nonisolated static func normalizeServiceHostToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let prettified = Self.prettifyInstanceName(raw)
-        let strippedBridge = prettified.replacingOccurrences(
-            of: #"\s*-?\s*bridge$"#,
+        let strippedGateway = prettified.replacingOccurrences(
+            of: #"\s*-?\s*gateway$"#,
             with: "",
             options: .regularExpression)
-        return self.normalizeHostToken(strippedBridge)
+        return self.normalizeHostToken(strippedGateway)
     }
 }
 

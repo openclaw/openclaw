@@ -7,14 +7,14 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import type { BridgeEvent, BridgeHandlersContext } from "./server-bridge-types.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
-export const handleBridgeEvent = async (
-  ctx: BridgeHandlersContext,
+export const handleNodeEvent = async (
+  ctx: NodeEventContext,
   nodeId: string,
-  evt: BridgeEvent,
+  evt: NodeEvent,
 ) => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -72,7 +72,7 @@ export const handleBridgeEvent = async (
         defaultRuntime,
         ctx.deps,
       ).catch((err) => {
-        ctx.logBridge.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
       return;
     }
@@ -140,7 +140,7 @@ export const handleBridgeEvent = async (
         defaultRuntime,
         ctx.deps,
       ).catch((err) => {
-        ctx.logBridge.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
       return;
     }
@@ -156,7 +156,7 @@ export const handleBridgeEvent = async (
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       if (!sessionKey) return;
-      ctx.bridgeSubscribe(nodeId, sessionKey);
+      ctx.nodeSubscribe(nodeId, sessionKey);
       return;
     }
     case "chat.unsubscribe": {
@@ -171,7 +171,7 @@ export const handleBridgeEvent = async (
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       if (!sessionKey) return;
-      ctx.bridgeUnsubscribe(nodeId, sessionKey);
+      ctx.nodeUnsubscribe(nodeId, sessionKey);
       return;
     }
     case "exec.started":

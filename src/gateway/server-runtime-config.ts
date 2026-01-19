@@ -1,9 +1,4 @@
-import type {
-  BridgeBindMode,
-  GatewayAuthConfig,
-  GatewayTailscaleConfig,
-  loadConfig,
-} from "../config/config.js";
+import type { GatewayAuthConfig, GatewayBindMode, GatewayTailscaleConfig, loadConfig } from "../config/config.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -29,7 +24,7 @@ export type GatewayRuntimeConfig = {
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: ReturnType<typeof loadConfig>;
   port: number;
-  bind?: BridgeBindMode;
+  bind?: GatewayBindMode;
   host?: string;
   controlUiEnabled?: boolean;
   openAiChatCompletionsEnabled?: boolean;

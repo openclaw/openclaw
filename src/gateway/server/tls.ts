@@ -1,14 +1,12 @@
-import type { BridgeTlsConfig } from "../../config/types.gateway.js";
+import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import {
-  type BridgeTlsRuntime,
-  loadBridgeTlsRuntime,
-} from "../../infra/bridge/server/tls.js";
-
-export type GatewayTlsRuntime = BridgeTlsRuntime;
+  type GatewayTlsRuntime,
+  loadGatewayTlsRuntime as loadGatewayTlsRuntimeConfig,
+} from "../../infra/tls/gateway.js";
 
 export async function loadGatewayTlsRuntime(
-  cfg: BridgeTlsConfig | undefined,
+  cfg: GatewayTlsConfig | undefined,
   log?: { info?: (msg: string) => void; warn?: (msg: string) => void },
 ): Promise<GatewayTlsRuntime> {
-  return await loadBridgeTlsRuntime(cfg, log);
+  return await loadGatewayTlsRuntimeConfig(cfg, log);
 }

@@ -2,7 +2,7 @@ import ClawdbotKit
 import Foundation
 import Network
 
-public enum BridgeEndpointID {
+public enum GatewayEndpointID {
     public static func stableID(_ endpoint: NWEndpoint) -> String {
         switch endpoint {
         case let .service(name, type, domain, _):

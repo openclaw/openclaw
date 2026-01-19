@@ -28,13 +28,13 @@ struct ClawdbotConfigFileTests {
             ClawdbotConfigFile.saveDict([
                 "gateway": [
                     "remote": [
-                        "url": "ws://bridge.ts.net:19999",
+                        "url": "ws://gateway.ts.net:19999",
                     ],
                 ],
             ])
             #expect(ClawdbotConfigFile.remoteGatewayPort() == 19999)
-            #expect(ClawdbotConfigFile.remoteGatewayPort(matchingHost: "bridge.ts.net") == 19999)
-            #expect(ClawdbotConfigFile.remoteGatewayPort(matchingHost: "bridge") == 19999)
+            #expect(ClawdbotConfigFile.remoteGatewayPort(matchingHost: "gateway.ts.net") == 19999)
+            #expect(ClawdbotConfigFile.remoteGatewayPort(matchingHost: "gateway") == 19999)
             #expect(ClawdbotConfigFile.remoteGatewayPort(matchingHost: "other.ts.net") == nil)
         }
     }

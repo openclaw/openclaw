@@ -79,7 +79,9 @@ import type {
 } from "./logs-chat.js";
 import type {
   NodeDescribeParamsSchema,
+  NodeEventParamsSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairListParamsSchema,
@@ -131,6 +133,8 @@ export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
 export type NodeListParams = Static<typeof NodeListParamsSchema>;
 export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
+export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
+export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;

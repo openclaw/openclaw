@@ -53,11 +53,11 @@ final class BridgeDiscoveryModel {
         if !self.browsers.isEmpty { return }
         self.appendDebugLog("start()")
 
-        for domain in ClawdbotBonjour.bridgeServiceDomains {
+        for domain in ClawdbotBonjour.gatewayServiceDomains {
             let params = NWParameters.tcp
             params.includePeerToPeer = true
             let browser = NWBrowser(
-                for: .bonjour(type: ClawdbotBonjour.bridgeServiceType, domain: domain),
+                for: .bonjour(type: ClawdbotBonjour.gatewayServiceType, domain: domain),
                 using: params)
 
             browser.stateUpdateHandler = { [weak self] state in

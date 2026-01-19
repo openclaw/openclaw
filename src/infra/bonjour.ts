@@ -17,10 +17,7 @@ export type GatewayBonjourAdvertiseOpts = {
   sshPort?: number;
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
-  bridgePort?: number;
   canvasPort?: number;
-  bridgeTlsEnabled?: boolean;
-  bridgeTlsFingerprintSha256?: string;
   tailnetDns?: string;
   cliPath?: string;
 };
@@ -106,9 +103,6 @@ export async function startGatewayBonjourAdvertiser(
     lanHost: `${hostname}.local`,
     displayName,
   };
-  if (typeof opts.bridgePort === "number" && opts.bridgePort > 0) {
-    txtBase.bridgePort = String(opts.bridgePort);
-  }
   if (opts.gatewayTlsEnabled) {
     txtBase.gatewayTls = "1";
     if (opts.gatewayTlsFingerprintSha256) {
@@ -117,12 +111,6 @@ export async function startGatewayBonjourAdvertiser(
   }
   if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
     txtBase.canvasPort = String(opts.canvasPort);
-  }
-  if (opts.bridgeTlsEnabled) {
-    txtBase.bridgeTls = "1";
-    if (opts.bridgeTlsFingerprintSha256) {
-      txtBase.bridgeTlsSha256 = opts.bridgeTlsFingerprintSha256;
-    }
   }
   if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
     txtBase.tailnetDns = opts.tailnetDns.trim();
@@ -133,26 +121,23 @@ export async function startGatewayBonjourAdvertiser(
 
   const services: Array<{ label: string; svc: BonjourService }> = [];
 
-  // Bridge beacon (used by macOS/iOS/Android nodes and the mac app onboarding flow).
-  if (typeof opts.bridgePort === "number" && opts.bridgePort > 0) {
-    const bridge = responder.createService({
-      name: safeServiceName(instanceName),
-      type: "clawdbot-bridge",
-      protocol: Protocol.TCP,
-      port: opts.bridgePort,
-      domain: "local",
-      hostname,
-      txt: {
-        ...txtBase,
-        sshPort: String(opts.sshPort ?? 22),
-        transport: "bridge",
-      },
-    });
-    services.push({
-      label: "bridge",
-      svc: bridge as unknown as BonjourService,
-    });
-  }
+  const gateway = responder.createService({
+    name: safeServiceName(instanceName),
+    type: "clawdbot-gateway",
+    protocol: Protocol.TCP,
+    port: opts.gatewayPort,
+    domain: "local",
+    hostname,
+    txt: {
+      ...txtBase,
+      sshPort: String(opts.sshPort ?? 22),
+      transport: "gateway",
+    },
+  });
+  services.push({
+    label: "gateway",
+    svc: gateway as unknown as BonjourService,
+  });
 
   let ciaoCancellationRejectionHandler: (() => void) | undefined;
   if (services.length > 0) {
@@ -164,9 +149,7 @@ export async function startGatewayBonjourAdvertiser(
   logDebug(
     `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
       safeServiceName(instanceName),
-    )}, gatewayPort=${opts.gatewayPort}, bridgePort=${opts.bridgePort ?? 0}, sshPort=${
-      opts.sshPort ?? 22
-    })`,
+    )}, gatewayPort=${opts.gatewayPort}, sshPort=${opts.sshPort ?? 22})`,
   );
 
   for (const { label, svc } of services) {

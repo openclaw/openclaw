@@ -1,10 +1,13 @@
 import Foundation
 
-enum BridgeDiscoveryPreferences {
-    private static let preferredStableIDKey = "bridge.preferredStableID"
+enum GatewayDiscoveryPreferences {
+    private static let preferredStableIDKey = "gateway.preferredStableID"
+    private static let legacyPreferredStableIDKey = "bridge.preferredStableID"
 
     static func preferredStableID() -> String? {
-        let raw = UserDefaults.standard.string(forKey: self.preferredStableIDKey)
+        let defaults = UserDefaults.standard
+        let raw = defaults.string(forKey: self.preferredStableIDKey)
+            ?? defaults.string(forKey: self.legacyPreferredStableIDKey)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
     }
@@ -13,8 +16,10 @@ enum BridgeDiscoveryPreferences {
         let trimmed = stableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
             UserDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
+            UserDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         } else {
             UserDefaults.standard.removeObject(forKey: self.preferredStableIDKey)
+            UserDefaults.standard.removeObject(forKey: self.legacyPreferredStableIDKey)
         }
     }
 }

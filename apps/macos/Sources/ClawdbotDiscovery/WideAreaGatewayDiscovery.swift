@@ -9,7 +9,6 @@ struct WideAreaGatewayBeacon: Sendable, Equatable {
     var lanHost: String?
     var tailnetDns: String?
     var gatewayPort: Int?
-    var bridgePort: Int?
     var sshPort: Int?
     var cliPath: String?
 }
@@ -51,9 +50,9 @@ enum WideAreaGatewayDiscovery {
             return []
         }
 
-        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_clawdbot-bridge._tcp.\(domainTrimmed)"
+        let probeName = "_clawdbot-gateway._tcp.\(domainTrimmed)"
         guard let ptrLines = context.dig(
             ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
             min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
@@ -67,7 +66,7 @@ enum WideAreaGatewayDiscovery {
             let ptr = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             if ptr.isEmpty { continue }
             let ptrName = ptr.hasSuffix(".") ? String(ptr.dropLast()) : ptr
-            let suffix = "._clawdbot-bridge._tcp.\(domainTrimmed)"
+            let suffix = "._clawdbot-gateway._tcp.\(domainTrimmed)"
             let rawInstanceName = ptrName.hasSuffix(suffix)
                 ? String(ptrName.dropLast(suffix.count))
                 : ptrName
@@ -94,7 +93,6 @@ enum WideAreaGatewayDiscovery {
                 lanHost: txt["lanHost"],
                 tailnetDns: txt["tailnetDns"],
                 gatewayPort: parseInt(txt["gatewayPort"]),
-                bridgePort: parseInt(txt["bridgePort"]),
                 sshPort: parseInt(txt["sshPort"]),
                 cliPath: txt["cliPath"])
             beacons.append(beacon)
@@ -156,9 +154,9 @@ enum WideAreaGatewayDiscovery {
         remaining: () -> TimeInterval,
         dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
     {
-        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        let domain = ClawdbotBonjour.wideAreaGatewayServiceDomain
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_clawdbot-bridge._tcp.\(domainTrimmed)"
+        let probeName = "_clawdbot-gateway._tcp.\(domainTrimmed)"
 
         let ips = candidates
         candidates.removeAll(keepingCapacity: true)

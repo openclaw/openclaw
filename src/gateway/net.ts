@@ -23,7 +23,7 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
  * @returns The bind address to use (never null)
  */
 export async function resolveGatewayBindHost(
-  bind: import("../config/config.js").BridgeBindMode | undefined,
+  bind: import("../config/config.js").GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";

@@ -40,9 +40,13 @@ export type GatewayClientOptions = {
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
+  caps?: string[];
+  commands?: string[];
+  permissions?: Record<string, boolean>;
   deviceIdentity?: DeviceIdentity;
   minProtocol?: number;
   maxProtocol?: number;
+  tlsFingerprint?: string;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -81,7 +85,21 @@ export class GatewayClient {
     if (this.closed) return;
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     // Allow node screen snapshots and other large responses.
-    this.ws = new WebSocket(url, { maxPayload: 25 * 1024 * 1024 });
+    const wsOptions: ConstructorParameters<typeof WebSocket>[1] = {
+      maxPayload: 25 * 1024 * 1024,
+    };
+    if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
+      wsOptions.rejectUnauthorized = false;
+      wsOptions.checkServerIdentity = (_host, cert) => {
+        const fingerprint = normalizeFingerprint(
+          typeof cert?.fingerprint256 === "string" ? cert.fingerprint256 : "",
+        );
+        const expected = normalizeFingerprint(this.opts.tlsFingerprint ?? "");
+        if (fingerprint && fingerprint === expected) return undefined;
+        return new Error("gateway tls fingerprint mismatch");
+      };
+    }
+    this.ws = new WebSocket(url, wsOptions);
 
     this.ws.on("open", () => this.sendConnect());
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
@@ -149,7 +167,12 @@ export class GatewayClient {
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
         instanceId: this.opts.instanceId,
       },
-      caps: [],
+      caps: Array.isArray(this.opts.caps) ? this.opts.caps : [],
+      commands: Array.isArray(this.opts.commands) ? this.opts.commands : undefined,
+      permissions:
+        this.opts.permissions && typeof this.opts.permissions === "object"
+          ? this.opts.permissions
+          : undefined,
       auth,
       role,
       scopes,
@@ -269,4 +292,8 @@ export class GatewayClient {
     this.ws.send(JSON.stringify(frame));
     return p;
   }
+}
+
+function normalizeFingerprint(input: string): string {
+  return input.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
 }

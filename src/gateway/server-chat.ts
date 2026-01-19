@@ -94,11 +94,11 @@ export type ChatEventBroadcast = (
   opts?: { dropIfSlow?: boolean },
 ) => void;
 
-export type BridgeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
+export type NodeSendToSession = (sessionKey: string, event: string, payload: unknown) => void;
 
 export type AgentEventHandlerOptions = {
   broadcast: ChatEventBroadcast;
-  bridgeSendToSession: BridgeSendToSession;
+  nodeSendToSession: NodeSendToSession;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
@@ -107,7 +107,7 @@ export type AgentEventHandlerOptions = {
 
 export function createAgentEventHandler({
   broadcast,
-  bridgeSendToSession,
+  nodeSendToSession,
   agentRunSeq,
   chatRunState,
   resolveSessionKeyForRun,
@@ -131,7 +131,7 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", payload, { dropIfSlow: true });
-    bridgeSendToSession(sessionKey, "chat", payload);
+    nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const emitChatFinal = (
@@ -159,7 +159,7 @@ export function createAgentEventHandler({
           : undefined,
       };
       broadcast("chat", payload);
-      bridgeSendToSession(sessionKey, "chat", payload);
+      nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
     const payload = {
@@ -170,7 +170,7 @@ export function createAgentEventHandler({
       errorMessage: error ? formatForLog(error) : undefined,
     };
     broadcast("chat", payload);
-    bridgeSendToSession(sessionKey, "chat", payload);
+    nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const shouldEmitToolEvents = (runId: string, sessionKey?: string) => {
@@ -222,7 +222,7 @@ export function createAgentEventHandler({
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
     if (sessionKey) {
-      bridgeSendToSession(sessionKey, "agent", agentPayload);
+    nodeSendToSession(sessionKey, "agent", agentPayload);
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {

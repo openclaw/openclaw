@@ -55,6 +55,17 @@ struct WebSocketSessionBox: @unchecked Sendable {
     let session: any WebSocketSessioning
 }
 
+struct GatewayConnectOptions: Sendable {
+    var role: String
+    var scopes: [String]
+    var caps: [String]
+    var commands: [String]
+    var permissions: [String: Bool]
+    var clientId: String
+    var clientMode: String
+    var clientDisplayName: String?
+}
+
 // Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
 
@@ -81,19 +92,25 @@ actor GatewayChannelActor {
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
+    private let connectOptions: GatewayConnectOptions?
+    private let disconnectHandler: (@Sendable (String) async -> Void)?
 
     init(
         url: URL,
         token: String?,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
-        pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil)
+        pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
+        connectOptions: GatewayConnectOptions? = nil,
+        disconnectHandler: (@Sendable (String) async -> Void)? = nil)
     {
         self.url = url
         self.token = token
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
+        self.connectOptions = connectOptions
+        self.disconnectHandler = disconnectHandler
         Task { [weak self] in
             await self?.startWatchdog()
         }
@@ -178,6 +195,7 @@ actor GatewayChannelActor {
             let wrapped = self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             self.connected = false
             self.task?.cancel(with: .goingAway, reason: nil)
+            await self.disconnectHandler?("connect failed: \(wrapped.localizedDescription)")
             let waiters = self.connectWaiters
             self.connectWaiters.removeAll()
             for waiter in waiters {
@@ -202,9 +220,18 @@ actor GatewayChannelActor {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
-        let clientDisplayName = InstanceIdentity.displayName
-        let clientId = "clawdbot-macos"
-        let clientMode = "ui"
+        let options = self.connectOptions ?? GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "clawdbot-macos",
+            clientMode: "ui",
+            clientDisplayName: InstanceIdentity.displayName)
+        let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName
+        let clientId = options.clientId
+        let clientMode = options.clientMode
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
@@ -224,12 +251,18 @@ actor GatewayChannelActor {
             "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "client": ProtoAnyCodable(client),
-            "caps": ProtoAnyCodable([] as [String]),
+            "caps": ProtoAnyCodable(options.caps),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
-            "role": ProtoAnyCodable("operator"),
-            "scopes": ProtoAnyCodable(["operator.admin", "operator.approvals", "operator.pairing"]),
+            "role": ProtoAnyCodable(options.role),
+            "scopes": ProtoAnyCodable(options.scopes),
         ]
+        if !options.commands.isEmpty {
+            params["commands"] = ProtoAnyCodable(options.commands)
+        }
+        if !options.permissions.isEmpty {
+            params["permissions"] = ProtoAnyCodable(options.permissions)
+        }
         if let token = self.token {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
         } else if let password = self.password {
@@ -237,13 +270,13 @@ actor GatewayChannelActor {
         }
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let scopes = "operator.admin,operator.approvals,operator.pairing"
+        let scopes = options.scopes.joined(separator: ",")
         let payload = [
             "v1",
             identity.deviceId,
             clientId,
             clientMode,
-            "operator",
+            options.role,
             scopes,
             String(signedAtMs),
             self.token ?? "",
@@ -344,6 +377,7 @@ actor GatewayChannelActor {
         let wrapped = self.wrap(err, context: "gateway receive")
         self.logger.error("gateway ws receive failed \(wrapped.localizedDescription, privacy: .public)")
         self.connected = false
+        await self.disconnectHandler?("receive failed: \(wrapped.localizedDescription)")
         await self.failPending(wrapped)
         await self.scheduleReconnect()
     }

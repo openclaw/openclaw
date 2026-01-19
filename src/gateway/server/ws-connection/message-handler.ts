@@ -13,12 +13,15 @@ import {
   requestDevicePairing,
   updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
+import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { authorizeGatewayConnect } from "../../auth.js";
+import { loadConfig } from "../../../config/config.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress } from "../../net.js";
 import {
@@ -478,6 +481,38 @@ export function attachGatewayWsMessageHandler(params: {
         };
         setClient(nextClient);
         setHandshakeState("connected");
+        if (role === "node") {
+          const context = buildRequestContext();
+          const nodeSession = context.nodeRegistry.register(nextClient, { remoteIp: remoteAddr });
+          recordRemoteNodeInfo({
+            nodeId: nodeSession.nodeId,
+            displayName: nodeSession.displayName,
+            platform: nodeSession.platform,
+            deviceFamily: nodeSession.deviceFamily,
+            commands: nodeSession.commands,
+            remoteIp: nodeSession.remoteIp,
+          });
+          void refreshRemoteNodeBins({
+            nodeId: nodeSession.nodeId,
+            platform: nodeSession.platform,
+            deviceFamily: nodeSession.deviceFamily,
+            commands: nodeSession.commands,
+            cfg: loadConfig(),
+          }).catch((err) =>
+            logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
+          );
+          void loadVoiceWakeConfig()
+            .then((cfg) => {
+              context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
+                triggers: cfg.triggers,
+              });
+            })
+            .catch((err) =>
+              logGateway.warn(
+                `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
+              ),
+            );
+        }
 
         logWs("out", "hello-ok", {
           connId,

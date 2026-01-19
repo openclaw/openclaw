@@ -110,24 +110,23 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
       tailnetDns: "host.tailnet.ts.net",
       cliPath: "/opt/homebrew/bin/clawdbot",
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
-    const [bridgeCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
-    expect(bridgeCall?.[0]?.type).toBe("clawdbot-bridge");
-    expect(bridgeCall?.[0]?.port).toBe(18790);
-    expect(bridgeCall?.[0]?.domain).toBe("local");
-    expect(bridgeCall?.[0]?.hostname).toBe("test-host");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.bridgePort).toBe("18790");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
+    const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
+    expect(gatewayCall?.[0]?.type).toBe("clawdbot-gateway");
+    expect(gatewayCall?.[0]?.port).toBe(18789);
+    expect(gatewayCall?.[0]?.domain).toBe("local");
+    expect(gatewayCall?.[0]?.hostname).toBe("test-host");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe("18789");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
       "/opt/homebrew/bin/clawdbot",
     );
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.transport).toBe("bridge");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.transport).toBe("gateway");
 
     // We don't await `advertise()`, but it should still be called for each service.
     expect(advertise).toHaveBeenCalledTimes(1);
@@ -166,7 +165,6 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
     });
 
     // 1 service × 2 listeners
@@ -209,7 +207,6 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
     });
 
     await started.stop();
@@ -248,7 +245,6 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
     });
 
     // initial advertise attempt happens immediately
@@ -295,7 +291,6 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
@@ -328,14 +323,13 @@ describe("gateway bonjour advertiser", () => {
     const started = await startGatewayBonjourAdvertiser({
       gatewayPort: 18789,
       sshPort: 2222,
-      bridgePort: 18790,
     });
 
-    const [bridgeCall] = createService.mock.calls as Array<[ServiceCall]>;
-    expect(bridgeCall?.[0]?.name).toBe("Mac (Clawdbot)");
-    expect(bridgeCall?.[0]?.domain).toBe("local");
-    expect(bridgeCall?.[0]?.hostname).toBe("Mac");
-    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
+    const [gatewayCall] = createService.mock.calls as Array<[ServiceCall]>;
+    expect(gatewayCall?.[0]?.name).toBe("Mac (Clawdbot)");
+    expect(gatewayCall?.[0]?.domain).toBe("local");
+    expect(gatewayCall?.[0]?.hostname).toBe("Mac");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("Mac.local");
 
     await started.stop();
   });

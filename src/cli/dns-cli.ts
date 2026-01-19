@@ -122,7 +122,7 @@ export function registerDnsCli(program: Command) {
       console.log(
         JSON.stringify(
           {
-            bridge: { bind: "tailnet" },
+            gateway: { bind: "auto" },
             discovery: { wideArea: { enabled: true } },
           },
           null,

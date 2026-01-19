@@ -113,7 +113,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       removeChatRun: context.removeChatRun,
       agentRunSeq: context.agentRunSeq,
       broadcast: context.broadcast,
-      bridgeSendToSession: context.bridgeSendToSession,
+      nodeSendToSession: context.nodeSendToSession,
     };
 
     if (!runId) {
@@ -250,7 +250,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           removeChatRun: context.removeChatRun,
           agentRunSeq: context.agentRunSeq,
           broadcast: context.broadcast,
-          bridgeSendToSession: context.bridgeSendToSession,
+          nodeSendToSession: context.nodeSendToSession,
         },
         { sessionKey: p.sessionKey, stopReason: "stop" },
       );
@@ -451,7 +451,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: transcriptEntry.message,
     };
     context.broadcast("chat", chatPayload);
-    context.bridgeSendToSession(p.sessionKey, "chat", chatPayload);
+    context.nodeSendToSession(p.sessionKey, "chat", chatPayload);
 
     respond(true, { ok: true, messageId });
   },

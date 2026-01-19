@@ -486,46 +486,20 @@ actor MacNodeRuntime {
             return false
         }()
 
-        var approvedByAsk = false
-        if requiresAsk {
-            let decision = await ExecApprovalsPromptPresenter.prompt(
-                ExecApprovalPromptRequest(
-                    command: displayCommand,
-                    cwd: params.cwd,
+        let approvedByAsk = params.approved == true
+        if requiresAsk && !approvedByAsk {
+            await self.emitExecEvent(
+                "exec.denied",
+                payload: ExecEventPayload(
+                    sessionKey: sessionKey,
+                    runId: runId,
                     host: "node",
-                    security: security.rawValue,
-                    ask: ask.rawValue,
-                    agentId: agentId,
-                    resolvedPath: resolution?.resolvedPath))
-
-            switch decision {
-            case .deny:
-                await self.emitExecEvent(
-                    "exec.denied",
-                    payload: ExecEventPayload(
-                        sessionKey: sessionKey,
-                        runId: runId,
-                        host: "node",
-                        command: displayCommand,
-                        reason: "user-denied"))
-                return Self.errorResponse(
-                    req,
-                    code: .unavailable,
-                    message: "SYSTEM_RUN_DENIED: user denied")
-            case .allowAlways:
-                approvedByAsk = true
-                if security == .allowlist {
-                    let pattern = resolution?.resolvedPath ??
-                        resolution?.rawExecutable ??
-                        command.first?.trimmingCharacters(in: .whitespacesAndNewlines) ??
-                        ""
-                    if !pattern.isEmpty {
-                        ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-                    }
-                }
-            case .allowOnce:
-                approvedByAsk = true
-            }
+                    command: displayCommand,
+                    reason: "approval-required"))
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "SYSTEM_RUN_DENIED: approval required")
         }
 
         if security == .allowlist && allowlistMatch == nil && !skillAllow && !approvedByAsk {
@@ -762,7 +736,7 @@ actor MacNodeRuntime {
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
-            throw NSError(domain: "Bridge", code: 20, userInfo: [
+            throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }
