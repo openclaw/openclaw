@@ -60,7 +60,11 @@ function ensureExperimentalWarningSuppressed(): boolean {
 function normalizeWindowsArgv(argv: string[]): string[] {
   if (process.platform !== "win32") return argv;
   if (argv.length < 3) return argv;
-  const normalizeArg = (value: string): string => value.replace(/^['"]+|['"]+$/g, "").trim();
+  const normalizeArg = (value: string): string =>
+    value
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .replace(/^['"]+|['"]+$/g, "")
+      .trim();
   const normalizeCandidate = (value: string): string =>
     normalizeArg(value).replace(/^\\\\\\?\\/, "");
   const execPath = normalizeCandidate(process.execPath);
@@ -73,7 +77,8 @@ function normalizeWindowsArgv(argv: string[]): string[] {
       lower === execPathLower ||
       path.basename(lower) === execBase ||
       lower.endsWith("\\node.exe") ||
-      lower.endsWith("/node.exe")
+      lower.endsWith("/node.exe") ||
+      lower.includes("node.exe")
     );
   };
   const arg1 = path.basename(argv[1] ?? "").toLowerCase();
