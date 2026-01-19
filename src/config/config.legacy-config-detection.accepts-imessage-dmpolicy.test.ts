@@ -65,7 +65,7 @@ describe("legacy config detection", () => {
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { imessage: { cliPath: "imsg; rm -rf /" } },
-      tools: { audio: { transcription: { args: ["--model", "base"] } } },
+      audio: { transcription: { command: ["whisper", "--model", "base"] } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -76,7 +76,7 @@ describe("legacy config detection", () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
-      tools: { audio: { transcription: { args: ["--model", "base"] } } },
+      audio: { transcription: { command: ["whisper", "--model", "base"] } },
     });
     expect(res.ok).toBe(true);
   });
@@ -85,11 +85,9 @@ describe("legacy config detection", () => {
     const { validateConfigObject } = await import("./config.js");
     const res = validateConfigObject({
       channels: { imessage: { cliPath: "/Applications/Imsg Tools/imsg" } },
-      tools: {
-        audio: {
-          transcription: {
-            args: ["--model"],
-          },
+      audio: {
+        transcription: {
+          command: ["whisper", "--model"],
         },
       },
     });
@@ -166,7 +164,7 @@ describe("legacy config detection", () => {
     expect(res.config?.agents?.defaults?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
     expect(res.config?.agent).toBeUndefined();
   });
-  it("auto-migrates legacy config in snapshot (no legacyIssues)", async () => {
+  it("flags legacy config in snapshot", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -176,31 +174,23 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { readConfigFileSnapshot } = await import("./config.js");
-        const snap = await readConfigFileSnapshot();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        expect(snap.valid).toBe(true);
-        expect(snap.legacyIssues.length).toBe(0);
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          channels?: { whatsapp?: { allowFrom?: string[] } };
-          routing?: unknown;
-        };
-        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
-        expect(parsed.routing).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        routing?: { allowFrom?: string[] };
+        channels?: unknown;
+      };
+      expect(parsed.routing?.allowFrom).toEqual(["+15555550123"]);
+      expect(parsed.channels).toBeUndefined();
     });
   });
-  it("auto-migrates claude-cli auth profile mode to oauth", async () => {
+  it("does not auto-migrate claude-cli auth profile mode on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -220,27 +210,19 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
-        expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("oauth");
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+      expect(cfg.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          auth?: { profiles?: Record<string, { mode?: string }> };
-        };
-        expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("oauth");
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        auth?: { profiles?: Record<string, { mode?: string }> };
+      };
+      expect(parsed.auth?.profiles?.["anthropic:claude-cli"]?.mode).toBe("token");
     });
   });
-  it("auto-migrates legacy provider sections on load and writes back", async () => {
+  it("flags legacy provider sections in snapshot", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -250,29 +232,23 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        expect(cfg.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          channels?: { whatsapp?: { allowFrom?: string[] } };
-          whatsapp?: unknown;
-        };
-        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+1555"]);
-        expect(parsed.whatsapp).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "whatsapp")).toBe(true);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        channels?: unknown;
+        whatsapp?: unknown;
+      };
+      expect(parsed.channels).toBeUndefined();
+      expect(parsed.whatsapp).toBeTruthy();
     });
   });
-  it("auto-migrates routing.allowFrom on load and writes back", async () => {
+  it("flags routing.allowFrom in snapshot", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -282,26 +258,23 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        expect(cfg.channels?.whatsapp?.allowFrom).toEqual(["+1666"]);
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          channels?: { whatsapp?: { allowFrom?: string[] } };
-          routing?: unknown;
-        };
-        expect(parsed.channels?.whatsapp?.allowFrom).toEqual(["+1666"]);
-        expect(parsed.routing).toBeUndefined();
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.some((issue) => issue.path === "routing.allowFrom")).toBe(true);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        channels?: unknown;
+        routing?: { allowFrom?: string[] };
+      };
+      expect(parsed.channels).toBeUndefined();
+      expect(parsed.routing?.allowFrom).toEqual(["+1666"]);
     });
   });
-  it("auto-migrates bindings[].match.provider on load and writes back", async () => {
+  it("rejects bindings[].match.provider on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -317,28 +290,21 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
-        expect(cfg.bindings?.[0]?.match?.channel).toBe("slack");
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          bindings?: Array<{ match?: { channel?: string; provider?: string } }>;
-        };
-        expect(parsed.bindings?.[0]?.match?.channel).toBe("slack");
-        expect(parsed.bindings?.[0]?.match?.provider).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.length).toBeGreaterThan(0);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        bindings?: Array<{ match?: { provider?: string } }>;
+      };
+      expect(parsed.bindings?.[0]?.match?.provider).toBe("slack");
     });
   });
-  it("auto-migrates bindings[].match.accountID on load and writes back", async () => {
+  it("rejects bindings[].match.accountID on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -354,28 +320,21 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
-        expect(cfg.bindings?.[0]?.match?.accountId).toBe("work");
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          bindings?: Array<{ match?: { accountId?: string; accountID?: string } }>;
-        };
-        expect(parsed.bindings?.[0]?.match?.accountId).toBe("work");
-        expect(parsed.bindings?.[0]?.match?.accountID).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.length).toBeGreaterThan(0);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        bindings?: Array<{ match?: { accountID?: string } }>;
+      };
+      expect(parsed.bindings?.[0]?.match?.accountID).toBe("work");
     });
   });
-  it("auto-migrates session.sendPolicy.rules[].match.provider on load and writes back", async () => {
+  it("rejects session.sendPolicy.rules[].match.provider on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -395,34 +354,21 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
-        expect(cfg.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe("telegram");
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          session?: {
-            sendPolicy?: {
-              rules?: Array<{
-                match?: { channel?: string; provider?: string };
-              }>;
-            };
-          };
-        };
-        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.channel).toBe("telegram");
-        expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.length).toBeGreaterThan(0);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        session?: { sendPolicy?: { rules?: Array<{ match?: { provider?: string } }> } };
+      };
+      expect(parsed.session?.sendPolicy?.rules?.[0]?.match?.provider).toBe("telegram");
     });
   });
-  it("auto-migrates messages.queue.byProvider on load and writes back", async () => {
+  it("rejects messages.queue.byProvider on load", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdbot", "clawdbot.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -432,30 +378,22 @@ describe("legacy config detection", () => {
         "utf-8",
       );
 
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       vi.resetModules();
-      try {
-        const { loadConfig } = await import("./config.js");
-        const cfg = loadConfig();
-        expect(cfg.messages?.queue?.byChannel?.whatsapp).toBe("queue");
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
 
-        const raw = await fs.readFile(configPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          messages?: {
-            queue?: {
-              byChannel?: Record<string, unknown>;
-              byProvider?: unknown;
-            };
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.length).toBeGreaterThan(0);
+
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        messages?: {
+          queue?: {
+            byProvider?: Record<string, unknown>;
           };
         };
-        expect(parsed.messages?.queue?.byChannel?.whatsapp).toBe("queue");
-        expect(parsed.messages?.queue?.byProvider).toBeUndefined();
-        expect(
-          warnSpy.mock.calls.some(([msg]) => String(msg).includes("Auto-migrated config")),
-        ).toBe(true);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      };
+      expect(parsed.messages?.queue?.byProvider?.whatsapp).toBe("queue");
     });
   });
 });

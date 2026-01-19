@@ -23,32 +23,40 @@ const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "a
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
-  z.object({
-    inlineButtons: TelegramInlineButtonsScopeSchema.optional(),
-  }),
+  z
+    .object({
+      inlineButtons: TelegramInlineButtonsScopeSchema.optional(),
+    })
+    .strict(),
 ]);
 
-export const TelegramTopicSchema = z.object({
-  requireMention: z.boolean().optional(),
-  skills: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  systemPrompt: z.string().optional(),
-});
+export const TelegramTopicSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+  })
+  .strict();
 
-export const TelegramGroupSchema = z.object({
-  requireMention: z.boolean().optional(),
-  skills: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  systemPrompt: z.string().optional(),
-  topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
-});
+export const TelegramGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+  })
+  .strict();
 
-const TelegramCustomCommandSchema = z.object({
-  command: z.string().transform(normalizeTelegramCommandName),
-  description: z.string().transform(normalizeTelegramCommandDescription),
-});
+const TelegramCustomCommandSchema = z
+  .object({
+    command: z.string().transform(normalizeTelegramCommandName),
+    description: z.string().transform(normalizeTelegramCommandDescription),
+  })
+  .strict();
 
 const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
@@ -69,7 +77,8 @@ const validateTelegramCustomCommands = (
   }
 };
 
-export const TelegramAccountSchemaBase = z.object({
+export const TelegramAccountSchemaBase = z
+  .object({
   name: z.string().optional(),
   capabilities: TelegramCapabilitiesSchema.optional(),
   enabled: z.boolean().optional(),
@@ -105,10 +114,12 @@ export const TelegramAccountSchemaBase = z.object({
       sendMessage: z.boolean().optional(),
       deleteMessage: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   reactionNotifications: z.enum(["off", "own", "all"]).optional(),
   reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
-});
+})
+  .strict();
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -144,6 +155,7 @@ export const DiscordDmSchema = z
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     requireOpenAllowFrom({
       policy: value.policy,
@@ -155,25 +167,30 @@ export const DiscordDmSchema = z
     });
   });
 
-export const DiscordGuildChannelSchema = z.object({
-  allow: z.boolean().optional(),
-  requireMention: z.boolean().optional(),
-  skills: z.array(z.string()).optional(),
-  enabled: z.boolean().optional(),
-  users: z.array(z.union([z.string(), z.number()])).optional(),
-  systemPrompt: z.string().optional(),
-  autoThread: z.boolean().optional(),
-});
+export const DiscordGuildChannelSchema = z
+  .object({
+    allow: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    skills: z.array(z.string()).optional(),
+    enabled: z.boolean().optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+    autoThread: z.boolean().optional(),
+  })
+  .strict();
 
-export const DiscordGuildSchema = z.object({
-  slug: z.string().optional(),
-  requireMention: z.boolean().optional(),
-  reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-  users: z.array(z.union([z.string(), z.number()])).optional(),
-  channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
-});
+export const DiscordGuildSchema = z
+  .object({
+    slug: z.string().optional(),
+    requireMention: z.boolean().optional(),
+    reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    channels: z.record(z.string(), DiscordGuildChannelSchema.optional()).optional(),
+  })
+  .strict();
 
-export const DiscordAccountSchema = z.object({
+export const DiscordAccountSchema = z
+  .object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
@@ -212,11 +229,13 @@ export const DiscordAccountSchema = z.object({
       moderation: z.boolean().optional(),
       channels: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   replyToMode: ReplyToModeSchema.optional(),
   dm: DiscordDmSchema.optional(),
   guilds: z.record(z.string(), DiscordGuildSchema.optional()).optional(),
-});
+})
+  .strict();
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
   accounts: z.record(z.string(), DiscordAccountSchema.optional()).optional(),
@@ -230,6 +249,7 @@ export const SlackDmSchema = z
     groupEnabled: z.boolean().optional(),
     groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     requireOpenAllowFrom({
       policy: value.policy,
@@ -241,22 +261,27 @@ export const SlackDmSchema = z
     });
   });
 
-export const SlackChannelSchema = z.object({
-  enabled: z.boolean().optional(),
-  allow: z.boolean().optional(),
-  requireMention: z.boolean().optional(),
-  allowBots: z.boolean().optional(),
-  users: z.array(z.union([z.string(), z.number()])).optional(),
-  skills: z.array(z.string()).optional(),
-  systemPrompt: z.string().optional(),
-});
+export const SlackChannelSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    allow: z.boolean().optional(),
+    requireMention: z.boolean().optional(),
+    allowBots: z.boolean().optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    skills: z.array(z.string()).optional(),
+    systemPrompt: z.string().optional(),
+  })
+  .strict();
 
-export const SlackThreadSchema = z.object({
-  historyScope: z.enum(["thread", "channel"]).optional(),
-  inheritParent: z.boolean().optional(),
-});
+export const SlackThreadSchema = z
+  .object({
+    historyScope: z.enum(["thread", "channel"]).optional(),
+    inheritParent: z.boolean().optional(),
+  })
+  .strict();
 
-export const SlackAccountSchema = z.object({
+export const SlackAccountSchema = z
+  .object({
   name: z.string().optional(),
   mode: z.enum(["socket", "http"]).optional(),
   signingSecret: z.string().optional(),
@@ -294,6 +319,7 @@ export const SlackAccountSchema = z.object({
       channelInfo: z.boolean().optional(),
       emojiList: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   slashCommand: z
     .object({
@@ -302,10 +328,12 @@ export const SlackAccountSchema = z.object({
       sessionPrefix: z.string().optional(),
       ephemeral: z.boolean().optional(),
     })
+    .strict()
     .optional(),
   dm: SlackDmSchema.optional(),
   channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
-});
+})
+  .strict();
 
 export const SlackConfigSchema = SlackAccountSchema.extend({
   mode: z.enum(["socket", "http"]).optional().default("socket"),
@@ -339,7 +367,8 @@ export const SlackConfigSchema = SlackAccountSchema.extend({
   }
 });
 
-export const SignalAccountSchemaBase = z.object({
+export const SignalAccountSchemaBase = z
+  .object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
@@ -367,7 +396,8 @@ export const SignalAccountSchemaBase = z.object({
   mediaMaxMb: z.number().int().positive().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
-});
+})
+  .strict();
 
 export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -391,7 +421,8 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   });
 });
 
-export const IMessageAccountSchemaBase = z.object({
+export const IMessageAccountSchemaBase = z
+  .object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
@@ -420,10 +451,12 @@ export const IMessageAccountSchemaBase = z.object({
         .object({
           requireMention: z.boolean().optional(),
         })
+        .strict()
         .optional(),
     )
     .optional(),
-});
+})
+  .strict();
 
 export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -449,16 +482,20 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   });
 });
 
-export const MSTeamsChannelSchema = z.object({
-  requireMention: z.boolean().optional(),
-  replyStyle: MSTeamsReplyStyleSchema.optional(),
-});
+export const MSTeamsChannelSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    replyStyle: MSTeamsReplyStyleSchema.optional(),
+  })
+  .strict();
 
-export const MSTeamsTeamSchema = z.object({
-  requireMention: z.boolean().optional(),
-  replyStyle: MSTeamsReplyStyleSchema.optional(),
-  channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
-});
+export const MSTeamsTeamSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    replyStyle: MSTeamsReplyStyleSchema.optional(),
+    channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
+  })
+  .strict();
 
 export const MSTeamsConfigSchema = z
   .object({
@@ -473,6 +510,7 @@ export const MSTeamsConfigSchema = z
         port: z.number().int().positive().optional(),
         path: z.string().optional(),
       })
+      .strict()
       .optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.string()).optional(),
@@ -488,6 +526,7 @@ export const MSTeamsConfigSchema = z
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
   })
+  .strict()
   .superRefine((value, ctx) => {
     requireOpenAllowFrom({
       policy: value.dmPolicy,

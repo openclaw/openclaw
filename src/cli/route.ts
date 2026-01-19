@@ -15,18 +15,17 @@ import {
   getVerboseFlag,
   hasFlag,
   hasHelpOrVersion,
-  shouldMigrateStateFromPath,
 } from "./argv.js";
 import { ensureConfigReady } from "./program/config-guard.js";
 import { runMemoryStatus } from "./memory-cli.js";
 
 async function prepareRoutedCommand(params: {
   argv: string[];
-  migrateState: boolean;
+  commandPath: string[];
   loadPlugins?: boolean;
 }) {
   emitCliBanner(VERSION, { argv: params.argv });
-  await ensureConfigReady({ runtime: defaultRuntime, migrateState: params.migrateState });
+  await ensureConfigReady({ runtime: defaultRuntime, commandPath: params.commandPath });
   if (params.loadPlugins) {
     ensurePluginRegistryLoaded();
   }
@@ -39,10 +38,8 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   const path = getCommandPath(argv, 2);
   const [primary, secondary] = path;
   if (!primary) return false;
-  const migrateState = shouldMigrateStateFromPath(path);
-
   if (primary === "health") {
-    await prepareRoutedCommand({ argv, migrateState, loadPlugins: true });
+    await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: true });
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     const timeoutMs = getPositiveIntFlagValue(argv, "--timeout");
@@ -53,7 +50,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "status") {
-    await prepareRoutedCommand({ argv, migrateState, loadPlugins: true });
+    await prepareRoutedCommand({ argv, commandPath: path, loadPlugins: true });
     const json = hasFlag(argv, "--json");
     const deep = hasFlag(argv, "--deep");
     const all = hasFlag(argv, "--all");
@@ -67,7 +64,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "sessions") {
-    await prepareRoutedCommand({ argv, migrateState });
+    await prepareRoutedCommand({ argv, commandPath: path });
     const json = hasFlag(argv, "--json");
     const verbose = getVerboseFlag(argv);
     const store = getFlagValue(argv, "--store");
@@ -80,7 +77,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "agents" && secondary === "list") {
-    await prepareRoutedCommand({ argv, migrateState });
+    await prepareRoutedCommand({ argv, commandPath: path });
     const json = hasFlag(argv, "--json");
     const bindings = hasFlag(argv, "--bindings");
     await agentsListCommand({ json, bindings }, defaultRuntime);
@@ -88,7 +85,7 @@ export async function tryRouteCli(argv: string[]): Promise<boolean> {
   }
 
   if (primary === "memory" && secondary === "status") {
-    await prepareRoutedCommand({ argv, migrateState });
+    await prepareRoutedCommand({ argv, commandPath: path });
     const agent = getFlagValue(argv, "--agent");
     if (agent === null) return false;
     const json = hasFlag(argv, "--json");

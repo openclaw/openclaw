@@ -8,25 +8,31 @@ export const AgentsSchema = z
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
   })
+  .strict()
   .optional();
 
 export const BindingsSchema = z
   .array(
-    z.object({
-      agentId: z.string(),
-      match: z.object({
-        channel: z.string(),
-        accountId: z.string().optional(),
-        peer: z
+    z
+      .object({
+        agentId: z.string(),
+        match: z
           .object({
-            kind: z.union([z.literal("dm"), z.literal("group"), z.literal("channel")]),
-            id: z.string(),
+            channel: z.string(),
+            accountId: z.string().optional(),
+            peer: z
+              .object({
+                kind: z.union([z.literal("dm"), z.literal("group"), z.literal("channel")]),
+                id: z.string(),
+              })
+              .strict()
+              .optional(),
+            guildId: z.string().optional(),
+            teamId: z.string().optional(),
           })
-          .optional(),
-        guildId: z.string().optional(),
-        teamId: z.string().optional(),
-      }),
-    }),
+          .strict(),
+      })
+      .strict(),
   )
   .optional();
 
@@ -43,4 +49,5 @@ export const AudioSchema = z
   .object({
     transcription: TranscribeAudioSchema,
   })
+  .strict()
   .optional();

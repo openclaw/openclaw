@@ -356,7 +356,7 @@ describe("doctor command", () => {
       changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
     });
 
-    await doctorCommand(runtime, { nonInteractive: true });
+    await doctorCommand(runtime, { nonInteractive: true, repair: true });
 
     expect(writeConfigFile).toHaveBeenCalledTimes(1);
     const written = writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;

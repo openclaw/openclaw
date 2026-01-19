@@ -4,6 +4,9 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.19-1
 
+### Breaking
+- **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety; run `clawdbot doctor --fix` to repair. 
+
 ### Changes
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
 

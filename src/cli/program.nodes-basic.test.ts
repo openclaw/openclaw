@@ -43,6 +43,11 @@ vi.mock("../tui/tui.js", () => ({ runTui }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   randomIdempotencyKey: () => "idem-test",
+  buildGatewayConnectionDetails: () => ({
+    url: "ws://127.0.0.1:1234",
+    urlSource: "test",
+    message: "Gateway target: ws://127.0.0.1:1234",
+  }),
 }));
 vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
 
@@ -127,26 +132,32 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodeId: "ios-node",
-        displayName: "iOS Node",
-        caps: ["canvas", "camera"],
-        commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
-        connected: true,
-      });
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.describe") {
+        return {
+          ts: Date.now(),
+          nodeId: "ios-node",
+          displayName: "iOS Node",
+          caps: ["canvas", "camera"],
+          commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
+          connected: true,
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -154,12 +165,10 @@ describe("cli program (nodes basics)", () => {
       from: "user",
     });
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      1,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ method: "node.list", params: {} }),
     );
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.describe",
         params: { nodeId: "ios-node" },
@@ -189,24 +198,30 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "canvas.eval",
-        payload: { result: "ok" },
-      });
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "canvas.eval",
+          payload: { result: "ok" },
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -224,12 +239,10 @@ describe("cli program (nodes basics)", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      1,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({ method: "node.list", params: {} }),
     );
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.invoke",
         params: {

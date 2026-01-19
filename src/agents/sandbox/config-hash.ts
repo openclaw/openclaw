@@ -12,7 +12,6 @@ type SandboxHashInput = {
 function isPrimitive(value: unknown): value is string | number | boolean | bigint | symbol | null {
   return value === null || (typeof value !== "object" && typeof value !== "function");
 }
-
 function normalizeForHash(value: unknown): unknown {
   if (value === undefined) return undefined;
   if (Array.isArray(value)) {

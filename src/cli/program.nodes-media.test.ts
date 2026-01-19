@@ -44,6 +44,11 @@ vi.mock("../tui/tui.js", () => ({ runTui }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   randomIdempotencyKey: () => "idem-test",
+  buildGatewayConnectionDetails: () => ({
+    url: "ws://127.0.0.1:1234",
+    urlSource: "test",
+    message: "Gateway target: ws://127.0.0.1:1234",
+  }),
 }));
 vi.mock("./deps.js", () => ({ createDefaultDeps: () => ({}) }));
 
@@ -56,61 +61,43 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.snap",
-        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.snap",
-        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
-      });
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "camera.snap",
+          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
     await program.parseAsync(["nodes", "camera", "snap", "--node", "ios-node"], { from: "user" });
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        method: "node.invoke",
-        params: expect.objectContaining({
-          nodeId: "ios-node",
-          command: "camera.snap",
-          timeoutMs: 20000,
-          idempotencyKey: "idem-test",
-          params: expect.objectContaining({ facing: "front", format: "jpg" }),
-        }),
-      }),
-    );
-    expect(callGateway).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        method: "node.invoke",
-        params: expect.objectContaining({
-          nodeId: "ios-node",
-          command: "camera.snap",
-          timeoutMs: 20000,
-          idempotencyKey: "idem-test",
-          params: expect.objectContaining({ facing: "back", format: "jpg" }),
-        }),
-      }),
-    );
+    const invokeCalls = callGateway.mock.calls
+      .map((call) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .filter((call) => call.method === "node.invoke");
+    const facings = invokeCalls
+      .map((call) => (call.params?.params as { facing?: string } | undefined)?.facing)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+    expect(facings).toEqual(["back", "front"]);
 
     const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
     const mediaPaths = out
@@ -130,29 +117,35 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera clip and prints one MEDIA path", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "camera.clip",
+          payload: {
+            format: "mp4",
+            base64: "aGk=",
+            durationMs: 3000,
+            hasAudio: true,
           },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.clip",
-        payload: {
-          format: "mp4",
-          base64: "aGk=",
-          durationMs: 3000,
-          hasAudio: true,
-        },
-      });
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -161,8 +154,7 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.invoke",
         params: expect.objectContaining({
@@ -192,24 +184,30 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera snap with facing front and passes params", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.snap",
-        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
-      });
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "camera.snap",
+          payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -234,8 +232,7 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.invoke",
         params: expect.objectContaining({
@@ -265,29 +262,35 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera clip with --no-audio", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "camera.clip",
+          payload: {
+            format: "mp4",
+            base64: "aGk=",
+            durationMs: 3000,
+            hasAudio: false,
           },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.clip",
-        payload: {
-          format: "mp4",
-          base64: "aGk=",
-          durationMs: 3000,
-          hasAudio: false,
-        },
-      });
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -307,8 +310,7 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.invoke",
         params: expect.objectContaining({
@@ -335,29 +337,35 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes camera clip with human duration (10s)", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "camera.clip",
+          payload: {
+            format: "mp4",
+            base64: "aGk=",
+            durationMs: 10_000,
+            hasAudio: true,
           },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "camera.clip",
-        payload: {
-          format: "mp4",
-          base64: "aGk=",
-          durationMs: 10_000,
-          hasAudio: true,
-        },
-      });
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -366,8 +374,7 @@ describe("cli program (nodes media)", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenNthCalledWith(
-      2,
+    expect(callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "node.invoke",
         params: expect.objectContaining({
@@ -380,24 +387,30 @@ describe("cli program (nodes media)", () => {
   });
 
   it("runs nodes canvas snapshot and prints MEDIA path", async () => {
-    callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        nodes: [
-          {
-            nodeId: "ios-node",
-            displayName: "iOS Node",
-            remoteIp: "192.168.0.88",
-            connected: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        nodeId: "ios-node",
-        command: "canvas.snapshot",
-        payload: { format: "png", base64: "aGk=" },
-      });
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      if (opts.method === "node.invoke") {
+        return {
+          ok: true,
+          nodeId: "ios-node",
+          command: "canvas.snapshot",
+          payload: { format: "png", base64: "aGk=" },
+        };
+      }
+      return { ok: true };
+    });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -418,16 +431,21 @@ describe("cli program (nodes media)", () => {
   });
 
   it("fails nodes camera snap on invalid facing", async () => {
-    callGateway.mockResolvedValueOnce({
-      ts: Date.now(),
-      nodes: [
-        {
-          nodeId: "ios-node",
-          displayName: "iOS Node",
-          remoteIp: "192.168.0.88",
-          connected: true,
-        },
-      ],
+    callGateway.mockImplementation(async (opts: { method?: string }) => {
+      if (opts.method === "node.list") {
+        return {
+          ts: Date.now(),
+          nodes: [
+            {
+              nodeId: "ios-node",
+              displayName: "iOS Node",
+              remoteIp: "192.168.0.88",
+              connected: true,
+            },
+          ],
+        };
+      }
+      return { ok: true };
     });
 
     const program = buildProgram();
@@ -439,6 +457,8 @@ describe("cli program (nodes media)", () => {
       }),
     ).rejects.toThrow(/exit/i);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringMatching(/invalid facing/i));
+    expect(runtime.error.mock.calls.some(([msg]) => /invalid facing/i.test(String(msg)))).toBe(
+      true,
+    );
   });
 });

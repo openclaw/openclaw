@@ -20,21 +20,25 @@ export const AgentDefaultsSchema = z
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
       })
+      .strict()
       .optional(),
     imageModel: z
       .object({
         primary: z.string().optional(),
         fallbacks: z.array(z.string()).optional(),
       })
+      .strict()
       .optional(),
     models: z
       .record(
         z.string(),
-        z.object({
-          alias: z.string().optional(),
-          /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-          params: z.record(z.string(), z.unknown()).optional(),
-        }),
+        z
+          .object({
+            alias: z.string().optional(),
+            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
+            params: z.record(z.string(), z.unknown()).optional(),
+          })
+          .strict(),
       )
       .optional(),
     workspace: z.string().optional(),
@@ -62,6 +66,7 @@ export const AgentDefaultsSchema = z
             allow: z.array(z.string()).optional(),
             deny: z.array(z.string()).optional(),
           })
+          .strict()
           .optional(),
         softTrim: z
           .object({
@@ -69,14 +74,17 @@ export const AgentDefaultsSchema = z
             headChars: z.number().int().nonnegative().optional(),
             tailChars: z.number().int().nonnegative().optional(),
           })
+          .strict()
           .optional(),
         hardClear: z
           .object({
             enabled: z.boolean().optional(),
             placeholder: z.string().optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     compaction: z
       .object({
@@ -89,8 +97,10 @@ export const AgentDefaultsSchema = z
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
           })
+          .strict()
           .optional(),
       })
+      .strict()
       .optional(),
     thinkingDefault: z
       .union([
@@ -132,10 +142,11 @@ export const AgentDefaultsSchema = z
             z.object({
               primary: z.string().optional(),
               fallbacks: z.array(z.string()).optional(),
-            }),
+            }).strict(),
           ])
           .optional(),
       })
+      .strict()
       .optional(),
     sandbox: z
       .object({
@@ -149,6 +160,8 @@ export const AgentDefaultsSchema = z
         browser: SandboxBrowserSchema,
         prune: SandboxPruneSchema,
       })
+      .strict()
       .optional(),
   })
+  .strict()
   .optional();

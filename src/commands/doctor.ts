@@ -247,9 +247,13 @@ export async function doctorCommand(
     healthOk,
   });
 
-  cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
-  await writeConfigFile(cfg);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  if (prompter.shouldRepair) {
+    cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
+    await writeConfigFile(cfg);
+    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  } else {
+    runtime.log('Run "clawdbot doctor --fix" to apply changes.');
+  }
 
   if (options.workspaceSuggestions !== false) {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));

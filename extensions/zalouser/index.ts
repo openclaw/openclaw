@@ -1,4 +1,5 @@
 import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 
 import { zalouserPlugin } from "./src/channel.js";
 import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
@@ -8,6 +9,7 @@ const plugin = {
   id: "zalouser",
   name: "Zalo Personal",
   description: "Zalo personal account messaging via zca-cli",
+  configSchema: emptyPluginConfigSchema(),
   register(api: ClawdbotPluginApi) {
     setZalouserRuntime(api.runtime);
     // Register channel plugin (for onboarding & gateway)

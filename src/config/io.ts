@@ -24,10 +24,9 @@ import {
 import { VERSION } from "../version.js";
 import { MissingEnvVarError, resolveConfigEnvVars } from "./env-substitution.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
-import { applyLegacyMigrations, findLegacyConfigIssues } from "./legacy.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { ClawdbotConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import { validateConfigObject } from "./validation.js";
@@ -87,29 +86,6 @@ function coerceConfig(value: unknown): ClawdbotConfig {
   return value as ClawdbotConfig;
 }
 
-function rotateConfigBackupsSync(configPath: string, ioFs: typeof fs): void {
-  if (CONFIG_BACKUP_COUNT <= 1) return;
-  const backupBase = `${configPath}.bak`;
-  const maxIndex = CONFIG_BACKUP_COUNT - 1;
-  try {
-    ioFs.unlinkSync(`${backupBase}.${maxIndex}`);
-  } catch {
-    // best-effort
-  }
-  for (let index = maxIndex - 1; index >= 1; index -= 1) {
-    try {
-      ioFs.renameSync(`${backupBase}.${index}`, `${backupBase}.${index + 1}`);
-    } catch {
-      // best-effort
-    }
-  }
-  try {
-    ioFs.renameSync(backupBase, `${backupBase}.1`);
-  } catch {
-    // best-effort
-  }
-}
-
 async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
   if (CONFIG_BACKUP_COUNT <= 1) return;
   const backupBase = `${configPath}.bak`;
@@ -145,10 +121,6 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
       'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
     );
   }
-}
-
-function formatLegacyMigrationLog(changes: string[]): string {
-  return `Auto-migrated config:\n${changes.map((entry) => `- ${entry}`).join("\n")}`;
 }
 
 function stampConfigVersion(cfg: ClawdbotConfig): ClawdbotConfig {
@@ -231,56 +203,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
 
-  const writeConfigFileSync = (cfg: ClawdbotConfig) => {
-    const dir = path.dirname(configPath);
-    deps.fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const json = JSON.stringify(applyModelDefaults(stampConfigVersion(cfg)), null, 2)
-      .trimEnd()
-      .concat("\n");
-
-    const tmp = path.join(
-      dir,
-      `${path.basename(configPath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
-    );
-
-    deps.fs.writeFileSync(tmp, json, { encoding: "utf-8", mode: 0o600 });
-
-    if (deps.fs.existsSync(configPath)) {
-      rotateConfigBackupsSync(configPath, deps.fs);
-      try {
-        deps.fs.copyFileSync(configPath, `${configPath}.bak`);
-      } catch {
-        // best-effort
-      }
-    }
-
-    try {
-      deps.fs.renameSync(tmp, configPath);
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === "EPERM" || code === "EEXIST") {
-        deps.fs.copyFileSync(tmp, configPath);
-        try {
-          deps.fs.chmodSync(configPath, 0o600);
-        } catch {
-          // best-effort
-        }
-        try {
-          deps.fs.unlinkSync(tmp);
-        } catch {
-          // best-effort
-        }
-        return;
-      }
-      try {
-        deps.fs.unlinkSync(tmp);
-      } catch {
-        // best-effort
-      }
-      throw err;
-    }
-  };
-
   function loadConfig(): ClawdbotConfig {
     try {
       if (!deps.fs.existsSync(configPath)) {
@@ -307,14 +229,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // Substitute ${VAR} env var references
       const substituted = resolveConfigEnvVars(resolved, deps.env);
 
-      const migrated = applyLegacyMigrations(substituted);
-      let resolvedConfig = migrated.next ?? substituted;
-      const autoEnable = applyPluginAutoEnable({
-        config: coerceConfig(resolvedConfig),
-        env: deps.env,
-      });
-      resolvedConfig = autoEnable.config;
-      const migrationChanges = [...migrated.changes, ...autoEnable.changes];
+      const resolvedConfig = substituted;
       warnOnConfigMiskeys(resolvedConfig, deps.logger);
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) return {};
       const validated = ClawdbotSchema.safeParse(resolvedConfig);
@@ -326,14 +241,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       warnIfConfigFromFuture(validated.data as ClawdbotConfig, deps.logger);
-      if (migrationChanges.length > 0) {
-        deps.logger.warn(formatLegacyMigrationLog(migrationChanges));
-        try {
-          writeConfigFileSync(resolvedConfig as ClawdbotConfig);
-        } catch (err) {
-          deps.logger.warn(`Failed to write migrated config at ${configPath}: ${String(err)}`);
-        }
-      }
       const cfg = applyModelDefaults(
         applyCompactionDefaults(
           applyContextPruningDefaults(
@@ -467,14 +374,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const migrated = applyLegacyMigrations(substituted);
-      let resolvedConfigRaw = migrated.next ?? substituted;
-      const autoEnable = applyPluginAutoEnable({
-        config: coerceConfig(resolvedConfigRaw),
-        env: deps.env,
-      });
-      resolvedConfigRaw = autoEnable.config;
-      const migrationChanges = [...migrated.changes, ...autoEnable.changes];
+      const resolvedConfigRaw = substituted;
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
       const validated = validateConfigObject(resolvedConfigRaw);
@@ -493,13 +393,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
-      if (migrationChanges.length > 0) {
-        deps.logger.warn(formatLegacyMigrationLog(migrationChanges));
-        await writeConfigFile(validated.config).catch((err) => {
-          deps.logger.warn(`Failed to write migrated config at ${configPath}: ${String(err)}`);
-        });
-      }
-
       return {
         path: configPath,
         exists: true,

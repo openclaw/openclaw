@@ -20,6 +20,7 @@ export const ChannelsSchema = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
       })
+      .strict()
       .optional(),
     whatsapp: WhatsAppConfigSchema.optional(),
     telegram: TelegramConfigSchema.optional(),
@@ -29,5 +30,5 @@ export const ChannelsSchema = z
     imessage: IMessageConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
   })
-  .catchall(z.unknown())
+  .strict()
   .optional();
