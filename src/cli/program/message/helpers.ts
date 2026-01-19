@@ -36,20 +36,20 @@ export function createMessageCliHelpers(
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
-      await messageCommand(
-        {
-          ...(() => {
-            const { account, ...rest } = opts;
-            return {
-              ...rest,
-              accountId: typeof account === "string" ? account : undefined,
-            };
-          })(),
-          action,
-        },
-        deps,
-        defaultRuntime,
-      );
+        await messageCommand(
+          {
+            ...(() => {
+              const { account, ...rest } = opts;
+              return {
+                ...rest,
+                accountId: typeof account === "string" ? account : undefined,
+              };
+            })(),
+            action,
+          },
+          deps,
+          defaultRuntime,
+        );
       },
       (err) => {
         defaultRuntime.error(danger(String(err)));

@@ -361,10 +361,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
 
-      await agentCommand(
-        { message: "hi", to: "+1555", accountId: "kev" },
-        runtime,
-      );
+      await agentCommand({ message: "hi", to: "+1555", accountId: "kev" }, runtime);
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.agentAccountId).toBe("kev");
