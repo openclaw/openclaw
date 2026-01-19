@@ -233,14 +233,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "usage",
       nativeName: "usage",
-      description: "Toggle per-response usage line.",
+      description: "Usage footer or cost summary.",
       textAlias: "/usage",
       args: [
         {
           name: "mode",
-          description: "off, tokens, or full",
+          description: "off, tokens, full, or cost",
           type: "string",
-          choices: ["off", "tokens", "full"],
+          choices: ["off", "tokens", "full", "cost"],
         },
       ],
       argsMenu: "auto",

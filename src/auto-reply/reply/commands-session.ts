@@ -7,6 +7,8 @@ import { scheduleGatewaySigusr1Restart, triggerClawdbotRestart } from "../../inf
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import {
   formatAbortReplyText,
   isAbortTrigger,
@@ -141,10 +143,48 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
+  if (rawArgs.toLowerCase().startsWith("cost")) {
+    const sessionSummary = await loadSessionCostSummary({
+      sessionId: params.sessionEntry?.sessionId,
+      sessionEntry: params.sessionEntry,
+      sessionFile: params.sessionEntry?.sessionFile,
+      config: params.cfg,
+    });
+    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+
+    const sessionCost = formatUsd(sessionSummary?.totalCost);
+    const sessionTokens = sessionSummary?.totalTokens
+      ? formatTokenCount(sessionSummary.totalTokens)
+      : undefined;
+    const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
+    const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
+    const sessionLine =
+      sessionCost || sessionTokens
+        ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
+        : "Session n/a";
+
+    const todayKey = new Date().toLocaleDateString("en-CA");
+    const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
+    const todayCost = formatUsd(todayEntry?.totalCost);
+    const todayMissing = todayEntry?.missingCostEntries ?? 0;
+    const todaySuffix = todayMissing > 0 ? " (partial)" : "";
+    const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
+
+    const last30Cost = formatUsd(summary.totals.totalCost);
+    const last30Missing = summary.totals.missingCostEntries;
+    const last30Suffix = last30Missing > 0 ? " (partial)" : "";
+    const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
+
+    return {
+      shouldContinue: false,
+      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+    };
+  }
+
   if (rawArgs && !requested) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full" },
+      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
     };
   }
 

@@ -59,14 +59,14 @@ describe("commands registry args", () => {
           name: "mode",
           description: "mode",
           type: "string",
-          choices: ["off", "tokens", "full"],
+          choices: ["off", "tokens", "full", "cost"],
         },
       ],
     };
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("mode");
-    expect(menu?.choices).toEqual(["off", "tokens", "full"]);
+    expect(menu?.choices).toEqual(["off", "tokens", "full", "cost"]);
   });
 
   it("does not show menus when arg already provided", () => {
@@ -82,7 +82,7 @@ describe("commands registry args", () => {
           name: "mode",
           description: "mode",
           type: "string",
-          choices: ["off", "tokens", "full"],
+          choices: ["off", "tokens", "full", "cost"],
         },
       ],
     };
@@ -141,7 +141,7 @@ describe("commands registry args", () => {
           name: "mode",
           description: "on or off",
           type: "string",
-          choices: ["off", "tokens", "full"],
+          choices: ["off", "tokens", "full", "cost"],
         },
       ],
     };

@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.19-1
+
+### Changes
+- Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
+
 ## 2026.1.18-5
 
 ### Changes

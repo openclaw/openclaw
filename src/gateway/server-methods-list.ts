@@ -7,6 +7,7 @@ const BASE_METHODS = [
   "channels.logout",
   "status",
   "usage.status",
+  "usage.cost",
   "config.get",
   "config.set",
   "config.apply",
