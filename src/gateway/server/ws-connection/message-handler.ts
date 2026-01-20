@@ -386,7 +386,7 @@ export function attachGatewayWsMessageHandler(params: {
         }
 
         if (device && devicePublicKey) {
-          const requirePairing = async (reason: string, paired?: { deviceId: string }) => {
+          const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
@@ -444,13 +444,9 @@ export function attachGatewayWsMessageHandler(params: {
             const ok = await requirePairing("not-paired");
             if (!ok) return;
           } else {
-          const allowedRoles = new Set(
-            Array.isArray(paired.roles)
-              ? paired.roles
-              : paired.role
-                ? [paired.role]
-                : [],
-          );
+            const allowedRoles = new Set(
+              Array.isArray(paired.roles) ? paired.roles : paired.role ? [paired.role] : [],
+            );
             if (allowedRoles.size === 0) {
               const ok = await requirePairing("role-upgrade", paired);
               if (!ok) return;
@@ -532,7 +528,7 @@ export function attachGatewayWsMessageHandler(params: {
             deviceFamily: connectParams.client.deviceFamily,
             modelIdentifier: connectParams.client.modelIdentifier,
             mode: connectParams.client.mode,
-            instanceId: connectParams.device?.id ?? instanceId,
+            instanceId: instanceId ?? connectParams.device?.id,
             reason: "connect",
           });
           incrementPresenceVersion();

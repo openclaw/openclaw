@@ -57,10 +57,11 @@ describe("gateway node command allowlist", () => {
     await connectOk(nodeWs, {
       role: "node",
       client: {
-        id: "node-empty",
+        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
         version: "1.0.0",
         platform: "ios",
         mode: GATEWAY_CLIENT_MODES.NODE,
+        instanceId: "node-empty",
       },
       commands: [],
     });
@@ -92,10 +93,11 @@ describe("gateway node command allowlist", () => {
     await connectOk(nodeWs, {
       role: "node",
       client: {
-        id: "node-allowed",
+        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
         version: "1.0.0",
         platform: "ios",
         mode: GATEWAY_CLIENT_MODES.NODE,
+        instanceId: "node-allowed",
       },
       commands: ["canvas.snapshot"],
     });
