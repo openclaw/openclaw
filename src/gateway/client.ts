@@ -128,7 +128,17 @@ export class GatewayClient {
     }
     this.ws = new WebSocket(url, wsOptions);
 
-    this.ws.on("open", () => this.queueConnect());
+    this.ws.on("open", () => {
+      if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
+        const tlsError = this.validateTlsFingerprint();
+        if (tlsError) {
+          this.opts.onConnectError?.(tlsError);
+          this.ws?.close(1008, tlsError.message);
+          return;
+        }
+      }
+      this.queueConnect();
+    });
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
@@ -139,6 +149,9 @@ export class GatewayClient {
     });
     this.ws.on("error", (err) => {
       logDebug(`gateway client error: ${String(err)}`);
+      if (!this.connectSent) {
+        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
@@ -338,6 +351,25 @@ export class GatewayClient {
         this.ws?.close(4000, "tick timeout");
       }
     }, interval);
+  }
+
+  private validateTlsFingerprint(): Error | null {
+    if (!this.opts.tlsFingerprint || !this.ws) return null;
+    const expected = normalizeFingerprint(this.opts.tlsFingerprint);
+    if (!expected) return new Error("gateway tls fingerprint missing");
+    const socket = (
+      this.ws as WebSocket & {
+        _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
+      }
+    )._socket;
+    if (!socket || typeof socket.getPeerCertificate !== "function") {
+      return new Error("gateway tls fingerprint unavailable");
+    }
+    const cert = socket.getPeerCertificate();
+    const fingerprint = normalizeFingerprint(cert?.fingerprint256 ?? "");
+    if (!fingerprint) return new Error("gateway tls fingerprint unavailable");
+    if (fingerprint !== expected) return new Error("gateway tls fingerprint mismatch");
+    return null;
   }
 
   async request<T = unknown>(
