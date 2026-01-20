@@ -33,4 +33,27 @@ describe("system-presence", () => {
     expect(matches[0]?.ip).toBe("10.0.0.1");
     expect(matches[0]?.lastInputSeconds).toBe(5);
   });
+
+  it("merges roles and scopes for the same device", () => {
+    const deviceId = randomUUID();
+
+    upsertPresence(deviceId, {
+      deviceId,
+      host: "clawdbot",
+      roles: ["operator"],
+      scopes: ["operator.admin"],
+      reason: "connect",
+    });
+
+    upsertPresence(deviceId, {
+      deviceId,
+      roles: ["node"],
+      scopes: ["system.run"],
+      reason: "connect",
+    });
+
+    const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
+    expect(entry?.roles).toEqual(expect.arrayContaining(["operator", "node"]));
+    expect(entry?.scopes).toEqual(expect.arrayContaining(["operator.admin", "system.run"]));
+  });
 });

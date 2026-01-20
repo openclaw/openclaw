@@ -296,8 +296,8 @@ Same `deviceId` across roles → single “Instance” row:
 - [x] **TLS pinning for WS:** reuse bridge TLS runtime; discovery advertises fingerprint; client validation.
 - [x] **Discovery + allowlist:** WS discovery TXT includes TLS fingerprint + role hints; node commands filtered by server allowlist.
 - [x] **Presence unification:** dedupe deviceId across roles; include role/scope metadata; “single instance row”.
-- [ ] **Docs + examples:** protocol doc, CLI docs, onboarding + security notes; no personal hostnames.
-- [ ] **Test coverage:** connect auth paths, rotation/revoke, approvals, TLS fingerprint mismatch, presence.
+- [x] **Docs + examples:** protocol doc, CLI docs, onboarding + security notes; no personal hostnames.
+- [x] **Test coverage:** connect auth paths, rotation/revoke, approvals, TLS fingerprint mismatch, presence.
 
 Process per item:
 - Do implementation.
