@@ -19,6 +19,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -48,6 +49,20 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
+
+function matchesMessagingToolDeliveryTarget(
+  target: MessagingToolSend,
+  delivery: { channel: string; to?: string; accountId?: string },
+): boolean {
+  if (!delivery.to || !target.to) return false;
+  const channel = delivery.channel.trim().toLowerCase();
+  const provider = target.provider?.trim().toLowerCase();
+  if (provider && provider !== "message" && provider !== channel) return false;
+  if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
+    return false;
+  }
+  return target.to === delivery.to;
+}
 
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
@@ -197,14 +212,17 @@ export async function runCronIsolatedAgentTurn(params: {
       params.job.payload.kind === "agentTurn" ? params.job.payload.timeoutSeconds : undefined,
   });
 
-  const delivery = params.job.payload.kind === "agentTurn" && params.job.payload.deliver === true;
-  const bestEffortDeliver =
-    params.job.payload.kind === "agentTurn" && params.job.payload.bestEffortDeliver === true;
+  const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
+  const deliveryMode =
+    agentPayload?.deliver === true ? "explicit" : agentPayload?.deliver === false ? "off" : "auto";
+  const hasExplicitTarget = Boolean(agentPayload?.to && agentPayload.to.trim());
+  const deliveryRequested =
+    deliveryMode === "explicit" || (deliveryMode === "auto" && hasExplicitTarget);
+  const bestEffortDeliver = agentPayload?.bestEffortDeliver === true;
 
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel:
-      params.job.payload.kind === "agentTurn" ? (params.job.payload.channel ?? "last") : "last",
-    to: params.job.payload.kind === "agentTurn" ? params.job.payload.to : undefined,
+    channel: agentPayload?.channel ?? "last",
+    to: agentPayload?.to,
   });
 
   const base = `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -342,9 +360,20 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
-  const skipHeartbeatDelivery = delivery && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
+  const skipMessagingToolDelivery =
+    deliveryRequested &&
+    deliveryMode === "auto" &&
+    runResult.didSendViaMessagingTool === true &&
+    (runResult.messagingToolSentTargets ?? []).some((target) =>
+      matchesMessagingToolDeliveryTarget(target, {
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+      }),
+    );
 
-  if (delivery && !skipHeartbeatDelivery) {
+  if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (!resolvedDelivery.to) {
       const reason =
         resolvedDelivery.error?.message ?? "Cron delivery requires a recipient (--to).";

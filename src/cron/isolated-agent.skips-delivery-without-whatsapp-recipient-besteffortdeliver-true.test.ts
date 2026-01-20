@@ -203,6 +203,116 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("auto-delivers when explicit target is set without deliver flag", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn().mockResolvedValue({
+          messageId: "t1",
+          chatId: "123",
+        }),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello from cron" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = "";
+      try {
+        const res = await runCronIsolatedAgentTurn({
+          cfg: makeCfg(home, storePath, {
+            channels: { telegram: { botToken: "t-1" } },
+          }),
+          deps,
+          job: makeJob({
+            kind: "agentTurn",
+            message: "do it",
+            channel: "telegram",
+            to: "123",
+          }),
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+
+        expect(res.status).toBe("ok");
+        expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+          "123",
+          "hello from cron",
+          expect.objectContaining({ verbose: false }),
+        );
+      } finally {
+        if (prevTelegramToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+        }
+      }
+    });
+  });
+
+  it("skips auto-delivery when messaging tool already sent to the target", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn().mockResolvedValue({
+          messageId: "t1",
+          chatId: "123",
+        }),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "sent" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
+      });
+
+      const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = "";
+      try {
+        const res = await runCronIsolatedAgentTurn({
+          cfg: makeCfg(home, storePath, {
+            channels: { telegram: { botToken: "t-1" } },
+          }),
+          deps,
+          job: makeJob({
+            kind: "agentTurn",
+            message: "do it",
+            channel: "telegram",
+            to: "123",
+          }),
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+
+        expect(res.status).toBe("ok");
+        expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      } finally {
+        if (prevTelegramToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+        }
+      }
+    });
+  });
+
   it("delivers telegram topic targets via channel send", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);

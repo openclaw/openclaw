@@ -35,7 +35,11 @@ export function registerCronEditCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs")
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
-      .option("--deliver", "Deliver agent output", false)
+      .option(
+        "--deliver",
+        "Deliver agent output (required when using last-route delivery without --to)",
+        false,
+      )
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
@@ -125,10 +129,10 @@ export function registerCronEditCommand(cron: Command) {
               thinking,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-              deliver: Boolean(opts.deliver),
+              deliver: opts.deliver ? true : undefined,
               channel: typeof opts.channel === "string" ? opts.channel : undefined,
               to: typeof opts.to === "string" ? opts.to : undefined,
-              bestEffortDeliver: Boolean(opts.bestEffortDeliver),
+              bestEffortDeliver: opts.bestEffortDeliver ? true : undefined,
             };
           }
 
