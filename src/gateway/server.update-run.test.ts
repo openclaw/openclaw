@@ -22,9 +22,17 @@ import {
 
 installGatewayTestHooks();
 
+async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timeout");
+}
+
 describe("gateway update.run", () => {
   it("writes sentinel and schedules restart", async () => {
-    vi.useFakeTimers();
     const sigusr1 = vi.fn();
     process.on("SIGUSR1", sigusr1);
 
@@ -49,7 +57,7 @@ describe("gateway update.run", () => {
     );
     expect(res.ok).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(0);
+    await waitForSignal(() => sigusr1.mock.calls.length > 0);
     expect(sigusr1).toHaveBeenCalled();
 
     const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
@@ -63,6 +71,5 @@ describe("gateway update.run", () => {
     ws.close();
     await server.close();
     process.off("SIGUSR1", sigusr1);
-    vi.useRealTimers();
   });
 });
