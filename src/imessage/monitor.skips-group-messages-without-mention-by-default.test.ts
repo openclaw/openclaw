@@ -495,4 +495,43 @@ describe("monitorIMessageProvider", () => {
     expect(body).toContain("Test Group id:99");
     expect(body).toContain("+15550001111: @clawd hi");
   });
+
+  it("includes reply context when imessage reply metadata is present", async () => {
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 12,
+          chat_id: 55,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "replying now",
+          is_group: false,
+          reply_to_id: 9001,
+          reply_to_text: "original message",
+          reply_to_sender: "+15559998888",
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalled();
+    const ctx = replyMock.mock.calls[0]?.[0] as {
+      Body?: string;
+      ReplyToId?: string;
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+    };
+    expect(ctx.ReplyToId).toBe("9001");
+    expect(ctx.ReplyToBody).toBe("original message");
+    expect(ctx.ReplyToSender).toBe("+15559998888");
+    expect(String(ctx.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
+    expect(String(ctx.Body ?? "")).toContain("original message");
+  });
 });

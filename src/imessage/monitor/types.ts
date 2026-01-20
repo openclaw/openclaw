@@ -13,6 +13,9 @@ export type IMessagePayload = {
   sender?: string | null;
   is_from_me?: boolean | null;
   text?: string | null;
+  reply_to_id?: number | string | null;
+  reply_to_text?: string | null;
+  reply_to_sender?: string | null;
   created_at?: string | null;
   attachments?: IMessageAttachment[] | null;
   chat_identifier?: string | null;

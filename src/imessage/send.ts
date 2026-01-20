@@ -23,6 +23,18 @@ export type IMessageSendResult = {
   messageId: string;
 };
 
+function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
+  if (!result) return null;
+  const raw =
+    (typeof result.messageId === "string" && result.messageId.trim()) ||
+    (typeof result.message_id === "string" && result.message_id.trim()) ||
+    (typeof result.id === "string" && result.id.trim()) ||
+    (typeof result.guid === "string" && result.guid.trim()) ||
+    (typeof result.message_id === "number" ? String(result.message_id) : null) ||
+    (typeof result.id === "number" ? String(result.id) : null);
+  return raw ? String(raw).trim() : null;
+}
+
 async function resolveAttachment(
   mediaUrl: string,
   maxBytes: number,
@@ -97,11 +109,12 @@ export async function sendMessageIMessage(
   const client = opts.client ?? (await createIMessageRpcClient({ cliPath, dbPath }));
   const shouldClose = !opts.client;
   try {
-    const result = await client.request<{ ok?: boolean }>("send", params, {
+    const result = await client.request<Record<string, unknown>>("send", params, {
       timeoutMs: opts.timeoutMs,
     });
+    const resolvedId = resolveMessageId(result);
     return {
-      messageId: result?.ok ? "ok" : "unknown",
+      messageId: resolvedId ?? (result?.ok ? "ok" : "unknown"),
     };
   } finally {
     if (shouldClose) {
