@@ -246,6 +246,7 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
+  deviceId?: string | null;
   instanceId?: string | null;
   host?: string | null;
   ip?: string | null;
@@ -256,6 +257,8 @@ export type PresenceEntry = {
   mode?: string | null;
   lastInputSeconds?: number | null;
   reason?: string | null;
+  roles?: string[] | null;
+  scopes?: string[] | null;
   text?: string | null;
   ts?: number | null;
 };

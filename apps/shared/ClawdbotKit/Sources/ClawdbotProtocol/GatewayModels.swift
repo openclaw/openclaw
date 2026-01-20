@@ -205,6 +205,9 @@ public struct PresenceEntry: Codable, Sendable {
     public let tags: [String]?
     public let text: String?
     public let ts: Int
+    public let deviceid: String?
+    public let roles: [String]?
+    public let scopes: [String]?
     public let instanceid: String?
 
     public init(
@@ -220,6 +223,9 @@ public struct PresenceEntry: Codable, Sendable {
         tags: [String]?,
         text: String?,
         ts: Int,
+        deviceid: String?,
+        roles: [String]?,
+        scopes: [String]?,
         instanceid: String?
     ) {
         self.host = host
@@ -234,6 +240,9 @@ public struct PresenceEntry: Codable, Sendable {
         self.tags = tags
         self.text = text
         self.ts = ts
+        self.deviceid = deviceid
+        self.roles = roles
+        self.scopes = scopes
         self.instanceid = instanceid
     }
     private enum CodingKeys: String, CodingKey {
@@ -249,6 +258,9 @@ public struct PresenceEntry: Codable, Sendable {
         case tags
         case text
         case ts
+        case deviceid = "deviceId"
+        case roles
+        case scopes
         case instanceid = "instanceId"
     }
 }

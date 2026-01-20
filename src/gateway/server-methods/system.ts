@@ -37,6 +37,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionKey = resolveMainSessionKeyFromConfig();
+    const deviceId = typeof params.deviceId === "string" ? params.deviceId : undefined;
     const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;
     const ip = typeof params.ip === "string" ? params.ip : undefined;
@@ -51,12 +52,21 @@ export const systemHandlers: GatewayRequestHandlers = {
         ? params.lastInputSeconds
         : undefined;
     const reason = typeof params.reason === "string" ? params.reason : undefined;
+    const roles =
+      Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
+        ? (params.roles as string[])
+        : undefined;
+    const scopes =
+      Array.isArray(params.scopes) && params.scopes.every((t) => typeof t === "string")
+        ? (params.scopes as string[])
+        : undefined;
     const tags =
       Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
         ? (params.tags as string[])
         : undefined;
     const presenceUpdate = updateSystemPresence({
       text,
+      deviceId,
       instanceId,
       host,
       ip,
@@ -67,6 +77,8 @@ export const systemHandlers: GatewayRequestHandlers = {
       modelIdentifier,
       lastInputSeconds,
       reason,
+      roles,
+      scopes,
       tags,
     });
     const isNodePresenceLine = text.startsWith("Node:");

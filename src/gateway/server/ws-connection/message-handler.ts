@@ -619,6 +619,9 @@ export function attachGatewayWsMessageHandler(params: {
             deviceFamily: connectParams.client.deviceFamily,
             modelIdentifier: connectParams.client.modelIdentifier,
             mode: connectParams.client.mode,
+            deviceId: connectParams.device?.id,
+            roles: [role],
+            scopes,
             instanceId: connectParams.device?.id ?? instanceId,
             reason: "connect",
           });

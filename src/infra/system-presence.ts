@@ -11,6 +11,9 @@ export type SystemPresence = {
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
+  deviceId?: string;
+  roles?: string[];
+  scopes?: string[];
   instanceId?: string;
   text: string;
   ts: number;
@@ -153,6 +156,7 @@ function parsePresence(text: string): SystemPresence {
 
 type SystemPresencePayload = {
   text: string;
+  deviceId?: string;
   instanceId?: string;
   host?: string;
   ip?: string;
@@ -163,13 +167,28 @@ type SystemPresencePayload = {
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
+  roles?: string[];
+  scopes?: string[];
   tags?: string[];
 };
+
+function mergeStringList(...values: Array<string[] | undefined>): string[] | undefined {
+  const out = new Set<string>();
+  for (const list of values) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const trimmed = String(item).trim();
+      if (trimmed) out.add(trimmed);
+    }
+  }
+  return out.size > 0 ? [...out] : undefined;
+}
 
 export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
   ensureSelfPresence();
   const parsed = parsePresence(payload.text);
   const key =
+    normalizePresenceKey(payload.deviceId) ||
     normalizePresenceKey(payload.instanceId) ||
     normalizePresenceKey(parsed.instanceId) ||
     normalizePresenceKey(parsed.host) ||
@@ -191,6 +210,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     lastInputSeconds:
       payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
     reason: payload.reason ?? parsed.reason ?? existing.reason,
+    deviceId: payload.deviceId ?? existing.deviceId,
+    roles: mergeStringList(existing.roles, payload.roles),
+    scopes: mergeStringList(existing.scopes, payload.scopes),
     instanceId: payload.instanceId ?? parsed.instanceId ?? existing.instanceId,
     text: payload.text || parsed.text || existing.text,
     ts: Date.now(),
@@ -221,9 +243,13 @@ export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
   const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
+  const roles = mergeStringList(existing.roles, presence.roles);
+  const scopes = mergeStringList(existing.scopes, presence.scopes);
   const merged: SystemPresence = {
     ...existing,
     ...presence,
+    roles,
+    scopes,
     ts: Date.now(),
     text:
       presence.text ||

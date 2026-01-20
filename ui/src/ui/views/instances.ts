@@ -48,6 +48,14 @@ function renderEntry(entry: PresenceEntry) {
       ? `${entry.lastInputSeconds}s ago`
       : "n/a";
   const mode = entry.mode ?? "unknown";
+  const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
+  const scopes = Array.isArray(entry.scopes) ? entry.scopes.filter(Boolean) : [];
+  const scopesLabel =
+    scopes.length > 0
+      ? scopes.length > 3
+        ? `${scopes.length} scopes`
+        : `scopes: ${scopes.join(", ")}`
+      : null;
   return html`
     <div class="list-item">
       <div class="list-main">
@@ -55,6 +63,8 @@ function renderEntry(entry: PresenceEntry) {
         <div class="list-sub">${formatPresenceSummary(entry)}</div>
         <div class="chip-row">
           <span class="chip">${mode}</span>
+          ${roles.map((role) => html`<span class="chip">${role}</span>`)}
+          ${scopesLabel ? html`<span class="chip">${scopesLabel}</span>` : nothing}
           ${entry.platform ? html`<span class="chip">${entry.platform}</span>` : nothing}
           ${entry.deviceFamily
             ? html`<span class="chip">${entry.deviceFamily}</span>`
