@@ -3,8 +3,6 @@ import ClawdbotProtocol
 import Darwin
 import Foundation
 
-private typealias ProtoAnyCodable = ClawdbotProtocol.AnyCodable
-
 struct WizardCliOptions {
     var url: String?
     var token: String?
@@ -51,17 +49,6 @@ struct WizardCliOptions {
     }
 }
 
-struct GatewayConfig {
-    var mode: String?
-    var bind: String?
-    var port: Int?
-    var remoteUrl: String?
-    var token: String?
-    var password: String?
-    var remoteToken: String?
-    var remotePassword: String?
-}
-
 enum WizardCliError: Error, CustomStringConvertible {
     case invalidUrl(String)
     case missingRemoteUrl
@@ -80,68 +67,56 @@ enum WizardCliError: Error, CustomStringConvertible {
     }
 }
 
-@main
-struct ClawdbotWizardCLI {
-    static func main() async {
-        let opts = WizardCliOptions.parse(Array(CommandLine.arguments.dropFirst()))
-        if opts.help {
-            printUsage()
-            return
-        }
+func runWizardCommand(_ args: [String]) async {
+    let opts = WizardCliOptions.parse(args)
+    if opts.help {
+        print("""
+        clawdbot-mac wizard
 
-        let config = loadGatewayConfig()
-        do {
-            guard isatty(STDIN_FILENO) != 0 else {
-                throw WizardCliError.gatewayError("Wizard requires an interactive TTY.")
-            }
-            let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
-            let client = GatewayWizardClient(
-                url: endpoint.url,
-                token: endpoint.token,
-                password: endpoint.password,
-                json: opts.json)
-            try await client.connect()
-            defer { Task { await client.close() } }
-            try await runWizard(client: client, opts: opts)
-        } catch {
-            fputs("wizard: \(error)\n", stderr)
-            exit(1)
+        Usage:
+          clawdbot-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
+                              [--mode <local|remote>] [--workspace <path>] [--json]
+
+        Options:
+          --url <url>        Gateway WebSocket URL (overrides config)
+          --token <token>    Gateway token (if required)
+          --password <pw>    Gateway password (if required)
+          --mode <mode>      Wizard mode (local|remote). Default: local
+          --workspace <path> Wizard workspace override
+          --json             Print raw wizard responses
+          -h, --help         Show help
+        """)
+        return
+    }
+
+    let config = loadGatewayConfig()
+    do {
+        guard isatty(STDIN_FILENO) != 0 else {
+            throw WizardCliError.gatewayError("Wizard requires an interactive TTY.")
         }
+        let endpoint = try resolveWizardGatewayEndpoint(opts: opts, config: config)
+        let client = GatewayWizardClient(
+            url: endpoint.url,
+            token: endpoint.token,
+            password: endpoint.password,
+            json: opts.json)
+        try await client.connect()
+        defer { Task { await client.close() } }
+        try await runWizard(client: client, opts: opts)
+    } catch {
+        fputs("wizard: \(error)\n", stderr)
+        exit(1)
     }
 }
 
-private struct GatewayEndpoint {
-    let url: URL
-    let token: String?
-    let password: String?
-}
-
-private func printUsage() {
-    print("""
-    clawdbot-mac-wizard
-
-    Usage:
-      clawdbot-mac-wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
-                          [--mode <local|remote>] [--workspace <path>] [--json]
-
-    Options:
-      --url <url>        Gateway WebSocket URL (overrides config)
-      --token <token>    Gateway token (if required)
-      --password <pw>    Gateway password (if required)
-      --mode <mode>      Wizard mode (local|remote). Default: local
-      --workspace <path> Wizard workspace override
-      --json             Print raw wizard responses
-      -h, --help         Show help
-    """)
-}
-
-private func resolveGatewayEndpoint(opts: WizardCliOptions, config: GatewayConfig) throws -> GatewayEndpoint {
+private func resolveWizardGatewayEndpoint(opts: WizardCliOptions, config: GatewayConfig) throws -> GatewayEndpoint {
     if let raw = opts.url, !raw.isEmpty {
         guard let url = URL(string: raw) else { throw WizardCliError.invalidUrl(raw) }
         return GatewayEndpoint(
             url: url,
             token: resolvedToken(opts: opts, config: config),
-            password: resolvedPassword(opts: opts, config: config))
+            password: resolvedPassword(opts: opts, config: config),
+            mode: (config.mode ?? "local").lowercased())
     }
 
     let mode = (config.mode ?? "local").lowercased()
@@ -153,7 +128,8 @@ private func resolveGatewayEndpoint(opts: WizardCliOptions, config: GatewayConfi
         return GatewayEndpoint(
             url: url,
             token: resolvedToken(opts: opts, config: config),
-            password: resolvedPassword(opts: opts, config: config))
+            password: resolvedPassword(opts: opts, config: config),
+            mode: mode)
     }
 
     let port = config.port ?? 18789
@@ -164,7 +140,8 @@ private func resolveGatewayEndpoint(opts: WizardCliOptions, config: GatewayConfi
     return GatewayEndpoint(
         url: url,
         token: resolvedToken(opts: opts, config: config),
-        password: resolvedPassword(opts: opts, config: config))
+        password: resolvedPassword(opts: opts, config: config),
+        mode: mode)
 }
 
 private func resolvedToken(opts: WizardCliOptions, config: GatewayConfig) -> String? {
@@ -187,47 +164,6 @@ private func resolvedPassword(opts: WizardCliOptions, config: GatewayConfig) -> 
         return config.remotePassword
     }
     return config.password
-}
-
-private func loadGatewayConfig() -> GatewayConfig {
-    let url = FileManager().homeDirectoryForCurrentUser
-        .appendingPathComponent(".clawdbot")
-        .appendingPathComponent("clawdbot.json")
-    guard let data = try? Data(contentsOf: url) else { return GatewayConfig() }
-    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        return GatewayConfig()
-    }
-
-    var cfg = GatewayConfig()
-    if let gateway = json["gateway"] as? [String: Any] {
-        cfg.mode = gateway["mode"] as? String
-        cfg.bind = gateway["bind"] as? String
-        cfg.port = gateway["port"] as? Int ?? parseInt(gateway["port"])
-
-        if let auth = gateway["auth"] as? [String: Any] {
-            cfg.token = auth["token"] as? String
-            cfg.password = auth["password"] as? String
-        }
-        if let remote = gateway["remote"] as? [String: Any] {
-            cfg.remoteUrl = remote["url"] as? String
-            cfg.remoteToken = remote["token"] as? String
-            cfg.remotePassword = remote["password"] as? String
-        }
-    }
-    return cfg
-}
-
-private func parseInt(_ value: Any?) -> Int? {
-    switch value {
-    case let number as Int:
-        number
-    case let number as Double:
-        Int(number)
-    case let raw as String:
-        Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
-    default:
-        nil
-    }
 }
 
 actor GatewayWizardClient {
@@ -411,7 +347,7 @@ actor GatewayWizardClient {
                 operation: {
                     while true {
                         let message = try await task.receive()
-                        let frame = try decodeFrame(message)
+                        let frame = try await self.decodeFrame(message)
                         if case let .event(evt) = frame, evt.event == "connect.challenge" {
                             if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
                                let nonce = payload["nonce"]?.value as? String

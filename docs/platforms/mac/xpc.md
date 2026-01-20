@@ -5,7 +5,7 @@ read_when:
 ---
 # Clawdbot macOS IPC architecture
 
-**Current model:** a local Unix socket connects the **node service** to the **macOS app** for exec approvals + `system.run`. There is no `clawdbot-mac` CLI; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
+**Current model:** a local Unix socket connects the **node service** to the **macOS app** for exec approvals + `system.run`. A `clawdbot-mac` debug CLI exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
 
 ## Goals
 - Single GUI app instance that owns all TCC-facing work (notifications, screen recording, mic, speech, AppleScript).
