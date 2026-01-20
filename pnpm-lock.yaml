@@ -49,9 +49,6 @@ importers:
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
-      '@napi-rs/canvas':
-        specifier: ^0.1.88
-        version: 0.1.88
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
@@ -246,6 +243,9 @@ importers:
         specifier: ^0.14.12
         version: 0.14.12
     optionalDependencies:
+      '@napi-rs/canvas':
+        specifier: ^0.1.88
+        version: 0.1.88
       node-llama-cpp:
         specifier: 3.14.5
         version: 3.14.5(typescript@5.9.3)
@@ -6129,6 +6129,7 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.88
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.88
       '@napi-rs/canvas-win32-x64-msvc': 0.1.88
+    optional: true
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:

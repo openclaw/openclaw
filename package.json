@@ -155,7 +155,6 @@
     "@mariozechner/pi-coding-agent": "^0.46.0",
     "@mariozechner/pi-tui": "^0.46.0",
     "@mozilla/readability": "^0.6.0",
-    "@napi-rs/canvas": "^0.1.88",
     "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
@@ -196,6 +195,7 @@
     "zod": "^4.3.5"
   },
   "optionalDependencies": {
+    "@napi-rs/canvas": "^0.1.88",
     "node-llama-cpp": "3.14.5"
   },
   "devDependencies": {
