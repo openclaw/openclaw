@@ -8,6 +8,10 @@ import {
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  DEFAULT_AGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+} from "../config/agent-limits.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
@@ -127,10 +131,13 @@ export function createGatewayReloadHandlers(params: {
     }
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
-    setCommandLaneConcurrency("main", nextConfig.agents?.defaults?.maxConcurrent ?? 4);
+    setCommandLaneConcurrency(
+      "main",
+      nextConfig.agents?.defaults?.maxConcurrent ?? DEFAULT_AGENT_MAX_CONCURRENT,
+    );
     setCommandLaneConcurrency(
       "subagent",
-      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 8,
+      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? DEFAULT_SUBAGENT_MAX_CONCURRENT,
     );
 
     if (plan.hotReasons.length > 0) {

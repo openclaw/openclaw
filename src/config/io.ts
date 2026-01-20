@@ -15,6 +15,7 @@ import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js"
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
+  applyAgentDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -244,8 +245,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const cfg = applyModelDefaults(
         applyCompactionDefaults(
           applyContextPruningDefaults(
-            applySessionDefaults(
-              applyLoggingDefaults(applyMessageDefaults(validated.data as ClawdbotConfig)),
+            applyAgentDefaults(
+              applySessionDefaults(
+                applyLoggingDefaults(applyMessageDefaults(validated.data as ClawdbotConfig)),
+              ),
             ),
           ),
         ),
@@ -291,7 +294,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const config = applyTalkApiKey(
         applyModelDefaults(
           applyCompactionDefaults(
-            applyContextPruningDefaults(applySessionDefaults(applyMessageDefaults({}))),
+            applyContextPruningDefaults(
+              applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
+            ),
           ),
         ),
       );
@@ -402,7 +407,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         config: normalizeConfigPaths(
           applyTalkApiKey(
             applyModelDefaults(
-              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              applyAgentDefaults(
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+              ),
             ),
           ),
         ),

@@ -1,6 +1,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { DEFAULT_AGENT_MAX_CONCURRENT } from "../config/agent-limits.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatDurationMs } from "../infra/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -28,7 +29,7 @@ export type MonitorTelegramOpts = {
 export function createTelegramRunnerOptions(cfg: ClawdbotConfig): RunOptions<unknown> {
   return {
     sink: {
-      concurrency: cfg.agents?.defaults?.maxConcurrent ?? 1,
+      concurrency: cfg.agents?.defaults?.maxConcurrent ?? DEFAULT_AGENT_MAX_CONCURRENT,
     },
     runner: {
       fetch: {

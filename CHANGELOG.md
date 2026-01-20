@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Repo: remove the Peekaboo git submodule now that the SPM release is used.
 - Gateway: raise default lane concurrency for main and sub-agent runs.
+- Config: centralize default agent concurrency limits.
 
 ### Fixes
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
