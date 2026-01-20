@@ -9,8 +9,6 @@ import SwiftUI
 
 private let webChatSwiftLogger = Logger(subsystem: "com.clawdbot", category: "WebChatSwiftUI")
 
-private typealias AnyCodable = ClawdbotKit.AnyCodable
-
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 500, height: 840)
     static let panelSize = NSSize(width: 480, height: 640)

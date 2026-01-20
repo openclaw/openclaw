@@ -3,8 +3,6 @@ import ClawdbotProtocol
 import Foundation
 import OSLog
 
-private typealias AnyCodable = ClawdbotKit.AnyCodable
-
 @MainActor
 final class ExecApprovalsGatewayPrompter {
     static let shared = ExecApprovalsGatewayPrompter()

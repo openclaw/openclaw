@@ -81,7 +81,7 @@ private struct EventRow: View {
         return f.string(from: date)
     }
 
-    private func prettyJSON(_ dict: [String: AnyCodable]) -> String? {
+    private func prettyJSON(_ dict: [String: ClawdbotProtocol.AnyCodable]) -> String? {
         let normalized = dict.mapValues { $0.value }
         guard JSONSerialization.isValidJSONObject(normalized),
               let data = try? JSONSerialization.data(withJSONObject: normalized, options: [.prettyPrinted]),
@@ -98,7 +98,10 @@ struct AgentEventsWindow_Previews: PreviewProvider {
             seq: 1,
             stream: "tool",
             ts: Date().timeIntervalSince1970 * 1000,
-            data: ["phase": AnyCodable("start"), "name": AnyCodable("bash")],
+            data: [
+                "phase": ClawdbotProtocol.AnyCodable("start"),
+                "name": ClawdbotProtocol.AnyCodable("bash"),
+            ],
             summary: nil)
         AgentEventStore.shared.append(sample)
         return AgentEventsWindow()
