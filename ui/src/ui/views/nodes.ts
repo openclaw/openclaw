@@ -1,15 +1,24 @@
 import { html, nothing } from "lit";
 
-import { clampText, formatAgo } from "../format";
+import { clampText, formatAgo, formatList } from "../format";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
 } from "../controllers/exec-approvals";
+import type {
+  DevicePairingList,
+  DeviceTokenSummary,
+  PairedDevice,
+  PendingDevice,
+} from "../controllers/devices";
 
 export type NodesProps = {
   loading: boolean;
   nodes: Array<Record<string, unknown>>;
+  devicesLoading: boolean;
+  devicesError: string | null;
+  devicesList: DevicePairingList | null;
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;
@@ -24,6 +33,11 @@ export type NodesProps = {
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onRefresh: () => void;
+  onDevicesRefresh: () => void;
+  onDeviceApprove: (requestId: string) => void;
+  onDeviceReject: (requestId: string) => void;
+  onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;
+  onDeviceRevoke: (deviceId: string, role: string) => void;
   onLoadConfig: () => void;
   onLoadExecApprovals: () => void;
   onBindDefault: (nodeId: string | null) => void;
@@ -42,6 +56,7 @@ export function renderNodes(props: NodesProps) {
   return html`
     ${renderExecApprovals(approvalsState)}
     ${renderBindings(bindingState)}
+    ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -58,6 +73,128 @@ export function renderNodes(props: NodesProps) {
           : props.nodes.map((n) => renderNode(n))}
       </div>
     </section>
+  `;
+}
+
+function renderDevices(props: NodesProps) {
+  const list = props.devicesList ?? { pending: [], paired: [] };
+  const pending = Array.isArray(list.pending) ? list.pending : [];
+  const paired = Array.isArray(list.paired) ? list.paired : [];
+  return html`
+    <section class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <div class="card-title">Devices</div>
+          <div class="card-sub">Pairing requests + role tokens.</div>
+        </div>
+        <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
+          ${props.devicesLoading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      ${props.devicesError
+        ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`
+        : nothing}
+      <div class="list" style="margin-top: 16px;">
+        ${pending.length > 0
+          ? html`
+              <div class="muted" style="margin-bottom: 8px;">Pending</div>
+              ${pending.map((req) => renderPendingDevice(req, props))}
+            `
+          : nothing}
+        ${paired.length > 0
+          ? html`
+              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
+              ${paired.map((device) => renderPairedDevice(device, props))}
+            `
+          : nothing}
+        ${pending.length === 0 && paired.length === 0
+          ? html`<div class="muted">No paired devices.</div>`
+          : nothing}
+      </div>
+    </section>
+  `;
+}
+
+function renderPendingDevice(req: PendingDevice, props: NodesProps) {
+  const name = req.displayName?.trim() || req.deviceId;
+  const age = typeof req.ts === "number" ? formatAgo(req.ts) : "n/a";
+  const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
+  const repair = req.isRepair ? " · repair" : "";
+  const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${name}</div>
+        <div class="list-sub">${req.deviceId}${ip}</div>
+        <div class="muted" style="margin-top: 6px;">
+          ${role} · requested ${age}${repair}
+        </div>
+      </div>
+      <div class="list-meta">
+        <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
+          <button class="btn btn--sm primary" @click=${() => props.onDeviceApprove(req.requestId)}>
+            Approve
+          </button>
+          <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
+            Reject
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderPairedDevice(device: PairedDevice, props: NodesProps) {
+  const name = device.displayName?.trim() || device.deviceId;
+  const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
+  const roles = `roles: ${formatList(device.roles)}`;
+  const scopes = `scopes: ${formatList(device.scopes)}`;
+  const tokens = Array.isArray(device.tokens) ? device.tokens : [];
+  return html`
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">${name}</div>
+        <div class="list-sub">${device.deviceId}${ip}</div>
+        <div class="muted" style="margin-top: 6px;">${roles} · ${scopes}</div>
+        ${tokens.length === 0
+          ? html`<div class="muted" style="margin-top: 6px;">Tokens: none</div>`
+          : html`
+              <div class="muted" style="margin-top: 10px;">Tokens</div>
+              <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
+                ${tokens.map((token) => renderTokenRow(device.deviceId, token, props))}
+              </div>
+            `}
+      </div>
+    </div>
+  `;
+}
+
+function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
+  const status = token.revokedAtMs ? "revoked" : "active";
+  const scopes = `scopes: ${formatList(token.scopes)}`;
+  const when = formatAgo(token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null);
+  return html`
+    <div class="row" style="justify-content: space-between; gap: 8px;">
+      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
+      <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
+        <button
+          class="btn btn--sm"
+          @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
+        >
+          Rotate
+        </button>
+        ${token.revokedAtMs
+          ? nothing
+          : html`
+              <button
+                class="btn btn--sm danger"
+                @click=${() => props.onDeviceRevoke(deviceId, token.role)}
+              >
+                Revoke
+              </button>
+            `}
+      </div>
+    </div>
   `;
 }
 

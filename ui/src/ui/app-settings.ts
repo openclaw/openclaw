@@ -3,6 +3,7 @@ import { loadCronJobs, loadCronStatus } from "./controllers/cron";
 import { loadChannels } from "./controllers/channels";
 import { loadDebug } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
+import { loadDevices } from "./controllers/devices";
 import { loadNodes } from "./controllers/nodes";
 import { loadExecApprovals } from "./controllers/exec-approvals";
 import { loadPresence } from "./controllers/presence";
@@ -136,6 +137,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "skills") await loadSkills(host as unknown as ClawdbotApp);
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as ClawdbotApp);
+    await loadDevices(host as unknown as ClawdbotApp);
     await loadConfig(host as unknown as ClawdbotApp);
     await loadExecApprovals(host as unknown as ClawdbotApp);
   }

@@ -1,4 +1,5 @@
 import { loadChatHistory } from "./controllers/chat";
+import { loadDevices } from "./controllers/devices";
 import { loadNodes } from "./controllers/nodes";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway";
 import { GatewayBrowserClient } from "./gateway";
@@ -106,6 +107,7 @@ export function connectGateway(host: GatewayHost) {
       host.hello = hello;
       applySnapshot(host, hello);
       void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
+      void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
@@ -168,6 +170,10 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "cron" && host.tab === "cron") {
     void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
+  }
+
+  if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
+    void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
   }
 }
 

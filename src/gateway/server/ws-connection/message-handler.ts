@@ -487,6 +487,9 @@ export function attachGatewayWsMessageHandler(params: {
             if (pairing.request.silent === true) {
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
+                logGateway.info(
+                  `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
+                );
                 context.broadcast(
                   "device.pair.resolved",
                   {

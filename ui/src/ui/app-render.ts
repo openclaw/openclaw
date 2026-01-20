@@ -38,6 +38,13 @@ import { renderLogs } from "./views/logs";
 import { renderNodes } from "./views/nodes";
 import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
+import {
+  approveDevicePairing,
+  loadDevices,
+  rejectDevicePairing,
+  revokeDeviceToken,
+  rotateDeviceToken,
+} from "./controllers/devices";
 import { renderSkills } from "./views/skills";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
@@ -301,6 +308,9 @@ export function renderApp(state: AppViewState) {
           ? renderNodes({
               loading: state.nodesLoading,
               nodes: state.nodes,
+              devicesLoading: state.devicesLoading,
+              devicesError: state.devicesError,
+              devicesList: state.devicesList,
               configForm: state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null),
               configLoading: state.configLoading,
               configSaving: state.configSaving,
@@ -315,6 +325,13 @@ export function renderApp(state: AppViewState) {
               execApprovalsTarget: state.execApprovalsTarget,
               execApprovalsTargetNodeId: state.execApprovalsTargetNodeId,
               onRefresh: () => loadNodes(state),
+              onDevicesRefresh: () => loadDevices(state),
+              onDeviceApprove: (requestId) => approveDevicePairing(state, requestId),
+              onDeviceReject: (requestId) => rejectDevicePairing(state, requestId),
+              onDeviceRotate: (deviceId, role, scopes) =>
+                rotateDeviceToken(state, { deviceId, role, scopes }),
+              onDeviceRevoke: (deviceId, role) =>
+                revokeDeviceToken(state, { deviceId, role }),
               onLoadConfig: () => loadConfig(state),
               onLoadExecApprovals: () => {
                 const target =
