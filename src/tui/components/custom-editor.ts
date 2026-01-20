@@ -1,4 +1,4 @@
-import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey } from "@mariozechner/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;
@@ -12,22 +12,8 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
 
-  constructor(tuiOrTheme: unknown, themeOrOptions?: unknown, options?: { paddingX?: number }) {
-    const hasTui = Boolean((tuiOrTheme as { terminal?: unknown })?.terminal);
-    const useTuiArg = hasTui && Editor.length >= 2;
-
-    if (hasTui) {
-      const theme = themeOrOptions;
-      if (useTuiArg) {
-        super(tuiOrTheme as never, theme as never, options as never);
-      } else {
-        super(theme as never, options as never);
-        this.tui = tuiOrTheme as unknown as typeof this.tui;
-      }
-      return;
-    }
-
-    super(tuiOrTheme as never, themeOrOptions as never);
+  constructor(theme: EditorTheme) {
+    super(theme);
   }
 
   handleInput(data: string): void {
