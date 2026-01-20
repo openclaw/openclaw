@@ -1,4 +1,5 @@
 import type { TypingMode } from "../../config/types.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingController } from "./typing.js";
 
 export type TypingModeContext = {
@@ -46,6 +47,13 @@ export function createTypingSignaler(params: {
   const shouldStartOnText = mode === "message" || mode === "instant";
   const shouldStartOnReasoning = mode === "thinking";
   const disabled = isHeartbeat || mode === "never";
+  let hasRenderableText = false;
+
+  const isRenderableText = (text?: string): boolean => {
+    const trimmed = text?.trim();
+    if (!trimmed) return false;
+    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
+  };
 
   const signalRunStart = async () => {
     if (disabled || !shouldStartImmediately) return;
@@ -54,28 +62,40 @@ export function createTypingSignaler(params: {
 
   const signalMessageStart = async () => {
     if (disabled || !shouldStartOnMessageStart) return;
+    if (!hasRenderableText) return;
     await typing.startTypingLoop();
   };
 
   const signalTextDelta = async (text?: string) => {
     if (disabled) return;
+    const renderable = isRenderableText(text);
+    if (renderable) {
+      hasRenderableText = true;
+    } else if (text?.trim()) {
+      return;
+    }
     if (shouldStartOnText) {
       await typing.startTypingOnText(text);
       return;
     }
     if (shouldStartOnReasoning) {
+      if (!typing.isActive()) {
+        await typing.startTypingLoop();
+      }
       typing.refreshTypingTtl();
     }
   };
 
   const signalReasoningDelta = async () => {
     if (disabled || !shouldStartOnReasoning) return;
+    if (!hasRenderableText) return;
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };
 
   const signalToolStart = async () => {
     if (disabled) return;
+    if (!hasRenderableText) return;
     if (!typing.isActive()) {
       await typing.startTypingLoop();
       typing.refreshTypingTtl();

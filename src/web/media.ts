@@ -29,6 +29,17 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
   return false;
 }
 
+function toJpegFileName(fileName?: string): string | undefined {
+  if (!fileName) return undefined;
+  const trimmed = fileName.trim();
+  if (!trimmed) return fileName;
+  const parsed = path.parse(trimmed);
+  if (!parsed.ext || HEIC_EXT_RE.test(parsed.ext)) {
+    return path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext: ".jpg" });
+  }
+  return path.format({ dir: parsed.dir, name: parsed.name, ext: ".jpg" });
+}
+
 async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
@@ -50,6 +61,7 @@ async function loadWebMediaInternal(
   ) => {
     const originalSize = buffer.length;
     const optimized = await optimizeImageToJpeg(buffer, cap, meta);
+    const fileName = meta && isHeicSource(meta) ? toJpegFileName(meta.fileName) : meta?.fileName;
     if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
       logVerbose(
         `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
@@ -67,6 +79,7 @@ async function loadWebMediaInternal(
       buffer: optimized.buffer,
       contentType: "image/jpeg",
       kind: "image" as const,
+      fileName,
     };
   };
 
@@ -103,7 +116,6 @@ async function loadWebMediaInternal(
           contentType: params.contentType,
           fileName: params.fileName,
         })),
-        fileName: params.fileName,
       };
     }
     if (params.buffer.length > cap) {
