@@ -589,6 +589,38 @@ describe("send", () => {
       expect(result.messageId).toBe("numeric-id-456");
     });
 
+    it("extracts messageGuid from response payload", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                data: { messageGuid: "msg-guid-789" },
+              }),
+            ),
+        });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("msg-guid-789");
+    });
+
     it("resolves credentials from config", async () => {
       mockFetch
         .mockResolvedValueOnce({

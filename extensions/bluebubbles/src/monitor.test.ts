@@ -1078,6 +1078,8 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
+      expect(callArgs.ctx.Body).toContain("[Replying to +15550000000 id:msg-0]");
+      expect(callArgs.ctx.Body).toContain("original message");
     });
   });
 

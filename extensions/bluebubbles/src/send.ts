@@ -86,12 +86,18 @@ function resolveSendTarget(raw: string): BlueBubblesSendTarget {
 function extractMessageId(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "unknown";
   const record = payload as Record<string, unknown>;
-  const data = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;
+  const data =
+    record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;
   const candidates = [
     record.messageId,
+    record.messageGuid,
+    record.message_guid,
     record.guid,
     record.id,
     data?.messageId,
+    data?.messageGuid,
+    data?.message_guid,
+    data?.message_id,
     data?.guid,
     data?.id,
   ];

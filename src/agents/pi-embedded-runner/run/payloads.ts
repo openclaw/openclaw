@@ -156,9 +156,10 @@ export function buildEmbeddedRunPayloads(params: {
     });
   }
 
-  if (replyItems.length === 0 && params.lastToolError) {
-    // Check if this is a recoverable/internal tool error that shouldn't be shown to users.
-    // These include parameter validation errors that the model should have retried.
+  if (params.lastToolError) {
+    const hasUserFacingReply = replyItems.length > 0;
+    // Check if this is a recoverable/internal tool error that shouldn't be shown to users
+    // when there's already a user-facing reply (the model should have retried).
     const errorLower = (params.lastToolError.error ?? "").toLowerCase();
     const isRecoverableError =
       errorLower.includes("required") ||
@@ -169,8 +170,7 @@ export function buildEmbeddedRunPayloads(params: {
       errorLower.includes("needs") ||
       errorLower.includes("requires");
 
-    // Only show non-recoverable errors to users
-    if (!isRecoverableError) {
+    if (!hasUserFacingReply || !isRecoverableError) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
@@ -182,8 +182,8 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
       });
     }
-    // Note: Recoverable errors are already in the model's context as tool_result is_error,
-    // so the model can see them and should retry. We just don't send them to the user.
+    // Note: Recoverable errors are already in the model's context as tool_result is_error.
+    // We only suppress them when a user-facing reply already exists.
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);

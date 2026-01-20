@@ -216,6 +216,21 @@ function buildMessagePlaceholder(message: NormalizedWebhookMessage): string {
   return "";
 }
 
+function formatReplyContext(message: {
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
+}): string | null {
+  if (!message.replyToId && !message.replyToBody && !message.replyToSender) return null;
+  const sender = message.replyToSender?.trim() || "unknown sender";
+  const idPart = message.replyToId ? ` id:${message.replyToId}` : "";
+  const body = message.replyToBody?.trim();
+  if (!body) {
+    return `[Replying to ${sender}${idPart}]\n[/Replying]`;
+  }
+  return `[Replying to ${sender}${idPart}]\n${body}\n[/Replying]`;
+}
+
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
   if (!record) return undefined;
   const value = record[key];
@@ -1178,6 +1193,8 @@ async function processMessage(
     }
   }
   const rawBody = text.trim() || placeholder;
+  const replyContext = formatReplyContext(message);
+  const baseBody = replyContext ? `${rawBody}\n\n${replyContext}` : rawBody;
   const fromLabel = isGroup
     ? `group:${peerId}`
     : message.senderName || `user:${message.senderId}`;
@@ -1202,7 +1219,7 @@ async function processMessage(
     timestamp: message.timestamp,
     previousTimestamp,
     envelope: envelopeOptions,
-    body: rawBody,
+    body: baseBody,
   });
   let chatGuidForActions = chatGuid;
   if (!chatGuidForActions && baseUrl && password) {
