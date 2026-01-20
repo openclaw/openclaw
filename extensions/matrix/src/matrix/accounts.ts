@@ -31,18 +31,20 @@ export function resolveMatrixAccount(params: {
   const base = (params.cfg.channels?.matrix ?? {}) as MatrixConfig;
   const enabled = base.enabled !== false;
   const resolved = resolveMatrixConfig(params.cfg, process.env);
-  const hasCore = Boolean(resolved.homeserver && resolved.userId);
-  const hasToken = Boolean(resolved.accessToken || resolved.password);
+  const hasHomeserver = Boolean(resolved.homeserver);
+  const hasUserId = Boolean(resolved.userId);
+  const hasAccessToken = Boolean(resolved.accessToken);
+  const hasPassword = Boolean(resolved.password);
+  const hasPasswordAuth = hasUserId && hasPassword;
   const stored = loadMatrixCredentials(process.env);
   const hasStored =
-    stored &&
-    resolved.homeserver &&
-    resolved.userId &&
-    credentialsMatchConfig(stored, {
-      homeserver: resolved.homeserver,
-      userId: resolved.userId,
-    });
-  const configured = hasCore && (hasToken || Boolean(hasStored));
+    stored && resolved.homeserver
+      ? credentialsMatchConfig(stored, {
+          homeserver: resolved.homeserver,
+          userId: resolved.userId || "",
+        })
+      : false;
+  const configured = hasHomeserver && (hasAccessToken || hasPasswordAuth || Boolean(hasStored));
   return {
     accountId,
     enabled,

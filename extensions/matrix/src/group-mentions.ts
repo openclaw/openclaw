@@ -20,7 +20,7 @@ export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): b
   const aliases = groupChannel ? [groupChannel] : [];
   const cfg = params.cfg as CoreConfig;
   const resolved = resolveMatrixRoomConfig({
-    rooms: cfg.channels?.matrix?.rooms,
+    rooms: cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms,
     roomId,
     aliases,
     name: groupChannel || undefined,

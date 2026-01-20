@@ -1,4 +1,11 @@
-import { ClientEvent, type MatrixClient, SyncState } from "matrix-js-sdk";
+import {
+  ConsoleLogger,
+  LogService,
+  MatrixClient,
+  SimpleFsStorageProvider,
+  RustSdkCryptoStorageProvider,
+} from "matrix-bot-sdk";
+import type { IStorageProvider, ICryptoStorageProvider } from "matrix-bot-sdk";
 
 import type { CoreConfig } from "../types.js";
 import { getMatrixRuntime } from "../runtime.js";
@@ -10,22 +17,30 @@ export type MatrixResolvedConfig = {
   password?: string;
   deviceName?: string;
   initialSyncLimit?: number;
+  encryption?: boolean;
 };
 
+/**
+ * Authenticated Matrix configuration.
+ * Note: deviceId is NOT included here because it's implicit in the accessToken.
+ * The crypto storage assumes the device ID (and thus access token) does not change
+ * between restarts. If the access token becomes invalid or crypto storage is lost,
+ * both will need to be recreated together.
+ */
 export type MatrixAuth = {
   homeserver: string;
   userId: string;
   accessToken: string;
   deviceName?: string;
   initialSyncLimit?: number;
+  encryption?: boolean;
 };
-
-type MatrixSdk = typeof import("matrix-js-sdk");
 
 type SharedMatrixClientState = {
   client: MatrixClient;
   key: string;
   started: boolean;
+  cryptoReady: boolean;
 };
 
 let sharedClientState: SharedMatrixClientState | null = null;
@@ -37,12 +52,63 @@ export function isBunRuntime(): boolean {
   return typeof versions.bun === "string";
 }
 
-async function loadMatrixSdk(): Promise<MatrixSdk> {
-  return (await import("matrix-js-sdk")) as MatrixSdk;
+let matrixSdkLoggingConfigured = false;
+const matrixSdkBaseLogger = new ConsoleLogger();
+
+function shouldSuppressMatrixHttpNotFound(
+  module: string,
+  messageOrObject: unknown[],
+): boolean {
+  if (module !== "MatrixHttpClient") return false;
+  return messageOrObject.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    return (entry as { errcode?: string }).errcode === "M_NOT_FOUND";
+  });
+}
+
+function ensureMatrixSdkLoggingConfigured(): void {
+  if (matrixSdkLoggingConfigured) return;
+  matrixSdkLoggingConfigured = true;
+
+  LogService.setLogger({
+    trace: (module, ...messageOrObject) =>
+      matrixSdkBaseLogger.trace(module, ...messageOrObject),
+    debug: (module, ...messageOrObject) =>
+      matrixSdkBaseLogger.debug(module, ...messageOrObject),
+    info: (module, ...messageOrObject) =>
+      matrixSdkBaseLogger.info(module, ...messageOrObject),
+    warn: (module, ...messageOrObject) =>
+      matrixSdkBaseLogger.warn(module, ...messageOrObject),
+    error: (module, ...messageOrObject) => {
+      if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) return;
+      matrixSdkBaseLogger.error(module, ...messageOrObject);
+    },
+  });
 }
 
 function clean(value?: string): string {
   return value?.trim() ?? "";
+}
+
+function sanitizeUserIdList(input: unknown, label: string): string[] {
+  if (input == null) return [];
+  if (!Array.isArray(input)) {
+    LogService.warn(
+      "MatrixClientLite",
+      `Expected ${label} list to be an array, got ${typeof input}`,
+    );
+    return [];
+  }
+  const filtered = input.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+  if (filtered.length !== input.length) {
+    LogService.warn(
+      "MatrixClientLite",
+      `Dropping ${input.length - filtered.length} invalid ${label} entries from sync payload`,
+    );
+  }
+  return filtered;
 }
 
 export function resolveMatrixConfig(
@@ -61,6 +127,7 @@ export function resolveMatrixConfig(
     typeof matrix.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))
       : undefined;
+  const encryption = matrix.encryption ?? false;
   return {
     homeserver,
     userId,
@@ -68,7 +135,24 @@ export function resolveMatrixConfig(
     password,
     deviceName,
     initialSyncLimit,
+    encryption,
   };
+}
+
+export function resolveCryptoStorePath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = getMatrixRuntime().state.resolveStateDir(env, () =>
+    require("node:os").homedir(),
+  );
+  const path = require("node:path");
+  return path.join(stateDir, "matrix", "crypto");
+}
+
+export function resolveStoragePath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = getMatrixRuntime().state.resolveStateDir(env, () =>
+    require("node:os").homedir(),
+  );
+  const path = require("node:path");
+  return path.join(stateDir, "matrix", "bot-storage.json");
 }
 
 export async function resolveMatrixAuth(params?: {
@@ -80,9 +164,6 @@ export async function resolveMatrixAuth(params?: {
   const resolved = resolveMatrixConfig(cfg, env);
   if (!resolved.homeserver) {
     throw new Error("Matrix homeserver is required (matrix.homeserver)");
-  }
-  if (!resolved.userId) {
-    throw new Error("Matrix userId is required (matrix.userId)");
   }
 
   const {
@@ -97,21 +178,36 @@ export async function resolveMatrixAuth(params?: {
     cached &&
     credentialsMatchConfig(cached, {
       homeserver: resolved.homeserver,
-      userId: resolved.userId,
+      userId: resolved.userId || "",
     })
       ? cached
       : null;
 
+  // If we have an access token, we can fetch userId via whoami if not provided
   if (resolved.accessToken) {
-    if (cachedCredentials && cachedCredentials.accessToken === resolved.accessToken) {
+    let userId = resolved.userId;
+    if (!userId) {
+      // Fetch userId from access token via whoami
+      ensureMatrixSdkLoggingConfigured();
+      const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
+      const whoami = await tempClient.getUserId();
+      userId = whoami;
+      // Save the credentials with the fetched userId
+      saveMatrixCredentials({
+        homeserver: resolved.homeserver,
+        userId,
+        accessToken: resolved.accessToken,
+      });
+    } else if (cachedCredentials && cachedCredentials.accessToken === resolved.accessToken) {
       touchMatrixCredentials(env);
     }
     return {
       homeserver: resolved.homeserver,
-      userId: resolved.userId,
+      userId,
       accessToken: resolved.accessToken,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
+      encryption: resolved.encryption,
     };
   }
 
@@ -123,25 +219,45 @@ export async function resolveMatrixAuth(params?: {
       accessToken: cachedCredentials.accessToken,
       deviceName: resolved.deviceName,
       initialSyncLimit: resolved.initialSyncLimit,
+      encryption: resolved.encryption,
     };
+  }
+
+  if (!resolved.userId) {
+    throw new Error(
+      "Matrix userId is required when no access token is configured (matrix.userId)",
+    );
   }
 
   if (!resolved.password) {
     throw new Error(
-      "Matrix access token or password is required (matrix.accessToken or matrix.password)",
+      "Matrix password is required when no access token is configured (matrix.password)",
     );
   }
 
-  const sdk = await loadMatrixSdk();
-  const loginClient = sdk.createClient({
-    baseUrl: resolved.homeserver,
+  // Login with password using HTTP API
+  const loginResponse = await fetch(`${resolved.homeserver}/_matrix/client/v3/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      type: "m.login.password",
+      identifier: { type: "m.id.user", user: resolved.userId },
+      password: resolved.password,
+      initial_device_display_name: resolved.deviceName ?? "Clawdbot Gateway",
+    }),
   });
-  const login = await loginClient.loginRequest({
-    type: "m.login.password",
-    identifier: { type: "m.id.user", user: resolved.userId },
-    password: resolved.password,
-    initial_device_display_name: resolved.deviceName ?? "Clawdbot Gateway",
-  });
+
+  if (!loginResponse.ok) {
+    const errorText = await loginResponse.text();
+    throw new Error(`Matrix login failed: ${errorText}`);
+  }
+
+  const login = (await loginResponse.json()) as {
+    access_token?: string;
+    user_id?: string;
+    device_id?: string;
+  };
+  
   const accessToken = login.access_token?.trim();
   if (!accessToken) {
     throw new Error("Matrix login did not return an access token");
@@ -153,12 +269,14 @@ export async function resolveMatrixAuth(params?: {
     accessToken,
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
+    encryption: resolved.encryption,
   };
 
   saveMatrixCredentials({
     homeserver: auth.homeserver,
     userId: auth.userId,
     accessToken: auth.accessToken,
+    deviceId: login.device_id,
   });
 
   return auth;
@@ -168,21 +286,79 @@ export async function createMatrixClient(params: {
   homeserver: string;
   userId: string;
   accessToken: string;
+  encryption?: boolean;
   localTimeoutMs?: number;
 }): Promise<MatrixClient> {
-  const sdk = await loadMatrixSdk();
-  const store = new sdk.MemoryStore();
-  return sdk.createClient({
-    baseUrl: params.homeserver,
-    userId: params.userId,
-    accessToken: params.accessToken,
-    localTimeoutMs: params.localTimeoutMs,
-    store,
-  });
+  ensureMatrixSdkLoggingConfigured();
+  const env = process.env;
+
+  // Create storage provider
+  const storagePath = resolveStoragePath(env);
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  fs.mkdirSync(path.dirname(storagePath), { recursive: true });
+  const storage: IStorageProvider = new SimpleFsStorageProvider(storagePath);
+
+  // Create crypto storage if encryption is enabled
+  let cryptoStorage: ICryptoStorageProvider | undefined;
+  if (params.encryption) {
+    const cryptoPath = resolveCryptoStorePath(env);
+    fs.mkdirSync(cryptoPath, { recursive: true });
+    
+    try {
+      const { StoreType } = await import("@matrix-org/matrix-sdk-crypto-nodejs");
+      cryptoStorage = new RustSdkCryptoStorageProvider(cryptoPath, StoreType.Sqlite);
+    } catch (err) {
+      LogService.warn("MatrixClientLite", "Failed to initialize crypto storage, E2EE disabled:", err);
+    }
+  }
+
+  const client = new MatrixClient(
+    params.homeserver,
+    params.accessToken,
+    storage,
+    cryptoStorage,
+  );
+
+  if (client.crypto) {
+    const originalUpdateSyncData = client.crypto.updateSyncData.bind(client.crypto);
+    client.crypto.updateSyncData = async (
+      toDeviceMessages,
+      otkCounts,
+      unusedFallbackKeyAlgs,
+      changedDeviceLists,
+      leftDeviceLists,
+    ) => {
+      const safeChanged = sanitizeUserIdList(changedDeviceLists, "changed device list");
+      const safeLeft = sanitizeUserIdList(leftDeviceLists, "left device list");
+      try {
+        return await originalUpdateSyncData(
+          toDeviceMessages,
+          otkCounts,
+          unusedFallbackKeyAlgs,
+          safeChanged,
+          safeLeft,
+        );
+      } catch (err) {
+        const message = typeof err === "string" ? err : err instanceof Error ? err.message : "";
+        if (message.includes("Expect value to be String")) {
+          LogService.warn(
+            "MatrixClientLite",
+            "Ignoring malformed device list entries during crypto sync",
+            message,
+          );
+          return;
+        }
+        throw err;
+      }
+    };
+  }
+
+  return client;
 }
 
 function buildSharedClientKey(auth: MatrixAuth): string {
-  return [auth.homeserver, auth.userId, auth.accessToken].join("|");
+  return [auth.homeserver, auth.userId, auth.accessToken, auth.encryption ? "e2ee" : "plain"].join("|");
 }
 
 async function createSharedMatrixClient(params: {
@@ -193,15 +369,22 @@ async function createSharedMatrixClient(params: {
     homeserver: params.auth.homeserver,
     userId: params.auth.userId,
     accessToken: params.auth.accessToken,
+    encryption: params.auth.encryption,
     localTimeoutMs: params.timeoutMs,
   });
-  return { client, key: buildSharedClientKey(params.auth), started: false };
+  return {
+    client,
+    key: buildSharedClientKey(params.auth),
+    started: false,
+    cryptoReady: false,
+  };
 }
 
 async function ensureSharedClientStarted(params: {
   state: SharedMatrixClientState;
   timeoutMs?: number;
   initialSyncLimit?: number;
+  encryption?: boolean;
 }): Promise<void> {
   if (params.state.started) return;
   if (sharedClientStartPromise) {
@@ -209,18 +392,22 @@ async function ensureSharedClientStarted(params: {
     return;
   }
   sharedClientStartPromise = (async () => {
-    const startOpts: Parameters<MatrixClient["startClient"]>[0] = {
-      lazyLoadMembers: true,
-      threadSupport: true,
-    };
-    if (typeof params.initialSyncLimit === "number") {
-      startOpts.initialSyncLimit = params.initialSyncLimit;
+    const client = params.state.client;
+    
+    // Initialize crypto if enabled
+    if (params.encryption && !params.state.cryptoReady) {
+      try {
+        const joinedRooms = await client.getJoinedRooms();
+        if (client.crypto) {
+          await client.crypto.prepare(joinedRooms);
+          params.state.cryptoReady = true;
+        }
+      } catch (err) {
+        LogService.warn("MatrixClientLite", "Failed to prepare crypto:", err);
+      }
     }
-    await params.state.client.startClient(startOpts);
-    await waitForMatrixSync({
-      client: params.state.client,
-      timeoutMs: params.timeoutMs,
-    });
+
+    await client.start();
     params.state.started = true;
   })();
   try {
@@ -249,6 +436,7 @@ export async function resolveSharedMatrixClient(
         state: sharedClientState,
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
+        encryption: auth.encryption,
       });
     }
     return sharedClientState.client;
@@ -262,11 +450,12 @@ export async function resolveSharedMatrixClient(
           state: pending,
           timeoutMs: params.timeoutMs,
           initialSyncLimit: auth.initialSyncLimit,
+          encryption: auth.encryption,
         });
       }
       return pending.client;
     }
-    pending.client.stopClient();
+    pending.client.stop();
     sharedClientState = null;
     sharedClientPromise = null;
   }
@@ -283,6 +472,7 @@ export async function resolveSharedMatrixClient(
         state: created,
         timeoutMs: params.timeoutMs,
         initialSyncLimit: auth.initialSyncLimit,
+        encryption: auth.encryption,
       });
     }
     return created.client;
@@ -291,48 +481,18 @@ export async function resolveSharedMatrixClient(
   }
 }
 
-export async function waitForMatrixSync(params: {
+export async function waitForMatrixSync(_params: {
   client: MatrixClient;
   timeoutMs?: number;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  const timeoutMs = Math.max(1000, params.timeoutMs ?? 15_000);
-  if (params.client.getSyncState() === SyncState.Syncing) return;
-  await new Promise<void>((resolve, reject) => {
-    let done = false;
-    let timer: NodeJS.Timeout | undefined;
-    const cleanup = () => {
-      if (done) return;
-      done = true;
-      params.client.removeListener(ClientEvent.Sync, onSync);
-      if (params.abortSignal) {
-        params.abortSignal.removeEventListener("abort", onAbort);
-      }
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
-    };
-    const onSync = (state: SyncState) => {
-      if (done) return;
-      if (state === SyncState.Prepared || state === SyncState.Syncing) {
-        cleanup();
-        resolve();
-      }
-      if (state === SyncState.Error) {
-        cleanup();
-        reject(new Error("Matrix sync failed"));
-      }
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(new Error("Matrix sync aborted"));
-    };
-    params.client.on(ClientEvent.Sync, onSync);
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("Matrix sync timed out"));
-    }, timeoutMs);
-  });
+  // matrix-bot-sdk handles sync internally in start()
+  // This is kept for API compatibility but is essentially a no-op now
+}
+
+export function stopSharedClient(): void {
+  if (sharedClientState) {
+    sharedClientState.client.stop();
+    sharedClientState = null;
+  }
 }

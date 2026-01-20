@@ -1,11 +1,17 @@
-import type { MatrixEvent, Room } from "matrix-js-sdk";
-import { EventType, RelationType, RoomEvent } from "matrix-js-sdk";
-import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
+import type {
+  LocationMessageEventContent,
+  MatrixClient,
+  MessageEventContent,
+} from "matrix-bot-sdk";
+import { format } from "node:util";
 
 import {
   formatAllowlistMatchMeta,
+  formatLocationText,
   mergeAllowlist,
   summarizeMapping,
+  toLocationContext,
+  type NormalizedLocation,
   type ReplyPayload,
   type RuntimeEnv,
 } from "clawdbot/plugin-sdk";
@@ -15,6 +21,7 @@ import {
   isBunRuntime,
   resolveMatrixAuth,
   resolveSharedMatrixClient,
+  stopSharedClient,
 } from "../client.js";
 import {
   formatPollAsText,
@@ -22,7 +29,12 @@ import {
   type PollStartContent,
   parsePollStartContent,
 } from "../poll-types.js";
-import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send.js";
+import {
+  reactMatrixMessage,
+  sendMessageMatrix,
+  sendReadReceiptMatrix,
+  sendTypingMatrix,
+} from "../send.js";
 import {
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
@@ -37,6 +49,118 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
+
+// Constants that were previously from matrix-js-sdk
+const EventType = {
+  RoomMessage: "m.room.message",
+  RoomMessageEncrypted: "m.room.encrypted",
+  RoomMember: "m.room.member",
+  Location: "m.location",
+} as const;
+
+const RelationType = {
+  Replace: "m.replace",
+} as const;
+
+// Type for raw Matrix events from matrix-bot-sdk
+type MatrixRawEvent = {
+  event_id: string;
+  sender: string;
+  type: string;
+  origin_server_ts: number;
+  content: Record<string, unknown>;
+  unsigned?: {
+    age?: number;
+    redacted_because?: unknown;
+  };
+};
+
+type RoomMessageEventContent = MessageEventContent & {
+  url?: string;
+  info?: {
+    mimetype?: string;
+  };
+  "m.relates_to"?: {
+    rel_type?: string;
+    event_id?: string;
+    "m.in_reply_to"?: { event_id?: string };
+  };
+};
+
+type MatrixLocationPayload = {
+  text: string;
+  context: ReturnType<typeof toLocationContext>;
+};
+
+type GeoUriParams = {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+};
+
+function parseGeoUri(value: string): GeoUriParams | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.toLowerCase().startsWith("geo:")) return null;
+  const payload = trimmed.slice(4);
+  const [coordsPart, ...paramParts] = payload.split(";");
+  const coords = coordsPart.split(",");
+  if (coords.length < 2) return null;
+  const latitude = Number.parseFloat(coords[0] ?? "");
+  const longitude = Number.parseFloat(coords[1] ?? "");
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+
+  const params = new Map<string, string>();
+  for (const part of paramParts) {
+    const segment = part.trim();
+    if (!segment) continue;
+    const eqIndex = segment.indexOf("=");
+    const rawKey = eqIndex === -1 ? segment : segment.slice(0, eqIndex);
+    const rawValue = eqIndex === -1 ? "" : segment.slice(eqIndex + 1);
+    const key = rawKey.trim().toLowerCase();
+    if (!key) continue;
+    const valuePart = rawValue.trim();
+    params.set(key, valuePart ? decodeURIComponent(valuePart) : "");
+  }
+
+  const accuracyRaw = params.get("u");
+  const accuracy = accuracyRaw ? Number.parseFloat(accuracyRaw) : undefined;
+
+  return {
+    latitude,
+    longitude,
+    accuracy: Number.isFinite(accuracy) ? accuracy : undefined,
+  };
+}
+
+function resolveMatrixLocation(params: {
+  eventType: string;
+  content: LocationMessageEventContent;
+}): MatrixLocationPayload | null {
+  const { eventType, content } = params;
+  const isLocation =
+    eventType === EventType.Location ||
+    (eventType === EventType.RoomMessage && content.msgtype === EventType.Location);
+  if (!isLocation) return null;
+  const geoUri = typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
+  if (!geoUri) return null;
+  const parsed = parseGeoUri(geoUri);
+  if (!parsed) return null;
+  const caption = typeof content.body === "string" ? content.body.trim() : "";
+  const location: NormalizedLocation = {
+    latitude: parsed.latitude,
+    longitude: parsed.longitude,
+    accuracy: parsed.accuracy,
+    caption: caption || undefined,
+    source: "pin",
+    isLive: false,
+  };
+
+  return {
+    text: formatLocationText(location),
+    context: toLocationContext(location),
+  };
+}
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -56,12 +180,22 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let cfg = core.config.loadConfig() as CoreConfig;
   if (cfg.channels?.matrix?.enabled === false) return;
 
+  const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
+  const formatRuntimeMessage = (...args: Parameters<RuntimeEnv["log"]>) => format(...args);
   const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
+    log: (...args) => {
+      logger.info(formatRuntimeMessage(...args));
+    },
+    error: (...args) => {
+      logger.error(formatRuntimeMessage(...args));
+    },
     exit: (code: number): never => {
       throw new Error(`exit ${code}`);
     },
+  };
+  const logVerboseMessage = (message: string) => {
+    if (!core.logging.shouldLogVerbose()) return;
+    logger.debug(message);
   };
 
   const normalizeUserEntry = (raw: string) =>
@@ -70,8 +204,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     raw.replace(/^matrix:/i, "").replace(/^(room|channel):/i, "").trim();
   const isMatrixUserId = (value: string) => value.startsWith("@") && value.includes(":");
 
+  const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
   let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
-  let roomsConfig = cfg.channels?.matrix?.rooms;
+  let roomsConfig = cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms;
 
   if (allowFrom.length > 0) {
     const entries = allowFrom
@@ -163,7 +298,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           ...cfg.channels?.matrix?.dm,
           allowFrom,
         },
-        rooms: roomsConfig,
+        ...(roomsConfig ? { groups: roomsConfig } : {}),
       },
     },
   };
@@ -185,13 +320,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client);
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
-  const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
-  const logVerboseMessage = (message: string) => {
-    if (core.logging.shouldLogVerbose()) {
-      logger.debug(message);
-    }
-  };
-  const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicyRaw = cfg.channels?.matrix?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
@@ -206,30 +334,75 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
   const startupGraceMs = 0;
-  const directTracker = createDirectRoomTracker(client);
+  const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, cfg, runtime });
+  const warnedEncryptedRooms = new Set<string>();
+  const warnedCryptoMissingRooms = new Set<string>();
 
-  const handleTimeline = async (
-    event: MatrixEvent,
-    room: Room | undefined,
-    toStartOfTimeline?: boolean,
+  const roomInfoCache = new Map<
+    string,
+    { name?: string; canonicalAlias?: string; altAliases: string[] }
+  >();
+
+  // Helper to get room info
+  const getRoomInfo = async (roomId: string) => {
+    const cached = roomInfoCache.get(roomId);
+    if (cached) return cached;
+    let name: string | undefined;
+    let canonicalAlias: string | undefined;
+    let altAliases: string[] = [];
+    try {
+      const nameState = await client.getRoomStateEvent(roomId, "m.room.name", "").catch(() => null);
+      name = nameState?.name;
+    } catch { /* ignore */ }
+    try {
+      const aliasState = await client.getRoomStateEvent(roomId, "m.room.canonical_alias", "").catch(() => null);
+      canonicalAlias = aliasState?.alias;
+      altAliases = aliasState?.alt_aliases ?? [];
+    } catch { /* ignore */ }
+    const info = { name, canonicalAlias, altAliases };
+    roomInfoCache.set(roomId, info);
+    return info;
+  };
+
+  // Helper to get member display name
+  const getMemberDisplayName = async (roomId: string, userId: string): Promise<string> => {
+    try {
+      const memberState = await client.getRoomStateEvent(roomId, "m.room.member", userId).catch(() => null);
+      return memberState?.displayname ?? userId;
+    } catch {
+      return userId;
+    }
+  };
+
+  const handleRoomMessage = async (
+    roomId: string,
+    event: MatrixRawEvent,
   ) => {
     try {
-      if (!room) return;
-      if (toStartOfTimeline) return;
-      if (event.getType() === EventType.RoomMessageEncrypted || event.isDecryptionFailure()) {
+      const eventType = event.type;
+      if (eventType === EventType.RoomMessageEncrypted) {
+        // Encrypted messages are decrypted automatically by matrix-bot-sdk with crypto enabled
         return;
       }
 
-      const eventType = event.getType();
       const isPollEvent = isPollStartType(eventType);
-      if (eventType !== EventType.RoomMessage && !isPollEvent) return;
-      if (event.isRedacted()) return;
-      const senderId = event.getSender();
+      const locationContent = event.content as LocationMessageEventContent;
+      const isLocationEvent =
+        eventType === EventType.Location ||
+        (eventType === EventType.RoomMessage &&
+          locationContent.msgtype === EventType.Location);
+      if (eventType !== EventType.RoomMessage && !isPollEvent && !isLocationEvent) return;
+      logVerboseMessage(
+        `matrix: room.message recv room=${roomId} type=${eventType} id=${event.event_id ?? "unknown"}`,
+      );
+      if (event.unsigned?.redacted_because) return;
+      const senderId = event.sender;
       if (!senderId) return;
-      if (senderId === client.getUserId()) return;
-      const eventTs = event.getTs();
-      const eventAge = event.getAge();
+      const selfUserId = await client.getUserId();
+      if (senderId === selfUserId) return;
+      const eventTs = event.origin_server_ts;
+      const eventAge = event.unsigned?.age;
       if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
         return;
       }
@@ -241,15 +414,23 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         return;
       }
 
-      let content = event.getContent<RoomMessageEventContent>();
+      const roomInfo = await getRoomInfo(roomId);
+      const roomName = roomInfo.name;
+      const roomAliases = [
+        roomInfo.canonicalAlias ?? "",
+        ...roomInfo.altAliases,
+      ].filter(Boolean);
+
+      let content = event.content as RoomMessageEventContent;
       if (isPollEvent) {
-        const pollStartContent = event.getContent<PollStartContent>();
+        const pollStartContent = event.content as PollStartContent;
         const pollSummary = parsePollStartContent(pollStartContent);
         if (pollSummary) {
-          pollSummary.eventId = event.getId() ?? "";
-          pollSummary.roomId = room.roomId;
+          pollSummary.eventId = event.event_id ?? "";
+          pollSummary.roomId = roomId;
           pollSummary.sender = senderId;
-          pollSummary.senderName = room.getMember(senderId)?.name ?? senderId;
+          const senderDisplayName = await getMemberDisplayName(roomId, senderId);
+          pollSummary.senderName = senderDisplayName;
           const pollText = formatPollAsText(pollSummary);
           content = {
             msgtype: "m.text",
@@ -260,50 +441,64 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         }
       }
 
+      const locationPayload = resolveMatrixLocation({
+        eventType,
+        content: content as LocationMessageEventContent,
+      });
+
       const relates = content["m.relates_to"];
       if (relates && "rel_type" in relates) {
         if (relates.rel_type === RelationType.Replace) return;
       }
 
-      const roomId = room.roomId;
-      const isDirectMessage = directTracker.isDirectMessage(room, senderId);
+      const isDirectMessage = await directTracker.isDirectMessage({
+        roomId,
+        senderId,
+        selfUserId,
+      });
       const isRoom = !isDirectMessage;
 
-      if (!isDirectMessage && groupPolicy === "disabled") return;
+      if (isRoom && groupPolicy === "disabled") return;
 
-      const roomAliases = [
-        room.getCanonicalAlias?.() ?? "",
-        ...(room.getAltAliases?.() ?? []),
-      ].filter(Boolean);
-      const roomName = room.name ?? undefined;
-      const roomConfigInfo = resolveMatrixRoomConfig({
-        rooms: cfg.channels?.matrix?.rooms,
-        roomId,
-        aliases: roomAliases,
-        name: roomName,
-      });
-      const roomMatchMeta = `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
-        roomConfigInfo.matchSource ?? "none"
-      }`;
+      const roomConfigInfo = isRoom
+        ? resolveMatrixRoomConfig({
+            rooms: roomsConfig,
+            roomId,
+            aliases: roomAliases,
+            name: roomName,
+          })
+        : undefined;
+      const roomConfig = roomConfigInfo?.config;
+      const roomMatchMeta = roomConfigInfo
+        ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
+            roomConfigInfo.matchSource ?? "none"
+          }`
+        : "matchKey=none matchSource=none";
 
-      if (roomConfigInfo.config && !roomConfigInfo.allowed) {
+      if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
         logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
         return;
       }
-      if (groupPolicy === "allowlist") {
-        if (!roomConfigInfo.allowlistConfigured) {
+      if (isRoom && groupPolicy === "allowlist") {
+        if (!roomConfigInfo?.allowlistConfigured) {
           logVerboseMessage(`matrix: drop room message (no allowlist, ${roomMatchMeta})`);
           return;
         }
-        if (!roomConfigInfo.config) {
+        if (!roomConfig) {
           logVerboseMessage(`matrix: drop room message (not in allowlist, ${roomMatchMeta})`);
           return;
         }
       }
 
-      const senderName = room.getMember(senderId)?.name ?? senderId;
+      const senderName = await getMemberDisplayName(roomId, senderId);
       const storeAllowFrom = await core.channel.pairing.readAllowFromStore("matrix").catch(() => []);
       const effectiveAllowFrom = normalizeAllowListLower([...allowFrom, ...storeAllowFrom]);
+      const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+      const effectiveGroupAllowFrom = normalizeAllowListLower([
+        ...groupAllowFrom,
+        ...storeAllowFrom,
+      ]);
+      const groupAllowConfigured = effectiveGroupAllowFrom.length > 0;
 
       if (isDirectMessage) {
         if (!dmEnabled || dmPolicy === "disabled") return;
@@ -353,9 +548,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         }
       }
 
-      if (isRoom && roomConfigInfo.config?.users?.length) {
+      const roomUsers = roomConfig?.users ?? [];
+      if (isRoom && roomUsers.length > 0) {
         const userMatch = resolveMatrixAllowListMatch({
-          allowList: normalizeAllowListLower(roomConfigInfo.config.users),
+          allowList: normalizeAllowListLower(roomUsers),
           userId: senderId,
           userName: senderName,
         });
@@ -368,11 +564,27 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           return;
         }
       }
+      if (isRoom && groupPolicy === "allowlist" && roomUsers.length === 0 && groupAllowConfigured) {
+        const groupAllowMatch = resolveMatrixAllowListMatch({
+          allowList: effectiveGroupAllowFrom,
+          userId: senderId,
+          userName: senderName,
+        });
+        if (!groupAllowMatch.allowed) {
+          logVerboseMessage(
+            `matrix: blocked sender ${senderId} (groupAllowFrom, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
+              groupAllowMatch,
+            )})`,
+          );
+          return;
+        }
+      }
       if (isRoom) {
         logVerboseMessage(`matrix: allow room ${roomId} (${roomMatchMeta})`);
       }
 
-      const rawBody = content.body.trim();
+      const rawBody = locationPayload?.text
+        ?? (typeof content.body === "string" ? content.body.trim() : "");
       let media: {
         path: string;
         contentType?: string;
@@ -406,7 +618,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
       const { wasMentioned, hasExplicitMention } = resolveMentions({
         content,
-        userId: client.getUserId(),
+        userId: selfUserId,
         text: bodyText,
         mentionRegexes,
       });
@@ -420,10 +632,27 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         userId: senderId,
         userName: senderName,
       });
+      const senderAllowedForGroup = groupAllowConfigured
+        ? resolveMatrixAllowListMatches({
+            allowList: effectiveGroupAllowFrom,
+            userId: senderId,
+            userName: senderName,
+          })
+        : false;
+      const senderAllowedForRoomUsers =
+        isRoom && roomUsers.length > 0
+          ? resolveMatrixAllowListMatches({
+              allowList: normalizeAllowListLower(roomUsers),
+              userId: senderId,
+              userName: senderName,
+            })
+          : false;
       const commandAuthorized = core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+          { configured: roomUsers.length > 0, allowed: senderAllowedForRoomUsers },
+          { configured: groupAllowConfigured, allowed: senderAllowedForGroup },
         ],
       });
       if (
@@ -436,12 +665,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         return;
       }
       const shouldRequireMention = isRoom
-        ? roomConfigInfo.config?.autoReply === true
+        ? roomConfig?.autoReply === true
           ? false
-          : roomConfigInfo.config?.autoReply === false
+          : roomConfig?.autoReply === false
             ? true
-            : typeof roomConfigInfo.config?.requireMention === "boolean"
-              ? roomConfigInfo.config.requireMention
+            : typeof roomConfig?.requireMention === "boolean"
+              ? roomConfig?.requireMention
               : true
         : false;
       const shouldBypassMention =
@@ -457,13 +686,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         return;
       }
 
-      const messageId = event.getId() ?? "";
+      const messageId = event.event_id ?? "";
+      const replyToEventId = content["m.relates_to"]?.["m.in_reply_to"]?.event_id;
       const threadRootId = resolveMatrixThreadRootId({ event, content });
 	      const threadTarget = resolveMatrixThreadTarget({
 	        threadReplies,
 	        messageId,
 	        threadRootId,
-	        isThreadRoot: event.isThreadRoot,
+	        isThreadRoot: false, // matrix-bot-sdk doesn't have this info readily available
 	      });
 
 	      const route = core.channel.routing.resolveAgentRoute({
@@ -484,16 +714,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 	        storePath,
 	        sessionKey: route.sessionKey,
 	      });
-	      const body = core.channel.reply.formatAgentEnvelope({
-	        channel: "Matrix",
-	        from: envelopeFrom,
-	        timestamp: event.getTs() ?? undefined,
-	        previousTimestamp,
-	        envelope: envelopeOptions,
-	        body: textWithId,
-	      });
+      const body = core.channel.reply.formatAgentEnvelope({
+        channel: "Matrix",
+        from: envelopeFrom,
+        timestamp: eventTs ?? undefined,
+        previousTimestamp,
+        envelope: envelopeOptions,
+        body: textWithId,
+      });
 
-	      const groupSystemPrompt = roomConfigInfo.config?.systemPrompt?.trim() || undefined;
+      const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
 	        Body: body,
 	        RawBody: bodyText,
@@ -508,18 +738,19 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         SenderId: senderId,
         SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
-        GroupChannel: isRoom ? (room.getCanonicalAlias?.() ?? roomId) : undefined,
+        GroupChannel: isRoom ? (roomInfo.canonicalAlias ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
         Provider: "matrix" as const,
         Surface: "matrix" as const,
         WasMentioned: isRoom ? wasMentioned : undefined,
         MessageSid: messageId,
-        ReplyToId: threadTarget ? undefined : (event.replyEventId ?? undefined),
+        ReplyToId: threadTarget ? undefined : (replyToEventId ?? undefined),
         MessageThreadId: threadTarget,
-        Timestamp: event.getTs() ?? undefined,
+        Timestamp: eventTs ?? undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        ...(locationPayload?.context ?? {}),
 	        CommandAuthorized: commandAuthorized,
 	        CommandSource: "text" as const,
 	        OriginatingChannel: "matrix" as const,
@@ -577,6 +808,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         return;
       }
 
+      if (messageId) {
+        sendReadReceiptMatrix(roomId, messageId, client).catch((err) => {
+          logVerboseMessage(
+            `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
+          );
+        });
+      }
+
       let didSendReply = false;
       const { dispatcher, replyOptions, markDispatchIdle } = core.channel.reply.createReplyDispatcherWithTyping({
         responsePrefix: core.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
@@ -606,7 +845,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         dispatcher,
         replyOptions: {
           ...replyOptions,
-          skillFilter: roomConfigInfo.config?.skills,
+          skillFilter: roomConfig?.skills,
         },
       });
       markDispatchIdle();
@@ -628,15 +867,100 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     }
   };
 
-  client.on(RoomEvent.Timeline, handleTimeline);
+  // matrix-bot-sdk uses on("room.message", handler)
+  client.on("room.message", handleRoomMessage);
 
-  await resolveSharedMatrixClient({ cfg, auth: authWithLimit, startClient: true });
-  runtime.log?.(`matrix: logged in as ${auth.userId}`);
+  client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
+    const eventId = event?.event_id ?? "unknown";
+    const eventType = event?.type ?? "unknown";
+    logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
+  });
+
+  client.on("room.decrypted_event", (roomId: string, event: MatrixRawEvent) => {
+    const eventId = event?.event_id ?? "unknown";
+    const eventType = event?.type ?? "unknown";
+    logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
+  });
+
+  // Handle failed E2EE decryption
+  client.on("room.failed_decryption", async (roomId: string, event: MatrixRawEvent, error: Error) => {
+    logger.warn({ roomId, eventId: event.event_id, error: error.message }, "Failed to decrypt message");
+    logVerboseMessage(
+      `matrix: failed decrypt room=${roomId} id=${event.event_id ?? "unknown"} error=${error.message}`,
+    );
+  });
+
+  client.on("room.invite", (roomId: string, event: MatrixRawEvent) => {
+    const eventId = event?.event_id ?? "unknown";
+    const sender = event?.sender ?? "unknown";
+    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
+    logVerboseMessage(
+      `matrix: invite room=${roomId} sender=${sender} direct=${String(isDirect)} id=${eventId}`,
+    );
+  });
+
+  client.on("room.join", (roomId: string, event: MatrixRawEvent) => {
+    const eventId = event?.event_id ?? "unknown";
+    logVerboseMessage(`matrix: join room=${roomId} id=${eventId}`);
+  });
+
+  client.on("room.event", (roomId: string, event: MatrixRawEvent) => {
+    const eventType = event?.type ?? "unknown";
+    if (eventType === EventType.RoomMessageEncrypted) {
+      logVerboseMessage(
+        `matrix: encrypted raw event room=${roomId} id=${event?.event_id ?? "unknown"}`,
+      );
+      if (auth.encryption !== true && !warnedEncryptedRooms.has(roomId)) {
+        warnedEncryptedRooms.add(roomId);
+        const warning =
+          "matrix: encrypted event received without encryption enabled; set channels.matrix.encryption=true and verify the device to decrypt";
+        logger.warn({ roomId }, warning);
+      }
+      if (auth.encryption === true && !client.crypto && !warnedCryptoMissingRooms.has(roomId)) {
+        warnedCryptoMissingRooms.add(roomId);
+        const warning =
+          "matrix: encryption enabled but crypto is unavailable; install @matrix-org/matrix-sdk-crypto-nodejs and restart";
+        logger.warn({ roomId }, warning);
+      }
+      return;
+    }
+    if (eventType === EventType.RoomMember) {
+      const membership = (event?.content as { membership?: string } | undefined)?.membership;
+      const stateKey = (event as { state_key?: string }).state_key ?? "";
+      logVerboseMessage(
+        `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
+      );
+    }
+  });
+
+  logVerboseMessage("matrix: starting client");
+  await resolveSharedMatrixClient({
+    cfg,
+    auth: authWithLimit,
+  });
+  logVerboseMessage("matrix: client started");
+
+  // matrix-bot-sdk client is already started via resolveSharedMatrixClient
+  logger.info(`matrix: logged in as ${auth.userId}`);
+
+  // If E2EE is enabled, trigger device verification
+  if (auth.encryption && client.crypto) {
+    try {
+      // Request verification from other sessions
+      const verificationRequest = await client.crypto.requestOwnUserVerification();
+      if (verificationRequest) {
+        logger.info("matrix: device verification requested - please verify in another client");
+      }
+    } catch (err) {
+      logger.debug({ error: String(err) }, "Device verification request failed (may already be verified)");
+    }
+  }
 
   await new Promise<void>((resolve) => {
     const onAbort = () => {
       try {
-        client.stopClient();
+        logVerboseMessage("matrix: stopping client");
+        stopSharedClient();
       } finally {
         setActiveMatrixClient(null);
         resolve();
