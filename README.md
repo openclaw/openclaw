@@ -258,12 +258,7 @@ Send these in WhatsApp/Telegram/Slack/Microsoft Teams/WebChat (group commands ar
 
 The Gateway alone delivers a great experience. All apps are optional and add extra features.
 
-If you plan to build/run companion apps, initialize submodules first:
-
-```bash
-git submodule update --init --recursive
-./scripts/restart-mac.sh
-```
+If you plan to build/run companion apps, follow the platform runbooks below.
 
 ### macOS (Clawdbot.app) (optional)
 

@@ -77,8 +77,8 @@ Docs: https://docs.clawd.bot
 ## 2026.1.18-4
 
 ### Changes
-- macOS: switch PeekabooBridge integration to the tagged Swift Package Manager release (no submodule).
-- macOS: stop syncing Peekaboo as a git submodule in postinstall.
+- macOS: switch PeekabooBridge integration to the tagged Swift Package Manager release.
+- macOS: stop syncing Peekaboo in postinstall.
 - Swabble: use the tagged Commander Swift package release.
 - CLI: add `clawdbot acp client` interactive ACP harness for debugging.
 - Plugins: route command detection/text chunking helpers through the plugin runtime and drop runtime exports from the SDK.
