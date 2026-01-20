@@ -469,6 +469,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const abortSignal = opts.abortSignal;
   const onAbort = () => {
     if (!gateway) return;
+    // Carbon emits an error when maxAttempts is 0; keep a one-shot listener to avoid
+    // an unhandled error after we tear down listeners during abort.
+    gatewayEmitter?.once("error", () => {});
     gateway.options.reconnect = { maxAttempts: 0 };
     gateway.disconnect();
   };
