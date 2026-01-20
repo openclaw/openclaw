@@ -50,12 +50,12 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe("+19257864429");
   });
 
-  it("normalizes chat<digits> pattern to chat_id format", () => {
+  it("normalizes chat<digits> pattern to chat_identifier format", () => {
     expect(normalizeBlueBubblesMessagingTarget("chat660250192681427962")).toBe(
-      "chat_id:660250192681427962",
+      "chat_identifier:chat660250192681427962",
     );
-    expect(normalizeBlueBubblesMessagingTarget("chat123")).toBe("chat_id:123");
-    expect(normalizeBlueBubblesMessagingTarget("Chat456789")).toBe("chat_id:456789");
+    expect(normalizeBlueBubblesMessagingTarget("chat123")).toBe("chat_identifier:chat123");
+    expect(normalizeBlueBubblesMessagingTarget("Chat456789")).toBe("chat_identifier:Chat456789");
   });
 });
 
@@ -88,13 +88,19 @@ describe("looksLikeBlueBubblesTargetId", () => {
 });
 
 describe("parseBlueBubblesTarget", () => {
-  it("parses chat<digits> pattern as chat_id", () => {
+  it("parses chat<digits> pattern as chat_identifier", () => {
     expect(parseBlueBubblesTarget("chat660250192681427962")).toEqual({
-      kind: "chat_id",
-      chatId: 660250192681427962,
+      kind: "chat_identifier",
+      chatIdentifier: "chat660250192681427962",
     });
-    expect(parseBlueBubblesTarget("chat123")).toEqual({ kind: "chat_id", chatId: 123 });
-    expect(parseBlueBubblesTarget("Chat456789")).toEqual({ kind: "chat_id", chatId: 456789 });
+    expect(parseBlueBubblesTarget("chat123")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "chat123",
+    });
+    expect(parseBlueBubblesTarget("Chat456789")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "Chat456789",
+    });
   });
 
   it("parses explicit chat_id: prefix", () => {
@@ -118,12 +124,15 @@ describe("parseBlueBubblesTarget", () => {
 });
 
 describe("parseBlueBubblesAllowTarget", () => {
-  it("parses chat<digits> pattern as chat_id", () => {
+  it("parses chat<digits> pattern as chat_identifier", () => {
     expect(parseBlueBubblesAllowTarget("chat660250192681427962")).toEqual({
-      kind: "chat_id",
-      chatId: 660250192681427962,
+      kind: "chat_identifier",
+      chatIdentifier: "chat660250192681427962",
     });
-    expect(parseBlueBubblesAllowTarget("chat123")).toEqual({ kind: "chat_id", chatId: 123 });
+    expect(parseBlueBubblesAllowTarget("chat123")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "chat123",
+    });
   });
 
   it("parses explicit chat_id: prefix", () => {

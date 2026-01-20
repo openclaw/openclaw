@@ -11,7 +11,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 
 ## Overview
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
-- Recommended/tested: macOS Sequoia (15). macOS Tahoe (26) works; edit is currently broken on Tahoe, but other actions (reactions, effects, unsend, etc.) still work.
+- Recommended/tested: macOS Sequoia (15). macOS Tahoe (26) works; edit is currently broken on Tahoe, and group icon updates may report success but not sync.
 - Clawdbot talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Incoming messages arrive via webhooks; outgoing replies, typing indicators, read receipts, and tapbacks are REST calls.
 - Attachments and stickers are ingested as inbound media (and surfaced to the agent when possible).
@@ -125,7 +125,7 @@ BlueBubbles supports advanced message actions when enabled in config:
         reply: true,           // reply threading by message GUID
         sendWithEffect: true,  // message effects (slam, loud, etc.)
         renameGroup: true,     // rename group chats
-        setGroupIcon: true,    // set group chat icon/photo
+        setGroupIcon: true,    // set group chat icon/photo (flaky on macOS 26 Tahoe)
         addParticipant: true,  // add participants to groups
         removeParticipant: true, // remove participants from groups
         leaveGroup: true,      // leave group chats
@@ -143,7 +143,7 @@ Available actions:
 - **reply**: Reply to a specific message (`messageId`, `text`, `to`)
 - **sendWithEffect**: Send with iMessage effect (`text`, `to`, `effectId`)
 - **renameGroup**: Rename a group chat (`chatGuid`, `displayName`)
-- **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`)
+- **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`) — flaky on macOS 26 Tahoe (API may return success but the icon does not sync).
 - **addParticipant**: Add someone to a group (`chatGuid`, `address`)
 - **removeParticipant**: Remove someone from a group (`chatGuid`, `address`)
 - **leaveGroup**: Leave a group chat (`chatGuid`)
@@ -208,7 +208,8 @@ Prefer `chat_guid` for stable routing:
 - If typing/read events stop working, check the BlueBubbles webhook logs and verify the gateway path matches `channels.bluebubbles.webhookPath`.
 - Pairing codes expire after one hour; use `clawdbot pairing list bluebubbles` and `clawdbot pairing approve bluebubbles <code>`.
 - Reactions require the BlueBubbles private API (`POST /api/v1/message/react`); ensure the server version exposes it.
-- Edit/unsend require macOS 13+ and a compatible BlueBubbles server version. On macOS 26 (Tahoe), edit is currently broken due to private API changes; other actions still work.
+- Edit/unsend require macOS 13+ and a compatible BlueBubbles server version. On macOS 26 (Tahoe), edit is currently broken due to private API changes.
+- Group icon updates can be flaky on macOS 26 (Tahoe): the API may return success but the new icon does not sync.
 - For status/health info: `clawdbot status --all` or `clawdbot status --deep`.
 
 For general channel workflow reference, see [Channels](/channels) and the [Plugins](/plugins) guide.
