@@ -5,6 +5,7 @@ Docs: https://docs.clawd.bot
 ## 2026.1.20-1
 
 ### Changes
+- Deps: update workspace + memory-lancedb dependencies.
 - Repo: remove the Peekaboo git submodule now that the SPM release is used.
 - Plugins: require manifest-embedded config schemas, validate configs without loading plugin code, and surface plugin config warnings. (#1272) — thanks @thewilloftheshadow.
 - Plugins: move channel catalog metadata into plugin manifests; align Nextcloud Talk policy helpers with core patterns. (#1290) — thanks @NicholaiVogel.
