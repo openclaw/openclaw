@@ -1,3 +1,8 @@
+import path from "node:path";
+
+import { discoverClawdbotPlugins } from "../../plugins/discovery.js";
+import type { PluginOrigin } from "../../plugins/types.js";
+import type { ClawdbotManifest } from "../../plugins/manifest.js";
 import type { ChannelMeta } from "./types.js";
 
 export type ChannelPluginCatalogEntry = {
@@ -10,86 +15,133 @@ export type ChannelPluginCatalogEntry = {
   };
 };
 
-const CATALOG: ChannelPluginCatalogEntry[] = [
-  {
-    id: "msteams",
-    meta: {
-      id: "msteams",
-      label: "Microsoft Teams",
-      selectionLabel: "Microsoft Teams (Bot Framework)",
-      docsPath: "/channels/msteams",
-      docsLabel: "msteams",
-      blurb: "Bot Framework; enterprise support.",
-      aliases: ["teams"],
-      order: 60,
-    },
-    install: {
-      npmSpec: "@clawdbot/msteams",
-      localPath: "extensions/msteams",
-      defaultChoice: "npm",
-    },
-  },
-  {
-    id: "matrix",
-    meta: {
-      id: "matrix",
-      label: "Matrix",
-      selectionLabel: "Matrix (plugin)",
-      docsPath: "/channels/matrix",
-      docsLabel: "matrix",
-      blurb: "open protocol; install the plugin to enable.",
-      order: 70,
-      quickstartAllowFrom: true,
-    },
-    install: {
-      npmSpec: "@clawdbot/matrix",
-      localPath: "extensions/matrix",
-      defaultChoice: "npm",
-    },
-  },
-  {
-    id: "bluebubbles",
-    meta: {
-      id: "bluebubbles",
-      label: "BlueBubbles",
-      selectionLabel: "BlueBubbles (macOS app)",
-      docsPath: "/channels/bluebubbles",
-      docsLabel: "bluebubbles",
-      blurb: "iMessage via the BlueBubbles mac app + REST API.",
-      order: 75,
-    },
-    install: {
-      npmSpec: "@clawdbot/bluebubbles",
-      localPath: "extensions/bluebubbles",
-      defaultChoice: "npm",
-    },
-  },
-  {
-    id: "zalo",
-    meta: {
-      id: "zalo",
-      label: "Zalo",
-      selectionLabel: "Zalo (Bot API)",
-      docsPath: "/channels/zalo",
-      docsLabel: "zalo",
-      blurb: "Vietnam-focused messaging platform with Bot API.",
-      aliases: ["zl"],
-      order: 80,
-      quickstartAllowFrom: true,
-    },
-    install: {
-      npmSpec: "@clawdbot/zalo",
-      localPath: "extensions/zalo",
-    },
-  },
-];
+type CatalogOptions = {
+  workspaceDir?: string;
+};
 
-export function listChannelPluginCatalogEntries(): ChannelPluginCatalogEntry[] {
-  return [...CATALOG];
+const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
+  config: 0,
+  workspace: 1,
+  global: 2,
+  bundled: 3,
+};
+
+function toChannelMeta(params: {
+  channel: NonNullable<ClawdbotManifest["channel"]>;
+  id: string;
+}): ChannelMeta | null {
+  const label = params.channel.label?.trim();
+  if (!label) return null;
+  const selectionLabel = params.channel.selectionLabel?.trim() || label;
+  const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
+  const blurb = params.channel.blurb?.trim() || "";
+
+  return {
+    id: params.id,
+    label,
+    selectionLabel,
+    docsPath,
+    docsLabel: params.channel.docsLabel?.trim() || undefined,
+    blurb,
+    ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
+    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
+    ...(params.channel.selectionDocsPrefix
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
+    ...(params.channel.selectionDocsOmitLabel !== undefined
+      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
+      : {}),
+    ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
+    ...(params.channel.showConfigured !== undefined
+      ? { showConfigured: params.channel.showConfigured }
+      : {}),
+    ...(params.channel.quickstartAllowFrom !== undefined
+      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
+      : {}),
+    ...(params.channel.forceAccountBinding !== undefined
+      ? { forceAccountBinding: params.channel.forceAccountBinding }
+      : {}),
+    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
+      ? {
+          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+        }
+      : {}),
+  };
 }
 
-export function getChannelPluginCatalogEntry(id: string): ChannelPluginCatalogEntry | undefined {
+function resolveInstallInfo(params: {
+  manifest: ClawdbotManifest;
+  packageName?: string;
+  packageDir?: string;
+  workspaceDir?: string;
+}): ChannelPluginCatalogEntry["install"] | null {
+  const npmSpec = params.manifest.install?.npmSpec?.trim() ?? params.packageName?.trim();
+  if (!npmSpec) return null;
+  let localPath = params.manifest.install?.localPath?.trim() || undefined;
+  if (!localPath && params.workspaceDir && params.packageDir) {
+    localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
+  }
+  const defaultChoice = params.manifest.install?.defaultChoice ?? (localPath ? "local" : "npm");
+  return {
+    npmSpec,
+    ...(localPath ? { localPath } : {}),
+    ...(defaultChoice ? { defaultChoice } : {}),
+  };
+}
+
+function buildCatalogEntry(candidate: {
+  packageName?: string;
+  packageDir?: string;
+  workspaceDir?: string;
+  packageClawdbot?: ClawdbotManifest;
+}): ChannelPluginCatalogEntry | null {
+  const manifest = candidate.packageClawdbot;
+  if (!manifest?.channel) return null;
+  const id = manifest.channel.id?.trim();
+  if (!id) return null;
+  const meta = toChannelMeta({ channel: manifest.channel, id });
+  if (!meta) return null;
+  const install = resolveInstallInfo({
+    manifest,
+    packageName: candidate.packageName,
+    packageDir: candidate.packageDir,
+    workspaceDir: candidate.workspaceDir,
+  });
+  if (!install) return null;
+  return { id, meta, install };
+}
+
+export function listChannelPluginCatalogEntries(
+  options: CatalogOptions = {},
+): ChannelPluginCatalogEntry[] {
+  const discovery = discoverClawdbotPlugins({ workspaceDir: options.workspaceDir });
+  const resolved = new Map<string, { entry: ChannelPluginCatalogEntry; priority: number }>();
+
+  for (const candidate of discovery.candidates) {
+    const entry = buildCatalogEntry(candidate);
+    if (!entry) continue;
+    const priority = ORIGIN_PRIORITY[candidate.origin] ?? 99;
+    const existing = resolved.get(entry.id);
+    if (!existing || priority < existing.priority) {
+      resolved.set(entry.id, { entry, priority });
+    }
+  }
+
+  return Array.from(resolved.values())
+    .map(({ entry }) => entry)
+    .sort((a, b) => {
+      const orderA = a.meta.order ?? 999;
+      const orderB = b.meta.order ?? 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.meta.label.localeCompare(b.meta.label);
+    });
+}
+
+export function getChannelPluginCatalogEntry(
+  id: string,
+  options: CatalogOptions = {},
+): ChannelPluginCatalogEntry | undefined {
   const trimmed = id.trim();
   if (!trimmed) return undefined;
-  return CATALOG.find((entry) => entry.id === trimmed);
+  return listChannelPluginCatalogEntries(options).find((entry) => entry.id === trimmed);
 }

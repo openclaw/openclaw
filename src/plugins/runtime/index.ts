@@ -52,6 +52,7 @@ import { probeDiscord } from "../../discord/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
+import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { monitorIMessageProvider } from "../../imessage/monitor.js";
 import { probeIMessage } from "../../imessage/probe.js";
@@ -176,6 +177,10 @@ export function createPluginRuntime(): PluginRuntime {
       media: {
         fetchRemoteMedia,
         saveMediaBuffer,
+      },
+      activity: {
+        record: recordChannelActivity,
+        get: getChannelActivity,
       },
       session: {
         resolveStorePath,

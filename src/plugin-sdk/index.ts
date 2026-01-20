@@ -60,7 +60,9 @@ export type { ClawdbotConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {
+  BlockStreamingCoalesceConfig,
   DmPolicy,
+  DmConfig,
   GroupPolicy,
   MSTeamsChannelConfig,
   MSTeamsConfig,
@@ -76,6 +78,14 @@ export {
   TelegramConfigSchema,
 } from "../config/zod-schema.providers-core.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
+export {
+  BlockStreamingCoalesceSchema,
+  DmConfigSchema,
+  DmPolicySchema,
+  GroupPolicySchema,
+  normalizeAllowFrom,
+  requireOpenAllowFrom,
+} from "../config/zod-schema.core.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -89,7 +99,10 @@ export {
 } from "../auto-reply/reply/history.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
-export { resolveMentionGating } from "../channels/mention-gating.js";
+export {
+  resolveMentionGating,
+  resolveMentionGatingWithBypass,
+} from "../channels/mention-gating.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
   resolveDiscordGroupRequireMention,

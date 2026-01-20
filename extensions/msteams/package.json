@@ -6,7 +6,22 @@
   "clawdbot": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "msteams",
+      "label": "Microsoft Teams",
+      "selectionLabel": "Microsoft Teams (Bot Framework)",
+      "docsPath": "/channels/msteams",
+      "docsLabel": "msteams",
+      "blurb": "Bot Framework; enterprise support.",
+      "aliases": ["teams"],
+      "order": 60
+    },
+    "install": {
+      "npmSpec": "@clawdbot/msteams",
+      "localPath": "extensions/msteams",
+      "defaultChoice": "npm"
+    }
   },
   "dependencies": {
     "@microsoft/agents-hosting": "^1.2.2",

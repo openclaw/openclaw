@@ -7,7 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Repo: remove the Peekaboo git submodule now that the SPM release is used.
 - Plugins: require manifest-embedded config schemas, validate configs without loading plugin code, and surface plugin config warnings. (#1272) — thanks @thewilloftheshadow.
-
+- Plugins: move channel catalog metadata into plugin manifests; align Nextcloud Talk policy helpers with core patterns. (#1290) — thanks @NicholaiVogel.
 ### Fixes
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.

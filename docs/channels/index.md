@@ -19,6 +19,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [iMessage](/channels/imessage) — macOS only; native integration.
 - [BlueBubbles](/channels/bluebubbles) — iMessage via BlueBubbles macOS server (bundled plugin, disabled by default).
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).
+- [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).

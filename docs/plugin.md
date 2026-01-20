@@ -112,6 +112,37 @@ becomes `name/<fileBase>`.
 If your plugin imports npm deps, install them in that directory so
 `node_modules` is available (`npm install` / `pnpm install`).
 
+### Channel catalog metadata
+
+Channel plugins can advertise onboarding metadata via `clawdbot.channel` and
+install hints via `clawdbot.install`. This keeps the core catalog data-free.
+
+Example:
+
+```json
+{
+  "name": "@clawdbot/nextcloud-talk",
+  "clawdbot": {
+    "extensions": ["./index.ts"],
+    "channel": {
+      "id": "nextcloud-talk",
+      "label": "Nextcloud Talk",
+      "selectionLabel": "Nextcloud Talk (self-hosted)",
+      "docsPath": "/channels/nextcloud-talk",
+      "docsLabel": "nextcloud-talk",
+      "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
+      "order": 65,
+      "aliases": ["nc-talk", "nc"]
+    },
+    "install": {
+      "npmSpec": "@clawdbot/nextcloud-talk",
+      "localPath": "extensions/nextcloud-talk",
+      "defaultChoice": "npm"
+    }
+  }
+}
+```
+
 ## Plugin IDs
 
 Default plugin ids:

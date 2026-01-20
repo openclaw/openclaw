@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "./config.js";
-import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { listChatChannels } from "../channels/registry.js";
+import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 
 type PluginEnableChange = {
   pluginId: string;
@@ -11,20 +12,6 @@ export type PluginAutoEnableResult = {
   config: ClawdbotConfig;
   changes: string[];
 };
-
-const CHANNEL_PLUGIN_IDS = [
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "msteams",
-  "matrix",
-  "zalo",
-  "zalouser",
-  "bluebubbles",
-] as const;
 
 const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
   { pluginId: "google-antigravity-auth", providerId: "google-antigravity" },
@@ -239,7 +226,19 @@ function resolveConfiguredPlugins(
   env: NodeJS.ProcessEnv,
 ): PluginEnableChange[] {
   const changes: PluginEnableChange[] = [];
-  for (const channelId of CHANNEL_PLUGIN_IDS) {
+  const channelIds = new Set<string>();
+  for (const meta of listChatChannels()) {
+    channelIds.add(meta.id);
+  }
+  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
+  if (configuredChannels && typeof configuredChannels === "object") {
+    for (const key of Object.keys(configuredChannels)) {
+      if (key === "defaults") continue;
+      channelIds.add(key);
+    }
+  }
+  for (const channelId of channelIds) {
+    if (!channelId) continue;
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({
         pluginId: channelId,

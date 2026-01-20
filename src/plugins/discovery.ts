@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import type { ClawdbotManifest, PackageManifest } from "./manifest.js";
 import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
@@ -16,20 +17,13 @@ export type PluginCandidate = {
   packageName?: string;
   packageVersion?: string;
   packageDescription?: string;
+  packageDir?: string;
+  packageClawdbot?: ClawdbotManifest;
 };
 
 export type PluginDiscoveryResult = {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
-};
-
-type PackageManifest = {
-  name?: string;
-  version?: string;
-  description?: string;
-  clawdbot?: {
-    extensions?: string[];
-  };
 };
 
 function isExtensionFile(filePath: string): boolean {
@@ -83,6 +77,7 @@ function addCandidate(params: {
   origin: PluginOrigin;
   workspaceDir?: string;
   manifest?: PackageManifest | null;
+  packageDir?: string;
 }) {
   const resolved = path.resolve(params.source);
   if (params.seen.has(resolved)) return;
@@ -97,6 +92,8 @@ function addCandidate(params: {
     packageName: manifest?.name?.trim() || undefined,
     packageVersion: manifest?.version?.trim() || undefined,
     packageDescription: manifest?.description?.trim() || undefined,
+    packageDir: params.packageDir,
+    packageClawdbot: manifest?.clawdbot,
   });
 }
 
@@ -156,6 +153,7 @@ function discoverInDirectory(params: {
           origin: params.origin,
           workspaceDir: params.workspaceDir,
           manifest,
+          packageDir: fullPath,
         });
       }
       continue;
@@ -174,6 +172,8 @@ function discoverInDirectory(params: {
         rootDir: fullPath,
         origin: params.origin,
         workspaceDir: params.workspaceDir,
+        manifest,
+        packageDir: fullPath,
       });
     }
   }
@@ -239,6 +239,7 @@ function discoverFromPath(params: {
           origin: params.origin,
           workspaceDir: params.workspaceDir,
           manifest,
+          packageDir: resolved,
         });
       }
       return;
@@ -258,6 +259,8 @@ function discoverFromPath(params: {
         rootDir: resolved,
         origin: params.origin,
         workspaceDir: params.workspaceDir,
+        manifest,
+        packageDir: resolved,
       });
       return;
     }
