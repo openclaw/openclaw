@@ -57,7 +57,8 @@ Example:
 
 ### PATH handling
 
-- `host=gateway`: uses the Gateway process `PATH`. Daemons install a minimal `PATH`:
+- `host=gateway`: merges your login-shell `PATH` into the exec environment (unless the exec call
+  already sets `env.PATH`). The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.

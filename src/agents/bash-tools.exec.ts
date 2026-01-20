@@ -18,6 +18,10 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
+import {
+  getShellPathFromLoginShell,
+  resolveShellEnvFallbackTimeoutMs,
+} from "../infra/shell-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo } from "../logger.js";
 import {
@@ -249,6 +253,17 @@ function applyPathPrepend(
   if (merged) env.PATH = merged;
 }
 
+function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
+  if (!shellPath) return;
+  const entries = shellPath
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (entries.length === 0) return;
+  const merged = mergePathPrepend(env.PATH, entries);
+  if (merged) env.PATH = merged;
+}
+
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) return;
   const sessionKey = session.sessionKey?.trim();
@@ -422,6 +437,13 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+      if (!sandbox && host === "gateway" && !params.env?.PATH) {
+        const shellPath = getShellPathFromLoginShell({
+          env: process.env,
+          timeoutMs: resolveShellEnvFallbackTimeoutMs(process.env),
+        });
+        applyShellPath(env, shellPath);
+      }
       applyPathPrepend(env, defaultPathPrepend);
 
       if (host === "node") {
