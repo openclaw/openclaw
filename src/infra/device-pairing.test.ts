@@ -31,6 +31,7 @@ describe("device pairing tokens", () => {
     });
     let paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+    expect(paired?.scopes).toEqual(["operator.read"]);
 
     await rotateDeviceToken({
       deviceId: "device-1",

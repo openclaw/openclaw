@@ -472,6 +472,9 @@ export async function rotateDeviceToken(params: {
     };
     tokens[role] = next;
     device.tokens = tokens;
+    if (params.scopes !== undefined) {
+      device.scopes = requestedScopes;
+    }
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir);
     return next;
