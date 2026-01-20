@@ -19,6 +19,15 @@ describe("isAuthErrorMessage", () => {
       expect(isAuthErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches OAuth refresh failures", () => {
+    const samples = [
+      "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
+      "Please re-authenticate to continue.",
+    ];
+    for (const sample of samples) {
+      expect(isAuthErrorMessage(sample)).toBe(true);
+    }
+  });
   it("ignores unrelated errors", () => {
     expect(isAuthErrorMessage("rate limit exceeded")).toBe(false);
     expect(isAuthErrorMessage("billing issue detected")).toBe(false);

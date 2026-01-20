@@ -328,6 +328,8 @@ const ERROR_PATTERNS = {
     "incorrect api key",
     "invalid token",
     "authentication",
+    "re-authenticate",
+    "oauth token refresh failed",
     "unauthorized",
     "forbidden",
     "access denied",
