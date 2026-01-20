@@ -60,7 +60,7 @@ function resolveAccount(params: BlueBubblesReactionOpts) {
   return { baseUrl, password };
 }
 
-function normalizeReactionInput(emoji: string, remove?: boolean): string {
+export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
   const trimmed = emoji.trim();
   if (!trimmed) throw new Error("BlueBubbles reaction requires an emoji or name.");
   let raw = trimmed.toLowerCase();
@@ -85,7 +85,7 @@ export async function sendBlueBubblesReaction(params: {
   const messageGuid = params.messageGuid.trim();
   if (!chatGuid) throw new Error("BlueBubbles reaction requires chatGuid.");
   if (!messageGuid) throw new Error("BlueBubbles reaction requires messageGuid.");
-  const reaction = normalizeReactionInput(params.emoji, params.remove);
+  const reaction = normalizeBlueBubblesReactionInput(params.emoji, params.remove);
   const { baseUrl, password } = resolveAccount(params.opts ?? {});
   const url = buildBlueBubblesApiUrl({
     baseUrl,

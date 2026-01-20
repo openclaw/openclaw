@@ -302,6 +302,9 @@ export async function runAgentTurnWithFallback(params: {
                       text,
                       mediaUrls: payload.mediaUrls,
                       mediaUrl: payload.mediaUrls?.[0],
+                      replyToId: payload.replyToId,
+                      replyToTag: payload.replyToTag,
+                      replyToCurrent: payload.replyToCurrent,
                     },
                     params.sessionCtx.MessageSid,
                   );

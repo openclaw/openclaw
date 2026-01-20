@@ -42,6 +42,10 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
   };
 }
 
+function readMessageText(params: Record<string, unknown>): string | undefined {
+  return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
 /** Supported action names for BlueBubbles */
 const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   "react",
@@ -161,7 +165,10 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     // Handle edit action
     if (action === "edit") {
       const messageId = readStringParam(params, "messageId");
-      const newText = readStringParam(params, "text") ?? readStringParam(params, "newText");
+      const newText =
+        readStringParam(params, "text") ??
+        readStringParam(params, "newText") ??
+        readStringParam(params, "message");
       if (!messageId || !newText) {
         const missing: string[] = [];
         if (!messageId) missing.push("messageId (the message GUID to edit)");
@@ -205,16 +212,16 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     // Handle reply action
     if (action === "reply") {
       const messageId = readStringParam(params, "messageId");
-      const text = readStringParam(params, "text");
-      const to = readStringParam(params, "to");
+      const text = readMessageText(params);
+      const to = readStringParam(params, "to") ?? readStringParam(params, "target");
       if (!messageId || !text || !to) {
         const missing: string[] = [];
         if (!messageId) missing.push("messageId (the message GUID to reply to)");
-        if (!text) missing.push("text (the reply message content)");
-        if (!to) missing.push("to (the chat target)");
+        if (!text) missing.push("text or message (the reply message content)");
+        if (!to) missing.push("to or target (the chat target)");
         throw new Error(
           `BlueBubbles reply requires: ${missing.join(", ")}. ` +
-            `Use action=reply with messageId=<message_guid>, text=<your reply>, to=<chat_target>.`,
+            `Use action=reply with messageId=<message_guid>, message=<your reply>, target=<chat_target>.`,
         );
       }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
@@ -230,20 +237,20 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle sendWithEffect action
     if (action === "sendWithEffect") {
-      const text = readStringParam(params, "text");
-      const to = readStringParam(params, "to");
+      const text = readMessageText(params);
+      const to = readStringParam(params, "to") ?? readStringParam(params, "target");
       const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
       if (!text || !to || !effectId) {
         const missing: string[] = [];
-        if (!text) missing.push("text (the message content)");
-        if (!to) missing.push("to (the chat target)");
+        if (!text) missing.push("text or message (the message content)");
+        if (!to) missing.push("to or target (the chat target)");
         if (!effectId)
           missing.push(
             "effectId or effect (e.g., slam, loud, gentle, invisible-ink, confetti, lasers, fireworks, balloons, heart)",
           );
         throw new Error(
           `BlueBubbles sendWithEffect requires: ${missing.join(", ")}. ` +
-            `Use action=sendWithEffect with text=<message>, to=<chat_target>, effectId=<effect_name>.`,
+            `Use action=sendWithEffect with message=<message>, target=<chat_target>, effectId=<effect_name>.`,
         );
       }
 

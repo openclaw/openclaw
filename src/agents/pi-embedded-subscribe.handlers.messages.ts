@@ -226,13 +226,23 @@ export function handleMessageEnd(
         );
       } else {
         ctx.state.lastBlockReplyText = text;
-        const { text: cleanedText, mediaUrls, audioAsVoice } = parseReplyDirectives(text);
+        const {
+          text: cleanedText,
+          mediaUrls,
+          audioAsVoice,
+          replyToId,
+          replyToTag,
+          replyToCurrent,
+        } = parseReplyDirectives(text);
         // Emit if there's content OR audioAsVoice flag (to propagate the flag).
         if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
           void onBlockReply({
             text: cleanedText,
             mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
             audioAsVoice,
+            replyToId,
+            replyToTag,
+            replyToCurrent,
           });
         }
       }

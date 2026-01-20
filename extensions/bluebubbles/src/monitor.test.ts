@@ -28,6 +28,14 @@ vi.mock("./attachments.js", () => ({
   }),
 }));
 
+vi.mock("./reactions.js", async () => {
+  const actual = await vi.importActual<typeof import("./reactions.js")>("./reactions.js");
+  return {
+    ...actual,
+    sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
@@ -781,6 +789,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
 
+    it("treats chat_guid groups as group even when isGroup=false", async () => {
+      const account = createMockAccount({
+        groupPolicy: "allowlist",
+        dmPolicy: "open",
+      });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello from group",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
     it("allows group messages from allowed chat_guid in groupAllowFrom", async () => {
       const account = createMockAccount({
         groupPolicy: "allowlist",
@@ -938,6 +985,152 @@ describe("BlueBubbles webhook monitor", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    });
+  });
+
+  describe("group metadata", () => {
+    it("includes group subject + members in ctx", async () => {
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello group",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          chatName: "Family",
+          participants: [
+            { address: "+15551234567", displayName: "Alice" },
+            { address: "+15557654321", displayName: "Bob" },
+          ],
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.GroupSubject).toBe("Family");
+      expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
+    });
+  });
+
+  describe("reply metadata", () => {
+    it("surfaces reply fields in ctx when provided", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          replyTo: {
+            guid: "msg-0",
+            text: "original message",
+            handle: { address: "+15550000000", displayName: "Alice" },
+          },
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("original message");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
+    });
+  });
+
+  describe("ack reactions", () => {
+    it("sends ack reaction when configured", async () => {
+      const { sendBlueBubblesReaction } = await import("./reactions.js");
+      vi.mocked(sendBlueBubblesReaction).mockClear();
+
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {
+        messages: {
+          ackReaction: "❤️",
+          ackReactionScope: "direct",
+        },
+      };
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          chatGuid: "iMessage;-;+15551234567",
+          messageGuid: "msg-1",
+          emoji: "❤️",
+          opts: expect.objectContaining({ accountId: "default" }),
+        }),
+      );
     });
   });
 

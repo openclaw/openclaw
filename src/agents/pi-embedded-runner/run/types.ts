@@ -56,6 +56,9 @@ export type EmbeddedRunAttemptParams = {
     text?: string;
     mediaUrls?: string[];
     audioAsVoice?: boolean;
+    replyToId?: string;
+    replyToTag?: boolean;
+    replyToCurrent?: boolean;
   }) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";

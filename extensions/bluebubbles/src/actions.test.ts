@@ -355,5 +355,64 @@ describe("bluebubblesMessageActions", () => {
         }),
       );
     });
+
+    it("accepts message param for edit action", async () => {
+      const { editBlueBubblesMessage } = await import("./chat.js");
+
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      await bluebubblesMessageActions.handleAction({
+        action: "edit",
+        params: { messageId: "msg-123", message: "updated" },
+        cfg,
+        accountId: null,
+      });
+
+      expect(editBlueBubblesMessage).toHaveBeenCalledWith(
+        "msg-123",
+        "updated",
+        expect.objectContaining({ cfg, accountId: undefined }),
+      );
+    });
+
+    it("accepts message/target aliases for sendWithEffect", async () => {
+      const { sendMessageBlueBubbles } = await import("./send.js");
+
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      const result = await bluebubblesMessageActions.handleAction({
+        action: "sendWithEffect",
+        params: {
+          message: "peekaboo",
+          target: "+15551234567",
+          effect: "invisible ink",
+        },
+        cfg,
+        accountId: null,
+      });
+
+      expect(sendMessageBlueBubbles).toHaveBeenCalledWith(
+        "+15551234567",
+        "peekaboo",
+        expect.objectContaining({ effectId: "invisible ink" }),
+      );
+      expect(result).toMatchObject({
+        details: { ok: true, messageId: "msg-123", effect: "invisible ink" },
+      });
+    });
   });
 });

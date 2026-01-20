@@ -345,6 +345,15 @@
   align-items: center;
 }
 
+.config-form .field.checkbox {
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.config-form .field.checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
 .form-grid {
   display: grid;
   gap: 12px;

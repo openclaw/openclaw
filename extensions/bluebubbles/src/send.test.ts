@@ -128,6 +128,38 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;+15551234567");
     });
 
+    it("prefers direct chat guid when handle also appears in a group chat", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "iMessage;+;group-123",
+                participants: [{ address: "+15551234567" }, { address: "+15550001111" }],
+              },
+              {
+                guid: "iMessage;-;+15551234567",
+                participants: [{ address: "+15551234567" }],
+              },
+            ],
+          }),
+      });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "handle",
+        address: "+15551234567",
+        service: "imessage",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;-;+15551234567");
+    });
+
     it("returns null when chat not found", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -378,6 +410,45 @@ describe("send", () => {
       expect(body.method).toBe("private-api");
       expect(body.selectedMessageGuid).toBe("reply-guid-123");
       expect(body.partIndex).toBe(1);
+    });
+
+    it("normalizes effect names and uses private-api for effects", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: [
+                {
+                  guid: "iMessage;-;+15551234567",
+                  participants: [{ address: "+15551234567" }],
+                },
+              ],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                data: { guid: "msg-uuid-125" },
+              }),
+            ),
+        });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        effectId: "invisible ink",
+      });
+
+      expect(result.messageId).toBe("msg-uuid-125");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      const sendCall = mockFetch.mock.calls[1];
+      const body = JSON.parse(sendCall[1].body);
+      expect(body.method).toBe("private-api");
+      expect(body.effectId).toBe("com.apple.MobileSMS.expressivesend.invisibleink");
     });
 
     it("sends message with chat_guid target directly", async () => {

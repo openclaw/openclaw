@@ -342,13 +342,23 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts.push(chunk);
     if (!params.onBlockReply) return;
     const splitResult = parseReplyDirectives(chunk);
-    const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
+    const {
+      text: cleanedText,
+      mediaUrls,
+      audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
+    } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
       audioAsVoice,
+      replyToId,
+      replyToTag,
+      replyToCurrent,
     });
   };
 

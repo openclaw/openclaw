@@ -23,7 +23,7 @@ import {
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
-import { probeBlueBubbles } from "./probe.js";
+import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
@@ -254,10 +254,12 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       }
       return { ok: true, to: trimmed };
     },
-    sendText: async ({ cfg, to, text, accountId }) => {
+    sendText: async ({ cfg, to, text, accountId, replyToId }) => {
+      const replyToMessageGuid = typeof replyToId === "string" ? replyToId.trim() : "";
       const result = await sendMessageBlueBubbles(to, text, {
         cfg: cfg as ClawdbotConfig,
         accountId: accountId ?? undefined,
+        replyToMessageGuid: replyToMessageGuid || undefined,
       });
       return { channel: "bluebubbles", ...result };
     },
@@ -358,20 +360,25 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         password: account.config.password ?? null,
         timeoutMs,
       }),
-    buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
-      baseUrl: account.baseUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
-    }),
+    buildAccountSnapshot: ({ account, runtime, probe }) => {
+      const running = runtime?.running ?? false;
+      const probeOk = (probe as BlueBubblesProbe | undefined)?.ok;
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        baseUrl: account.baseUrl,
+        running,
+        connected: probeOk ?? running,
+        lastStartAt: runtime?.lastStartAt ?? null,
+        lastStopAt: runtime?.lastStopAt ?? null,
+        lastError: runtime?.lastError ?? null,
+        probe,
+        lastInboundAt: runtime?.lastInboundAt ?? null,
+        lastOutboundAt: runtime?.lastOutboundAt ?? null,
+      };
+    },
   },
   gateway: {
     startAccount: async (ctx) => {

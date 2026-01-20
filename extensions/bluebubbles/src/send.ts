@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { parseBlueBubblesTarget, normalizeBlueBubblesHandle } from "./targets.js";
+import {
+  extractHandleFromChatGuid,
+  normalizeBlueBubblesHandle,
+  parseBlueBubblesTarget,
+} from "./targets.js";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 import {
   blueBubblesFetchWithTimeout,
@@ -34,12 +38,17 @@ const EFFECT_MAP: Record<string, string> = {
   loud: "com.apple.MobileSMS.expressivesend.loud",
   gentle: "com.apple.MobileSMS.expressivesend.gentle",
   invisible: "com.apple.MobileSMS.expressivesend.invisibleink",
+  "invisible-ink": "com.apple.MobileSMS.expressivesend.invisibleink",
+  "invisible ink": "com.apple.MobileSMS.expressivesend.invisibleink",
+  invisibleink: "com.apple.MobileSMS.expressivesend.invisibleink",
   // Screen effects
   echo: "com.apple.messages.effect.CKEchoEffect",
   spotlight: "com.apple.messages.effect.CKSpotlightEffect",
   balloons: "com.apple.messages.effect.CKHappyBirthdayEffect",
   confetti: "com.apple.messages.effect.CKConfettiEffect",
   love: "com.apple.messages.effect.CKHeartEffect",
+  heart: "com.apple.messages.effect.CKHeartEffect",
+  hearts: "com.apple.messages.effect.CKHeartEffect",
   lasers: "com.apple.messages.effect.CKLasersEffect",
   fireworks: "com.apple.messages.effect.CKFireworksEffect",
   celebration: "com.apple.messages.effect.CKSparklesEffect",
@@ -48,7 +57,12 @@ const EFFECT_MAP: Record<string, string> = {
 function resolveEffectId(raw?: string): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim().toLowerCase();
-  return EFFECT_MAP[trimmed] ?? raw;
+  if (EFFECT_MAP[trimmed]) return EFFECT_MAP[trimmed];
+  const normalized = trimmed.replace(/[\s_]+/g, "-");
+  if (EFFECT_MAP[normalized]) return EFFECT_MAP[normalized];
+  const compact = trimmed.replace(/[\s_-]+/g, "");
+  if (EFFECT_MAP[compact]) return EFFECT_MAP[compact];
+  return raw;
 }
 
 function resolveSendTarget(raw: string): BlueBubblesSendTarget {
@@ -184,6 +198,7 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
+  let participantMatch: string | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -214,16 +229,23 @@ export async function resolveChatGuidForTarget(params: {
         if (identifier && identifier === targetChatIdentifier) return extractChatGuid(chat);
       }
       if (normalizedHandle) {
-        const participants = extractParticipantAddresses(chat).map((entry) =>
-          normalizeBlueBubblesHandle(entry),
-        );
-        if (participants.includes(normalizedHandle)) {
-          return extractChatGuid(chat);
+        const guid = extractChatGuid(chat);
+        const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
+        if (directHandle && directHandle === normalizedHandle) {
+          return guid;
+        }
+        if (!participantMatch && guid) {
+          const participants = extractParticipantAddresses(chat).map((entry) =>
+            normalizeBlueBubblesHandle(entry),
+          );
+          if (participants.includes(normalizedHandle)) {
+            participantMatch = guid;
+          }
         }
       }
     }
   }
-  return null;
+  return participantMatch;
 }
 
 export async function sendMessageBlueBubbles(

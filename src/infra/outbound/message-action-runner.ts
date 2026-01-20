@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
   readNumberParam,
@@ -12,7 +15,12 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../utils/message-channel.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -30,6 +38,8 @@ import {
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 import { resolveChannelTarget } from "./target-resolver.js";
+import { loadWebMedia } from "../../web/media.js";
+import { extensionForMime } from "../../media/mime.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -192,6 +202,124 @@ function readBooleanParam(params: Record<string, unknown>, key: string): boolean
     if (trimmed === "false") return false;
   }
   return undefined;
+}
+
+function resolveAttachmentMaxBytes(params: {
+  cfg: ClawdbotConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+}): number | undefined {
+  const fallback = params.cfg.agents?.defaults?.mediaMaxMb;
+  if (params.channel !== "bluebubbles") {
+    return typeof fallback === "number" ? fallback * 1024 * 1024 : undefined;
+  }
+  const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
+  const channelCfg = params.cfg.channels?.bluebubbles;
+  const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
+  const limitMb =
+    accountCfg?.mediaMaxMb ?? channelCfg?.mediaMaxMb ?? params.cfg.agents?.defaults?.mediaMaxMb;
+  return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
+}
+
+function inferAttachmentFilename(params: {
+  mediaHint?: string;
+  contentType?: string;
+}): string | undefined {
+  const mediaHint = params.mediaHint?.trim();
+  if (mediaHint) {
+    try {
+      if (mediaHint.startsWith("file://")) {
+        const filePath = fileURLToPath(mediaHint);
+        const base = path.basename(filePath);
+        if (base) return base;
+      } else if (/^https?:\/\//i.test(mediaHint)) {
+        const url = new URL(mediaHint);
+        const base = path.basename(url.pathname);
+        if (base) return base;
+      } else {
+        const base = path.basename(mediaHint);
+        if (base) return base;
+      }
+    } catch {
+      // fall through to content-type based default
+    }
+  }
+  const ext = params.contentType ? extensionForMime(params.contentType) : undefined;
+  return ext ? `attachment${ext}` : "attachment";
+}
+
+function normalizeBase64Payload(params: { base64?: string; contentType?: string }): {
+  base64?: string;
+  contentType?: string;
+} {
+  if (!params.base64) return { base64: params.base64, contentType: params.contentType };
+  const match = /^data:([^;]+);base64,(.*)$/i.exec(params.base64.trim());
+  if (!match) return { base64: params.base64, contentType: params.contentType };
+  const [, mime, payload] = match;
+  return {
+    base64: payload,
+    contentType: params.contentType ?? mime,
+  };
+}
+
+async function hydrateSendAttachmentParams(params: {
+  cfg: ClawdbotConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  action: ChannelMessageActionName;
+  dryRun?: boolean;
+}): Promise<void> {
+  if (params.action !== "sendAttachment") return;
+
+  const mediaHint = readStringParam(params.args, "media", { trim: false });
+  const fileHint =
+    readStringParam(params.args, "path", { trim: false }) ??
+    readStringParam(params.args, "filePath", { trim: false });
+  const contentTypeParam =
+    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
+  const caption = readStringParam(params.args, "caption", { allowEmpty: true })?.trim();
+  const message = readStringParam(params.args, "message", { allowEmpty: true })?.trim();
+  if (!caption && message) params.args.caption = message;
+
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: contentTypeParam ?? undefined,
+  });
+  if (normalized.base64 !== rawBuffer && normalized.base64) {
+    params.args.buffer = normalized.base64;
+    if (normalized.contentType && !contentTypeParam) {
+      params.args.contentType = normalized.contentType;
+    }
+  }
+
+  const filename = readStringParam(params.args, "filename");
+  const mediaSource = mediaHint ?? fileHint;
+
+  if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
+    const maxBytes = resolveAttachmentMaxBytes({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    });
+    const media = await loadWebMedia(mediaSource, maxBytes);
+    params.args.buffer = media.buffer.toString("base64");
+    if (!contentTypeParam && media.contentType) {
+      params.args.contentType = media.contentType;
+    }
+    if (!filename) {
+      params.args.filename = inferAttachmentFilename({
+        mediaHint: media.fileName ?? mediaSource,
+        contentType: media.contentType ?? contentTypeParam ?? undefined,
+      });
+    }
+  } else if (!filename) {
+    params.args.filename = inferAttachmentFilename({
+      mediaHint: mediaSource,
+      contentType: contentTypeParam ?? undefined,
+    });
+  }
 }
 
 function parseButtonsParam(params: Record<string, unknown>): void {
@@ -534,6 +662,29 @@ export async function runMessageAction(
     return handleBroadcastAction(input, params);
   }
 
+  const explicitTarget = typeof params.target === "string" ? params.target.trim() : "";
+  const hasLegacyTarget =
+    (typeof params.to === "string" && params.to.trim().length > 0) ||
+    (typeof params.channelId === "string" && params.channelId.trim().length > 0);
+  if (
+    !explicitTarget &&
+    !hasLegacyTarget &&
+    actionRequiresTarget(action) &&
+    !actionHasTarget(action, params)
+  ) {
+    const inferredTarget = input.toolContext?.currentChannelId?.trim();
+    if (inferredTarget) {
+      params.target = inferredTarget;
+    }
+  }
+  const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
+  if (!explicitChannel) {
+    const inferredChannel = normalizeMessageChannel(input.toolContext?.currentChannelProvider);
+    if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
+      params.channel = inferredChannel;
+    }
+  }
+
   applyTargetToParams({ action, args: params });
   if (actionRequiresTarget(action)) {
     if (!actionHasTarget(action, params)) {
@@ -544,6 +695,15 @@ export async function runMessageAction(
   const channel = await resolveChannel(cfg, params);
   const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  await hydrateSendAttachmentParams({
+    cfg,
+    channel,
+    accountId,
+    args: params,
+    action,
+    dryRun,
+  });
 
   await resolveActionTarget({
     cfg,
@@ -559,6 +719,14 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
+  });
+
+  await hydrateSendAttachmentParams({
+    cfg,
+    channel,
+    accountId,
+    args: params,
+    dryRun,
   });
 
   const gateway = resolveGateway(input);

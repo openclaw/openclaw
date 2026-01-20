@@ -99,6 +99,55 @@ export function renderNode(params: {
         </label>
       `;
     }
+
+    const primitiveTypes = new Set(
+      nonNull
+        .map((variant) => schemaType(variant))
+        .filter((variant): variant is string => Boolean(variant)),
+    );
+    const normalizedTypes = new Set(
+      [...primitiveTypes].map((variant) => (variant === "integer" ? "number" : variant)),
+    );
+    const primitiveOnly = [...normalizedTypes].every((variant) =>
+      ["string", "number", "boolean"].includes(variant),
+    );
+
+    if (primitiveOnly && normalizedTypes.size > 0) {
+      const hasString = normalizedTypes.has("string");
+      const hasNumber = normalizedTypes.has("number");
+      const hasBoolean = normalizedTypes.has("boolean");
+
+      if (hasBoolean && normalizedTypes.size === 1) {
+        return renderNode({
+          ...params,
+          schema: { ...schema, type: "boolean", anyOf: undefined, oneOf: undefined },
+        });
+      }
+
+      if (hasString || hasNumber) {
+        const displayValue = value ?? schema.default ?? "";
+        return html`
+          <label class="field">
+            ${showLabel ? html`<span>${label}</span>` : nothing}
+            ${help ? html`<div class="muted">${help}</div>` : nothing}
+            <input
+              type=${hasNumber && !hasString ? "number" : "text"}
+              .value=${displayValue == null ? "" : String(displayValue)}
+              ?disabled=${disabled}
+              @input=${(e: Event) => {
+                const raw = (e.target as HTMLInputElement).value;
+                if (hasString || !hasNumber || raw.trim() === "" || /[^0-9-.]/.test(raw)) {
+                  onPatch(path, raw === "" ? undefined : raw);
+                  return;
+                }
+                const parsed = Number(raw);
+                onPatch(path, Number.isNaN(parsed) ? raw : parsed);
+              }}
+            />
+          </label>
+        `;
+      }
+    }
   }
 
   if (schema.enum) {
@@ -254,9 +303,7 @@ export function renderNode(params: {
           ? schema.default
           : false;
     return html`
-      <label class="field">
-        ${showLabel ? html`<span>${label}</span>` : nothing}
-        ${help ? html`<div class="muted">${help}</div>` : nothing}
+      <label class="field checkbox">
         <input
           type="checkbox"
           .checked=${displayValue}
@@ -264,6 +311,12 @@ export function renderNode(params: {
           @change=${(e: Event) =>
             onPatch(path, (e.target as HTMLInputElement).checked)}
         />
+        ${showLabel ? html`<span>${label}</span>` : nothing}
+        ${help
+          ? html`<div class="muted" style="grid-column: 1 / -1;">
+              ${help}
+            </div>`
+          : nothing}
       </label>
     `;
   }

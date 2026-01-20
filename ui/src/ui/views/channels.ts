@@ -215,7 +215,9 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
         </div>
         <div>
           <span class="label">Connected</span>
-          <span>${account.connected ? "Yes" : "No"}</span>
+          <span>
+            ${account.connected == null ? "n/a" : account.connected ? "Yes" : "No"}
+          </span>
         </div>
         <div>
           <span class="label">Last inbound</span>

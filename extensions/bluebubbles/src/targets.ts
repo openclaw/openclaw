@@ -48,7 +48,7 @@ export function normalizeBlueBubblesHandle(raw: string): string {
  * BlueBubbles chat_guid format for DM: "service;-;handle" (e.g., "iMessage;-;+19257864429")
  * Group chat format: "service;+;groupId" (has "+" instead of "-")
  */
-function extractHandleFromChatGuid(chatGuid: string): string | null {
+export function extractHandleFromChatGuid(chatGuid: string): string | null {
   const parts = chatGuid.split(";");
   // DM format: service;-;handle (3 parts, middle is "-")
   if (parts.length === 3 && parts[1] === "-") {

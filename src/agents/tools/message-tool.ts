@@ -14,15 +14,23 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const BLUEBUBBLES_GROUP_ACTIONS = new Set<ChannelMessageActionName>([
+  "renameGroup",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+]);
 
 function buildRoutingSchema() {
   return {
@@ -37,7 +45,26 @@ function buildRoutingSchema() {
 function buildSendSchema(options: { includeButtons: boolean }) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
+    effectId: Type.Optional(
+      Type.String({
+        description: "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+      }),
+    ),
+    effect: Type.Optional(
+      Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
+    ),
     media: Type.Optional(Type.String()),
+    filename: Type.Optional(Type.String()),
+    buffer: Type.Optional(
+      Type.String({
+        description: "Base64 payload for attachments (optionally a data: URL).",
+      }),
+    ),
+    contentType: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+    caption: Type.Optional(Type.String()),
+    path: Type.Optional(Type.String()),
+    filePath: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
@@ -228,17 +255,43 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+function filterActionsForContext(params: {
+  actions: ChannelMessageActionName[];
+  channel?: string;
+  currentChannelId?: string;
+}): ChannelMessageActionName[] {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel || channel !== "bluebubbles") return params.actions;
+  const currentChannelId = params.currentChannelId?.trim();
+  if (!currentChannelId) return params.actions;
+  const normalizedTarget =
+    normalizeTargetForProvider(channel, currentChannelId) ?? currentChannelId;
+  const lowered = normalizedTarget.trim().toLowerCase();
+  const isGroupTarget =
+    lowered.startsWith("chat_guid:") ||
+    lowered.startsWith("chat_id:") ||
+    lowered.startsWith("chat_identifier:") ||
+    lowered.startsWith("group:");
+  if (isGroupTarget) return params.actions;
+  return params.actions.filter((action) => !BLUEBUBBLES_GROUP_ACTIONS.has(action));
+}
+
 function buildMessageToolDescription(options?: {
   config?: ClawdbotConfig;
   currentChannel?: string;
+  currentChannelId?: string;
 }): string {
   const baseDescription = "Send, delete, and manage messages via channel plugins.";
 
   // If we have a current channel, show only its supported actions
   if (options?.currentChannel) {
-    const channelActions = listChannelSupportedActions({
-      cfg: options.config,
+    const channelActions = filterActionsForContext({
+      actions: listChannelSupportedActions({
+        cfg: options.config,
+        channel: options.currentChannel,
+      }),
       channel: options.currentChannel,
+      currentChannelId: options.currentChannelId,
     });
     if (channelActions.length > 0) {
       // Always include "send" as a base action
@@ -265,6 +318,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const description = buildMessageToolDescription({
     config: options?.config,
     currentChannel: options?.currentChannelProvider,
+    currentChannelId: options?.currentChannelId,
   });
 
   return {
