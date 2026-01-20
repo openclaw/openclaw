@@ -30,6 +30,7 @@ Docs: https://docs.clawd.bot
 - Plugins: add Nextcloud Talk manifest for plugin config validation. (#1297) — thanks @ysqander.
 - Anthropic: default API prompt caching to 1h with configurable TTL override; ignore TTL for OAuth.
 - Discord: make resolve warnings avoid raw JSON payloads on rate limits.
+- Cron: auto-deliver isolated agent output to explicit targets without tool calls. (#1285)
 
 ## 2026.1.19-3
 
