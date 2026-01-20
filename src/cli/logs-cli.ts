@@ -1,12 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { addGatewayClientOptions } from "./gateway-rpc.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -43,10 +44,15 @@ async function fetchLogs(
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await callGatewayFromCli("logs.tail", opts, {
-    cursor,
-    limit,
-    maxBytes,
+  const payload = await callGateway<LogsTailPayload>({
+    url: opts.url,
+    token: opts.token,
+    method: "logs.tail",
+    params: { cursor, limit, maxBytes },
+    expectFinal: Boolean(opts.expectFinal),
+    timeoutMs: Number(opts.timeout ?? 10_000),
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
   });
   if (!payload || typeof payload !== "object") {
     throw new Error("Unexpected logs.tail response");
@@ -104,8 +110,23 @@ function formatLogLine(
   return [head, messageValue].filter(Boolean).join(" ").trim();
 }
 
+function writeLine(text: string, stream: NodeJS.WriteStream) {
+  // Avoid feeding CLI output back into the log file via console capture.
+  clearActiveProgressLine();
+  stream.write(`${text}\n`);
+}
+
+function logLine(text: string) {
+  writeLine(text, process.stdout);
+}
+
+function errorLine(text: string) {
+  writeLine(text, process.stderr);
+}
+
 function emitJsonLine(payload: Record<string, unknown>, toStdErr = false) {
   const text = `${JSON.stringify(payload)}\n`;
+  clearActiveProgressLine();
   if (toStdErr) process.stderr.write(text);
   else process.stdout.write(text);
 }
@@ -135,9 +156,9 @@ function emitGatewayError(
     return;
   }
 
-  defaultRuntime.error(colorize(rich, theme.error, message));
-  defaultRuntime.error(details.message);
-  defaultRuntime.error(colorize(rich, theme.muted, hint));
+  errorLine(colorize(rich, theme.error, message));
+  errorLine(details.message);
+  errorLine(colorize(rich, theme.muted, hint));
 }
 
 export function registerLogsCli(program: Command) {
@@ -172,7 +193,7 @@ export function registerLogsCli(program: Command) {
         payload = await fetchLogs(opts, cursor);
       } catch (err) {
         emitGatewayError(err, opts, jsonMode ? "json" : "text", rich);
-        defaultRuntime.exit(1);
+        process.exit(1);
         return;
       }
       const lines = Array.isArray(payload.lines) ? payload.lines : [];
@@ -208,10 +229,10 @@ export function registerLogsCli(program: Command) {
       } else {
         if (first && payload.file) {
           const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
-          defaultRuntime.log(`${prefix} ${payload.file}`);
+          logLine(`${prefix} ${payload.file}`);
         }
         for (const line of lines) {
-          defaultRuntime.log(
+          logLine(
             formatLogLine(line, {
               pretty,
               rich,
@@ -219,10 +240,10 @@ export function registerLogsCli(program: Command) {
           );
         }
         if (payload.truncated) {
-          defaultRuntime.error("Log tail truncated (increase --max-bytes).");
+          errorLine("Log tail truncated (increase --max-bytes).");
         }
         if (payload.reset) {
-          defaultRuntime.error("Log cursor reset (file rotated).");
+          errorLine("Log cursor reset (file rotated).");
         }
       }
       cursor =
