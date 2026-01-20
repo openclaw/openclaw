@@ -6,6 +6,11 @@ read_when:
 ---
 # OpenResponses API (HTTP)
 
+## TL;DR (What & Why)
+
+- **What:** An OpenResponses-compatible `POST /v1/responses` HTTP endpoint exposed by the Gateway.
+- **Why:** Use it when you have clients that already speak OpenResponses and want item-based inputs, tool calls, and SSE streaming without using the Gateway WebSocket.
+
 Clawdbot’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.

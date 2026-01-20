@@ -5,6 +5,11 @@ read_when:
 ---
 # Gateway (daemon) runbook
 
+## TL;DR (What & Why)
+
+- **What:** The operational runbook for running, supervising, and debugging the Gateway daemon.
+- **Why:** Use it when you need to start the Gateway, understand its lifecycle, or diagnose runtime issues.
+
 Last updated: 2025-12-09
 
 ## What it is

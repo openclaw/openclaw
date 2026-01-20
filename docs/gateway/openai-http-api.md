@@ -5,6 +5,11 @@ read_when:
 ---
 # OpenAI Chat Completions (HTTP)
 
+## TL;DR (What & Why)
+
+- **What:** An OpenAI-compatible `POST /v1/chat/completions` HTTP endpoint exposed by the Gateway.
+- **Why:** Use it when you need drop-in compatibility with OpenAI Chat Completions clients while keeping Clawdbot routing, auth, and sessions.
+
 Clawdbot’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
