@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 - Agents: treat OAuth refresh failures as auth errors to trigger model fallback. (#1261) — thanks @zknicker.
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.
+- Auth: dedupe codex-cli profiles when tokens match custom openai-codex entries. (#1264) — thanks @odrobnik.
 
 ## 2026.1.19-3
 
