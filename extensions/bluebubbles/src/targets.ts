@@ -245,11 +245,10 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
     if (value) return { kind: "chat_guid", chatGuid: value };
   }
 
-  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_id
-  const chatDigitsMatch = /^chat(\d+)$/i.exec(trimmed);
-  if (chatDigitsMatch) {
-    const chatId = Number.parseInt(chatDigitsMatch[1], 10);
-    if (Number.isFinite(chatId)) return { kind: "chat_id", chatId };
+  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
+  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
+  if (/^chat\d+$/i.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
   }
 
   return { kind: "handle", handle: normalizeBlueBubblesHandle(trimmed) };
