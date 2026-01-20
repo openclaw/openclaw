@@ -127,10 +127,10 @@ export function createGatewayReloadHandlers(params: {
     }
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
-    setCommandLaneConcurrency("main", nextConfig.agents?.defaults?.maxConcurrent ?? 1);
+    setCommandLaneConcurrency("main", nextConfig.agents?.defaults?.maxConcurrent ?? 4);
     setCommandLaneConcurrency(
       "subagent",
-      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 1,
+      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 8,
     );
 
     if (plan.hotReasons.length > 0) {

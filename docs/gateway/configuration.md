@@ -1840,7 +1840,7 @@ Example:
 
 `agents.defaults.subagents` configures sub-agent defaults:
 - `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
-- `maxConcurrent`: max concurrent sub-agent runs (default 1)
+- `maxConcurrent`: max concurrent sub-agent runs (default 8)
 - `archiveAfterMinutes`: auto-archive sub-agent sessions after N minutes (default 60; set `0` to disable)
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny` (deny wins)
 
@@ -1974,7 +1974,7 @@ Notes:
 
 `agents.defaults.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run
-per session key at a time). Default: 1.
+per session key at a time). Default: 4.
 
 ### `agents.defaults.sandbox`
 
