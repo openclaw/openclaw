@@ -256,10 +256,9 @@ describe("cron cli", () => {
     registerCronCli(program);
 
     // Update message without delivery flags - should NOT include undefined delivery fields
-    await program.parseAsync(
-      ["cron", "edit", "job-1", "--message", "Updated message"],
-      { from: "user" },
-    );
+    await program.parseAsync(["cron", "edit", "job-1", "--message", "Updated message"], {
+      from: "user",
+    });
 
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
@@ -276,7 +275,7 @@ describe("cron cli", () => {
 
     // Should include the new message
     expect(patch?.patch?.payload?.message).toBe("Updated message");
-    
+
     // Should NOT include delivery fields at all (to preserve existing values)
     expect(patch?.patch?.payload).not.toHaveProperty("deliver");
     expect(patch?.patch?.payload).not.toHaveProperty("channel");
