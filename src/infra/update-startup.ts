@@ -5,6 +5,11 @@ import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveClawdbotPackageRoot } from "./clawdbot-root.js";
 import { compareSemverStrings, fetchNpmTagVersion, checkUpdateStatus } from "./update-check.js";
+import {
+  channelToNpmTag,
+  normalizeUpdateChannel,
+  DEFAULT_PACKAGE_CHANNEL,
+} from "./update-channels.js";
 import { VERSION } from "../version.js";
 import { formatCliCommand } from "../cli/command-format.js";
 
@@ -16,17 +21,6 @@ type UpdateCheckState = {
 
 const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
-
-function normalizeChannel(value?: string | null): "stable" | "beta" | null {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "stable" || normalized === "beta") return normalized;
-  return null;
-}
-
-function channelToTag(channel: "stable" | "beta"): string {
-  return channel === "beta" ? "beta" : "latest";
-}
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) return false;
@@ -89,8 +83,8 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const channel = normalizeChannel(params.cfg.update?.channel) ?? "stable";
-  const tag = channelToTag(channel);
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const tag = channelToNpmTag(channel);
   const tagStatus = await fetchNpmTagVersion({ tag, timeoutMs: 2500 });
   if (!tagStatus.version) {
     await writeState(statePath, nextState);

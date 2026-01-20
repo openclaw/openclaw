@@ -793,6 +793,7 @@
           "install/index",
           "install/installer",
           "install/updating",
+          "install/development-channels",
           "install/uninstall",
           "install/ansible",
           "install/nix",
