@@ -1,26 +1,14 @@
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
-
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 type DiscordGuild = { id: string; name: string };
 type DiscordUser = { id: string; username: string; global_name?: string; bot?: boolean };
 type DiscordMember = { user: DiscordUser; nick?: string | null };
 type DiscordChannel = { id: string; name?: string | null };
-
-async function fetchDiscord<T>(path: string, token: string): Promise<T> {
-  const res = await fetch(`${DISCORD_API_BASE}${path}`, {
-    headers: { Authorization: `Bot ${token}` },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Discord API ${path} failed (${res.status}): ${text || "unknown error"}`);
-  }
-  return (await res.json()) as T;
-}
 
 function normalizeQuery(value?: string | null): string {
   return value?.trim().toLowerCase() ?? "";

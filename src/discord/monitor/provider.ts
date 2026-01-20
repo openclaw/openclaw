@@ -14,6 +14,7 @@ import {
 import type { ClawdbotConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
@@ -59,54 +60,6 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
   const sample = keys.slice(0, 4);
   const suffix = keys.length > sample.length ? ` (+${keys.length - sample.length})` : "";
   return `${sample.join(", ")}${suffix}`;
-}
-
-type DiscordApiErrorPayload = {
-  message?: string;
-  retry_after?: number;
-  code?: number;
-  global?: boolean;
-};
-
-function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | null {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
-  try {
-    const payload = JSON.parse(trimmed);
-    if (payload && typeof payload === "object") return payload as DiscordApiErrorPayload;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function formatRetryAfterSeconds(value: number | undefined): string | undefined {
-  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
-  const rounded = value < 10 ? value.toFixed(1) : Math.round(value).toString();
-  return `${rounded}s`;
-}
-
-function formatDiscordResolveError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  const match = raw.match(/^(Discord API [^]+ failed \(\d+\))(?:\s*:\s*(.*))?$/);
-  if (!match) return raw;
-  const prefix = match[1];
-  const detail = match[2]?.trim();
-  if (!detail) return prefix;
-  const payload = parseDiscordApiErrorPayload(detail);
-  if (!payload) {
-    const looksJson = detail.startsWith("{") && detail.endsWith("}");
-    return looksJson ? `${prefix}: unknown error` : `${prefix}: ${detail}`;
-  }
-  const message =
-    typeof payload.message === "string" && payload.message.trim()
-      ? payload.message.trim()
-      : "unknown error";
-  const retryAfter = formatRetryAfterSeconds(
-    typeof payload.retry_after === "number" ? payload.retry_after : undefined,
-  );
-  const retryHint = retryAfter ? ` (retry after ${retryAfter})` : "";
-  return `${prefix}: ${message}${retryHint}`;
 }
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -245,7 +198,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       } catch (err) {
         runtime.log?.(
-          `discord channel resolve failed; using config entries. ${formatDiscordResolveError(err)}`,
+          `discord channel resolve failed; using config entries. ${formatErrorMessage(err)}`,
         );
       }
     }
@@ -273,7 +226,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         summarizeMapping("discord users", mapping, unresolved, runtime);
       } catch (err) {
         runtime.log?.(
-          `discord user resolve failed; using config entries. ${formatDiscordResolveError(err)}`,
+          `discord user resolve failed; using config entries. ${formatErrorMessage(err)}`,
         );
       }
     }
@@ -355,9 +308,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           summarizeMapping("discord channel users", mapping, unresolved, runtime);
         } catch (err) {
           runtime.log?.(
-            `discord channel user resolve failed; using config entries. ${formatDiscordResolveError(
-              err,
-            )}`,
+            `discord channel user resolve failed; using config entries. ${formatErrorMessage(err)}`,
           );
         }
       }
