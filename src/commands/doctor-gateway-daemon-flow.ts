@@ -86,7 +86,13 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.healthOk) return;
 
   const service = resolveGatewayService();
-  let loaded = await service.isLoaded({ env: process.env });
+  // systemd can throw in containers/WSL; treat as "not loaded" and fall back to hints.
+  let loaded = false;
+  try {
+    loaded = await service.isLoaded({ env: process.env });
+  } catch {
+    loaded = false;
+  }
   let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
   if (loaded) {
     serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
