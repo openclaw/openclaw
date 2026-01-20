@@ -291,7 +291,7 @@ Same `deviceId` across roles → single “Instance” row:
 # Execution checklist (ship order)
 - [x] **Device‑bound auth (PoP):** nonce challenge + signature verify on connect; remove bearer‑only for non‑local.
 - [x] **Role‑scoped creds:** issue per‑role tokens, rotate, revoke, list; UI/CLI surfaced; audit log entries.
-- [ ] **Scope enforcement:** keep paired scopes in sync on rotation; reject/upgrade flows explicit; tests.
+- [x] **Scope enforcement:** keep paired scopes in sync on rotation; reject/upgrade flows explicit; tests.
 - [ ] **Approvals routing:** gateway‑hosted approvals; operator UI prompt/resolve; node stops prompting.
 - [ ] **TLS pinning for WS:** reuse bridge TLS runtime; discovery advertises fingerprint; client validation.
 - [ ] **Discovery + allowlist:** WS discovery TXT includes TLS fingerprint + role hints; node commands filtered by server allowlist.
