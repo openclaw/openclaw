@@ -18,19 +18,13 @@ describe("web_search perplexity baseUrl defaults", () => {
   });
 
   it("prefers explicit baseUrl over key-based defaults", () => {
-    expect(
-      resolvePerplexityBaseUrl(
-        { baseUrl: "https://example.com" },
-        "config",
-        "pplx-123",
-      ),
-    ).toBe("https://example.com");
+    expect(resolvePerplexityBaseUrl({ baseUrl: "https://example.com" }, "config", "pplx-123")).toBe(
+      "https://example.com",
+    );
   });
 
   it("defaults to direct when using PERPLEXITY_API_KEY", () => {
-    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe(
-      "https://api.perplexity.ai",
-    );
+    expect(resolvePerplexityBaseUrl(undefined, "perplexity_env")).toBe("https://api.perplexity.ai");
   });
 
   it("defaults to OpenRouter when using OPENROUTER_API_KEY", () => {

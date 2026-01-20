@@ -38,9 +38,9 @@ function resolveProviderConfig(
   }
   return (
     (providers[normalized] as ModelProviderConfig | undefined) ??
-    (Object.entries(providers).find(
-      ([key]) => normalizeProviderId(key) === normalized,
-    )?.[1] as ModelProviderConfig | undefined)
+    (Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1] as
+      | ModelProviderConfig
+      | undefined)
   );
 }
 
@@ -353,7 +353,5 @@ export async function getApiKeyForModel(params: {
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
   const key = auth.apiKey?.trim();
   if (key) return key;
-  throw new Error(
-    `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`,
-  );
+  throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
 }

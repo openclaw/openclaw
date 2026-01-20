@@ -1,5 +1,9 @@
 import type { ClawdbotConfig } from "./config.js";
-import { getChatChannelMeta, listChatChannels, normalizeChatChannelId } from "../channels/registry.js";
+import {
+  getChatChannelMeta,
+  listChatChannels,
+  normalizeChatChannelId,
+} from "../channels/registry.js";
 import {
   getChannelPluginCatalogEntry,
   listChannelPluginCatalogEntries,

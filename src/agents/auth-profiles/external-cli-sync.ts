@@ -179,9 +179,10 @@ export function syncExternalCliCredentials(
     !existingCodex ||
     existingCodex.provider !== "openai-codex" ||
     !isExternalProfileFresh(existingCodex, now);
-  const codexCreds = shouldSyncCodex || duplicateExistingId
-    ? readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
-    : null;
+  const codexCreds =
+    shouldSyncCodex || duplicateExistingId
+      ? readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
+      : null;
   if (codexCreds) {
     const duplicateProfileId = findDuplicateCodexProfile(store, codexCreds);
     if (duplicateProfileId) {

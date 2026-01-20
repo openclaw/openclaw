@@ -258,9 +258,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         applyCompactionDefaults(
           applyContextPruningDefaults(
             applyAgentDefaults(
-              applySessionDefaults(
-                applyLoggingDefaults(applyMessageDefaults(validated.config)),
-              ),
+              applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
             ),
           ),
         ),

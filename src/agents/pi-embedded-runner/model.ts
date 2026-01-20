@@ -55,8 +55,7 @@ export function resolveModel(
     const inlineModels = buildInlineProviderModels(providers);
     const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
-      (entry) =>
-        normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
     );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
