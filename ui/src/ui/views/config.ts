@@ -47,58 +47,59 @@ export function renderConfig(props: ConfigProps) {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div class="row">
-          <div class="card-title">Config</div>
-          <span class="pill">${validity}</span>
-        </div>
-        <div class="row">
+      <div class="config-header">
+        <div class="config-header__top">
+          <div class="row">
+            <div class="card-title">Config</div>
+            <span class="pill">${validity}</span>
+          </div>
           <div class="toggle-group">
             <button
-              class="btn ${props.formMode === "form" ? "primary" : ""}"
+              class="btn btn--sm ${props.formMode === "form" ? "primary" : ""}"
               ?disabled=${props.schemaLoading || !props.schema}
               @click=${() => props.onFormModeChange("form")}
             >
               Form
             </button>
             <button
-              class="btn ${props.formMode === "raw" ? "primary" : ""}"
+              class="btn btn--sm ${props.formMode === "raw" ? "primary" : ""}"
               @click=${() => props.onFormModeChange("raw")}
             >
               Raw
             </button>
           </div>
-          <button class="btn" ?disabled=${props.loading} @click=${props.onReload}>
+        </div>
+        <div class="config-header__actions">
+          <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
             ${props.loading ? "Loading…" : "Reload"}
           </button>
           <button
-            class="btn primary"
+            class="btn btn--sm primary"
             ?disabled=${!canSave}
             @click=${props.onSave}
           >
             ${props.saving ? "Saving…" : "Save"}
           </button>
           <button
-            class="btn"
+            class="btn btn--sm"
             ?disabled=${!canApply}
             @click=${props.onApply}
           >
-            ${props.applying ? "Applying…" : "Apply & Restart"}
+            ${props.applying ? "Applying…" : "Apply"}
           </button>
           <button
-            class="btn"
+            class="btn btn--sm"
             ?disabled=${!canUpdate}
             @click=${props.onUpdate}
           >
-            ${props.updating ? "Updating…" : "Update & Restart"}
+            ${props.updating ? "Updating…" : "Update"}
           </button>
         </div>
       </div>
 
-      <div class="muted" style="margin-top: 10px;">
+      <div class="muted" style="margin-top: 10px; font-size: 12px;">
         Writes to <span class="mono">~/.clawdbot/clawdbot.json</span>. Apply &
-        Update restart the gateway and will ping the last active session when it
-        comes back.
+        Update restart the gateway.
       </div>
 
 
