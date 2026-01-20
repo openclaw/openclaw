@@ -67,9 +67,10 @@ function addPluginLoadPath(cfg: ClawdbotConfig, pluginPath: string): ClawdbotCon
 async function promptInstallChoice(params: {
   entry: ChannelPluginCatalogEntry;
   localPath?: string | null;
+  defaultChoice: InstallChoice;
   prompter: WizardPrompter;
 }): Promise<InstallChoice> {
-  const { entry, localPath, prompter } = params;
+  const { entry, localPath, prompter, defaultChoice } = params;
   const localOptions: Array<{ value: InstallChoice; label: string; hint?: string }> = localPath
     ? [
         {
@@ -84,12 +85,32 @@ async function promptInstallChoice(params: {
     ...localOptions,
     { value: "skip", label: "Skip for now" },
   ];
-  const initialValue: InstallChoice = localPath ? "local" : "npm";
+  const initialValue: InstallChoice =
+    defaultChoice === "local" && !localPath ? "npm" : defaultChoice;
   return await prompter.select<InstallChoice>({
     message: `Install ${entry.meta.label} plugin?`,
     options,
     initialValue,
   });
+}
+
+function resolveInstallDefaultChoice(params: {
+  cfg: ClawdbotConfig;
+  entry: ChannelPluginCatalogEntry;
+  localPath?: string | null;
+}): InstallChoice {
+  const { cfg, entry, localPath } = params;
+  const updateChannel = cfg.update?.channel;
+  if (updateChannel === "dev") {
+    return localPath ? "local" : "npm";
+  }
+  if (updateChannel === "stable" || updateChannel === "beta") {
+    return "npm";
+  }
+  const entryDefault = entry.install.defaultChoice;
+  if (entryDefault === "local") return localPath ? "local" : "npm";
+  if (entryDefault === "npm") return "npm";
+  return localPath ? "local" : "npm";
 }
 
 export async function ensureOnboardingPluginInstalled(params: {
@@ -103,9 +124,15 @@ export async function ensureOnboardingPluginInstalled(params: {
   let next = params.cfg;
   const allowLocal = hasGitWorkspace(workspaceDir);
   const localPath = resolveLocalPath(entry, workspaceDir, allowLocal);
+  const defaultChoice = resolveInstallDefaultChoice({
+    cfg: next,
+    entry,
+    localPath,
+  });
   const choice = await promptInstallChoice({
     entry,
     localPath,
+    defaultChoice,
     prompter,
   });
 

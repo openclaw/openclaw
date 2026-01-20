@@ -200,6 +200,27 @@ export type IMessageStatus = {
   lastProbeAt?: number | null;
 };
 
+export type NostrProfile = {
+  name?: string | null;
+  displayName?: string | null;
+  about?: string | null;
+  picture?: string | null;
+  banner?: string | null;
+  website?: string | null;
+  nip05?: string | null;
+  lud16?: string | null;
+};
+
+export type NostrStatus = {
+  configured: boolean;
+  publicKey?: string | null;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  profile?: NostrProfile | null;
+};
+
 export type MSTeamsProbe = {
   ok: boolean;
   error?: string | null;
@@ -254,7 +275,6 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
-  deviceId?: string | null;
   instanceId?: string | null;
   host?: string | null;
   ip?: string | null;
@@ -265,8 +285,6 @@ export type PresenceEntry = {
   mode?: string | null;
   lastInputSeconds?: number | null;
   reason?: string | null;
-  roles?: string[] | null;
-  scopes?: string[] | null;
   text?: string | null;
   ts?: number | null;
 };
@@ -339,8 +357,15 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      channel?: string;
-      provider?: string;
+      provider?:
+        | "last"
+        | "whatsapp"
+        | "telegram"
+        | "discord"
+        | "slack"
+        | "signal"
+        | "imessage"
+        | "msteams";
       to?: string;
       bestEffortDeliver?: boolean;
     };

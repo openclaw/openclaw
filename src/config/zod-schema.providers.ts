@@ -32,5 +32,5 @@ export const ChannelsSchema = z
     bluebubbles: BlueBubblesConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
   })
-  .passthrough()
+  .passthrough() // Allow extension channel configs (nostr, matrix, zalo, etc.)
   .optional();
