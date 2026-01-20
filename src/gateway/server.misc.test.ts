@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { createServer } from "node:net";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -127,6 +129,40 @@ describe("gateway server misc", () => {
     } finally {
       setActivePluginRegistry(prevRegistry);
     }
+  });
+
+  test("auto-enables configured channel plugins on startup", async () => {
+    const configPath = process.env.CLAWDBOT_CONFIG_PATH;
+    if (!configPath) throw new Error("Missing CLAWDBOT_CONFIG_PATH");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          channels: {
+            discord: {
+              token: "token-123",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    await server.close();
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+    const plugins = updated.plugins as Record<string, unknown> | undefined;
+    const entries = plugins?.entries as Record<string, unknown> | undefined;
+    const discord = entries?.discord as Record<string, unknown> | undefined;
+    expect(discord?.enabled).toBe(true);
+    expect((updated.channels as Record<string, unknown> | undefined)?.discord).toMatchObject({
+      token: "token-123",
+    });
   });
 
   test("refuses to start when port already bound", async () => {
