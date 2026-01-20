@@ -1,0 +1,13 @@
+# Changelog
+
+## 2026.1.17-1
+
+- Initial version with full channel plugin support
+- QR code login via zca-cli
+- Multi-account support
+- Agent tool for sending messages
+- Group and DM policy support
+- ChannelDock for lightweight shared metadata
+- Zod-based config schema validation
+- Setup adapter for programmatic configuration
+- Dedicated probe and status issues modules
