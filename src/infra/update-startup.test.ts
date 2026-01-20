@@ -15,6 +15,7 @@ vi.mock("./update-check.js", async () => {
     ...actual,
     checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
+    resolveNpmChannelTag: vi.fn(),
   };
 });
 
@@ -43,7 +44,7 @@ describe("update-startup", () => {
 
   it("logs update hint for npm installs when newer tag exists", async () => {
     const { resolveClawdbotPackageRoot } = await import("./clawdbot-root.js");
-    const { checkUpdateStatus, fetchNpmTagVersion } = await import("./update-check.js");
+    const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
     const { runGatewayUpdateCheck } = await import("./update-startup.js");
 
     vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue("/opt/clawdbot");
@@ -52,7 +53,7 @@ describe("update-startup", () => {
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
-    vi.mocked(fetchNpmTagVersion).mockResolvedValue({
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
       version: "2.0.0",
     });
@@ -73,6 +74,40 @@ describe("update-startup", () => {
     const raw = await fs.readFile(statePath, "utf-8");
     const parsed = JSON.parse(raw) as { lastNotifiedVersion?: string };
     expect(parsed.lastNotifiedVersion).toBe("2.0.0");
+  });
+
+  it("uses latest when beta tag is older than release", async () => {
+    const { resolveClawdbotPackageRoot } = await import("./clawdbot-root.js");
+    const { checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js");
+    const { runGatewayUpdateCheck } = await import("./update-startup.js");
+
+    vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue("/opt/clawdbot");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/clawdbot",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2.0.0",
+    });
+
+    const log = { info: vi.fn() };
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "beta" } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("update available (latest): v2.0.0"),
+    );
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = JSON.parse(raw) as { lastNotifiedTag?: string };
+    expect(parsed.lastNotifiedTag).toBe("latest");
   });
 
   it("skips update check when disabled in config", async () => {
