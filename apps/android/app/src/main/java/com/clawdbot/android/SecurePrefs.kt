@@ -189,6 +189,18 @@ class SecurePrefs(context: Context) {
     prefs.edit { putString(key, fingerprint.trim()) }
   }
 
+  fun getString(key: String): String? {
+    return prefs.getString(key, null)
+  }
+
+  fun putString(key: String, value: String) {
+    prefs.edit { putString(key, value) }
+  }
+
+  fun remove(key: String) {
+    prefs.edit { remove(key) }
+  }
+
   private fun loadOrCreateInstanceId(): String {
     val existing = prefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing

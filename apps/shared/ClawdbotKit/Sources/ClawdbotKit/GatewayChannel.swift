@@ -498,7 +498,7 @@ public actor GatewayChannelActor {
         }
     }
 
-    private func decodeMessageData(_ msg: URLSessionWebSocketTask.Message) -> Data? {
+    private nonisolated func decodeMessageData(_ msg: URLSessionWebSocketTask.Message) -> Data? {
         let data: Data? = switch msg {
         case let .data(data): data
         case let .string(text): text.data(using: .utf8)

@@ -108,5 +108,9 @@ private func sha256Hex(_ data: Data) -> String {
 }
 
 private func normalizeFingerprint(_ raw: String) -> String {
-    raw.lowercased().filter(\.isHexDigit)
+    let stripped = raw.replacingOccurrences(
+        of: #"(?i)^sha-?256\s*:?\s*"#,
+        with: "",
+        options: .regularExpression)
+    return stripped.lowercased().filter(\.isHexDigit)
 }

@@ -84,5 +84,7 @@ private fun sha256Hex(data: ByteArray): String {
 }
 
 private fun normalizeFingerprint(raw: String): String {
-  return raw.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
+  val stripped = raw.trim()
+    .replace(Regex("^sha-?256\\s*:?\\s*", RegexOption.IGNORE_CASE), "")
+  return stripped.lowercase().filter { it in '0'..'9' || it in 'a'..'f' }
 }
