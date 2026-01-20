@@ -64,6 +64,7 @@ High-level:
 4. Installs deps (pnpm preferred; npm fallback).
 5. Builds + builds the Control UI.
 6. Runs `clawdbot doctor` as the final “safe update” check.
+7. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
 
 ## `--update` shorthand
 

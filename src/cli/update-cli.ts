@@ -36,6 +36,7 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "../commands/status.update.js";
+import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../plugins/update.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -389,6 +390,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     })) ?? process.cwd();
 
   const configSnapshot = await readConfigFileSnapshot();
+  let activeConfig = configSnapshot.valid ? configSnapshot.config : null;
   const storedChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
@@ -459,6 +461,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       },
     };
     await writeConfigFile(next);
+    activeConfig = next;
     if (!opts.json) {
       defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
     }
@@ -511,6 +514,87 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
     defaultRuntime.exit(0);
     return;
+  }
+
+  if (activeConfig) {
+    const pluginLogger = opts.json
+      ? {}
+      : {
+          info: (msg: string) => defaultRuntime.log(msg),
+          warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
+          error: (msg: string) => defaultRuntime.log(theme.error(msg)),
+        };
+
+    if (!opts.json) {
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Updating plugins..."));
+    }
+
+    const syncResult = await syncPluginsForUpdateChannel({
+      config: activeConfig,
+      channel,
+      workspaceDir: root,
+      logger: pluginLogger,
+    });
+    let pluginConfig = syncResult.config;
+
+    const npmResult = await updateNpmInstalledPlugins({
+      config: pluginConfig,
+      skipIds: new Set(syncResult.summary.switchedToNpm),
+      logger: pluginLogger,
+    });
+    pluginConfig = npmResult.config;
+
+    if (syncResult.changed || npmResult.changed) {
+      await writeConfigFile(pluginConfig);
+    }
+
+    if (!opts.json) {
+      const summarizeList = (list: string[]) => {
+        if (list.length <= 6) return list.join(", ");
+        return `${list.slice(0, 6).join(", ")} +${list.length - 6} more`;
+      };
+
+      if (syncResult.summary.switchedToBundled.length > 0) {
+        defaultRuntime.log(
+          theme.muted(
+            `Switched to bundled plugins: ${summarizeList(syncResult.summary.switchedToBundled)}.`,
+          ),
+        );
+      }
+      if (syncResult.summary.switchedToNpm.length > 0) {
+        defaultRuntime.log(
+          theme.muted(`Restored npm plugins: ${summarizeList(syncResult.summary.switchedToNpm)}.`),
+        );
+      }
+      for (const warning of syncResult.summary.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
+      for (const error of syncResult.summary.errors) {
+        defaultRuntime.log(theme.error(error));
+      }
+
+      const updated = npmResult.outcomes.filter((entry) => entry.status === "updated").length;
+      const unchanged = npmResult.outcomes.filter((entry) => entry.status === "unchanged").length;
+      const failed = npmResult.outcomes.filter((entry) => entry.status === "error").length;
+      const skipped = npmResult.outcomes.filter((entry) => entry.status === "skipped").length;
+
+      if (npmResult.outcomes.length === 0) {
+        defaultRuntime.log(theme.muted("No plugin updates needed."));
+      } else {
+        const parts = [`${updated} updated`, `${unchanged} unchanged`];
+        if (failed > 0) parts.push(`${failed} failed`);
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        defaultRuntime.log(theme.muted(`npm plugins: ${parts.join(", ")}.`));
+      }
+
+      for (const outcome of npmResult.outcomes) {
+        if (outcome.status !== "error") continue;
+        defaultRuntime.log(theme.error(outcome.message));
+      }
+    }
+  } else if (!opts.json) {
+    defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
   }
 
   // Restart daemon if requested

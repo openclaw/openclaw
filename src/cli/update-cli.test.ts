@@ -38,6 +38,11 @@ vi.mock("../commands/doctor.js", () => ({
 vi.mock("./daemon-cli.js", () => ({
   runDaemonRestart: vi.fn(),
 }));
+// Mock plugin update helpers
+vi.mock("../plugins/update.js", () => ({
+  syncPluginsForUpdateChannel: vi.fn(),
+  updateNpmInstalledPlugins: vi.fn(),
+}));
 
 // Mock the runtime
 vi.mock("../runtime.js", () => ({
@@ -74,6 +79,8 @@ describe("update-cli", () => {
     const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
     const { readConfigFileSnapshot } = await import("../config/config.js");
     const { checkUpdateStatus, fetchNpmTagVersion } = await import("../infra/update-check.js");
+    const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } =
+      await import("../plugins/update.js");
     vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
@@ -104,6 +111,16 @@ describe("update-cli", () => {
       registry: {
         latestVersion: "1.2.3",
       },
+    });
+    vi.mocked(syncPluginsForUpdateChannel).mockResolvedValue({
+      config: baseSnapshot.config,
+      changed: false,
+      summary: { switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
+    });
+    vi.mocked(updateNpmInstalledPlugins).mockResolvedValue({
+      config: baseSnapshot.config,
+      changed: false,
+      outcomes: [],
     });
     setTty(false);
     setStdoutTty(false);
@@ -144,6 +161,25 @@ describe("update-cli", () => {
 
     expect(runGatewayUpdate).toHaveBeenCalled();
     expect(defaultRuntime.log).toHaveBeenCalled();
+  });
+
+  it("updateCommand syncs plugins after a successful update", async () => {
+    const { runGatewayUpdate } = await import("../infra/update-runner.js");
+    const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } =
+      await import("../plugins/update.js");
+    const { updateCommand } = await import("./update-cli.js");
+
+    vi.mocked(runGatewayUpdate).mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      steps: [],
+      durationMs: 100,
+    });
+
+    await updateCommand({});
+
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
   });
 
   it("updateStatusCommand prints table output", async () => {

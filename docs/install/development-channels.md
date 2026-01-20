@@ -40,6 +40,13 @@ This updates via the corresponding npm dist-tag (`latest`, `beta`, `dev`).
 
 Tip: if you want stable + dev in parallel, keep two clones and point your gateway at the stable one.
 
+## Plugins and channels
+
+When you switch channels with `clawdbot update`, Clawdbot also syncs plugin sources:
+
+- `dev` prefers bundled plugins from the git checkout.
+- `stable` and `beta` restore npm-installed plugin packages.
+
 ## Tagging best practices
 
 - Stable: tag each release (`vYYYY.M.D` or `vYYYY.M.D-<patch>`).

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -7,15 +6,12 @@ import type { Command } from "commander";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import {
-  installPluginFromNpmSpec,
-  installPluginFromPath,
-  resolvePluginInstallDir,
-} from "../plugins/install.js";
+import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
+import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -68,16 +64,6 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   }
   if (plugin.error) parts.push(chalk.red(`  error: ${plugin.error}`));
   return parts.join("\n");
-}
-
-async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
-  try {
-    const raw = await fsp.readFile(path.join(dir, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function applySlotSelectionForPlugin(
@@ -438,88 +424,30 @@ export function registerPluginsCli(program: Command) {
         process.exit(1);
       }
 
-      let nextCfg = cfg;
-      let updatedCount = 0;
+      const result = await updateNpmInstalledPlugins({
+        config: cfg,
+        pluginIds: targets,
+        dryRun: opts.dryRun,
+        logger: {
+          info: (msg) => defaultRuntime.log(msg),
+          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+        },
+      });
 
-      for (const pluginId of targets) {
-        const record = installs[pluginId];
-        if (!record) {
-          defaultRuntime.log(chalk.yellow(`No install record for "${pluginId}".`));
+      for (const outcome of result.outcomes) {
+        if (outcome.status === "error") {
+          defaultRuntime.log(chalk.red(outcome.message));
           continue;
         }
-        if (record.source !== "npm") {
-          defaultRuntime.log(chalk.yellow(`Skipping "${pluginId}" (source: ${record.source}).`));
+        if (outcome.status === "skipped") {
+          defaultRuntime.log(chalk.yellow(outcome.message));
           continue;
         }
-        if (!record.spec) {
-          defaultRuntime.log(chalk.yellow(`Skipping "${pluginId}" (missing npm spec).`));
-          continue;
-        }
-
-        const installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
-        const currentVersion = await readInstalledPackageVersion(installPath);
-
-        if (opts.dryRun) {
-          const probe = await installPluginFromNpmSpec({
-            spec: record.spec,
-            mode: "update",
-            dryRun: true,
-            expectedPluginId: pluginId,
-            logger: {
-              info: (msg) => defaultRuntime.log(msg),
-              warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
-            },
-          });
-          if (!probe.ok) {
-            defaultRuntime.log(chalk.red(`Failed to check ${pluginId}: ${probe.error}`));
-            continue;
-          }
-
-          const nextVersion = probe.version ?? "unknown";
-          const currentLabel = currentVersion ?? "unknown";
-          if (currentVersion && probe.version && currentVersion === probe.version) {
-            defaultRuntime.log(`${pluginId} is up to date (${currentLabel}).`);
-          } else {
-            defaultRuntime.log(`Would update ${pluginId}: ${currentLabel} → ${nextVersion}.`);
-          }
-          continue;
-        }
-
-        const result = await installPluginFromNpmSpec({
-          spec: record.spec,
-          mode: "update",
-          expectedPluginId: pluginId,
-          logger: {
-            info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
-          },
-        });
-        if (!result.ok) {
-          defaultRuntime.log(chalk.red(`Failed to update ${pluginId}: ${result.error}`));
-          continue;
-        }
-
-        const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
-        nextCfg = recordPluginInstall(nextCfg, {
-          pluginId,
-          source: "npm",
-          spec: record.spec,
-          installPath: result.targetDir,
-          version: nextVersion,
-        });
-        updatedCount += 1;
-
-        const currentLabel = currentVersion ?? "unknown";
-        const nextLabel = nextVersion ?? "unknown";
-        if (currentVersion && nextVersion && currentVersion === nextVersion) {
-          defaultRuntime.log(`${pluginId} already at ${currentLabel}.`);
-        } else {
-          defaultRuntime.log(`Updated ${pluginId}: ${currentLabel} → ${nextLabel}.`);
-        }
+        defaultRuntime.log(outcome.message);
       }
 
-      if (updatedCount > 0) {
-        await writeConfigFile(nextCfg);
+      if (!opts.dryRun && result.changed) {
+        await writeConfigFile(result.config);
         defaultRuntime.log("Restart the gateway to load plugins.");
       }
     });
