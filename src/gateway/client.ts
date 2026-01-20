@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
+import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
@@ -99,6 +100,10 @@ export class GatewayClient {
   start() {
     if (this.closed) return;
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
+    if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
+      this.opts.onConnectError?.(new Error("gateway tls fingerprint requires wss:// gateway url"));
+      return;
+    }
     // Allow node screen snapshots and other large responses.
     const wsOptions: ClientOptions = {
       maxPayload: 25 * 1024 * 1024,
@@ -398,8 +403,4 @@ export class GatewayClient {
     this.ws.send(JSON.stringify(frame));
     return p;
   }
-}
-
-function normalizeFingerprint(input: string): string {
-  return input.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
 }

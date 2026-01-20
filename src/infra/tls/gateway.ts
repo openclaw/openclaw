@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { normalizeFingerprint } from "./fingerprint.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,10 +21,6 @@ export type GatewayTlsRuntime = {
   tlsOptions?: tls.TlsOptions;
   error?: string;
 };
-
-function normalizeFingerprint(input: string): string {
-  return input.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
-}
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
