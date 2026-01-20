@@ -1,9 +1,8 @@
 import type { RESTGetAPIChannelResult, RESTGetAPIGuildChannelsResult } from "discord-api-types/v10";
 
+import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
-
-const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 type DiscordGuildSummary = {
   id: string;
@@ -58,17 +57,6 @@ function parseDiscordChannelInput(raw: string): {
     return { guild, channel };
   }
   return { guild: trimmed, guildOnly: true };
-}
-
-async function fetchDiscord<T>(path: string, token: string, fetcher: typeof fetch): Promise<T> {
-  const res = await fetcher(`${DISCORD_API_BASE}${path}`, {
-    headers: { Authorization: `Bot ${token}` },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Discord API ${path} failed (${res.status}): ${text || "unknown error"}`);
-  }
-  return (await res.json()) as T;
 }
 
 async function listGuilds(token: string, fetcher: typeof fetch): Promise<DiscordGuildSummary[]> {
