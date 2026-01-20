@@ -6,6 +6,7 @@ import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender, normalizeBlueBubblesHandle } from "./targets.js";
 import { resolveAckReaction } from "../../../src/agents/identity.js";
+import { sendBlueBubblesMedia } from "./media-send.js";
 import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
@@ -299,9 +300,15 @@ function extractReplyMetadata(message: Record<string, unknown>): {
     typeof associatedType === "number" && REACTION_TYPE_MAP.has(associatedType);
 
   const replyToId = directReplyId ?? (!isReactionAssociation ? associatedGuid : undefined);
+  const threadOriginatorGuid = readString(message, "threadOriginatorGuid");
+  const messageGuid = readString(message, "guid");
+  const fallbackReplyId =
+    !replyToId && threadOriginatorGuid && threadOriginatorGuid !== messageGuid
+      ? threadOriginatorGuid
+      : undefined;
 
   return {
-    replyToId: replyToId?.trim() || undefined,
+    replyToId: (replyToId ?? fallbackReplyId)?.trim() || undefined,
     replyToBody: replyToBody?.trim() || undefined,
     replyToSender: normalizedSender || undefined,
   };
@@ -1351,6 +1358,29 @@ async function processMessage(
       cfg: config,
       dispatcherOptions: {
         deliver: async (payload) => {
+          const mediaList = payload.mediaUrls?.length
+            ? payload.mediaUrls
+            : payload.mediaUrl
+              ? [payload.mediaUrl]
+              : [];
+          if (mediaList.length > 0) {
+            let first = true;
+            for (const mediaUrl of mediaList) {
+              const caption = first ? payload.text : undefined;
+              first = false;
+              await sendBlueBubblesMedia({
+                cfg: config,
+                to: outboundTarget,
+                mediaUrl,
+                caption: caption ?? undefined,
+                accountId: account.accountId,
+              });
+              sentMessage = true;
+              statusSink?.({ lastOutboundAt: Date.now() });
+            }
+            return;
+          }
+
           const textLimit =
             account.config.textChunkLimit && account.config.textChunkLimit > 0
               ? account.config.textChunkLimit

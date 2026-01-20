@@ -1,6 +1,3 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import type { ChannelAccountSnapshot, ChannelPlugin, ClawdbotConfig } from "clawdbot/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
@@ -25,7 +22,6 @@ import {
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
-import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
   looksLikeBlueBubblesTargetId,
   normalizeBlueBubblesHandle,
@@ -34,7 +30,7 @@ import {
 import { bluebubblesMessageActions } from "./actions.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
 import { blueBubblesOnboardingAdapter } from "./onboarding.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+import { sendBlueBubblesMedia } from "./media-send.js";
 
 // Use core registry meta for consistency (Gate A: core registry).
 // BlueBubbles is positioned before imessage per Gate C preference.
@@ -42,37 +38,6 @@ const meta = {
   ...getChatChannelMeta("bluebubbles"),
   order: 75,
 };
-
-const HTTP_URL_RE = /^https?:\/\//i;
-
-function resolveLocalMediaPath(source: string): string {
-  if (!source.startsWith("file://")) return source;
-  try {
-    return fileURLToPath(source);
-  } catch {
-    throw new Error(`Invalid file:// URL: ${source}`);
-  }
-}
-
-function resolveFilenameFromSource(source?: string): string | undefined {
-  if (!source) return undefined;
-  if (source.startsWith("file://")) {
-    try {
-      return path.basename(fileURLToPath(source)) || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  if (HTTP_URL_RE.test(source)) {
-    try {
-      return path.basename(new URL(source).pathname) || undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  const base = path.basename(source);
-  return base || undefined;
-}
 
 export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   id: "bluebubbles",
@@ -272,64 +237,17 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
         filename?: string;
         caption?: string;
       };
-      const core = getBlueBubblesRuntime();
       const resolvedCaption = caption ?? text;
-
-      let buffer: Uint8Array;
-      let resolvedContentType = contentType ?? undefined;
-      let resolvedFilename = filename ?? undefined;
-
-      if (mediaBuffer) {
-        buffer = mediaBuffer;
-        if (!resolvedContentType) {
-          const hint = mediaPath ?? mediaUrl;
-          const detected = await core.media.detectMime({
-            buffer: Buffer.isBuffer(mediaBuffer) ? mediaBuffer : Buffer.from(mediaBuffer),
-            filePath: hint,
-          });
-          resolvedContentType = detected ?? undefined;
-        }
-        if (!resolvedFilename) {
-          resolvedFilename = resolveFilenameFromSource(mediaPath ?? mediaUrl);
-        }
-      } else {
-        const source = mediaPath ?? mediaUrl;
-        if (!source) {
-          throw new Error("BlueBubbles media delivery requires mediaUrl, mediaPath, or mediaBuffer.");
-        }
-        if (HTTP_URL_RE.test(source)) {
-          const fetched = await core.channel.media.fetchRemoteMedia({ url: source });
-          buffer = fetched.buffer;
-          resolvedContentType = resolvedContentType ?? fetched.contentType ?? undefined;
-          resolvedFilename = resolvedFilename ?? fetched.fileName;
-        } else {
-          const localPath = resolveLocalMediaPath(source);
-          const fs = await import("node:fs/promises");
-          const data = await fs.readFile(localPath);
-          buffer = new Uint8Array(data);
-          if (!resolvedContentType) {
-            const detected = await core.media.detectMime({
-              buffer: data,
-              filePath: localPath,
-            });
-            resolvedContentType = detected ?? undefined;
-          }
-          if (!resolvedFilename) {
-            resolvedFilename = resolveFilenameFromSource(localPath);
-          }
-        }
-      }
-
-      const result = await sendBlueBubblesAttachment({
+      const result = await sendBlueBubblesMedia({
+        cfg: cfg as ClawdbotConfig,
         to,
-        buffer,
-        filename: resolvedFilename ?? "attachment",
-        contentType: resolvedContentType ?? undefined,
+        mediaUrl,
+        mediaPath,
+        mediaBuffer,
+        contentType,
+        filename,
         caption: resolvedCaption ?? undefined,
-        opts: {
-          cfg: cfg as ClawdbotConfig,
-          accountId: accountId ?? undefined,
-        },
+        accountId: accountId ?? undefined,
       });
 
       return { channel: "bluebubbles", ...result };
