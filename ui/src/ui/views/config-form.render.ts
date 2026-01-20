@@ -14,69 +14,78 @@ export type ConfigFormProps = {
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
 
+// SVG Icons for section cards
+const sectionIcons = {
+  env: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`,
+  update: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+  agents: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"></path><circle cx="8" cy="14" r="1"></circle><circle cx="16" cy="14" r="1"></circle></svg>`,
+  auth: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>`,
+  channels: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`,
+  messages: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>`,
+  commands: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`,
+  hooks: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`,
+  skills: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`,
+  tools: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>`,
+  gateway: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`,
+  wizard: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 4V2"></path><path d="M15 16v-2"></path><path d="M8 9h2"></path><path d="M20 9h2"></path><path d="M17.8 11.8 19 13"></path><path d="M15 9h0"></path><path d="M17.8 6.2 19 5"></path><path d="m3 21 9-9"></path><path d="M12.2 6.2 11 5"></path></svg>`,
+  default: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+};
+
 // Section metadata
-const SECTION_META: Record<string, { label: string; icon: string; description: string }> = {
+const SECTION_META: Record<string, { label: string; description: string }> = {
   env: { 
     label: "Environment Variables", 
-    icon: "🔧",
     description: "Environment variables passed to the gateway process"
   },
   update: { 
     label: "Updates", 
-    icon: "📦",
     description: "Auto-update settings and release channel"
   },
   agents: { 
     label: "Agents", 
-    icon: "🤖",
     description: "Agent configurations, models, and identities"
   },
   auth: { 
     label: "Authentication", 
-    icon: "🔐",
     description: "API keys and authentication profiles"
   },
   channels: { 
     label: "Channels", 
-    icon: "💬",
     description: "Messaging channels (Telegram, Discord, Slack, etc.)"
   },
   messages: { 
     label: "Messages", 
-    icon: "📨",
     description: "Message handling and routing settings"
   },
   commands: { 
     label: "Commands", 
-    icon: "⌨️",
     description: "Custom slash commands"
   },
   hooks: { 
     label: "Hooks", 
-    icon: "🪝",
     description: "Webhooks and event hooks"
   },
   skills: { 
     label: "Skills", 
-    icon: "✨",
     description: "Skill packs and capabilities"
   },
   tools: { 
     label: "Tools", 
-    icon: "🛠️",
     description: "Tool configurations (browser, search, etc.)"
   },
   gateway: { 
     label: "Gateway", 
-    icon: "🌐",
     description: "Gateway server settings (port, auth, binding)"
   },
   wizard: { 
     label: "Setup Wizard", 
-    icon: "🧙",
     description: "Setup wizard state and history"
   },
 };
+
+function getSectionIcon(key: string) {
+  return sectionIcons[key as keyof typeof sectionIcons] ?? sectionIcons.default;
+}
 
 function matchesSearch(key: string, schema: JsonSchema, query: string): boolean {
   if (!query) return true;
@@ -161,14 +170,13 @@ export function renderConfigForm(props: ConfigFormProps) {
       ${entries.map(([key, node]) => {
         const meta = SECTION_META[key] ?? { 
           label: key.charAt(0).toUpperCase() + key.slice(1), 
-          icon: "📄",
           description: node.description ?? ""
         };
         
         return html`
           <section class="config-section-card" id="config-section-${key}">
             <div class="config-section-card__header">
-              <span class="config-section-card__icon">${meta.icon}</span>
+              <span class="config-section-card__icon">${getSectionIcon(key)}</span>
               <div class="config-section-card__titles">
                 <h3 class="config-section-card__title">${meta.label}</h3>
                 ${meta.description ? html`
