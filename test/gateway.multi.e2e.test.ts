@@ -6,12 +6,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { approveNodePairing, listNodePairing } from "../src/infra/node-pairing.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { GatewayClient } from "../src/gateway/client.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 
 type GatewayInstance = {
   name: string;
   port: number;
-  bridgePort: number;
   hookToken: string;
   gatewayToken: string;
   homeDir: string;
@@ -27,10 +28,6 @@ type NodeListPayload = {
 };
 
 type HealthPayload = { ok?: boolean };
-
-type PairingList = {
-  pending: Array<{ requestId: string; nodeId: string }>;
-};
 
 const GATEWAY_START_TIMEOUT_MS = 45_000;
 const E2E_TIMEOUT_MS = 120_000;
@@ -96,7 +93,6 @@ const waitForPortOpen = async (
 
 const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const port = await getFreePort();
-  const bridgePort = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
   const gatewayToken = `gateway-${name}-${randomUUID()}`;
   const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `clawdbot-e2e-${name}-`));
@@ -107,7 +103,6 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const config = {
     gateway: { port, auth: { mode: "token", token: gatewayToken } },
     hooks: { enabled: true, token: hookToken, path: "/hooks" },
-    bridge: { bind: "loopback", port: bridgePort },
   };
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf8");
 
@@ -139,9 +134,6 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
           CLAWDBOT_SKIP_CHANNELS: "1",
           CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
           CLAWDBOT_SKIP_CANVAS_HOST: "1",
-          CLAWDBOT_ENABLE_BRIDGE_IN_TESTS: "1",
-          CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
-          CLAWDBOT_BRIDGE_PORT: String(bridgePort),
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -157,7 +149,6 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
     return {
       name,
       port,
-      bridgePort,
       hookToken,
       gatewayToken,
       homeDir,
@@ -278,105 +269,91 @@ const postJson = async (url: string, body: unknown) => {
   });
 };
 
-const createLineReader = (socket: net.Socket) => {
-  let buffer = "";
-  const pending: Array<(line: string) => void> = [];
-
-  const flush = () => {
-    while (pending.length > 0) {
-      const idx = buffer.indexOf("\n");
-      if (idx === -1) return;
-      const line = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      const resolve = pending.shift();
-      resolve?.(line);
-    }
-  };
-
-  socket.on("data", (chunk) => {
-    buffer += chunk.toString("utf8");
-    flush();
-  });
-
-  const readLine = async () => {
-    flush();
-    const idx = buffer.indexOf("\n");
-    if (idx !== -1) {
-      const line = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      return line;
-    }
-    return await new Promise<string>((resolve) => pending.push(resolve));
-  };
-
-  return readLine;
-};
-
-const sendLine = (socket: net.Socket, obj: unknown) => {
-  socket.write(`${JSON.stringify(obj)}\n`);
-};
-
-const readLineWithTimeout = async (
-  readLine: () => Promise<string>,
+const connectNode = async (
+  inst: GatewayInstance,
   label: string,
-  timeoutMs = 10_000,
-) => {
-  const timer = sleep(timeoutMs).then(() => {
-    throw new Error(`timeout waiting for ${label}`);
+): Promise<{ client: GatewayClient; nodeId: string }> => {
+  const identityPath = path.join(inst.homeDir, `${label}-device.json`);
+  const deviceIdentity = loadOrCreateDeviceIdentity(identityPath);
+  const nodeId = deviceIdentity.deviceId;
+  let settled = false;
+  let resolveReady: (() => void) | null = null;
+  let rejectReady: ((err: Error) => void) | null = null;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
   });
-  return await Promise.race([readLine(), timer]);
+
+  const client = new GatewayClient({
+    url: `ws://127.0.0.1:${inst.port}`,
+    token: inst.gatewayToken,
+    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientDisplayName: label,
+    clientVersion: "1.0.0",
+    platform: "ios",
+    mode: GATEWAY_CLIENT_MODES.NODE,
+    role: "node",
+    scopes: [],
+    caps: ["system"],
+    commands: ["system.run"],
+    deviceIdentity,
+    onHelloOk: () => {
+      if (settled) return;
+      settled = true;
+      resolveReady?.();
+    },
+    onConnectError: (err) => {
+      if (settled) return;
+      settled = true;
+      rejectReady?.(err);
+    },
+    onClose: (code, reason) => {
+      if (settled) return;
+      settled = true;
+      rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
+    },
+  });
+
+  client.start();
+  try {
+    await Promise.race([
+      ready,
+      sleep(10_000).then(() => {
+        throw new Error(`timeout waiting for ${label} to connect`);
+      }),
+    ]);
+  } catch (err) {
+    client.stop();
+    throw err;
+  }
+  return { client, nodeId };
 };
 
-const waitForPairRequest = async (baseDir: string, nodeId: string, timeoutMs = 10_000) => {
+const waitForNodeStatus = async (inst: GatewayInstance, nodeId: string, timeoutMs = 10_000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const list = (await listNodePairing(baseDir)) as PairingList;
-    const match = list.pending.find((p) => p.nodeId === nodeId);
-    if (match?.requestId) return match.requestId;
+    const list = (await runCliJson(
+      ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${inst.port}`],
+      {
+        CLAWDBOT_GATEWAY_TOKEN: inst.gatewayToken,
+        CLAWDBOT_GATEWAY_PASSWORD: "",
+      },
+    )) as NodeListPayload;
+    const match = list.nodes?.find((n) => n.nodeId === nodeId);
+    if (match?.connected && match?.paired) return;
     await sleep(50);
   }
-  throw new Error(`timeout waiting for pairing request for ${nodeId}`);
-};
-
-const pairNode = async (inst: GatewayInstance, nodeId: string) => {
-  const socket = net.connect({ host: "127.0.0.1", port: inst.bridgePort });
-  await new Promise<void>((resolve, reject) => {
-    socket.once("connect", resolve);
-    socket.once("error", reject);
-  });
-
-  const readLine = createLineReader(socket);
-  sendLine(socket, {
-    type: "pair-request",
-    nodeId,
-    platform: "ios",
-    version: "1.0.0",
-  });
-
-  const baseDir = inst.stateDir;
-  const requestId = await waitForPairRequest(baseDir, nodeId);
-  const approved = await approveNodePairing(requestId, baseDir);
-  expect(approved).toBeTruthy();
-
-  const pairLine = JSON.parse(await readLineWithTimeout(readLine, `pair-ok (${nodeId})`)) as {
-    type?: string;
-    token?: string;
-  };
-  expect(pairLine.type).toBe("pair-ok");
-  expect(pairLine.token).toBeTruthy();
-
-  const helloLine = JSON.parse(await readLineWithTimeout(readLine, `hello-ok (${nodeId})`)) as {
-    type?: string;
-  };
-  expect(helloLine.type).toBe("hello-ok");
-
-  return socket;
+  throw new Error(`timeout waiting for node status for ${nodeId}`);
 };
 
 describe("gateway multi-instance e2e", () => {
   const instances: GatewayInstance[] = [];
+  const nodeClients: GatewayClient[] = [];
 
   afterAll(async () => {
+    for (const client of nodeClients) {
+      client.stop();
+    }
     for (const inst of instances) {
       await stopGatewayInstance(inst);
     }
@@ -421,32 +398,14 @@ describe("gateway multi-instance e2e", () => {
       expect(hookResB.status).toBe(200);
       expect((hookResB.json as { ok?: boolean } | undefined)?.ok).toBe(true);
 
-      const nodeASocket = await pairNode(gwA, "node-a");
-      const nodeBSocket = await pairNode(gwB, "node-b");
+      const nodeA = await connectNode(gwA, "node-a");
+      const nodeB = await connectNode(gwB, "node-b");
+      nodeClients.push(nodeA.client, nodeB.client);
 
-      const [nodeListA, nodeListB] = (await Promise.all([
-        runCliJson(["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`], {
-          CLAWDBOT_GATEWAY_TOKEN: gwA.gatewayToken,
-          CLAWDBOT_GATEWAY_PASSWORD: "",
-        }),
-        runCliJson(["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`], {
-          CLAWDBOT_GATEWAY_TOKEN: gwB.gatewayToken,
-          CLAWDBOT_GATEWAY_PASSWORD: "",
-        }),
-      ])) as [NodeListPayload, NodeListPayload];
-      expect(
-        nodeListA.nodes?.some(
-          (n) => n.nodeId === "node-a" && n.connected === true && n.paired === true,
-        ),
-      ).toBe(true);
-      expect(
-        nodeListB.nodes?.some(
-          (n) => n.nodeId === "node-b" && n.connected === true && n.paired === true,
-        ),
-      ).toBe(true);
-
-      nodeASocket.destroy();
-      nodeBSocket.destroy();
+      await Promise.all([
+        waitForNodeStatus(gwA, nodeA.nodeId),
+        waitForNodeStatus(gwB, nodeB.nodeId),
+      ]);
     },
   );
 });

@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -13,6 +20,7 @@ import {
   startGatewayServer,
   startServerWithClient,
 } from "./test-helpers.js";
+import { buildDeviceAuthPayload } from "./device-auth.js";
 
 installGatewayTestHooks();
 
@@ -201,8 +209,24 @@ describe("gateway server health/presence", () => {
   });
 
   test("presence includes client fingerprint", async () => {
+    const identityPath = path.join(os.tmpdir(), `clawdbot-device-${randomUUID()}.json`);
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const role = "operator";
+    const scopes: string[] = [];
+    const signedAtMs = Date.now();
+    const payload = buildDeviceAuthPayload({
+      deviceId: identity.deviceId,
+      clientId: GATEWAY_CLIENT_NAMES.FINGERPRINT,
+      clientMode: GATEWAY_CLIENT_MODES.UI,
+      role,
+      scopes,
+      signedAtMs,
+      token: null,
+    });
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
+      role,
+      scopes,
       client: {
         id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
         version: "9.9.9",
@@ -211,6 +235,12 @@ describe("gateway server health/presence", () => {
         modelIdentifier: "iPad16,6",
         mode: GATEWAY_CLIENT_MODES.UI,
         instanceId: "abc",
+      },
+      device: {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
       },
     });
 
@@ -224,9 +254,10 @@ describe("gateway server health/presence", () => {
     );
 
     const presenceRes = await presenceP;
-    const identity = loadOrCreateDeviceIdentity();
     const entries = presenceRes.payload as Array<Record<string, unknown>>;
-    const clientEntry = entries.find((e) => e.instanceId === identity.deviceId);
+    const clientEntry = entries.find(
+      (e) => e.host === GATEWAY_CLIENT_NAMES.FINGERPRINT && e.version === "9.9.9",
+    );
     expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");

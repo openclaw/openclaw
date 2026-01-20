@@ -1,32 +1,77 @@
 import { describe, expect, test } from "vitest";
-import { WebSocket } from "ws";
 
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   startServerWithClient,
 } from "./test-helpers.js";
+import { GatewayClient } from "./client.js";
 
 installGatewayTestHooks();
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const connectNodeClient = async (params: {
+  port: number;
+  commands: string[];
+  instanceId?: string;
+  displayName?: string;
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+}) => {
+  let settled = false;
+  let resolveReady: (() => void) | null = null;
+  let rejectReady: ((err: Error) => void) | null = null;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+  const client = new GatewayClient({
+    url: `ws://127.0.0.1:${params.port}`,
+    role: "node",
+    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientVersion: "1.0.0",
+    clientDisplayName: params.displayName,
+    platform: "ios",
+    mode: GATEWAY_CLIENT_MODES.NODE,
+    instanceId: params.instanceId,
+    scopes: [],
+    commands: params.commands,
+    onEvent: params.onEvent,
+    onHelloOk: () => {
+      if (settled) return;
+      settled = true;
+      resolveReady?.();
+    },
+    onConnectError: (err) => {
+      if (settled) return;
+      settled = true;
+      rejectReady?.(err);
+    },
+    onClose: (code, reason) => {
+      if (settled) return;
+      settled = true;
+      rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
+    },
+  });
+  client.start();
+  await Promise.race([
+    ready,
+    sleep(10_000).then(() => {
+      throw new Error("timeout waiting for node to connect");
+    }),
+  ]);
+  return client;
+};
 
 describe("gateway node command allowlist", () => {
   test("rejects commands outside platform allowlist", async () => {
     const { server, ws, port } = await startServerWithClient();
     await connectOk(ws);
 
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    await connectOk(nodeWs, {
-      role: "node",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        version: "1.0.0",
-        platform: "ios",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-      },
+    const nodeClient = await connectNodeClient({
+      port,
       commands: ["system.run"],
     });
 
@@ -43,7 +88,7 @@ describe("gateway node command allowlist", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("node command not allowed");
 
-    nodeWs.close();
+    nodeClient.stop();
     ws.close();
     await server.close();
   });
@@ -52,19 +97,11 @@ describe("gateway node command allowlist", () => {
     const { server, ws, port } = await startServerWithClient();
     await connectOk(ws);
 
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    await connectOk(nodeWs, {
-      role: "node",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        displayName: "node-empty",
-        version: "1.0.0",
-        platform: "ios",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        instanceId: "node-empty",
-      },
+    const nodeClient = await connectNodeClient({
+      port,
       commands: [],
+      instanceId: "node-empty",
+      displayName: "node-empty",
     });
 
     const listRes = await rpcReq<{ nodes?: Array<{ nodeId: string }> }>(ws, "node.list", {});
@@ -80,7 +117,7 @@ describe("gateway node command allowlist", () => {
     expect(res.ok).toBe(false);
     expect(res.error?.message).toContain("node command not allowed");
 
-    nodeWs.close();
+    nodeClient.stop();
     ws.close();
     await server.close();
   });
@@ -89,29 +126,26 @@ describe("gateway node command allowlist", () => {
     const { server, ws, port } = await startServerWithClient();
     await connectOk(ws);
 
-    const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => nodeWs.once("open", resolve));
-    await connectOk(nodeWs, {
-      role: "node",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        displayName: "node-allowed",
-        version: "1.0.0",
-        platform: "ios",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        instanceId: "node-allowed",
-      },
+    let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
+    const invokeReqP = new Promise<{ id?: string; nodeId?: string }>((resolve) => {
+      resolveInvoke = resolve;
+    });
+    const nodeClient = await connectNodeClient({
+      port,
       commands: ["canvas.snapshot"],
+      instanceId: "node-allowed",
+      displayName: "node-allowed",
+      onEvent: (evt) => {
+        if (evt.event === "node.invoke.request") {
+          const payload = evt.payload as { id?: string; nodeId?: string };
+          resolveInvoke?.(payload);
+        }
+      },
     });
 
     const listRes = await rpcReq<{ nodes?: Array<{ nodeId: string }> }>(ws, "node.list", {});
     const nodeId = listRes.payload?.nodes?.[0]?.nodeId ?? "";
     expect(nodeId).toBeTruthy();
-
-    const invokeReqP = onceMessage<{ type: "event"; event: string; payload?: unknown }>(
-      nodeWs,
-      (o) => o.type === "event" && o.event === "node.invoke.request",
-    );
 
     const invokeResP = rpcReq(ws, "node.invoke", {
       nodeId,
@@ -120,31 +154,21 @@ describe("gateway node command allowlist", () => {
       idempotencyKey: "allowlist-3",
     });
 
-    const invokeReq = await invokeReqP;
-    const payload = invokeReq.payload as { id?: string; nodeId?: string };
+    const payload = await invokeReqP;
     const requestId = payload?.id ?? "";
     const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
 
-    nodeWs.send(
-      JSON.stringify({
-        type: "req",
-        id: "node-result",
-        method: "node.invoke.result",
-        params: {
-          id: requestId,
-          nodeId: nodeIdFromReq,
-          ok: true,
-          payloadJSON: JSON.stringify({ ok: true }),
-        },
-      }),
-    );
-
-    await onceMessage(nodeWs, (o) => o.type === "res" && o.id === "node-result");
+    await nodeClient.request("node.invoke.result", {
+      id: requestId,
+      nodeId: nodeIdFromReq,
+      ok: true,
+      payloadJSON: JSON.stringify({ ok: true }),
+    });
 
     const invokeRes = await invokeResP;
     expect(invokeRes.ok).toBe(true);
 
-    nodeWs.close();
+    nodeClient.stop();
     ws.close();
     await server.close();
   });
