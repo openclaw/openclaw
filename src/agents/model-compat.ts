@@ -9,9 +9,11 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
   if (!isZai || !isOpenAiCompletionsModel(model)) return model;
 
-  const compat = model.compat ?? {};
-  if (compat.supportsDeveloperRole === false) return model;
+  const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
+  if (compat?.supportsDeveloperRole === false) return model;
 
-  model.compat = { ...compat, supportsDeveloperRole: false };
+  model.compat = compat
+    ? { ...compat, supportsDeveloperRole: false }
+    : { supportsDeveloperRole: false };
   return model;
 }

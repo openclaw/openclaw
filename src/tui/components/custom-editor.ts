@@ -12,8 +12,12 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
 
-  constructor(tui: TUI, theme: EditorTheme) {
-    super(tui, theme);
+  constructor(tuiOrTheme: TUI | EditorTheme, themeMaybe?: EditorTheme) {
+    const useTui = typeof themeMaybe !== "undefined" && Editor.length >= 2;
+    const args = (useTui ? [tuiOrTheme, themeMaybe] : [tuiOrTheme]) as ConstructorParameters<
+      typeof Editor
+    >;
+    super(...args);
   }
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
