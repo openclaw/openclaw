@@ -34,6 +34,7 @@ export type AgentIdentity = {
   creature?: string;
   vibe?: string;
   theme?: string;
+  avatar?: string;
 };
 
 export function listAgentEntries(cfg: ClawdbotConfig): AgentEntry[] {
@@ -90,6 +91,7 @@ export function parseIdentityMarkdown(content: string): AgentIdentity {
     if (label === "creature") identity.creature = value;
     if (label === "vibe") identity.vibe = value;
     if (label === "theme") identity.theme = value;
+    if (label === "avatar") identity.avatar = value;
   }
   return identity;
 }
@@ -99,7 +101,7 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
   try {
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
-    if (!parsed.name && !parsed.emoji && !parsed.theme && !parsed.creature && !parsed.vibe) {
+    if (!parsed.name && !parsed.emoji && !parsed.theme && !parsed.creature && !parsed.vibe && !parsed.avatar) {
       return null;
     }
     return parsed;
