@@ -1,13 +1,22 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
+import { resolveChannelMediaMaxBytes, type ClawdbotConfig } from "clawdbot/plugin-sdk";
 
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
+const MB = 1024 * 1024;
+
+function assertMediaWithinLimit(sizeBytes: number, maxBytes?: number): void {
+  if (typeof maxBytes !== "number" || maxBytes <= 0) return;
+  if (sizeBytes <= maxBytes) return;
+  const maxLabel = (maxBytes / MB).toFixed(0);
+  const sizeLabel = (sizeBytes / MB).toFixed(2);
+  throw new Error(`Media exceeds ${maxLabel}MB limit (got ${sizeLabel}MB)`);
+}
 
 function resolveLocalMediaPath(source: string): string {
   if (!source.startsWith("file://")) return source;
@@ -63,12 +72,20 @@ export async function sendBlueBubblesMedia(params: {
     accountId,
   } = params;
   const core = getBlueBubblesRuntime();
+  const maxBytes = resolveChannelMediaMaxBytes({
+    cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.bluebubbles?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.bluebubbles?.mediaMaxMb,
+    accountId,
+  });
 
   let buffer: Uint8Array;
   let resolvedContentType = contentType ?? undefined;
   let resolvedFilename = filename ?? undefined;
 
   if (mediaBuffer) {
+    assertMediaWithinLimit(mediaBuffer.byteLength, maxBytes);
     buffer = mediaBuffer;
     if (!resolvedContentType) {
       const hint = mediaPath ?? mediaUrl;
@@ -87,14 +104,22 @@ export async function sendBlueBubblesMedia(params: {
       throw new Error("BlueBubbles media delivery requires mediaUrl, mediaPath, or mediaBuffer.");
     }
     if (HTTP_URL_RE.test(source)) {
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: source });
+      const fetched = await core.channel.media.fetchRemoteMedia({
+        url: source,
+        maxBytes: typeof maxBytes === "number" && maxBytes > 0 ? maxBytes : undefined,
+      });
       buffer = fetched.buffer;
       resolvedContentType = resolvedContentType ?? fetched.contentType ?? undefined;
       resolvedFilename = resolvedFilename ?? fetched.fileName;
     } else {
       const localPath = resolveLocalMediaPath(source);
       const fs = await import("node:fs/promises");
+      if (typeof maxBytes === "number" && maxBytes > 0) {
+        const stats = await fs.stat(localPath);
+        assertMediaWithinLimit(stats.size, maxBytes);
+      }
       const data = await fs.readFile(localPath);
+      assertMediaWithinLimit(data.byteLength, maxBytes);
       buffer = new Uint8Array(data);
       if (!resolvedContentType) {
         const detected = await core.media.detectMime({
