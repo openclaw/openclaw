@@ -2,9 +2,23 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
+import { normalizeProviderId } from "../model-selection.js";
+
+type InlineModelEntry = ModelDefinitionConfig & { provider: string };
+
+export function buildInlineProviderModels(
+  providers: Record<string, { models?: ModelDefinitionConfig[] }>,
+): InlineModelEntry[] {
+  return Object.entries(providers).flatMap(([providerId, entry]) => {
+    const trimmed = providerId.trim();
+    if (!trimmed) return [];
+    return (entry?.models ?? []).map((model) => ({ ...model, provider: trimmed }));
+  });
+}
 
 export function buildModelAliasLines(cfg?: ClawdbotConfig) {
   const models = cfg?.agents?.defaults?.models ?? {};
@@ -38,12 +52,12 @@ export function resolveModel(
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
-    const inlineModels =
-      providers[provider]?.models?.map((entry) => ({ ...entry, provider })) ??
-      Object.values(providers)
-        .flatMap((entry) => entry?.models ?? [])
-        .map((entry) => ({ ...entry, provider }));
-    const inlineMatch = inlineModels.find((entry) => entry.id === modelId);
+    const inlineModels = buildInlineProviderModels(providers);
+    const normalizedProvider = normalizeProviderId(provider);
+    const inlineMatch = inlineModels.find(
+      (entry) =>
+        normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
       return {

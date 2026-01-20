@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
+  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+    if (auth?.apiKey) return auth.apiKey;
+    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
+  },
 }));
 
 const createFetchMock = () =>
@@ -26,6 +30,8 @@ describe("embedding provider remote overrides", () => {
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
+      mode: "api-key",
+      source: "test",
     });
 
     const cfg = {
@@ -78,6 +84,8 @@ describe("embedding provider remote overrides", () => {
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
+      mode: "api-key",
+      source: "test",
     });
 
     const cfg = {
@@ -120,6 +128,8 @@ describe("embedding provider remote overrides", () => {
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
+      mode: "api-key",
+      source: "test",
     });
 
     const cfg = {
@@ -166,7 +176,7 @@ describe("embedding provider auto selection", () => {
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
-        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY" };
+        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
       }
       throw new Error(`No API key found for provider "${provider}".`);
     });
@@ -190,7 +200,7 @@ describe("embedding provider auto selection", () => {
         throw new Error('No API key found for provider "openai".');
       }
       if (provider === "google") {
-        return { apiKey: "gemini-key", source: "env: GEMINI_API_KEY" };
+        return { apiKey: "gemini-key", source: "env: GEMINI_API_KEY", mode: "api-key" };
       }
       throw new Error(`Unexpected provider ${provider}`);
     });
@@ -231,6 +241,8 @@ describe("embedding provider local fallback", () => {
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockResolvedValue({
       apiKey: "provider-key",
+      mode: "api-key",
+      source: "test",
     });
 
     const result = await createEmbeddingProvider({

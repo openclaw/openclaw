@@ -17,7 +17,7 @@ import { loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
+import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
@@ -252,12 +252,13 @@ async function runImagePrompt(params: {
         cfg: effectiveCfg,
         agentDir: params.agentDir,
       });
-      authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+      const apiKey = requireApiKey(apiKeyInfo, model.provider);
+      authStorage.setRuntimeApiKey(model.provider, apiKey);
       const imageDataUrl = `data:${params.mimeType};base64,${params.base64}`;
 
       if (model.provider === "minimax") {
         const text = await minimaxUnderstandImage({
-          apiKey: apiKeyInfo.apiKey,
+          apiKey,
           prompt: params.prompt,
           imageDataUrl,
           modelBaseUrl: model.baseUrl,
@@ -267,7 +268,7 @@ async function runImagePrompt(params: {
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
       const message = (await complete(model, context, {
-        apiKey: apiKeyInfo.apiKey,
+        apiKey,
         maxTokens: 512,
       })) as AssistantMessage;
       const text = coerceImageAssistantText({

@@ -1,4 +1,4 @@
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type OpenAiEmbeddingClient = {
@@ -62,13 +62,16 @@ export async function resolveOpenAiEmbeddingClient(
   const remoteApiKey = remote?.apiKey?.trim();
   const remoteBaseUrl = remote?.baseUrl?.trim();
 
-  const { apiKey } = remoteApiKey
-    ? { apiKey: remoteApiKey }
-    : await resolveApiKeyForProvider({
-        provider: "openai",
-        cfg: options.config,
-        agentDir: options.agentDir,
-      });
+  const apiKey = remoteApiKey
+    ? remoteApiKey
+    : requireApiKey(
+        await resolveApiKeyForProvider({
+          provider: "openai",
+          cfg: options.config,
+          agentDir: options.agentDir,
+        }),
+        "openai",
+      );
 
   const providerConfig = options.config.models?.providers?.openai;
   const baseUrl = remoteBaseUrl || providerConfig?.baseUrl?.trim() || DEFAULT_OPENAI_BASE_URL;

@@ -13,7 +13,12 @@ vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
     apiKey: "test-key",
     source: "test",
+    mode: "api-key",
   })),
+  requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
+    if (auth?.apiKey) return auth.apiKey;
+    throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
+  },
 }));
 
 vi.mock("../media/fetch.js", () => ({

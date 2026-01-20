@@ -18,7 +18,7 @@ import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
-import { getApiKeyForModel } from "./model-auth.js";
+import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
@@ -178,7 +178,8 @@ describeLive("live anthropic setup-token", () => {
           profileId: tokenSource.profileId,
           agentDir: tokenSource.agentDir,
         });
-        const tokenError = validateAnthropicSetupToken(apiKeyInfo.apiKey);
+        const apiKey = requireApiKey(apiKeyInfo, model.provider);
+        const tokenError = validateAnthropicSetupToken(apiKey);
         if (tokenError) {
           throw new Error(`Resolved profile is not a setup-token: ${tokenError}`);
         }
@@ -195,7 +196,7 @@ describeLive("live anthropic setup-token", () => {
             ],
           },
           {
-            apiKey: apiKeyInfo.apiKey,
+            apiKey,
             maxTokens: 64,
             temperature: 0,
           },

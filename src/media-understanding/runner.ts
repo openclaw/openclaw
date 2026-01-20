@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import { resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type {
@@ -300,13 +300,14 @@ async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const key = await resolveApiKeyForProvider({
+    const auth = await resolveApiKeyForProvider({
       provider: providerId,
       cfg,
       profileId: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentDir: params.agentDir,
     });
+    const apiKey = requireApiKey(auth, providerId);
     const providerConfig = cfg.models?.providers?.[providerId];
     const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
     const mergedHeaders = {
@@ -325,7 +326,7 @@ async function runProviderEntry(params: {
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
-      apiKey: key.apiKey,
+      apiKey,
       baseUrl,
       headers,
       model,
@@ -359,19 +360,20 @@ async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const key = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProvider({
     provider: providerId,
     cfg,
     profileId: entry.profile,
     preferredProfile: entry.preferredProfile,
     agentDir: params.agentDir,
   });
+  const apiKey = requireApiKey(auth, providerId);
   const providerConfig = cfg.models?.providers?.[providerId];
   const result = await provider.describeVideo({
     buffer: media.buffer,
     fileName: media.fileName,
     mime: media.mime,
-    apiKey: key.apiKey,
+    apiKey,
     baseUrl: providerConfig?.baseUrl,
     headers: providerConfig?.headers,
     model: entry.model,

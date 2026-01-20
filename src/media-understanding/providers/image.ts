@@ -2,7 +2,7 @@ import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai"
 import { complete } from "@mariozechner/pi-ai";
 import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 
-import { getApiKeyForModel } from "../../agents/model-auth.js";
+import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
@@ -28,12 +28,13 @@ export async function describeImageWithModel(
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
   });
-  authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  authStorage.setRuntimeApiKey(model.provider, apiKey);
 
   const base64 = params.buffer.toString("base64");
   if (model.provider === "minimax") {
     const text = await minimaxUnderstandImage({
-      apiKey: apiKeyInfo.apiKey,
+      apiKey,
       prompt: params.prompt ?? "Describe the image.",
       imageDataUrl: `data:${params.mime ?? "image/jpeg"};base64,${base64}`,
       modelBaseUrl: model.baseUrl,
@@ -54,7 +55,7 @@ export async function describeImageWithModel(
     ],
   };
   const message = (await complete(model, context, {
-    apiKey: apiKeyInfo.apiKey,
+    apiKey,
     maxTokens: params.maxTokens ?? 512,
   })) as AssistantMessage;
   const text = coerceImageAssistantText({

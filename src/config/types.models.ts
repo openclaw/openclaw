@@ -13,6 +13,8 @@ export type ModelCompatConfig = {
   maxTokensField?: "max_completion_tokens" | "max_tokens";
 };
 
+export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+
 export type ModelDefinitionConfig = {
   id: string;
   name: string;
@@ -34,6 +36,7 @@ export type ModelDefinitionConfig = {
 export type ModelProviderConfig = {
   baseUrl: string;
   apiKey?: string;
+  auth?: ModelProviderAuthMode;
   api?: ModelApi;
   headers?: Record<string, string>;
   authHeader?: boolean;

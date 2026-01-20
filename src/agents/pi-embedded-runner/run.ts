@@ -21,6 +21,7 @@ import {
   ensureAuthProfileStore,
   getApiKeyForModel,
   resolveAuthProfileOrder,
+  type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import {
@@ -47,11 +48,7 @@ import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
-type ApiKeyInfo = {
-  apiKey: string;
-  profileId?: string;
-  source: string;
-};
+type ApiKeyInfo = ResolvedProviderAuth;
 
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
@@ -151,6 +148,15 @@ export async function runEmbeddedPiAgent(
 
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
+        if (!apiKeyInfo.apiKey) {
+          if (apiKeyInfo.mode !== "aws-sdk") {
+            throw new Error(
+              `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
+            );
+          }
+          lastProfileId = apiKeyInfo.profileId;
+          return;
+        }
         if (model.provider === "github-copilot") {
           const { resolveCopilotApiToken } =
             await import("../../providers/github-copilot-token.js");
