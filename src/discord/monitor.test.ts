@@ -281,6 +281,36 @@ describe("discord guild/channel resolution", () => {
     });
     expect(thread?.allowed).toBe(false);
   });
+
+  it("applies wildcard channel config when no specific match", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        general: { allow: true, requireMention: false },
+        "*": { allow: true, autoThread: true, requireMention: true },
+      },
+    };
+    // Specific channel should NOT use wildcard
+    const general = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "123",
+      channelName: "general",
+      channelSlug: "general",
+    });
+    expect(general?.allowed).toBe(true);
+    expect(general?.requireMention).toBe(false);
+    expect(general?.autoThread).toBeUndefined();
+
+    // Unknown channel should use wildcard
+    const random = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "999",
+      channelName: "random",
+      channelSlug: "random",
+    });
+    expect(random?.allowed).toBe(true);
+    expect(random?.autoThread).toBe(true);
+    expect(random?.requireMention).toBe(true);
+  });
 });
 
 describe("discord mention gating", () => {

@@ -234,7 +234,14 @@ export function resolveDiscordChannelConfig(params: {
     name: channelName,
     slug: channelSlug,
   });
-  if (!match.entry || !match.matchKey) return { allowed: false };
+  if (!match.entry || !match.matchKey) {
+    // Wildcard fallback: apply to all channels if "*" is configured
+    const wildcard = channels["*"];
+    if (wildcard) {
+      return resolveDiscordChannelConfigEntry(wildcard, "*", "direct");
+    }
+    return { allowed: false };
+  }
   return resolveDiscordChannelConfigEntry(match.entry, match.matchKey, "direct");
 }
 
@@ -283,6 +290,11 @@ export function resolveDiscordChannelConfigWithFallback(params: {
       match.matchKey,
       match.matchSource === "parent" ? "parent" : "direct",
     );
+  }
+  // Wildcard fallback: apply to all channels if "*" is configured
+  const wildcard = channels["*"];
+  if (wildcard) {
+    return resolveDiscordChannelConfigEntry(wildcard, "*", "direct");
   }
   return { allowed: false };
 }
