@@ -45,23 +45,22 @@ function logGroupAllowlistHint(params: {
   chatName?: string;
   accountId?: string;
 }): void {
-  const logger = params.runtime.log;
-  if (!logger) return;
+  const log = params.runtime.log ?? console.log;
   const nameHint = params.chatName ? ` (group name: ${params.chatName})` : "";
   const accountHint = params.accountId
     ? ` (or channels.bluebubbles.accounts.${params.accountId}.groupAllowFrom)`
     : "";
   if (params.entry) {
-    logger(
+    log(
       `[bluebubbles] group message blocked (${params.reason}). Allow this group by adding ` +
         `"${params.entry}" to channels.bluebubbles.groupAllowFrom${nameHint}.`,
     );
-    logger(
+    log(
       `[bluebubbles] add to config: channels.bluebubbles.groupAllowFrom=["${params.entry}"]${accountHint}.`,
     );
     return;
   }
-  logger(
+  log(
     `[bluebubbles] group message blocked (${params.reason}). Allow groups by setting ` +
       `channels.bluebubbles.groupPolicy="open" or adding a group id to ` +
       `channels.bluebubbles.groupAllowFrom${accountHint}${nameHint}.`,
@@ -1329,18 +1328,6 @@ async function processMessage(
   };
 
   let sentMessage = false;
-  if (chatGuidForActions && baseUrl && password) {
-    logVerbose(core, runtime, `typing start (pre-dispatch) chatGuid=${chatGuidForActions}`);
-    try {
-      await sendBlueBubblesTyping(chatGuidForActions, true, {
-        cfg: config,
-        accountId: account.accountId,
-      });
-    } catch (err) {
-      runtime.error?.(`[bluebubbles] typing start failed: ${String(err)}`);
-    }
-  }
-
   try {
     await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
