@@ -16,24 +16,29 @@ export type BlueBubblesServerInfo = {
   computer_id?: string;
 };
 
-/** Cache server info to avoid repeated API calls */
+/** Cache server info by account ID to avoid repeated API calls */
 const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: number }>();
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function buildCacheKey(accountId?: string): string {
+  return accountId?.trim() || "default";
+}
 
 /**
- * Fetch server info from BlueBubbles API.
+ * Fetch server info from BlueBubbles API and cache it.
  * Returns cached result if available and not expired.
  */
 export async function fetchBlueBubblesServerInfo(params: {
   baseUrl?: string | null;
   password?: string | null;
+  accountId?: string;
   timeoutMs?: number;
 }): Promise<BlueBubblesServerInfo | null> {
   const baseUrl = params.baseUrl?.trim();
   const password = params.password?.trim();
   if (!baseUrl || !password) return null;
 
-  const cacheKey = `${baseUrl}:${password}`;
+  const cacheKey = buildCacheKey(params.accountId);
   const cached = serverInfoCache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
     return cached.info;
@@ -55,12 +60,36 @@ export async function fetchBlueBubblesServerInfo(params: {
 }
 
 /**
+ * Get cached server info synchronously (for use in listActions).
+ * Returns null if not cached or expired.
+ */
+export function getCachedBlueBubblesServerInfo(accountId?: string): BlueBubblesServerInfo | null {
+  const cacheKey = buildCacheKey(accountId);
+  const cached = serverInfoCache.get(cacheKey);
+  if (cached && cached.expires > Date.now()) {
+    return cached.info;
+  }
+  return null;
+}
+
+/**
  * Parse macOS version string (e.g., "15.0.1" or "26.0") into major version number.
  */
 export function parseMacOSMajorVersion(version?: string | null): number | null {
   if (!version) return null;
   const match = /^(\d+)/.exec(version.trim());
   return match ? Number.parseInt(match[1], 10) : null;
+}
+
+/**
+ * Check if the cached server info indicates macOS 26 or higher.
+ * Returns false if no cached info is available (fail open for action listing).
+ */
+export function isMacOS26OrHigher(accountId?: string): boolean {
+  const info = getCachedBlueBubblesServerInfo(accountId);
+  if (!info?.os_version) return false;
+  const major = parseMacOSMajorVersion(info.os_version);
+  return major !== null && major >= 26;
 }
 
 /** Clear the server info cache (for testing) */
