@@ -17,7 +17,7 @@ if [ -n "$JSON_OUTPUT" ]; then
     REFERENCE=$(echo "$JSON_OUTPUT" | jq -r '.reference // empty')
 
     if [ -n "$TEXT" ] && [ -n "$REFERENCE" ]; then
-        MESSAGE="📖 *${REFERENCE}*
+        MESSAGE="📖 ${REFERENCE}
 
 ${TEXT}"
 
