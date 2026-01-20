@@ -9,45 +9,104 @@ export type ConfigFormProps = {
   value: Record<string, unknown> | null;
   disabled?: boolean;
   unsupportedPaths?: string[];
+  searchQuery?: string;
+  activeSection?: string | null;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
 
-// Define logical section groupings
-const SECTION_CONFIG: Record<string, { label: string; icon: string; order: number }> = {
-  // Core
-  env: { label: "Environment", icon: "🔧", order: 0 },
-  update: { label: "Updates", icon: "📦", order: 1 },
-  
-  // Identity & Agents
-  agents: { label: "Agents", icon: "🤖", order: 10 },
-  auth: { label: "Authentication", icon: "🔐", order: 11 },
-  
-  // Communication
-  channels: { label: "Channels", icon: "💬", order: 20 },
-  messages: { label: "Messages", icon: "📨", order: 21 },
-  
-  // Automation
-  commands: { label: "Commands", icon: "⌨️", order: 30 },
-  hooks: { label: "Hooks", icon: "🪝", order: 31 },
-  skills: { label: "Skills", icon: "✨", order: 32 },
-  
-  // Tools & Gateway
-  tools: { label: "Tools", icon: "🛠️", order: 40 },
-  gateway: { label: "Gateway", icon: "🌐", order: 41 },
-  
-  // System
-  wizard: { label: "Setup Wizard", icon: "🧙", order: 50 },
+// Section metadata
+const SECTION_META: Record<string, { label: string; icon: string; description: string }> = {
+  env: { 
+    label: "Environment Variables", 
+    icon: "🔧",
+    description: "Environment variables passed to the gateway process"
+  },
+  update: { 
+    label: "Updates", 
+    icon: "📦",
+    description: "Auto-update settings and release channel"
+  },
+  agents: { 
+    label: "Agents", 
+    icon: "🤖",
+    description: "Agent configurations, models, and identities"
+  },
+  auth: { 
+    label: "Authentication", 
+    icon: "🔐",
+    description: "API keys and authentication profiles"
+  },
+  channels: { 
+    label: "Channels", 
+    icon: "💬",
+    description: "Messaging channels (Telegram, Discord, Slack, etc.)"
+  },
+  messages: { 
+    label: "Messages", 
+    icon: "📨",
+    description: "Message handling and routing settings"
+  },
+  commands: { 
+    label: "Commands", 
+    icon: "⌨️",
+    description: "Custom slash commands"
+  },
+  hooks: { 
+    label: "Hooks", 
+    icon: "🪝",
+    description: "Webhooks and event hooks"
+  },
+  skills: { 
+    label: "Skills", 
+    icon: "✨",
+    description: "Skill packs and capabilities"
+  },
+  tools: { 
+    label: "Tools", 
+    icon: "🛠️",
+    description: "Tool configurations (browser, search, etc.)"
+  },
+  gateway: { 
+    label: "Gateway", 
+    icon: "🌐",
+    description: "Gateway server settings (port, auth, binding)"
+  },
+  wizard: { 
+    label: "Setup Wizard", 
+    icon: "🧙",
+    description: "Setup wizard state and history"
+  },
 };
 
-// Logical groupings for the accordion layout
-const SECTION_GROUPS: Array<{ title: string; keys: string[] }> = [
-  { title: "Core Settings", keys: ["env", "update"] },
-  { title: "Identity & Agents", keys: ["agents", "auth"] },
-  { title: "Communication", keys: ["channels", "messages"] },
-  { title: "Automation", keys: ["commands", "hooks", "skills"] },
-  { title: "Tools & Gateway", keys: ["tools", "gateway"] },
-  { title: "System", keys: ["wizard"] },
-];
+function matchesSearch(key: string, schema: JsonSchema, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  const meta = SECTION_META[key];
+  
+  // Check key name
+  if (key.toLowerCase().includes(q)) return true;
+  
+  // Check label and description
+  if (meta) {
+    if (meta.label.toLowerCase().includes(q)) return true;
+    if (meta.description.toLowerCase().includes(q)) return true;
+  }
+  
+  // Check schema title/description
+  if (schema.title?.toLowerCase().includes(q)) return true;
+  if (schema.description?.toLowerCase().includes(q)) return true;
+  
+  // Deep search in properties
+  if (schema.properties) {
+    for (const [propKey, propSchema] of Object.entries(schema.properties)) {
+      if (propKey.toLowerCase().includes(q)) return true;
+      if (propSchema.title?.toLowerCase().includes(q)) return true;
+      if (propSchema.description?.toLowerCase().includes(q)) return true;
+    }
+  }
+  
+  return false;
+}
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
@@ -60,76 +119,79 @@ export function renderConfigForm(props: ConfigFormProps) {
   }
   const unsupported = new Set(props.unsupportedPaths ?? []);
   const properties = schema.properties;
-  const allKeys = new Set(Object.keys(properties));
+  const searchQuery = props.searchQuery ?? "";
+  const activeSection = props.activeSection;
 
-  // Collect any keys not in our defined groups
-  const groupedKeys = new Set(SECTION_GROUPS.flatMap(g => g.keys));
-  const ungroupedKeys = [...allKeys].filter(k => !groupedKeys.has(k));
+  // Filter and sort entries
+  let entries = Object.entries(properties);
+  
+  // Filter by active section
+  if (activeSection) {
+    entries = entries.filter(([key]) => key === activeSection);
+  }
+  
+  // Filter by search
+  if (searchQuery) {
+    entries = entries.filter(([key, node]) => matchesSearch(key, node, searchQuery));
+  }
+  
+  // Sort by hint order, then alphabetically
+  entries.sort((a, b) => {
+    const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
+    const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
+    if (orderA !== orderB) return orderA - orderB;
+    return a[0].localeCompare(b[0]);
+  });
 
-  // Build the groups with their entries
-  const groups = SECTION_GROUPS.map(group => {
-    const entries = group.keys
-      .filter(key => allKeys.has(key))
-      .map(key => ({ key, node: properties[key] }));
-    return { ...group, entries };
-  }).filter(group => group.entries.length > 0);
-
-  // Add ungrouped keys as "Other" if any exist
-  if (ungroupedKeys.length > 0) {
-    const sortedUngrouped = ungroupedKeys.sort((a, b) => {
-      const orderA = hintForPath([a], props.uiHints)?.order ?? 100;
-      const orderB = hintForPath([b], props.uiHints)?.order ?? 100;
-      if (orderA !== orderB) return orderA - orderB;
-      return a.localeCompare(b);
-    });
-    groups.push({
-      title: "Other",
-      keys: sortedUngrouped,
-      entries: sortedUngrouped.map(key => ({ key, node: properties[key] })),
-    });
+  if (entries.length === 0) {
+    return html`
+      <div class="config-empty">
+        <div class="config-empty__icon">🔍</div>
+        <div class="config-empty__text">
+          ${searchQuery 
+            ? `No settings match "${searchQuery}"` 
+            : "No settings in this section"}
+        </div>
+      </div>
+    `;
   }
 
   return html`
-    <div class="config-form config-form--sectioned">
-      ${groups.map((group, groupIndex) => html`
-        <details class="config-section" ?open=${groupIndex === 0}>
-          <summary class="config-section__header">
-            <span class="config-section__title">${group.title}</span>
-            <span class="config-section__count">${group.entries.length} ${group.entries.length === 1 ? 'setting' : 'settings'}</span>
-            <svg class="config-section__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </summary>
-          <div class="config-section__content">
-            ${group.entries.map(({ key, node }) => {
-              const sectionInfo = SECTION_CONFIG[key];
-              const icon = sectionInfo?.icon ?? "📄";
-              const label = sectionInfo?.label ?? key;
-              
-              return html`
-                <div class="config-field-group">
-                  <div class="config-field-group__header">
-                    <span class="config-field-group__icon">${icon}</span>
-                    <span class="config-field-group__label">${label}</span>
-                  </div>
-                  <div class="config-field-group__content">
-                    ${renderNode({
-                      schema: node,
-                      value: (value as Record<string, unknown>)[key],
-                      path: [key],
-                      hints: props.uiHints,
-                      unsupported,
-                      disabled: props.disabled ?? false,
-                      showLabel: false,
-                      onPatch: props.onPatch,
-                    })}
-                  </div>
-                </div>
-              `;
-            })}
-          </div>
-        </details>
-      `)}
+    <div class="config-form config-form--modern">
+      ${entries.map(([key, node]) => {
+        const meta = SECTION_META[key] ?? { 
+          label: key.charAt(0).toUpperCase() + key.slice(1), 
+          icon: "📄",
+          description: node.description ?? ""
+        };
+        
+        return html`
+          <section class="config-section-card" id="config-section-${key}">
+            <div class="config-section-card__header">
+              <span class="config-section-card__icon">${meta.icon}</span>
+              <div class="config-section-card__titles">
+                <h3 class="config-section-card__title">${meta.label}</h3>
+                ${meta.description ? html`
+                  <p class="config-section-card__desc">${meta.description}</p>
+                ` : nothing}
+              </div>
+            </div>
+            <div class="config-section-card__content">
+              ${renderNode({
+                schema: node,
+                value: (value as Record<string, unknown>)[key],
+                path: [key],
+                hints: props.uiHints,
+                unsupported,
+                disabled: props.disabled ?? false,
+                showLabel: false,
+                onPatch: props.onPatch,
+                searchQuery,
+              })}
+            </div>
+          </section>
+        `;
+      })}
     </div>
   `;
 }

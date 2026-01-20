@@ -34,9 +34,10 @@ export function renderNode(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  searchQuery?: string;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult | typeof nothing {
-  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch, searchQuery } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
   const hint = hintForPath(path, hints);
@@ -303,21 +304,24 @@ export function renderNode(params: {
           ? schema.default
           : false;
     return html`
-      <label class="field checkbox">
-        <input
-          type="checkbox"
-          .checked=${displayValue}
-          ?disabled=${disabled}
-          @change=${(e: Event) =>
-            onPatch(path, (e.target as HTMLInputElement).checked)}
-        />
-        ${showLabel ? html`<span>${label}</span>` : nothing}
-        ${help
-          ? html`<div class="muted" style="grid-column: 1 / -1;">
-              ${help}
-            </div>`
-          : nothing}
-      </label>
+      <div class="field-row">
+        <div class="field-row__info">
+          ${showLabel ? html`<span class="field-row__label">${label}</span>` : nothing}
+          ${help ? html`<span class="field-row__help">${help}</span>` : nothing}
+        </div>
+        <label class="toggle-switch">
+          <input
+            type="checkbox"
+            .checked=${displayValue}
+            ?disabled=${disabled}
+            @change=${(e: Event) =>
+              onPatch(path, (e.target as HTMLInputElement).checked)}
+          />
+          <span class="toggle-switch__track">
+            <span class="toggle-switch__thumb"></span>
+          </span>
+        </label>
+      </div>
     `;
   }
 
