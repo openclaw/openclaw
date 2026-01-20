@@ -2,7 +2,7 @@
 
 Docs: https://docs.clawd.bot
 
-## 2026.1.20-1
+## 2026.1.20
 
 ### Changes
 - Deps: update workspace + memory-lancedb dependencies.
