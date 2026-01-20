@@ -92,6 +92,29 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
+type IMessageReplyContext = {
+  id?: string;
+  body: string;
+  sender?: string;
+};
+
+function normalizeReplyField(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (typeof value === "number") return String(value);
+  return undefined;
+}
+
+function describeReplyContext(message: IMessagePayload): IMessageReplyContext | null {
+  const body = normalizeReplyField(message.reply_to_text);
+  if (!body) return null;
+  const id = normalizeReplyField(message.reply_to_id);
+  const sender = normalizeReplyField(message.reply_to_sender);
+  return { body, id, sender };
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -324,6 +347,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
     const bodyText = messageText || placeholder;
     if (!bodyText) return;
+    const replyContext = describeReplyContext(message);
     const createdAt = message.created_at ? Date.parse(message.created_at) : undefined;
     const historyKey = isGroup
       ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
@@ -414,11 +438,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       storePath,
       sessionKey: route.sessionKey,
     });
+    const replySuffix = replyContext
+      ? `\n\n[Replying to ${replyContext.sender ?? "unknown sender"}${
+          replyContext.id ? ` id:${replyContext.id}` : ""
+        }]\n${replyContext.body}\n[/Replying]`
+      : "";
     const body = formatInboundEnvelope({
       channel: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
-      body: bodyText,
+      body: `${bodyText}${replySuffix}`,
       chatType: isGroup ? "group" : "direct",
       sender: { name: senderNormalized, id: sender },
       previousTimestamp,
@@ -462,6 +491,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       Provider: "imessage",
       Surface: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
+      ReplyToId: replyContext?.id,
+      ReplyToBody: replyContext?.body,
+      ReplyToSender: replyContext?.sender,
       Timestamp: createdAt,
       MediaPath: mediaPath,
       MediaType: mediaType,

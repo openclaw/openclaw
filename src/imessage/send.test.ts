@@ -65,4 +65,11 @@ describe("sendMessageIMessage", () => {
     expect(params.file).toBe("/tmp/imessage-media.jpg");
     expect(params.text).toBe("<media:image>");
   });
+
+  it("returns message id when rpc provides one", async () => {
+    requestMock.mockResolvedValue({ ok: true, id: 123 });
+    const { sendMessageIMessage } = await loadSendMessageIMessage();
+    const result = await sendMessageIMessage("chat_id:7", "hello");
+    expect(result.messageId).toBe("123");
+  });
 });
