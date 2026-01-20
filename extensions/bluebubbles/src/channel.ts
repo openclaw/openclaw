@@ -26,7 +26,11 @@ import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { probeBlueBubbles } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
-import { normalizeBlueBubblesHandle } from "./targets.js";
+import {
+  looksLikeBlueBubblesTargetId,
+  normalizeBlueBubblesHandle,
+  normalizeBlueBubblesMessagingTarget,
+} from "./targets.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
 import { blueBubblesOnboardingAdapter } from "./onboarding.js";
@@ -151,6 +155,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       return [
         `- BlueBubbles groups: groupPolicy="open" allows any member to trigger the bot. Set channels.bluebubbles.groupPolicy="allowlist" + channels.bluebubbles.groupAllowFrom to restrict senders.`,
       ];
+    },
+  },
+  messaging: {
+    normalizeTarget: normalizeBlueBubblesMessagingTarget,
+    targetResolver: {
+      looksLikeId: looksLikeBlueBubblesTargetId,
+      hint: "<handle|chat_guid:GUID|chat_id:ID|chat_identifier:ID>",
     },
   },
   setup: {

@@ -98,6 +98,7 @@ Per-group configuration:
 ## Typing + read receipts
 - **Typing indicators**: Sent automatically before and during response generation.
 - **Read receipts**: Controlled by `channels.bluebubbles.sendReadReceipts` (default: `true`).
+- **Typing indicators**: Clawdbot sends typing start events; BlueBubbles clears typing automatically on send or timeout (manual stop via DELETE is unreliable).
 
 ```json5
 {

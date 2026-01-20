@@ -482,6 +482,79 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   });
 });
 
+const BlueBubblesAllowFromEntry = z.union([z.string(), z.number()]);
+
+const BlueBubblesActionSchema = z
+  .object({
+    reactions: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    reply: z.boolean().optional(),
+    sendWithEffect: z.boolean().optional(),
+    renameGroup: z.boolean().optional(),
+    addParticipant: z.boolean().optional(),
+    removeParticipant: z.boolean().optional(),
+    leaveGroup: z.boolean().optional(),
+    sendAttachment: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const BlueBubblesGroupConfigSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+  })
+  .strict();
+
+export const BlueBubblesAccountSchemaBase = z
+  .object({
+    name: z.string().optional(),
+    capabilities: z.array(z.string()).optional(),
+    configWrites: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    serverUrl: z.string().optional(),
+    password: z.string().optional(),
+    webhookPath: z.string().optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
+    groupAllowFrom: z.array(BlueBubblesAllowFromEntry).optional(),
+    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+    sendReadReceipts: z.boolean().optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+  })
+  .strict();
+
+export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.bluebubbles.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
+  });
+});
+
+export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
+  accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
+  actions: BlueBubblesActionSchema,
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
+  });
+});
+
 export const MSTeamsChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),

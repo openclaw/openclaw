@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  BlueBubblesConfigSchema,
   DiscordConfigSchema,
   IMessageConfigSchema,
   MSTeamsConfigSchema,
@@ -28,6 +29,7 @@ export const ChannelsSchema = z
     slack: SlackConfigSchema.optional(),
     signal: SignalConfigSchema.optional(),
     imessage: IMessageConfigSchema.optional(),
+    bluebubbles: BlueBubblesConfigSchema.optional(),
     msteams: MSTeamsConfigSchema.optional(),
   })
   .passthrough()

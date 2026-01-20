@@ -25,6 +25,13 @@ function stripPrefix(value: string, prefix: string): string {
   return value.slice(prefix.length).trim();
 }
 
+function stripBlueBubblesPrefix(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (!trimmed.toLowerCase().startsWith("bluebubbles:")) return trimmed;
+  return trimmed.slice("bluebubbles:".length).trim();
+}
+
 export function normalizeBlueBubblesHandle(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return "";
@@ -34,6 +41,55 @@ export function normalizeBlueBubblesHandle(raw: string): string {
   if (lowered.startsWith("auto:")) return normalizeBlueBubblesHandle(trimmed.slice(5));
   if (trimmed.includes("@")) return trimmed.toLowerCase();
   return trimmed.replace(/\s+/g, "");
+}
+
+export function normalizeBlueBubblesMessagingTarget(raw: string): string | undefined {
+  let trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  trimmed = stripBlueBubblesPrefix(trimmed);
+  if (!trimmed) return undefined;
+  try {
+    const parsed = parseBlueBubblesTarget(trimmed);
+    if (parsed.kind === "chat_id") return `chat_id:${parsed.chatId}`;
+    if (parsed.kind === "chat_guid") return `chat_guid:${parsed.chatGuid}`;
+    if (parsed.kind === "chat_identifier") return `chat_identifier:${parsed.chatIdentifier}`;
+    const handle = normalizeBlueBubblesHandle(parsed.to);
+    if (!handle) return undefined;
+    return parsed.service === "auto" ? handle : `${parsed.service}:${handle}`;
+  } catch {
+    return trimmed;
+  }
+}
+
+export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  const candidate = stripBlueBubblesPrefix(trimmed);
+  if (!candidate) return false;
+  const lowered = candidate.toLowerCase();
+  if (/^(imessage|sms|auto):/.test(lowered)) return true;
+  if (
+    /^(chat_id|chatid|chat|chat_guid|chatguid|guid|chat_identifier|chatidentifier|chatident|group):/.test(
+      lowered,
+    )
+  ) {
+    return true;
+  }
+  if (candidate.includes("@")) return true;
+  const digitsOnly = candidate.replace(/[\s().-]/g, "");
+  if (/^\+?\d{3,}$/.test(digitsOnly)) return true;
+  if (normalized) {
+    const normalizedTrimmed = normalized.trim();
+    if (!normalizedTrimmed) return false;
+    const normalizedLower = normalizedTrimmed.toLowerCase();
+    if (
+      /^(imessage|sms|auto):/.test(normalizedLower) ||
+      /^(chat_id|chat_guid|chat_identifier):/.test(normalizedLower)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {

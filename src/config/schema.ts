@@ -250,6 +250,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.slack": "Slack",
   "channels.signal": "Signal",
   "channels.imessage": "iMessage",
+  "channels.bluebubbles": "BlueBubbles",
   "channels.msteams": "MS Teams",
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
@@ -268,6 +269,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.whatsapp.debounceMs": "WhatsApp Message Debounce (ms)",
   "channels.signal.dmPolicy": "Signal DM Policy",
   "channels.imessage.dmPolicy": "iMessage DM Policy",
+  "channels.bluebubbles.dmPolicy": "BlueBubbles DM Policy",
   "channels.discord.dm.policy": "Discord DM Policy",
   "channels.discord.retry.attempts": "Discord Retry Attempts",
   "channels.discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
@@ -540,6 +542,8 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
   "channels.imessage.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+  "channels.bluebubbles.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
   "channels.discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.discord.dm.allowFrom=["*"].',
   "channels.discord.retry.attempts":

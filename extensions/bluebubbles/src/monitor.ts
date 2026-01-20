@@ -1001,6 +1001,7 @@ async function processMessage(
     CommandAuthorized: commandAuthorized,
   };
 
+  let sentMessage = false;
   if (chatGuidForActions && baseUrl && password) {
     logVerbose(core, runtime, `typing start (pre-dispatch) chatGuid=${chatGuidForActions}`);
     try {
@@ -1031,6 +1032,7 @@ async function processMessage(
               cfg: config,
               accountId: account.accountId,
             });
+            sentMessage = true;
             statusSink?.({ lastOutboundAt: Date.now() });
           }
         },
@@ -1048,15 +1050,7 @@ async function processMessage(
           }
         },
         onIdle: () => {
-          if (!chatGuidForActions) return;
-          if (!baseUrl || !password) return;
-          logVerbose(core, runtime, `typing stop chatGuid=${chatGuidForActions}`);
-          void sendBlueBubblesTyping(chatGuidForActions, false, {
-            cfg: config,
-            accountId: account.accountId,
-          }).catch((err) => {
-            runtime.error?.(`[bluebubbles] typing stop failed: ${String(err)}`);
-          });
+          // BlueBubbles typing stop (DELETE) does not clear bubbles reliably; wait for timeout.
         },
         onError: (err, info) => {
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${String(err)}`);
@@ -1070,14 +1064,8 @@ async function processMessage(
       },
     });
   } finally {
-    if (chatGuidForActions && baseUrl && password) {
-      logVerbose(core, runtime, `typing stop (finalize) chatGuid=${chatGuidForActions}`);
-      void sendBlueBubblesTyping(chatGuidForActions, false, {
-        cfg: config,
-        accountId: account.accountId,
-      }).catch((err) => {
-        runtime.error?.(`[bluebubbles] typing stop failed: ${String(err)}`);
-      });
+    if (chatGuidForActions && baseUrl && password && !sentMessage) {
+      // BlueBubbles typing stop (DELETE) does not clear bubbles reliably; wait for timeout.
     }
   }
 }
