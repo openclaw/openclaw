@@ -16,7 +16,7 @@ export async function checkGatewayHealth(params: {
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
   try {
-    await healthCommand({ json: false, timeoutMs }, params.runtime);
+    await healthCommand({ json: false, timeoutMs, config: params.cfg }, params.runtime);
     healthOk = true;
   } catch (err) {
     const message = String(err);

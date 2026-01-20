@@ -10,7 +10,7 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { CONFIG_PATH_CLAWDBOT, writeConfigFile } from "../config/config.js";
+import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
@@ -266,6 +266,15 @@ export async function doctorCommand(
     noteWorkspaceBackupTip(workspaceDir);
     if (await shouldSuggestMemorySystem(workspaceDir)) {
       note(MEMORY_SYSTEM_PROMPT, "Workspace");
+    }
+  }
+
+  const finalSnapshot = await readConfigFileSnapshot();
+  if (finalSnapshot.exists && !finalSnapshot.valid) {
+    runtime.error("Invalid config:");
+    for (const issue of finalSnapshot.issues) {
+      const path = issue.path || "<root>";
+      runtime.error(`- ${path}: ${issue.message}`);
     }
   }
 
