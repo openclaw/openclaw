@@ -5,6 +5,7 @@ import { createAgentSession, SessionManager, SettingsManager } from "@mariozechn
 
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import { listChannelSupportedActions } from "../channel-tools.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
@@ -237,6 +238,14 @@ export async function compactEmbeddedPiSession(params: {
             }
           }
         }
+        // Resolve channel-specific message actions for system prompt
+        const channelActions = runtimeChannel
+          ? listChannelSupportedActions({
+              cfg: params.config,
+              channel: runtimeChannel,
+            })
+          : undefined;
+
         const runtimeInfo = {
           host: machineName,
           os: `${os.type()} ${os.release()}`,
@@ -245,6 +254,7 @@ export async function compactEmbeddedPiSession(params: {
           model: `${provider}/${modelId}`,
           channel: runtimeChannel,
           capabilities: runtimeCapabilities,
+          channelActions,
         };
         const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
         const reasoningTagHint = isReasoningTagProvider(provider);

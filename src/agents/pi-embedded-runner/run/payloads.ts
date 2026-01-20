@@ -157,16 +157,33 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   if (replyItems.length === 0 && params.lastToolError) {
-    const toolSummary = formatToolAggregate(
-      params.lastToolError.toolName,
-      params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-      { markdown: useMarkdown },
-    );
-    const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-    replyItems.push({
-      text: `⚠️ ${toolSummary} failed${errorSuffix}`,
-      isError: true,
-    });
+    // Check if this is a recoverable/internal tool error that shouldn't be shown to users.
+    // These include parameter validation errors that the model should have retried.
+    const errorLower = (params.lastToolError.error ?? "").toLowerCase();
+    const isRecoverableError =
+      errorLower.includes("required") ||
+      errorLower.includes("missing") ||
+      errorLower.includes("invalid") ||
+      errorLower.includes("must be") ||
+      errorLower.includes("must have") ||
+      errorLower.includes("needs") ||
+      errorLower.includes("requires");
+
+    // Only show non-recoverable errors to users
+    if (!isRecoverableError) {
+      const toolSummary = formatToolAggregate(
+        params.lastToolError.toolName,
+        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+        { markdown: useMarkdown },
+      );
+      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      replyItems.push({
+        text: `⚠️ ${toolSummary} failed${errorSuffix}`,
+        isError: true,
+      });
+    }
+    // Note: Recoverable errors are already in the model's context as tool_result is_error,
+    // so the model can see them and should retry. We just don't send them to the user.
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);

@@ -43,6 +43,21 @@ export function normalizeBlueBubblesHandle(raw: string): string {
   return trimmed.replace(/\s+/g, "");
 }
 
+/**
+ * Extracts the handle from a chat_guid if it's a DM (1:1 chat).
+ * BlueBubbles chat_guid format for DM: "service;-;handle" (e.g., "iMessage;-;+19257864429")
+ * Group chat format: "service;+;groupId" (has "+" instead of "-")
+ */
+function extractHandleFromChatGuid(chatGuid: string): string | null {
+  const parts = chatGuid.split(";");
+  // DM format: service;-;handle (3 parts, middle is "-")
+  if (parts.length === 3 && parts[1] === "-") {
+    const handle = parts[2]?.trim();
+    if (handle) return normalizeBlueBubblesHandle(handle);
+  }
+  return null;
+}
+
 export function normalizeBlueBubblesMessagingTarget(raw: string): string | undefined {
   let trimmed = raw.trim();
   if (!trimmed) return undefined;
@@ -51,7 +66,14 @@ export function normalizeBlueBubblesMessagingTarget(raw: string): string | undef
   try {
     const parsed = parseBlueBubblesTarget(trimmed);
     if (parsed.kind === "chat_id") return `chat_id:${parsed.chatId}`;
-    if (parsed.kind === "chat_guid") return `chat_guid:${parsed.chatGuid}`;
+    if (parsed.kind === "chat_guid") {
+      // For DM chat_guids, normalize to just the handle for easier comparison.
+      // This allows "chat_guid:iMessage;-;+1234567890" to match "+1234567890".
+      const handle = extractHandleFromChatGuid(parsed.chatGuid);
+      if (handle) return handle;
+      // For group chats or unrecognized formats, keep the full chat_guid
+      return `chat_guid:${parsed.chatGuid}`;
+    }
     if (parsed.kind === "chat_identifier") return `chat_identifier:${parsed.chatIdentifier}`;
     const handle = normalizeBlueBubblesHandle(parsed.to);
     if (!handle) return undefined;

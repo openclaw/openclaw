@@ -15,6 +15,8 @@ export type RuntimeInfoInput = {
   model: string;
   channel?: string;
   capabilities?: string[];
+  /** Supported message actions for the current channel (e.g., react, edit, unsend) */
+  channelActions?: string[];
 };
 
 export type SystemPromptRuntimeParams = {

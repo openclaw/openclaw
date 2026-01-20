@@ -7,6 +7,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { listChannelSupportedActions } from "../../channel-tools.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
@@ -203,6 +204,14 @@ export async function runEmbeddedAttempt(
     });
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
+    // Resolve channel-specific message actions for system prompt
+    const channelActions = runtimeChannel
+      ? listChannelSupportedActions({
+          cfg: params.config,
+          channel: runtimeChannel,
+        })
+      : undefined;
+
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
@@ -214,6 +223,7 @@ export async function runEmbeddedAttempt(
         model: `${params.provider}/${params.modelId}`,
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
+        channelActions,
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
