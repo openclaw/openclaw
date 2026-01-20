@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.
 - Auth: dedupe codex-cli profiles when tokens match custom openai-codex entries. (#1264) — thanks @odrobnik.
+- Agents: avoid misclassifying context-window-too-small errors as context overflow. (#1266) — thanks @humanwritten.
 
 ## 2026.1.19-3
 

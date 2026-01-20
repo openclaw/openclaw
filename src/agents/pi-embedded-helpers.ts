@@ -19,6 +19,7 @@ export {
   isCloudCodeAssistFormatError,
   isCompactionFailureError,
   isContextOverflowError,
+  isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
