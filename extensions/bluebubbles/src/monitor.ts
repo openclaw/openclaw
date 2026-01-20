@@ -43,21 +43,28 @@ function logGroupAllowlistHint(params: {
   reason: string;
   entry: string | null;
   chatName?: string;
+  accountId?: string;
 }): void {
   const logger = params.runtime.log;
   if (!logger) return;
   const nameHint = params.chatName ? ` (group name: ${params.chatName})` : "";
+  const accountHint = params.accountId
+    ? ` (or channels.bluebubbles.accounts.${params.accountId}.groupAllowFrom)`
+    : "";
   if (params.entry) {
     logger(
       `[bluebubbles] group message blocked (${params.reason}). Allow this group by adding ` +
         `"${params.entry}" to channels.bluebubbles.groupAllowFrom${nameHint}.`,
+    );
+    logger(
+      `[bluebubbles] add to config: channels.bluebubbles.groupAllowFrom=["${params.entry}"]${accountHint}.`,
     );
     return;
   }
   logger(
     `[bluebubbles] group message blocked (${params.reason}). Allow groups by setting ` +
       `channels.bluebubbles.groupPolicy="open" or adding a group id to ` +
-      `channels.bluebubbles.groupAllowFrom${nameHint}.`,
+      `channels.bluebubbles.groupAllowFrom${accountHint}${nameHint}.`,
   );
 }
 
@@ -921,6 +928,7 @@ async function processMessage(
         reason: "groupPolicy=disabled",
         entry: groupAllowEntry,
         chatName: groupName,
+        accountId: account.accountId,
       });
       return;
     }
@@ -932,6 +940,7 @@ async function processMessage(
           reason: "groupPolicy=allowlist (empty allowlist)",
           entry: groupAllowEntry,
           chatName: groupName,
+          accountId: account.accountId,
         });
         return;
       }
@@ -958,6 +967,7 @@ async function processMessage(
           reason: "groupPolicy=allowlist (not allowlisted)",
           entry: groupAllowEntry,
           chatName: groupName,
+          accountId: account.accountId,
         });
         return;
       }

@@ -456,10 +456,6 @@ export async function runPreparedReply(
     },
   };
 
-  if (typingSignals.shouldStartImmediately) {
-    await typingSignals.signalRunStart();
-  }
-
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
