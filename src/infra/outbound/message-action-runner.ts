@@ -215,9 +215,25 @@ function resolveAttachmentMaxBytes(params: {
   }
   const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
   const channelCfg = params.cfg.channels?.bluebubbles;
-  const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
+  const channelObj =
+    channelCfg && typeof channelCfg === "object"
+      ? (channelCfg as Record<string, unknown>)
+      : undefined;
+  const channelMediaMax =
+    typeof channelObj?.mediaMaxMb === "number" ? channelObj.mediaMaxMb : undefined;
+  const accountsObj =
+    channelObj?.accounts && typeof channelObj.accounts === "object"
+      ? (channelObj.accounts as Record<string, unknown>)
+      : undefined;
+  const accountCfg = accountId && accountsObj ? accountsObj[accountId] : undefined;
+  const accountMediaMax =
+    accountCfg && typeof accountCfg === "object"
+      ? (accountCfg as Record<string, unknown>).mediaMaxMb
+      : undefined;
   const limitMb =
-    accountCfg?.mediaMaxMb ?? channelCfg?.mediaMaxMb ?? params.cfg.agents?.defaults?.mediaMaxMb;
+    (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ??
+    channelMediaMax ??
+    params.cfg.agents?.defaults?.mediaMaxMb;
   return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
 }
 
@@ -260,6 +276,63 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
+}
+
+async function hydrateSetGroupIconParams(params: {
+  cfg: ClawdbotConfig;
+  channel: ChannelId;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+  action: ChannelMessageActionName;
+  dryRun?: boolean;
+}): Promise<void> {
+  if (params.action !== "setGroupIcon") return;
+
+  const mediaHint = readStringParam(params.args, "media", { trim: false });
+  const fileHint =
+    readStringParam(params.args, "path", { trim: false }) ??
+    readStringParam(params.args, "filePath", { trim: false });
+  const contentTypeParam =
+    readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
+
+  const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
+  const normalized = normalizeBase64Payload({
+    base64: rawBuffer,
+    contentType: contentTypeParam ?? undefined,
+  });
+  if (normalized.base64 !== rawBuffer && normalized.base64) {
+    params.args.buffer = normalized.base64;
+    if (normalized.contentType && !contentTypeParam) {
+      params.args.contentType = normalized.contentType;
+    }
+  }
+
+  const filename = readStringParam(params.args, "filename");
+  const mediaSource = mediaHint ?? fileHint;
+
+  if (!params.dryRun && !readStringParam(params.args, "buffer", { trim: false }) && mediaSource) {
+    const maxBytes = resolveAttachmentMaxBytes({
+      cfg: params.cfg,
+      channel: params.channel,
+      accountId: params.accountId,
+    });
+    const media = await loadWebMedia(mediaSource, maxBytes);
+    params.args.buffer = media.buffer.toString("base64");
+    if (!contentTypeParam && media.contentType) {
+      params.args.contentType = media.contentType;
+    }
+    if (!filename) {
+      params.args.filename = inferAttachmentFilename({
+        mediaHint: media.fileName ?? mediaSource,
+        contentType: media.contentType ?? contentTypeParam ?? undefined,
+      });
+    }
+  } else if (!filename) {
+    params.args.filename = inferAttachmentFilename({
+      mediaHint: mediaSource,
+      contentType: contentTypeParam ?? undefined,
+    });
+  }
 }
 
 async function hydrateSendAttachmentParams(params: {
@@ -666,6 +739,10 @@ export async function runMessageAction(
   const hasLegacyTarget =
     (typeof params.to === "string" && params.to.trim().length > 0) ||
     (typeof params.channelId === "string" && params.channelId.trim().length > 0);
+  if (explicitTarget && hasLegacyTarget) {
+    delete params.to;
+    delete params.channelId;
+  }
   if (
     !explicitTarget &&
     !hasLegacyTarget &&
@@ -675,6 +752,16 @@ export async function runMessageAction(
     const inferredTarget = input.toolContext?.currentChannelId?.trim();
     if (inferredTarget) {
       params.target = inferredTarget;
+    }
+  }
+  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
+    const legacyTo = typeof params.to === "string" ? params.to.trim() : "";
+    const legacyChannelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+    const legacyTarget = legacyTo || legacyChannelId;
+    if (legacyTarget) {
+      params.target = legacyTarget;
+      delete params.to;
+      delete params.channelId;
     }
   }
   const explicitChannel = typeof params.channel === "string" ? params.channel.trim() : "";
@@ -705,6 +792,15 @@ export async function runMessageAction(
     dryRun,
   });
 
+  await hydrateSetGroupIconParams({
+    cfg,
+    channel,
+    accountId,
+    args: params,
+    action,
+    dryRun,
+  });
+
   await resolveActionTarget({
     cfg,
     channel,
@@ -719,14 +815,6 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
-  });
-
-  await hydrateSendAttachmentParams({
-    cfg,
-    channel,
-    accountId,
-    args: params,
-    dryRun,
   });
 
   const gateway = resolveGateway(input);

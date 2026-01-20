@@ -5,6 +5,8 @@ import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
+  "image/heic": ".heic",
+  "image/heif": ".heif",
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
@@ -137,6 +139,10 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
     case "jpg":
     case "jpeg":
       return "image/jpeg";
+    case "heic":
+      return "image/heic";
+    case "heif":
+      return "image/heif";
     case "png":
       return "image/png";
     case "webp":

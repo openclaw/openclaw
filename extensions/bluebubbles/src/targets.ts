@@ -21,6 +21,19 @@ const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> =
   { prefix: "auto:", service: "auto" },
 ];
 
+function parseRawChatGuid(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(";");
+  if (parts.length !== 3) return null;
+  const service = parts[0]?.trim();
+  const separator = parts[1]?.trim();
+  const identifier = parts[2]?.trim();
+  if (!service || !identifier) return null;
+  if (separator !== "+" && separator !== "-") return null;
+  return `${service};${separator};${identifier}`;
+}
+
 function stripPrefix(value: string, prefix: string): string {
   return value.slice(prefix.length).trim();
 }
@@ -88,6 +101,7 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
   if (!trimmed) return false;
   const candidate = stripBlueBubblesPrefix(trimmed);
   if (!candidate) return false;
+  if (parseRawChatGuid(candidate)) return true;
   const lowered = candidate.toLowerCase();
   if (/^(imessage|sms|auto):/.test(lowered)) return true;
   if (
@@ -97,6 +111,8 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
   ) {
     return true;
   }
+  // Recognize chat<digits> patterns (e.g., "chat660250192681427962") as chat IDs
+  if (/^chat\d+$/i.test(candidate)) return true;
   if (candidate.includes("@")) return true;
   const digitsOnly = candidate.replace(/[\s().-]/g, "");
   if (/^\+?\d{3,}$/.test(digitsOnly)) return true;
@@ -115,7 +131,7 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
 }
 
 export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
-  const trimmed = raw.trim();
+  const trimmed = stripBlueBubblesPrefix(raw);
   if (!trimmed) throw new Error("BlueBubbles target is required");
   const lower = trimmed.toLowerCase();
 
@@ -173,6 +189,17 @@ export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {
     return { kind: "chat_guid", chatGuid: value };
   }
 
+  const rawChatGuid = parseRawChatGuid(trimmed);
+  if (rawChatGuid) {
+    return { kind: "chat_guid", chatGuid: rawChatGuid };
+  }
+
+  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_identifier
+  // These are BlueBubbles chat identifiers (the third part of a chat GUID), not numeric IDs
+  if (/^chat\d+$/i.test(trimmed)) {
+    return { kind: "chat_identifier", chatIdentifier: trimmed };
+  }
+
   return { kind: "handle", to: trimmed, service: "auto" };
 }
 
@@ -216,6 +243,13 @@ export function parseBlueBubblesAllowTarget(raw: string): BlueBubblesAllowTarget
     const chatId = Number.parseInt(value, 10);
     if (Number.isFinite(chatId)) return { kind: "chat_id", chatId };
     if (value) return { kind: "chat_guid", chatGuid: value };
+  }
+
+  // Handle chat<digits> pattern (e.g., "chat660250192681427962") as chat_id
+  const chatDigitsMatch = /^chat(\d+)$/i.exec(trimmed);
+  if (chatDigitsMatch) {
+    const chatId = Number.parseInt(chatDigitsMatch[1], 10);
+    if (Number.isFinite(chatId)) return { kind: "chat_id", chatId };
   }
 
   return { kind: "handle", handle: normalizeBlueBubblesHandle(trimmed) };

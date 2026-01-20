@@ -197,7 +197,32 @@ function renderGenericChannelCard(
   `;
 }
 
+const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+
+function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
+  if (!account.lastInboundAt) return false;
+  return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
+}
+
+function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
+  if (account.running) return "Yes";
+  // If we have recent inbound activity, the channel is effectively running
+  if (hasRecentActivity(account)) return "Active";
+  return "No";
+}
+
+function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
+  if (account.connected === true) return "Yes";
+  if (account.connected === false) return "No";
+  // If connected is null/undefined but we have recent activity, show as active
+  if (hasRecentActivity(account)) return "Active";
+  return "n/a";
+}
+
 function renderGenericAccount(account: ChannelAccountSnapshot) {
+  const runningStatus = deriveRunningStatus(account);
+  const connectedStatus = deriveConnectedStatus(account);
+
   return html`
     <div class="account-card">
       <div class="account-card-header">
@@ -207,7 +232,7 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       <div class="status-list account-card-status">
         <div>
           <span class="label">Running</span>
-          <span>${account.running ? "Yes" : "No"}</span>
+          <span>${runningStatus}</span>
         </div>
         <div>
           <span class="label">Configured</span>
@@ -215,9 +240,7 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
         </div>
         <div>
           <span class="label">Connected</span>
-          <span>
-            ${account.connected == null ? "n/a" : account.connected ? "Yes" : "No"}
-          </span>
+          <span>${connectedStatus}</span>
         </div>
         <div>
           <span class="label">Last inbound</span>

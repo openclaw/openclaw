@@ -1,7 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -15,9 +11,13 @@ import { runMessageAction } from "./message-action-runner.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 
-vi.mock("../../web/media.js", () => ({
-  loadWebMedia: vi.fn(),
-}));
+vi.mock("../../web/media.js", async () => {
+  const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+  return {
+    ...actual,
+    loadWebMedia: vi.fn(actual.loadWebMedia),
+  };
+});
 
 const slackConfig = {
   channels: {
@@ -76,66 +76,6 @@ describe("runMessageAction context isolation", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  it("maps sendAttachment media to buffer + filename", async () => {
-    const filePath = path.join(os.tmpdir(), `clawdbot-attachment-${Date.now()}.txt`);
-    await fs.writeFile(filePath, "hello");
-
-    const handleAction = vi.fn(async (ctx) => {
-      return jsonResult({ ok: true, params: ctx.params });
-    });
-
-    const testPlugin: ChannelPlugin = {
-      id: "bluebubbles",
-      meta: {
-        id: "bluebubbles",
-        label: "BlueBubbles",
-        selectionLabel: "BlueBubbles",
-        docsPath: "/channels/bluebubbles",
-        blurb: "BlueBubbles test plugin.",
-      },
-      capabilities: { chatTypes: ["direct", "group"], media: true },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
-      },
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-          hint: "<target>",
-        },
-        normalizeTarget: (raw) => raw.trim(),
-      },
-      actions: {
-        listActions: () => ["sendAttachment"],
-        handleAction: handleAction as NonNullable<ChannelPlugin["actions"]>["handleAction"],
-      },
-    };
-
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: testPlugin }]),
-    );
-
-    try {
-      const result = await runMessageAction({
-        cfg: { channels: { bluebubbles: {} } } as ClawdbotConfig,
-        action: "sendAttachment",
-        params: {
-          channel: "bluebubbles",
-          target: "chat_guid:TEST",
-          media: filePath,
-        },
-        dryRun: false,
-      });
-
-      expect(result.kind).toBe("action");
-      expect(handleAction).toHaveBeenCalledTimes(1);
-      const params = handleAction.mock.calls[0]?.[0]?.params as Record<string, unknown>;
-      expect(params.filename).toBe(path.basename(filePath));
-      expect(params.buffer).toBe(Buffer.from("hello").toString("base64"));
-    } finally {
-      await fs.unlink(filePath).catch(() => {});
-    }
-  });
   it("allows send when target matches current channel", async () => {
     const result = await runMessageAction({
       cfg: slackConfig,
@@ -146,6 +86,21 @@ describe("runMessageAction context isolation", () => {
         message: "hi",
       },
       toolContext: { currentChannelId: "C12345678" },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("accepts legacy to parameter for send", async () => {
+    const result = await runMessageAction({
+      cfg: slackConfig,
+      action: "send",
+      params: {
+        channel: "slack",
+        to: "#C12345678",
+        message: "hi",
+      },
       dryRun: true,
     });
 

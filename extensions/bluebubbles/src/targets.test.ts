@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { looksLikeBlueBubblesTargetId, normalizeBlueBubblesMessagingTarget } from "./targets.js";
+import {
+  looksLikeBlueBubblesTargetId,
+  normalizeBlueBubblesMessagingTarget,
+  parseBlueBubblesTarget,
+  parseBlueBubblesAllowTarget,
+} from "./targets.js";
 
 describe("normalizeBlueBubblesMessagingTarget", () => {
   it("normalizes chat_guid targets", () => {
@@ -37,6 +42,21 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
       "chat_guid:iMessage;+;chat123456789",
     );
   });
+
+  it("normalizes raw chat_guid values", () => {
+    expect(normalizeBlueBubblesMessagingTarget("iMessage;+;chat660250192681427962")).toBe(
+      "chat_guid:iMessage;+;chat660250192681427962",
+    );
+    expect(normalizeBlueBubblesMessagingTarget("iMessage;-;+19257864429")).toBe("+19257864429");
+  });
+
+  it("normalizes chat<digits> pattern to chat_id format", () => {
+    expect(normalizeBlueBubblesMessagingTarget("chat660250192681427962")).toBe(
+      "chat_id:660250192681427962",
+    );
+    expect(normalizeBlueBubblesMessagingTarget("chat123")).toBe("chat_id:123");
+    expect(normalizeBlueBubblesMessagingTarget("Chat456789")).toBe("chat_id:456789");
+  });
 });
 
 describe("looksLikeBlueBubblesTargetId", () => {
@@ -52,7 +72,68 @@ describe("looksLikeBlueBubblesTargetId", () => {
     expect(looksLikeBlueBubblesTargetId("+1 (555) 123-4567")).toBe(true);
   });
 
+  it("accepts raw chat_guid values", () => {
+    expect(looksLikeBlueBubblesTargetId("iMessage;+;chat660250192681427962")).toBe(true);
+  });
+
+  it("accepts chat<digits> pattern as chat_id", () => {
+    expect(looksLikeBlueBubblesTargetId("chat660250192681427962")).toBe(true);
+    expect(looksLikeBlueBubblesTargetId("chat123")).toBe(true);
+    expect(looksLikeBlueBubblesTargetId("Chat456789")).toBe(true);
+  });
+
   it("rejects display names", () => {
     expect(looksLikeBlueBubblesTargetId("Jane Doe")).toBe(false);
+  });
+});
+
+describe("parseBlueBubblesTarget", () => {
+  it("parses chat<digits> pattern as chat_id", () => {
+    expect(parseBlueBubblesTarget("chat660250192681427962")).toEqual({
+      kind: "chat_id",
+      chatId: 660250192681427962,
+    });
+    expect(parseBlueBubblesTarget("chat123")).toEqual({ kind: "chat_id", chatId: 123 });
+    expect(parseBlueBubblesTarget("Chat456789")).toEqual({ kind: "chat_id", chatId: 456789 });
+  });
+
+  it("parses explicit chat_id: prefix", () => {
+    expect(parseBlueBubblesTarget("chat_id:123")).toEqual({ kind: "chat_id", chatId: 123 });
+  });
+
+  it("parses phone numbers as handles", () => {
+    expect(parseBlueBubblesTarget("+19257864429")).toEqual({
+      kind: "handle",
+      to: "+19257864429",
+      service: "auto",
+    });
+  });
+
+  it("parses raw chat_guid format", () => {
+    expect(parseBlueBubblesTarget("iMessage;+;chat660250192681427962")).toEqual({
+      kind: "chat_guid",
+      chatGuid: "iMessage;+;chat660250192681427962",
+    });
+  });
+});
+
+describe("parseBlueBubblesAllowTarget", () => {
+  it("parses chat<digits> pattern as chat_id", () => {
+    expect(parseBlueBubblesAllowTarget("chat660250192681427962")).toEqual({
+      kind: "chat_id",
+      chatId: 660250192681427962,
+    });
+    expect(parseBlueBubblesAllowTarget("chat123")).toEqual({ kind: "chat_id", chatId: 123 });
+  });
+
+  it("parses explicit chat_id: prefix", () => {
+    expect(parseBlueBubblesAllowTarget("chat_id:456")).toEqual({ kind: "chat_id", chatId: 456 });
+  });
+
+  it("parses phone numbers as handles", () => {
+    expect(parseBlueBubblesAllowTarget("+19257864429")).toEqual({
+      kind: "handle",
+      handle: "+19257864429",
+    });
   });
 });
