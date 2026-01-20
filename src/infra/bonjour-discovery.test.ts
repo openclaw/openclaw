@@ -17,8 +17,8 @@ describe("bonjour-discovery", () => {
         if (domain === "local.") {
           return {
             stdout: [
-              "Add 2 3 local. _clawdbot-gateway._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
-              "Add 2 3 local. _clawdbot-gateway._tcp. Laptop Gateway",
+              "Add 2 3 local. _clawdbot-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway",
+              "Add 2 3 local. _clawdbot-gw._tcp. Laptop Gateway",
               "",
             ].join("\n"),
             stderr: "",
@@ -30,7 +30,7 @@ describe("bonjour-discovery", () => {
         if (domain === WIDE_AREA_DISCOVERY_DOMAIN) {
           return {
             stdout: [
-              `Add 2 3 ${WIDE_AREA_DISCOVERY_DOMAIN} _clawdbot-gateway._tcp. Tailnet Gateway`,
+              `Add 2 3 ${WIDE_AREA_DISCOVERY_DOMAIN} _clawdbot-gw._tcp. Tailnet Gateway`,
               "",
             ].join("\n"),
             stderr: "",
@@ -65,7 +65,7 @@ describe("bonjour-discovery", () => {
 
         return {
           stdout: [
-            `${instance}._clawdbot-gateway._tcp. can be reached at ${host}:18789`,
+            `${instance}._clawdbot-gw._tcp. can be reached at ${host}:18789`,
             txtParts.join(" "),
             "",
           ].join("\n"),
@@ -112,7 +112,7 @@ describe("bonjour-discovery", () => {
       const domain = argv[3] ?? "";
       if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
         return {
-          stdout: ["Add 2 3 local. _clawdbot-gateway._tcp. Studio Gateway", ""].join("\n"),
+          stdout: ["Add 2 3 local. _clawdbot-gw._tcp. Studio Gateway", ""].join("\n"),
           stderr: "",
           code: 0,
           signal: null,
@@ -123,7 +123,7 @@ describe("bonjour-discovery", () => {
       if (argv[0] === "dns-sd" && argv[1] === "-L") {
         return {
           stdout: [
-            "Studio Gateway._clawdbot-gateway._tcp. can be reached at studio.local:18789",
+            "Studio Gateway._clawdbot-gw._tcp. can be reached at studio.local:18789",
             "txtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 sshPort=22",
             "",
           ].join("\n"),
@@ -203,10 +203,10 @@ describe("bonjour-discovery", () => {
         if (
           server === "100.123.224.76" &&
           qtype === "PTR" &&
-          qname === "_clawdbot-gateway._tcp.clawdbot.internal"
+          qname === "_clawdbot-gw._tcp.clawdbot.internal"
         ) {
           return {
-            stdout: `studio-gateway._clawdbot-gateway._tcp.clawdbot.internal.\n`,
+            stdout: `studio-gateway._clawdbot-gw._tcp.clawdbot.internal.\n`,
             stderr: "",
             code: 0,
             signal: null,
@@ -217,7 +217,7 @@ describe("bonjour-discovery", () => {
         if (
           server === "100.123.224.76" &&
           qtype === "SRV" &&
-          qname === "studio-gateway._clawdbot-gateway._tcp.clawdbot.internal"
+          qname === "studio-gateway._clawdbot-gw._tcp.clawdbot.internal"
         ) {
           return {
             stdout: `0 0 18789 studio.clawdbot.internal.\n`,
@@ -231,7 +231,7 @@ describe("bonjour-discovery", () => {
         if (
           server === "100.123.224.76" &&
           qtype === "TXT" &&
-          qname === "studio-gateway._clawdbot-gateway._tcp.clawdbot.internal"
+          qname === "studio-gateway._clawdbot-gw._tcp.clawdbot.internal"
         ) {
           return {
             stdout: [

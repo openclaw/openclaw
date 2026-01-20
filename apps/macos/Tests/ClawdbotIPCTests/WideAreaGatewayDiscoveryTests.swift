@@ -20,7 +20,7 @@ struct WideAreaGatewayDiscoveryTests {
                 let nameserver = args.first(where: { $0.hasPrefix("@") }) ?? ""
                 if recordType == "PTR" {
                     if nameserver == "@100.123.224.76" {
-                        return "steipetacstudio-gateway._clawdbot-gateway._tcp.clawdbot.internal.\n"
+                        return "steipetacstudio-gateway._clawdbot-gw._tcp.clawdbot.internal.\n"
                     }
                     return ""
                 }

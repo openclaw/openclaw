@@ -82,7 +82,7 @@ export type WideAreaGatewayZoneOpts = {
 function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
   const hostname = os.hostname().split(".")[0] ?? "clawdbot";
   const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "clawdbot");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "clawdbot-gateway");
+  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "clawdbot-gw");
 
   const txt = [
     `displayName=${opts.displayName.trim() || hostname}`,
@@ -119,11 +119,9 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
 
-  records.push(`_clawdbot-gateway._tcp IN PTR ${instanceLabel}._clawdbot-gateway._tcp`);
-  records.push(
-    `${instanceLabel}._clawdbot-gateway._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`,
-  );
-  records.push(`${instanceLabel}._clawdbot-gateway._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
+  records.push(`_clawdbot-gw._tcp IN PTR ${instanceLabel}._clawdbot-gw._tcp`);
+  records.push(`${instanceLabel}._clawdbot-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
+  records.push(`${instanceLabel}._clawdbot-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
 
   const contentBody = `${records.join("\n")}\n`;
   const hashBody = `${records

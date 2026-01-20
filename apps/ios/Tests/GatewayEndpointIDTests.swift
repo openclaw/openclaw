@@ -7,11 +7,11 @@ import Testing
     @Test func stableIDForServiceDecodesAndNormalizesName() {
         let endpoint = NWEndpoint.service(
             name: "Clawdbot\\032Gateway   \\032  Node\n",
-            type: "_clawdbot-gateway._tcp",
+            type: "_clawdbot-gw._tcp",
             domain: "local.",
             interface: nil)
 
-        #expect(GatewayEndpointID.stableID(endpoint) == "_clawdbot-gateway._tcp|local.|Clawdbot Gateway Node")
+        #expect(GatewayEndpointID.stableID(endpoint) == "_clawdbot-gw._tcp|local.|Clawdbot Gateway Node")
     }
 
     @Test func stableIDForNonServiceUsesEndpointDescription() {
@@ -22,7 +22,7 @@ import Testing
     @Test func prettyDescriptionDecodesBonjourEscapes() {
         let endpoint = NWEndpoint.service(
             name: "Clawdbot\\032Gateway",
-            type: "_clawdbot-gateway._tcp",
+            type: "_clawdbot-gw._tcp",
             domain: "local.",
             interface: nil)
 

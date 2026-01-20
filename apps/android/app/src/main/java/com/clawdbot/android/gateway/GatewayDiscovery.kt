@@ -51,7 +51,7 @@ class GatewayDiscovery(
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val dns = DnsResolver.getInstance()
-  private val serviceType = "_clawdbot-gateway._tcp."
+  private val serviceType = "_clawdbot-gw._tcp."
   private val wideAreaDomain = "clawdbot.internal."
   private val logTag = "Clawdbot/GatewayDiscovery"
 

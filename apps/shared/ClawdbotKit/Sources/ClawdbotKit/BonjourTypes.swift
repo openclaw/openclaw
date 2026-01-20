@@ -2,7 +2,7 @@ import Foundation
 
 public enum ClawdbotBonjour {
     // v0: internal-only, subject to rename.
-    public static let gatewayServiceType = "_clawdbot-gateway._tcp"
+    public static let gatewayServiceType = "_clawdbot-gw._tcp"
     public static let gatewayServiceDomain = "local."
     public static let wideAreaGatewayServiceDomain = "clawdbot.internal."
 

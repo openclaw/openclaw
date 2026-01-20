@@ -92,7 +92,7 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _clawdbot-gateway._tcp
+          - _clawdbot-gw._tcp
         NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the gateway.
         NSLocationWhenInUseUsageDescription: Clawdbot uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: Clawdbot can share your location in the background when you enable Always.

@@ -123,7 +123,7 @@ export async function startGatewayBonjourAdvertiser(
 
   const gateway = responder.createService({
     name: safeServiceName(instanceName),
-    type: "clawdbot-gateway",
+    type: "clawdbot-gw",
     protocol: Protocol.TCP,
     port: opts.gatewayPort,
     domain: "local",
