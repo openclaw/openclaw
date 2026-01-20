@@ -1795,7 +1795,9 @@ export class MemoryIndexManager {
       if (!this.batch.enabled) {
         return { disabled: true, count: this.batchFailureCount };
       }
-      const increment = params.forceDisable ? BATCH_FAILURE_LIMIT : Math.max(1, params.attempts ?? 1);
+      const increment = params.forceDisable
+        ? BATCH_FAILURE_LIMIT
+        : Math.max(1, params.attempts ?? 1);
       this.batchFailureCount += increment;
       this.batchFailureLastError = params.message;
       this.batchFailureLastProvider = params.provider;

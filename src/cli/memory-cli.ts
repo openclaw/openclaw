@@ -85,8 +85,9 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    const totalFiles = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-      .length;
+    const totalFiles = entries.filter(
+      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+    ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
@@ -246,7 +247,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           await manager.probeVectorAvailability();
         }
         const status = manager.status();
-        const sources = (status.sources?.length ? status.sources : ["memory"]) as MemorySourceName[];
+        const sources = (
+          status.sources?.length ? status.sources : ["memory"]
+        ) as MemorySourceName[];
         const scan = await scanMemorySources({
           workspaceDir: status.workspaceDir,
           agentId,
@@ -305,8 +308,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
       for (const entry of status.sourceCounts) {
-        const total = scan?.sources.find((scanEntry) => scanEntry.source === entry.source)
-          ?.totalFiles;
+        const total = scan?.sources.find(
+          (scanEntry) => scanEntry.source === entry.source,
+        )?.totalFiles;
         const counts =
           total === null
             ? `${entry.files}/? files · ${entry.chunks} chunks`
@@ -373,7 +377,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       const batchState = status.batch.enabled ? "enabled" : "disabled";
       const batchColor = status.batch.enabled ? theme.success : theme.warn;
       const batchSuffix = ` (failures ${status.batch.failures}/${status.batch.limit})`;
-      lines.push(`${label("Batch")} ${colorize(rich, batchColor, batchState)}${muted(batchSuffix)}`);
+      lines.push(
+        `${label("Batch")} ${colorize(rich, batchColor, batchState)}${muted(batchSuffix)}`,
+      );
       if (status.batch.lastError) {
         lines.push(`${label("Batch error")} ${warn(status.batch.lastError)}`);
       }

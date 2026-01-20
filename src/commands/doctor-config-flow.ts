@@ -18,8 +18,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 type UnrecognizedKeysIssue = ZodIssue & {
   code: "unrecognized_keys";
-  keys: string[];
+  keys: PropertyKey[];
 };
+
+function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
+  return path.filter((part): part is string | number => typeof part !== "symbol");
+}
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
   return issue.code === "unrecognized_keys";
@@ -55,7 +59,10 @@ function resolvePathTarget(root: unknown, path: Array<string | number>): unknown
   return current;
 }
 
-function stripUnknownConfigKeys(config: ClawdbotConfig): { config: ClawdbotConfig; removed: string[] } {
+function stripUnknownConfigKeys(config: ClawdbotConfig): {
+  config: ClawdbotConfig;
+  removed: string[];
+} {
   const parsed = ClawdbotSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -65,13 +72,15 @@ function stripUnknownConfigKeys(config: ClawdbotConfig): { config: ClawdbotConfi
   const removed: string[] = [];
   for (const issue of parsed.error.issues) {
     if (!isUnrecognizedKeysIssue(issue)) continue;
-    const target = resolvePathTarget(next, issue.path);
+    const path = normalizeIssuePath(issue.path);
+    const target = resolvePathTarget(next, path);
     if (!target || typeof target !== "object" || Array.isArray(target)) continue;
     const record = target as Record<string, unknown>;
     for (const key of issue.keys) {
+      if (typeof key !== "string") continue;
       if (!(key in record)) continue;
       delete record[key];
-      removed.push(formatPath([...issue.path, key]));
+      removed.push(formatPath([...path, key]));
     }
   }
 
