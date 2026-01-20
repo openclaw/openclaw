@@ -1,7 +1,7 @@
 import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
 import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
 
-import { zalouserPlugin } from "./src/channel.js";
+import { zalouserDock, zalouserPlugin } from "./src/channel.js";
 import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
 import { setZalouserRuntime } from "./src/runtime.js";
 
@@ -13,7 +13,7 @@ const plugin = {
   register(api: ClawdbotPluginApi) {
     setZalouserRuntime(api.runtime);
     // Register channel plugin (for onboarding & gateway)
-    api.registerChannel(zalouserPlugin);
+    api.registerChannel({ plugin: zalouserPlugin, dock: zalouserDock });
 
     // Register agent tool
     api.registerTool({
