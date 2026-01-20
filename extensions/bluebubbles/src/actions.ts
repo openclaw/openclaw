@@ -18,6 +18,7 @@ import {
   editBlueBubblesMessage,
   unsendBlueBubblesMessage,
   renameBlueBubblesChat,
+  setGroupIconBlueBubbles,
   addBlueBubblesParticipant,
   removeBlueBubblesParticipant,
   leaveBlueBubblesChat,
@@ -54,6 +55,7 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "renameGroup",
+  "setGroupIcon",
   "addParticipant",
   "removeParticipant",
   "leaveGroup",
@@ -72,6 +74,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     if (gate("reply")) actions.add("reply");
     if (gate("sendWithEffect")) actions.add("sendWithEffect");
     if (gate("renameGroup")) actions.add("renameGroup");
+    if (gate("setGroupIcon")) actions.add("setGroupIcon");
     if (gate("addParticipant")) actions.add("addParticipant");
     if (gate("removeParticipant")) actions.add("removeParticipant");
     if (gate("leaveGroup")) actions.add("leaveGroup");
@@ -273,6 +276,35 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       await renameBlueBubblesChat(resolvedChatGuid, displayName, opts);
 
       return jsonResult({ ok: true, renamed: resolvedChatGuid, displayName });
+    }
+
+    // Handle setGroupIcon action
+    if (action === "setGroupIcon") {
+      const resolvedChatGuid = await resolveChatGuid();
+      const base64Buffer = readStringParam(params, "buffer");
+      const filename =
+        readStringParam(params, "filename") ??
+        readStringParam(params, "name") ??
+        "icon.png";
+      const contentType =
+        readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+
+      if (!base64Buffer) {
+        throw new Error(
+          "BlueBubbles setGroupIcon requires an image. " +
+            "Use action=setGroupIcon with media=<image_url> or path=<local_file_path> to set the group icon.",
+        );
+      }
+
+      // Decode base64 to buffer
+      const buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+
+      await setGroupIconBlueBubbles(resolvedChatGuid, buffer, filename, {
+        ...opts,
+        contentType: contentType ?? undefined,
+      });
+
+      return jsonResult({ ok: true, chatGuid: resolvedChatGuid, iconSet: true });
     }
 
     // Handle addParticipant action

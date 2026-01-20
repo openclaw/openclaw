@@ -27,6 +27,7 @@ import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const BLUEBUBBLES_GROUP_ACTIONS = new Set<ChannelMessageActionName>([
   "renameGroup",
+  "setGroupIcon",
   "addParticipant",
   "removeParticipant",
   "leaveGroup",

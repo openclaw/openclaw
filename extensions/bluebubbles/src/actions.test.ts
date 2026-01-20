@@ -28,6 +28,7 @@ vi.mock("./chat.js", () => ({
   editBlueBubblesMessage: vi.fn().mockResolvedValue(undefined),
   unsendBlueBubblesMessage: vi.fn().mockResolvedValue(undefined),
   renameBlueBubblesChat: vi.fn().mockResolvedValue(undefined),
+  setGroupIconBlueBubbles: vi.fn().mockResolvedValue(undefined),
   addBlueBubblesParticipant: vi.fn().mockResolvedValue(undefined),
   removeBlueBubblesParticipant: vi.fn().mockResolvedValue(undefined),
   leaveBlueBubblesChat: vi.fn().mockResolvedValue(undefined),
@@ -103,6 +104,7 @@ describe("bluebubblesMessageActions", () => {
       expect(bluebubblesMessageActions.supportsAction({ action: "reply" })).toBe(true);
       expect(bluebubblesMessageActions.supportsAction({ action: "sendWithEffect" })).toBe(true);
       expect(bluebubblesMessageActions.supportsAction({ action: "renameGroup" })).toBe(true);
+      expect(bluebubblesMessageActions.supportsAction({ action: "setGroupIcon" })).toBe(true);
       expect(bluebubblesMessageActions.supportsAction({ action: "addParticipant" })).toBe(true);
       expect(bluebubblesMessageActions.supportsAction({ action: "removeParticipant" })).toBe(true);
       expect(bluebubblesMessageActions.supportsAction({ action: "leaveGroup" })).toBe(true);
@@ -413,6 +415,97 @@ describe("bluebubblesMessageActions", () => {
       expect(result).toMatchObject({
         details: { ok: true, messageId: "msg-123", effect: "invisible ink" },
       });
+    });
+
+    it("throws when buffer is missing for setGroupIcon", async () => {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      await expect(
+        bluebubblesMessageActions.handleAction({
+          action: "setGroupIcon",
+          params: { chatGuid: "iMessage;-;chat-guid" },
+          cfg,
+          accountId: null,
+        }),
+      ).rejects.toThrow(/requires an image/i);
+    });
+
+    it("sets group icon successfully with chatGuid and buffer", async () => {
+      const { setGroupIconBlueBubbles } = await import("./chat.js");
+
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      // Base64 encode a simple test buffer
+      const testBuffer = Buffer.from("fake-image-data");
+      const base64Buffer = testBuffer.toString("base64");
+
+      const result = await bluebubblesMessageActions.handleAction({
+        action: "setGroupIcon",
+        params: {
+          chatGuid: "iMessage;-;chat-guid",
+          buffer: base64Buffer,
+          filename: "group-icon.png",
+          contentType: "image/png",
+        },
+        cfg,
+        accountId: null,
+      });
+
+      expect(setGroupIconBlueBubbles).toHaveBeenCalledWith(
+        "iMessage;-;chat-guid",
+        expect.any(Uint8Array),
+        "group-icon.png",
+        expect.objectContaining({ contentType: "image/png" }),
+      );
+      expect(result).toMatchObject({
+        details: { ok: true, chatGuid: "iMessage;-;chat-guid", iconSet: true },
+      });
+    });
+
+    it("uses default filename when not provided for setGroupIcon", async () => {
+      const { setGroupIconBlueBubbles } = await import("./chat.js");
+
+      const cfg: ClawdbotConfig = {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test-password",
+          },
+        },
+      };
+
+      const base64Buffer = Buffer.from("test").toString("base64");
+
+      await bluebubblesMessageActions.handleAction({
+        action: "setGroupIcon",
+        params: {
+          chatGuid: "iMessage;-;chat-guid",
+          buffer: base64Buffer,
+        },
+        cfg,
+        accountId: null,
+      });
+
+      expect(setGroupIconBlueBubbles).toHaveBeenCalledWith(
+        "iMessage;-;chat-guid",
+        expect.any(Uint8Array),
+        "icon.png",
+        expect.anything(),
+      );
     });
   });
 });

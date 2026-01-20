@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
@@ -278,5 +279,76 @@ export async function leaveBlueBubblesChat(
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");
     throw new Error(`BlueBubbles leaveChat failed (${res.status}): ${errorText || "unknown"}`);
+  }
+}
+
+/**
+ * Set a group chat's icon/photo via BlueBubbles API.
+ * Requires Private API to be enabled.
+ */
+export async function setGroupIconBlueBubbles(
+  chatGuid: string,
+  buffer: Uint8Array,
+  filename: string,
+  opts: BlueBubblesChatOpts & { contentType?: string } = {},
+): Promise<void> {
+  const trimmedGuid = chatGuid.trim();
+  if (!trimmedGuid) throw new Error("BlueBubbles setGroupIcon requires chatGuid");
+  if (!buffer || buffer.length === 0) {
+    throw new Error("BlueBubbles setGroupIcon requires image buffer");
+  }
+
+  const { baseUrl, password } = resolveAccount(opts);
+  const url = buildBlueBubblesApiUrl({
+    baseUrl,
+    path: `/api/v1/chat/${encodeURIComponent(trimmedGuid)}/icon`,
+    password,
+  });
+
+  // Build multipart form-data
+  const boundary = `----BlueBubblesFormBoundary${crypto.randomUUID().replace(/-/g, "")}`;
+  const parts: Uint8Array[] = [];
+  const encoder = new TextEncoder();
+
+  // Add file field named "icon" as per API spec
+  parts.push(encoder.encode(`--${boundary}\r\n`));
+  parts.push(
+    encoder.encode(
+      `Content-Disposition: form-data; name="icon"; filename="${filename}"\r\n`,
+    ),
+  );
+  parts.push(
+    encoder.encode(`Content-Type: ${opts.contentType ?? "application/octet-stream"}\r\n\r\n`),
+  );
+  parts.push(buffer);
+  parts.push(encoder.encode("\r\n"));
+
+  // Close multipart body
+  parts.push(encoder.encode(`--${boundary}--\r\n`));
+
+  // Combine into single buffer
+  const totalLength = parts.reduce((acc, part) => acc + part.length, 0);
+  const body = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.length;
+  }
+
+  const res = await blueBubblesFetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    },
+    opts.timeoutMs ?? 60_000, // longer timeout for file uploads
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => "");
+    throw new Error(`BlueBubbles setGroupIcon failed (${res.status}): ${errorText || "unknown"}`);
   }
 }

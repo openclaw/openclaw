@@ -4,16 +4,17 @@ const allowFromEntry = z.union([z.string(), z.number()]);
 
 const bluebubblesActionSchema = z
   .object({
-    reactions: z.boolean().optional(),
-    edit: z.boolean().optional(),
-    unsend: z.boolean().optional(),
-    reply: z.boolean().optional(),
-    sendWithEffect: z.boolean().optional(),
-    renameGroup: z.boolean().optional(),
-    addParticipant: z.boolean().optional(),
-    removeParticipant: z.boolean().optional(),
-    leaveGroup: z.boolean().optional(),
-    sendAttachment: z.boolean().optional(),
+    reactions: z.boolean().default(true),
+    edit: z.boolean().default(true),
+    unsend: z.boolean().default(true),
+    reply: z.boolean().default(true),
+    sendWithEffect: z.boolean().default(true),
+    renameGroup: z.boolean().default(true),
+    setGroupIcon: z.boolean().default(true),
+    addParticipant: z.boolean().default(true),
+    removeParticipant: z.boolean().default(true),
+    leaveGroup: z.boolean().default(true),
+    sendAttachment: z.boolean().default(true),
   })
   .optional();
 

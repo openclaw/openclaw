@@ -181,6 +181,19 @@ async function sipsResizeToJpeg(params: {
   });
 }
 
+async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
+  return await withTempDir(async (dir) => {
+    const input = path.join(dir, "in.heic");
+    const output = path.join(dir, "out.jpg");
+    await fs.writeFile(input, buffer);
+    await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
+      timeoutMs: 20_000,
+      maxBuffer: 1024 * 1024,
+    });
+    return await fs.readFile(output);
+  });
+}
+
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
   if (prefersSips()) {
     return await sipsMetadataFromBuffer(buffer).catch(() => null);
@@ -316,6 +329,14 @@ export async function resizeToJpeg(params: {
     })
     .jpeg({ quality: params.quality, mozjpeg: true })
     .toBuffer();
+}
+
+export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
+  if (prefersSips()) {
+    return await sipsConvertToJpeg(buffer);
+  }
+  const sharp = await loadSharp();
+  return await sharp(buffer).jpeg({ quality: 90, mozjpeg: true }).toBuffer();
 }
 
 /**
