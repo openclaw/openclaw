@@ -1,3 +1,5 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+
 export type TypingController = {
   onReplyStart: () => Promise<void>;
   startTypingLoop: () => Promise<void>;
@@ -20,7 +22,7 @@ export function createTypingController(params: {
     onReplyStart,
     typingIntervalSeconds = 6,
     typingTtlMs = 2 * 60_000,
-    silentToken,
+    silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
   let started = false;
@@ -119,7 +121,7 @@ export function createTypingController(params: {
     if (sealed) return;
     const trimmed = text?.trim();
     if (!trimmed) return;
-    if (silentToken && trimmed === silentToken) return;
+    if (silentToken && isSilentReplyText(trimmed, silentToken)) return;
     refreshTypingTtl();
     await startTypingLoop();
   };

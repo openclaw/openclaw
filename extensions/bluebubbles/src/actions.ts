@@ -12,6 +12,7 @@ import {
 } from "clawdbot/plugin-sdk";
 
 import { resolveBlueBubblesAccount } from "./accounts.js";
+import { isMacOS26OrHigher } from "./probe.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
@@ -68,8 +69,10 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     if (!account.enabled || !account.configured) return [];
     const gate = createActionGate((cfg as ClawdbotConfig).channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
+    // Check if running on macOS 26+ (edit not supported)
+    const macOS26 = isMacOS26OrHigher(account.accountId);
     if (gate("reactions")) actions.add("react");
-    if (gate("edit")) actions.add("edit");
+    if (gate("edit") && !macOS26) actions.add("edit");
     if (gate("unsend")) actions.add("unsend");
     if (gate("reply")) actions.add("reply");
     if (gate("sendWithEffect")) actions.add("sendWithEffect");
@@ -167,6 +170,13 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle edit action
     if (action === "edit") {
+      // Edit is not supported on macOS 26+
+      if (isMacOS26OrHigher(accountId ?? undefined)) {
+        throw new Error(
+          "BlueBubbles edit is not supported on macOS 26 or higher. " +
+            "Apple removed the ability to edit iMessages in this version.",
+        );
+      }
       const messageId = readStringParam(params, "messageId");
       const newText =
         readStringParam(params, "text") ??
