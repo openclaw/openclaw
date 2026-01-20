@@ -139,8 +139,11 @@ export class ClawdbotApp extends LitElement {
   @state() configSchemaLoading = false;
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
+  @state() configFormOriginal: Record<string, unknown> | null = null;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
+  @state() configSearchQuery = "";
+  @state() configActiveSection: string | null = null;
 
   @state() channelsLoading = false;
   @state() channelsSnapshot: ChannelsStatusSnapshot | null = null;
