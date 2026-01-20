@@ -19,6 +19,7 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Doctor: clarify plugin auto-enable hint text in the startup banner.
+- Gateway: clarify unauthorized handshake responses with token/password mismatch guidance.
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - TUI: align custom editor initialization with the latest pi-tui API. (#1298) — thanks @sibbl.
