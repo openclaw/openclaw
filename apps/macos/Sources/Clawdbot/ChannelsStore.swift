@@ -263,7 +263,7 @@ final class ChannelsStore {
 
     func orderedChannelIds() -> [String] {
         if let meta = self.snapshot?.channelMeta, !meta.isEmpty {
-            return meta.map { $0.id }
+            return meta.map(\.id)
         }
         return self.snapshot?.channelOrder ?? []
     }

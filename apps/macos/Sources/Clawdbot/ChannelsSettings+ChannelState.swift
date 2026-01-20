@@ -432,11 +432,11 @@ extension ChannelsSettings {
     }
 
     private func resolveChannelDetailTitle(_ id: String) -> String {
-        return self.store.resolveChannelDetailLabel(id)
+        self.store.resolveChannelDetailLabel(id)
     }
 
     private func resolveChannelSystemImage(_ id: String) -> String {
-        return self.store.resolveChannelSystemImage(id)
+        self.store.resolveChannelSystemImage(id)
     }
 
     private func channelStatusDictionary(_ id: String) -> [String: AnyCodable]? {
