@@ -130,6 +130,28 @@ export function rememberRoleRefsForTarget(opts: {
   }
 }
 
+export function storeRoleRefsForTarget(opts: {
+  page: Page;
+  cdpUrl: string;
+  targetId?: string;
+  refs: RoleRefs;
+  frameSelector?: string;
+  mode: NonNullable<PageState["roleRefsMode"]>;
+}): void {
+  const state = ensurePageState(opts.page);
+  state.roleRefs = opts.refs;
+  state.roleRefsFrameSelector = opts.frameSelector;
+  state.roleRefsMode = opts.mode;
+  if (!opts.targetId?.trim()) return;
+  rememberRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: opts.refs,
+    frameSelector: opts.frameSelector,
+    mode: opts.mode,
+  });
+}
+
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;

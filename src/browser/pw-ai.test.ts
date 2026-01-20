@@ -84,6 +84,35 @@ describe("pw-ai", () => {
     expect(p2.session.detach).toHaveBeenCalledTimes(1);
   });
 
+  it("registers aria refs from ai snapshots for act commands", async () => {
+    const { chromium } = await import("playwright-core");
+    const snapshot = ['- button "OK" [ref=e1]', '- link "Docs" [ref=e2]'].join("\n");
+    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
+    const browser = createBrowser([p1.page]);
+
+    (chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(browser);
+
+    const mod = await importModule();
+    const res = await mod.snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+    });
+
+    expect(res.refs).toMatchObject({
+      e1: { role: "button", name: "OK" },
+      e2: { role: "link", name: "Docs" },
+    });
+
+    await mod.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e1",
+    });
+
+    expect(p1.locator).toHaveBeenCalledWith("aria-ref=e1");
+    expect(p1.click).toHaveBeenCalledTimes(1);
+  });
+
   it("truncates oversized snapshots", async () => {
     const { chromium } = await import("playwright-core");
     const longSnapshot = "A".repeat(20);

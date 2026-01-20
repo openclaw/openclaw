@@ -9,8 +9,6 @@ import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
-import { buildRoleSnapshotFromAiSnapshot } from "../pw-role-snapshot.js";
-import { rememberRoleRefsForTarget } from "../pw-session.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -215,20 +213,6 @@ export function registerBrowserAgentSnapshotRoutes(app: express.Express, ctx: Br
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-              })
-              .then((result) => {
-                // Extract and register refs from AI snapshot so act commands can resolve them.
-                // snapshotAiViaPlaywright returns raw text without ref registration.
-                const parsed = buildRoleSnapshotFromAiSnapshot(result.snapshot);
-                if (Object.keys(parsed.refs).length > 0) {
-                  rememberRoleRefsForTarget({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    refs: parsed.refs,
-                    mode: "aria",
-                  });
-                }
-                return { ...result, refs: parsed.refs };
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
