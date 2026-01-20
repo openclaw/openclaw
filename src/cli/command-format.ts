@@ -1,8 +1,8 @@
 import { normalizeProfileName } from "./profile-utils.js";
 
 const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+clawdbot\b|^clawdbot\b/;
-const PROFILE_FLAG_RE = /\b--profile\b/;
-const DEV_FLAG_RE = /\b--dev\b/;
+const PROFILE_FLAG_RE = /(^|\s)--profile(\s|$)/;
+const DEV_FLAG_RE = /(^|\s)--dev(\s|$)/;
 
 export function formatCliCommand(
   command: string,

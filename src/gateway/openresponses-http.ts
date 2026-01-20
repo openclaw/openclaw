@@ -10,7 +10,6 @@ import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import { createCanvas } from "@napi-rs/canvas";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -32,13 +31,31 @@ import {
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import type { ImageContent } from "../commands/agent/types.js";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
 };
+
+type CanvasModule = typeof import("@napi-rs/canvas");
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+async function loadCanvasModule(): Promise<CanvasModule | null> {
+  try {
+    return await import("@napi-rs/canvas");
+  } catch {
+    return null;
+  }
+}
+
+async function loadPdfJsModule(): Promise<PdfJsModule | null> {
+  try {
+    return await import("pdfjs-dist/legacy/build/pdf.mjs");
+  } catch {
+    return null;
+  }
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -305,9 +322,12 @@ async function extractPdfContent(params: {
   limits: ResolvedResponsesLimits;
 }): Promise<{ text: string; images: ImageContent[] }> {
   const { buffer, limits } = params;
-  const pdf = await getDocument({
+  const pdfjs = await loadPdfJsModule();
+  if (!pdfjs) {
+    throw new Error("PDF parsing requires pdfjs-dist; install it to enable PDF support.");
+  }
+  const pdf = await pdfjs.getDocument({
     data: new Uint8Array(buffer),
-    // @ts-expect-error pdfjs-dist legacy option not in current type defs.
     disableWorker: true,
   }).promise;
   const maxPages = Math.min(pdf.numPages, limits.files.pdf.maxPages);
@@ -329,6 +349,10 @@ async function extractPdfContent(params: {
   }
 
   const images: ImageContent[] = [];
+  const canvasModule = await loadCanvasModule();
+  if (!canvasModule) {
+    throw new Error("PDF image extraction requires @napi-rs/canvas; install it to enable images.");
+  }
   for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1 });
@@ -337,7 +361,7 @@ async function extractPdfContent(params: {
     const pagePixels = viewport.width * viewport.height;
     const scale = Math.min(1, Math.sqrt(pixelBudget / pagePixels));
     const scaled = page.getViewport({ scale: Math.max(0.1, scale) });
-    const canvas = createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
+    const canvas = canvasModule.createCanvas(Math.ceil(scaled.width), Math.ceil(scaled.height));
     await page.render({
       canvas: canvas as unknown as HTMLCanvasElement,
       viewport: scaled,
