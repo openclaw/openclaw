@@ -86,6 +86,7 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
 
   const txt = [
     `displayName=${opts.displayName.trim() || hostname}`,
+    `role=gateway`,
     `transport=gateway`,
     `gatewayPort=${opts.gatewayPort}`,
   ];
