@@ -87,4 +87,14 @@ describe("extractContentFromMessage", () => {
 
     expect(text).toBe("hello");
   });
+
+  it("renders error text when stopReason is error and content is not an array", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: '429 {"error":{"message":"rate limit"}}',
+    });
+
+    expect(text).toContain("HTTP 429");
+  });
 });

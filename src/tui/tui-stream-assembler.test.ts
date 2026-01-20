@@ -65,4 +65,29 @@ describe("TuiStreamAssembler", () => {
 
     expect(finalText).toBe("Streamed");
   });
+
+  it("returns null when delta text is unchanged", () => {
+    const assembler = new TuiStreamAssembler();
+    const first = assembler.ingestDelta(
+      "run-4",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Repeat" }],
+      },
+      false,
+    );
+
+    expect(first).toBe("Repeat");
+
+    const second = assembler.ingestDelta(
+      "run-4",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Repeat" }],
+      },
+      false,
+    );
+
+    expect(second).toBeNull();
+  });
 });

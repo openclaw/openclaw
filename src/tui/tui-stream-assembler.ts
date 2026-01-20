@@ -27,10 +27,9 @@ export class TuiStreamAssembler {
     return state;
   }
 
-  ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
+  private updateRunState(state: RunStreamState, message: unknown, showThinking: boolean) {
     const thinkingText = extractThinkingFromMessage(message);
     const contentText = extractContentFromMessage(message);
-    const state = this.getOrCreateRun(runId);
 
     if (thinkingText) {
       state.thinkingText = thinkingText;
@@ -45,29 +44,23 @@ export class TuiStreamAssembler {
       showThinking,
     });
 
-    if (!displayText || displayText === state.displayText) return null;
-
     state.displayText = displayText;
-    return displayText;
+  }
+
+  ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
+    const state = this.getOrCreateRun(runId);
+    const previousDisplayText = state.displayText;
+    this.updateRunState(state, message, showThinking);
+
+    if (!state.displayText || state.displayText === previousDisplayText) return null;
+
+    return state.displayText;
   }
 
   finalize(runId: string, message: unknown, showThinking: boolean): string {
     const state = this.getOrCreateRun(runId);
-    const thinkingText = extractThinkingFromMessage(message);
-    const contentText = extractContentFromMessage(message);
-
-    if (thinkingText) {
-      state.thinkingText = thinkingText;
-    }
-    if (contentText) {
-      state.contentText = contentText;
-    }
-
-    const finalComposed = composeThinkingAndContent({
-      thinkingText: state.thinkingText,
-      contentText: state.contentText,
-      showThinking,
-    });
+    this.updateRunState(state, message, showThinking);
+    const finalComposed = state.displayText;
     const finalText = resolveFinalAssistantText({
       finalText: finalComposed,
       streamedText: state.displayText,
