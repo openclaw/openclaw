@@ -10,6 +10,7 @@ import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { fetchBlueBubblesServerInfo } from "./probe.js";
 
 export type BlueBubblesRuntimeEnv = {
   log?: (message: string) => void;
@@ -1498,6 +1499,17 @@ export async function monitorBlueBubblesProvider(
   const { account, config, runtime, abortSignal, statusSink } = options;
   const core = getBlueBubblesRuntime();
   const path = options.webhookPath?.trim() || DEFAULT_WEBHOOK_PATH;
+
+  // Fetch and cache server info (for macOS version detection in action gating)
+  const serverInfo = await fetchBlueBubblesServerInfo({
+    baseUrl: account.baseUrl,
+    password: account.config.password,
+    accountId: account.accountId,
+    timeoutMs: 5000,
+  }).catch(() => null);
+  if (serverInfo?.os_version) {
+    runtime.log?.(`[${account.accountId}] BlueBubbles server macOS ${serverInfo.os_version}`);
+  }
 
   const unregister = registerBlueBubblesWebhookTarget({
     account,
