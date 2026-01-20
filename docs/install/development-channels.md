@@ -7,6 +7,8 @@ read_when:
 
 # Development channels
 
+Last updated: 2026-01-20
+
 Clawdbot ships three update channels:
 
 - **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`). npm dist-tag: `latest`.
