@@ -4,6 +4,8 @@ import Foundation
 import Observation
 import OSLog
 
+private typealias AnyCodable = ClawdbotKit.AnyCodable
+
 @MainActor
 @Observable
 final class CronJobsStore {

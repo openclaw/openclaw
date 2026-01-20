@@ -12,6 +12,7 @@ private let onboardingWizardLogger = Logger(subsystem: "com.clawdbot", category:
 // Bridge between ClawdbotProtocol.AnyCodable and the local module to avoid
 // Swift 6 strict concurrency type conflicts.
 
+private typealias AnyCodable = ClawdbotKit.AnyCodable
 private typealias ProtocolAnyCodable = ClawdbotProtocol.AnyCodable
 
 private func bridgeToLocal(_ value: ProtocolAnyCodable) -> AnyCodable {

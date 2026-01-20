@@ -4,6 +4,8 @@ import ClawdbotProtocol
 import Foundation
 import OSLog
 
+private typealias AnyCodable = ClawdbotKit.AnyCodable
+
 private let gatewayConnectionLogger = Logger(subsystem: "com.clawdbot", category: "gateway.connection")
 
 enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
