@@ -1336,13 +1336,17 @@ describe("BlueBubbles webhook monitor", () => {
         },
       };
 
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.onReplyStart?.();
+      });
+
       const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
       const res = createMockResponse();
 
       await handleBlueBubblesWebhookRequest(req, res);
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Should call typing start
+      // Should call typing start when reply flow triggers it.
       expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
         expect.any(String),
         true,

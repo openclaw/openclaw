@@ -57,6 +57,15 @@ describe("normalizeBlueBubblesMessagingTarget", () => {
     expect(normalizeBlueBubblesMessagingTarget("chat123")).toBe("chat_identifier:chat123");
     expect(normalizeBlueBubblesMessagingTarget("Chat456789")).toBe("chat_identifier:Chat456789");
   });
+
+  it("normalizes UUID/hex chat identifiers", () => {
+    expect(normalizeBlueBubblesMessagingTarget("8b9c1a10536d4d86a336ea03ab7151cc")).toBe(
+      "chat_identifier:8b9c1a10536d4d86a336ea03ab7151cc",
+    );
+    expect(normalizeBlueBubblesMessagingTarget("1C2D3E4F-1234-5678-9ABC-DEF012345678")).toBe(
+      "chat_identifier:1C2D3E4F-1234-5678-9ABC-DEF012345678",
+    );
+  });
 });
 
 describe("looksLikeBlueBubblesTargetId", () => {
@@ -82,6 +91,11 @@ describe("looksLikeBlueBubblesTargetId", () => {
     expect(looksLikeBlueBubblesTargetId("Chat456789")).toBe(true);
   });
 
+  it("accepts UUID/hex chat identifiers", () => {
+    expect(looksLikeBlueBubblesTargetId("8b9c1a10536d4d86a336ea03ab7151cc")).toBe(true);
+    expect(looksLikeBlueBubblesTargetId("1C2D3E4F-1234-5678-9ABC-DEF012345678")).toBe(true);
+  });
+
   it("rejects display names", () => {
     expect(looksLikeBlueBubblesTargetId("Jane Doe")).toBe(false);
   });
@@ -100,6 +114,17 @@ describe("parseBlueBubblesTarget", () => {
     expect(parseBlueBubblesTarget("Chat456789")).toEqual({
       kind: "chat_identifier",
       chatIdentifier: "Chat456789",
+    });
+  });
+
+  it("parses UUID/hex chat identifiers as chat_identifier", () => {
+    expect(parseBlueBubblesTarget("8b9c1a10536d4d86a336ea03ab7151cc")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "8b9c1a10536d4d86a336ea03ab7151cc",
+    });
+    expect(parseBlueBubblesTarget("1C2D3E4F-1234-5678-9ABC-DEF012345678")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "1C2D3E4F-1234-5678-9ABC-DEF012345678",
     });
   });
 
@@ -132,6 +157,17 @@ describe("parseBlueBubblesAllowTarget", () => {
     expect(parseBlueBubblesAllowTarget("chat123")).toEqual({
       kind: "chat_identifier",
       chatIdentifier: "chat123",
+    });
+  });
+
+  it("parses UUID/hex chat identifiers as chat_identifier", () => {
+    expect(parseBlueBubblesAllowTarget("8b9c1a10536d4d86a336ea03ab7151cc")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "8b9c1a10536d4d86a336ea03ab7151cc",
+    });
+    expect(parseBlueBubblesAllowTarget("1C2D3E4F-1234-5678-9ABC-DEF012345678")).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "1C2D3E4F-1234-5678-9ABC-DEF012345678",
     });
   });
 
