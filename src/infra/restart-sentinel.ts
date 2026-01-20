@@ -32,6 +32,12 @@ export type RestartSentinelPayload = {
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;
+  /** Delivery context captured at restart time to ensure channel routing survives restart */
+  deliveryContext?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+  };
   message?: string | null;
   doctorHint?: string | null;
   stats?: RestartSentinelStats | null;

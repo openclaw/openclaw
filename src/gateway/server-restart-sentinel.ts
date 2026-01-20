@@ -30,7 +30,20 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
   const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
-  const origin = mergeDeliveryContext(deliveryContextFromSession(entry), parsedTarget ?? undefined);
+  // Prefer delivery context from sentinel payload (captured at restart time) over session store lookup
+  // This handles the case where session store wasn't flushed to disk before restart
+  const sentinelDelivery =
+    payload.deliveryContext && typeof payload.deliveryContext === "object"
+      ? {
+          channel: payload.deliveryContext.channel,
+          to: payload.deliveryContext.to,
+          accountId: payload.deliveryContext.accountId,
+        }
+      : undefined;
+  const origin = mergeDeliveryContext(
+    sentinelDelivery,
+    mergeDeliveryContext(deliveryContextFromSession(entry), parsedTarget ?? undefined),
+  );
   const channelRaw = origin?.channel;
   const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
   const to = origin?.to;

@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/io.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   DOCTOR_NONINTERACTIVE_HINT,
@@ -77,11 +79,32 @@ export function createGatewayTool(opts?: {
             : undefined;
         const note =
           typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        // Extract delivery context from session store to include in sentinel
+        // This ensures channel routing survives restart even if session store isn't flushed to disk
+        let deliveryContext: { channel?: string; to?: string; accountId?: string } | undefined;
+        if (sessionKey) {
+          try {
+            const cfg = loadConfig();
+            const storePath = resolveStorePath(cfg.session?.store);
+            const store = loadSessionStore(storePath);
+            const entry = store[sessionKey];
+            if (entry?.deliveryContext) {
+              deliveryContext = {
+                channel: entry.deliveryContext.channel,
+                to: entry.deliveryContext.to,
+                accountId: entry.deliveryContext.accountId,
+              };
+            }
+          } catch {
+            // ignore: delivery context is best-effort
+          }
+        }
         const payload: RestartSentinelPayload = {
           kind: "restart",
           status: "ok",
           ts: Date.now(),
           sessionKey,
+          deliveryContext,
           message: note ?? reason ?? null,
           doctorHint: DOCTOR_NONINTERACTIVE_HINT,
           stats: {
