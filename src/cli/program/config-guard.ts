@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status", "service"]);
+let didRunDoctorConfigFlow = false;
 
 function formatConfigIssues(issues: Array<{ path: string; message: string }>): string[] {
   return issues.map((issue) => `- ${issue.path || "<root>"}: ${issue.message}`);
@@ -14,10 +15,13 @@ export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
 }): Promise<void> {
-  await loadAndMaybeMigrateDoctorConfig({
-    options: { nonInteractive: true },
-    confirm: async () => false,
-  });
+  if (!didRunDoctorConfigFlow) {
+    didRunDoctorConfigFlow = true;
+    await loadAndMaybeMigrateDoctorConfig({
+      options: { nonInteractive: true },
+      confirm: async () => false,
+    });
+  }
 
   const snapshot = await readConfigFileSnapshot();
   const commandName = params.commandPath?.[0];
