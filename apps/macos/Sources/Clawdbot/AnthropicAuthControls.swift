@@ -45,7 +45,7 @@ struct AnthropicAuthControls: View {
                     NSWorkspace.shared.activateFileViewerSelecting([ClawdbotOAuthStore.oauthURL()])
                 }
                 .buttonStyle(.bordered)
-                .disabled(!FileManager.default.fileExists(atPath: ClawdbotOAuthStore.oauthURL().path))
+                .disabled(!FileManager().fileExists(atPath: ClawdbotOAuthStore.oauthURL().path))
 
                 Button("Refresh") {
                     self.refresh()

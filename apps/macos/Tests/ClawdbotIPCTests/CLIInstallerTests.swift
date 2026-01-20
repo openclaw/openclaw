@@ -6,7 +6,7 @@ import Testing
 @MainActor
 struct CLIInstallerTests {
     @Test func installedLocationFindsExecutable() throws {
-        let fm = FileManager.default
+        let fm = FileManager()
         let root = fm.temporaryDirectory.appendingPathComponent(
             "clawdbot-cli-installer-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }

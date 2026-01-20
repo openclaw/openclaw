@@ -234,7 +234,7 @@ enum ClawdbotOAuthStore {
             return URL(fileURLWithPath: expanded, isDirectory: true)
         }
 
-        return FileManager.default.homeDirectoryForCurrentUser
+        return FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot", isDirectory: true)
             .appendingPathComponent("credentials", isDirectory: true)
     }
@@ -253,7 +253,7 @@ enum ClawdbotOAuthStore {
             urls.append(URL(fileURLWithPath: expanded, isDirectory: true).appendingPathComponent(self.oauthFilename))
         }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = FileManager().homeDirectoryForCurrentUser
         urls.append(home.appendingPathComponent(".pi/agent/\(self.oauthFilename)"))
         urls.append(home.appendingPathComponent(".claude/\(self.oauthFilename)"))
         urls.append(home.appendingPathComponent(".config/claude/\(self.oauthFilename)"))
@@ -270,10 +270,10 @@ enum ClawdbotOAuthStore {
 
     static func importLegacyAnthropicOAuthIfNeeded() -> URL? {
         let dest = self.oauthURL()
-        guard !FileManager.default.fileExists(atPath: dest.path) else { return nil }
+        guard !FileManager().fileExists(atPath: dest.path) else { return nil }
 
         for url in self.legacyOAuthURLs() {
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            guard FileManager().fileExists(atPath: url.path) else { continue }
             guard self.anthropicOAuthStatus(at: url).isConnected else { continue }
             guard let storage = self.loadStorage(at: url) else { continue }
             do {
@@ -296,7 +296,7 @@ enum ClawdbotOAuthStore {
     }
 
     static func anthropicOAuthStatus(at url: URL) -> AnthropicOAuthStatus {
-        guard FileManager.default.fileExists(atPath: url.path) else { return .missingFile }
+        guard FileManager().fileExists(atPath: url.path) else { return .missingFile }
 
         guard let data = try? Data(contentsOf: url) else { return .unreadableFile }
         guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return .invalidJSON }
@@ -360,7 +360,7 @@ enum ClawdbotOAuthStore {
 
     private static func saveStorage(_ storage: [String: Any]) throws {
         let dir = self.oauthDir()
-        try FileManager.default.createDirectory(
+        try FileManager().createDirectory(
             at: dir,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
@@ -370,7 +370,7 @@ enum ClawdbotOAuthStore {
             withJSONObject: storage,
             options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 

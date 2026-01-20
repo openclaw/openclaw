@@ -1,10 +1,17 @@
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
 
 /** Image content block for Claude API multimodal messages. */
 export type ImageContent = {
   type: "image";
   data: string;
   mimeType: string;
+};
+
+export type AgentStreamParams = {
+  /** Provider stream params override (best-effort). */
+  temperature?: number;
+  maxTokens?: number;
 };
 
 export type AgentRunContext = {
@@ -20,6 +27,8 @@ export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
+  /** Optional client-provided tools (OpenResponses hosted tools). */
+  clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
   agentId?: string;
   to?: string;
@@ -50,4 +59,6 @@ export type AgentCommandOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  /** Per-call stream param overrides (best-effort). */
+  streamParams?: AgentStreamParams;
 };

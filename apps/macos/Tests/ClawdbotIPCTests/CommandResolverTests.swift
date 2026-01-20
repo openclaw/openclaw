@@ -12,16 +12,16 @@ import Testing
     private func makeTempDir() throws -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let dir = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     private func makeExec(at path: URL) throws {
-        try FileManager.default.createDirectory(
+        try FileManager().createDirectory(
             at: path.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        FileManager().createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
 
     @Test func prefersClawdbotBinary() async throws {
@@ -49,7 +49,7 @@ import Testing
         let scriptPath = tmp.appendingPathComponent("bin/clawdbot.js")
         try self.makeExec(at: nodePath)
         try "#!/bin/sh\necho v22.0.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try self.makeExec(at: scriptPath)
 
         let cmd = CommandResolver.clawdbotCommand(

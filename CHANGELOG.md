@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Android: remove legacy bridge transport code now that nodes use the gateway protocol.
 - Android: send structured payloads in node events/invokes and include user-agent metadata in gateway connects.
+- Gateway: expand `/v1/responses` to support file/image inputs, tool_choice, usage, and output limits. (#1229) — thanks @RyanLisse.
 - Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) — thanks @steipete.
 
 ### Fixes
@@ -35,6 +36,7 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety; run `clawdbot doctor --fix` to repair. 
 
 ### Changes
+- Gateway: add `/v1/responses` endpoint (OpenResponses API) for agentic workflows with item-based input and semantic streaming events. Enable via `gateway.http.endpoints.responses.enabled: true`.
 - Usage: add `/usage cost` summaries and macOS menu cost submenu with daily charting.
 - Agents: clarify node_modules read-only guidance in agent instructions.
 - TUI: add syntax highlighting for code blocks. (#1200) — thanks @vignesh07.

@@ -32,7 +32,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let safeSessionKey = CanvasWindowController.sanitizeSessionKey(sessionKey)
         canvasWindowLogger.debug("CanvasWindowController init sanitized session=\(safeSessionKey, privacy: .public)")
         self.sessionDir = root.appendingPathComponent(safeSessionKey, isDirectory: true)
-        try FileManager.default.createDirectory(at: self.sessionDir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: self.sessionDir, withIntermediateDirectories: true)
         canvasWindowLogger.debug("CanvasWindowController init session dir ready")
 
         self.schemeHandler = CanvasSchemeHandler(root: root)
@@ -143,8 +143,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                 if path == "/" || path.isEmpty {
                     let indexA = sessionDir.appendingPathComponent("index.html", isDirectory: false)
                     let indexB = sessionDir.appendingPathComponent("index.htm", isDirectory: false)
-                    if !FileManager.default.fileExists(atPath: indexA.path),
-                       !FileManager.default.fileExists(atPath: indexB.path)
+                    if !FileManager().fileExists(atPath: indexA.path),
+                       !FileManager().fileExists(atPath: indexB.path)
                     {
                         return
                     }
@@ -233,7 +233,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         // (Avoid treating Canvas routes like "/" as filesystem paths.)
         if trimmed.hasPrefix("/") {
             var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
+            if FileManager().fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
                 let url = URL(fileURLWithPath: trimmed)
                 canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
                 self.loadFile(url)

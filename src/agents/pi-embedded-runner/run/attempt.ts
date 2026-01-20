@@ -64,6 +64,7 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
+import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
@@ -314,6 +315,16 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
+      // Add client tools (OpenResponses hosted tools) to customTools
+      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      const clientToolDefs = params.clientTools
+        ? toClientToolDefinitions(params.clientTools, (toolName, toolParams) => {
+            clientToolCallDetected = { name: toolName, params: toolParams };
+          })
+        : [];
+
+      const allCustomTools = [...customTools, ...clientToolDefs];
+
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -323,7 +334,7 @@ export async function runEmbeddedAttempt(
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         systemPrompt,
         tools: builtInTools,
-        customTools,
+        customTools: allCustomTools,
         sessionManager,
         settingsManager,
         skills: [],
@@ -338,7 +349,13 @@ export async function runEmbeddedAttempt(
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
 
-      applyExtraParamsToAgent(activeSession.agent, params.config, params.provider, params.modelId);
+      applyExtraParamsToAgent(
+        activeSession.agent,
+        params.config,
+        params.provider,
+        params.modelId,
+        params.streamParams,
+      );
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -681,6 +698,8 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
+        // Client tool call detected (OpenResponses hosted tools)
+        clientToolCall: clientToolCallDetected ?? undefined,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

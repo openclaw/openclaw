@@ -91,7 +91,7 @@ final class ScreenRecordService: @unchecked Sendable {
         let includeAudio = includeAudio ?? true
 
         let outURL = self.makeOutputURL(outPath: outPath)
-        try? FileManager.default.removeItem(at: outURL)
+        try? FileManager().removeItem(at: outURL)
 
         return RecordConfig(
             durationMs: durationMs,
@@ -104,7 +104,7 @@ final class ScreenRecordService: @unchecked Sendable {
         if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return URL(fileURLWithPath: outPath)
         }
-        return FileManager.default.temporaryDirectory
+        return FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-screen-record-\(UUID().uuidString).mp4")
     }
 

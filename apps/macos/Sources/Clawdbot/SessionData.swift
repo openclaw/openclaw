@@ -246,7 +246,7 @@ enum SessionLoader {
     static let fallbackContextTokens = 200_000
 
     static let defaultStorePath = standardize(
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot/sessions/sessions.json").path)
 
     static func loadSnapshot(

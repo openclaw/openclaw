@@ -6,9 +6,9 @@ import Testing
 struct AnthropicAuthResolverTests {
     @Test
     func prefersOAuthFileOverEnv() throws {
-        let dir = FileManager.default.temporaryDirectory
+        let dir = FileManager().temporaryDirectory
             .appendingPathComponent("clawdbot-oauth-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
         let oauthFile = dir.appendingPathComponent("oauth.json")
         let payload = [
             "anthropic": [

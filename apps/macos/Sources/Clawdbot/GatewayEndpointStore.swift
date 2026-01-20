@@ -155,7 +155,8 @@ actor GatewayEndpointStore {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-               !configToken.isEmpty
+               !configToken.isEmpty,
+               configToken != trimmed
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -164,32 +165,19 @@ actor GatewayEndpointStore {
             }
             return trimmed
         }
-        if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let token = remote["token"] as? String
-            {
-                let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty {
-                    return value
-                }
-            }
-            return nil
-        }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let token = auth["token"] as? String
+        
+        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+           !configToken.isEmpty
         {
-            let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty {
-                return value
-            }
+            return configToken
         }
+
         if let token = launchdSnapshot?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
             return token
         }
+        
         return nil
     }
 

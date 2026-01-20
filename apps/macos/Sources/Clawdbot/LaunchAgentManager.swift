@@ -3,17 +3,17 @@ import Foundation
 enum LaunchAgentManager {
     private static let legacyLaunchdLabel = "com.steipete.clawdbot"
     private static var plistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/com.clawdbot.mac.plist")
     }
 
     private static var legacyPlistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(legacyLaunchdLabel).plist")
     }
 
     static func status() async -> Bool {
-        guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return false }
+        guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
         let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"])
         return result == 0
     }
@@ -21,7 +21,7 @@ enum LaunchAgentManager {
     static func set(enabled: Bool, bundlePath: String) async {
         if enabled {
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(self.legacyLaunchdLabel)"])
-            try? FileManager.default.removeItem(at: self.legacyPlistURL)
+            try? FileManager().removeItem(at: self.legacyPlistURL)
             self.writePlist(bundlePath: bundlePath)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
             _ = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
@@ -29,7 +29,7 @@ enum LaunchAgentManager {
         } else {
             // Disable autostart going forward but leave the current app running.
             // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
-            try? FileManager.default.removeItem(at: self.plistURL)
+            try? FileManager().removeItem(at: self.plistURL)
         }
     }
 
@@ -46,7 +46,7 @@ enum LaunchAgentManager {
             <string>\(bundlePath)/Contents/MacOS/Clawdbot</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(FileManager.default.homeDirectoryForCurrentUser.path)</string>
+          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>

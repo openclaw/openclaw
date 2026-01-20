@@ -112,6 +112,11 @@ export type GatewayServerOptions = {
    */
   openAiChatCompletionsEnabled?: boolean;
   /**
+   * If false, do not serve `POST /v1/responses` (OpenResponses API).
+   * Default: config `gateway.http.endpoints.responses.enabled` (or false when absent).
+   */
+  openResponsesEnabled?: boolean;
+  /**
    * Override gateway auth configuration (merges with config).
    */
   auth?: import("../config/config.js").GatewayAuthConfig;
@@ -205,6 +210,7 @@ export async function startGatewayServer(
     host: opts.host,
     controlUiEnabled: opts.controlUiEnabled,
     openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+    openResponsesEnabled: opts.openResponsesEnabled,
     auth: opts.auth,
     tailscale: opts.tailscale,
   });
@@ -212,6 +218,8 @@ export async function startGatewayServer(
     bindHost,
     controlUiEnabled,
     openAiChatCompletionsEnabled,
+    openResponsesEnabled,
+    openResponsesConfig,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,
@@ -250,6 +258,8 @@ export async function startGatewayServer(
     controlUiEnabled,
     controlUiBasePath,
     openAiChatCompletionsEnabled,
+    openResponsesEnabled,
+    openResponsesConfig,
     resolvedAuth,
     gatewayTls,
     hooksConfig: () => hooksConfig,

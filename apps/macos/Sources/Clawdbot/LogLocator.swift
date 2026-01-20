@@ -18,7 +18,7 @@ enum LogLocator {
     }
 
     private static func ensureLogDirExists() {
-        try? FileManager.default.createDirectory(at: self.logDir, withIntermediateDirectories: true)
+        try? FileManager().createDirectory(at: self.logDir, withIntermediateDirectories: true)
     }
 
     private static func modificationDate(for url: URL) -> Date {
@@ -28,7 +28,7 @@ enum LogLocator {
     /// Returns the newest log file under /tmp/clawdbot/ (rolling or stdout), or nil if none exist.
     static func bestLogFile() -> URL? {
         self.ensureLogDirExists()
-        let fm = FileManager.default
+        let fm = FileManager()
         let files = (try? fm.contentsOfDirectory(
             at: self.logDir,
             includingPropertiesForKeys: [.contentModificationDateKey],

@@ -18,7 +18,7 @@ enum ClawdbotConfigFile {
 
     static func loadDict() -> [String: Any] {
         let url = self.url()
-        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        guard FileManager().fileExists(atPath: url.path) else { return [:] }
         do {
             let data = try Data(contentsOf: url)
             guard let root = self.parseConfigData(data) else {
@@ -38,7 +38,7 @@ enum ClawdbotConfigFile {
         do {
             let data = try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys])
             let url = self.url()
-            try FileManager.default.createDirectory(
+            try FileManager().createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])

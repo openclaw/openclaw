@@ -2,7 +2,7 @@ import Foundation
 
 public enum ClawdbotNodeStorage {
     public static func appSupportDir() throws -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         guard let base else {
             throw NSError(domain: "ClawdbotNodeStorage", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Application Support directory unavailable",
@@ -19,7 +19,7 @@ public enum ClawdbotNodeStorage {
     }
 
     public static func cachesDir() throws -> URL {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let base = FileManager().urls(for: .cachesDirectory, in: .userDomainMask).first
         guard let base else {
             throw NSError(domain: "ClawdbotNodeStorage", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "Caches directory unavailable",

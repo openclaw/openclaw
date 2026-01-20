@@ -111,7 +111,7 @@ enum RuntimeLocator {
     // MARK: - Internals
 
     private static func findExecutable(named name: String, searchPaths: [String]) -> String? {
-        let fm = FileManager.default
+        let fm = FileManager()
         for dir in searchPaths {
             let candidate = (dir as NSString).appendingPathComponent(name)
             if fm.isExecutableFile(atPath: candidate) {

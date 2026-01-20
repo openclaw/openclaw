@@ -21,7 +21,7 @@ enum ClawdbotPaths {
         if let override = ClawdbotEnv.path(self.stateDirEnv) {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return FileManager.default.homeDirectoryForCurrentUser
+        return FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdbot", isDirectory: true)
     }
 

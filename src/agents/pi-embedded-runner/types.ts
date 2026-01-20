@@ -23,6 +23,14 @@ export type EmbeddedPiRunMeta = {
     kind: "context_overflow" | "compaction_failure" | "role_ordering";
     message: string;
   };
+  /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
+  stopReason?: string;
+  /** Pending tool calls when stopReason is "tool_calls". */
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
 };
 
 export type EmbeddedPiRunResult = {

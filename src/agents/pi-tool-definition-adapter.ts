@@ -4,6 +4,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -61,6 +62,41 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             error: described.message,
           });
         }
+      },
+    } satisfies ToolDefinition;
+  });
+}
+
+// Convert client tools (OpenResponses hosted tools) to ToolDefinition format
+// These tools are intercepted to return a "pending" result instead of executing
+export function toClientToolDefinitions(
+  tools: ClientToolDefinition[],
+  onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+): ToolDefinition[] {
+  return tools.map((tool) => {
+    const func = tool.function;
+    return {
+      name: func.name,
+      label: func.name,
+      description: func.description ?? "",
+      parameters: func.parameters as any,
+      execute: async (
+        toolCallId,
+        params,
+        _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+        _ctx,
+        _signal,
+      ): Promise<AgentToolResult<unknown>> => {
+        // Notify handler that a client tool was called
+        if (onClientToolCall) {
+          onClientToolCall(func.name, params as Record<string, unknown>);
+        }
+        // Return a pending result - the client will execute this tool
+        return jsonResult({
+          status: "pending",
+          tool: func.name,
+          message: "Tool execution delegated to client",
+        });
       },
     } satisfies ToolDefinition;
   });

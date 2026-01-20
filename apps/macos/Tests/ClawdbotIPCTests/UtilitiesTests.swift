@@ -47,17 +47,17 @@ import Testing
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let dist = tmp.appendingPathComponent("dist/index.js")
         let bin = tmp.appendingPathComponent("bin/clawdbot.js")
-        try FileManager.default.createDirectory(at: dist.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: bin.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: dist.path, contents: Data())
-        FileManager.default.createFile(atPath: bin.path, contents: Data())
+        try FileManager().createDirectory(at: dist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager().createDirectory(at: bin.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager().createFile(atPath: dist.path, contents: Data())
+        FileManager().createFile(atPath: bin.path, contents: Data())
 
         let entry = CommandResolver.gatewayEntrypoint(in: tmp)
         #expect(entry == dist.path)
     }
 
     @Test func logLocatorPicksNewestLogFile() throws {
-        let fm = FileManager.default
+        let fm = FileManager()
         let dir = URL(fileURLWithPath: "/tmp/clawdbot", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
 

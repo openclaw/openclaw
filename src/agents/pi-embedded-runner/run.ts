@@ -239,6 +239,7 @@ export async function runEmbeddedPiAgent(
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
+            streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
           });
@@ -482,6 +483,17 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              // Handle client tool calls (OpenResponses hosted tools)
+              stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
+              pendingToolCalls: attempt.clientToolCall
+                ? [
+                    {
+                      id: `call_${Date.now()}`,
+                      name: attempt.clientToolCall.name,
+                      arguments: JSON.stringify(attempt.clientToolCall.params),
+                    },
+                  ]
+                : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             messagingToolSentTexts: attempt.messagingToolSentTexts,
