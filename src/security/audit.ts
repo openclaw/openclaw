@@ -14,6 +14,7 @@ import {
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectModelHygieneFindings,
+  collectSmallModelRiskFindings,
   collectPluginsTrustFindings,
   collectSecretsInConfigFindings,
   collectStateDeepFilesystemFindings,
@@ -805,6 +806,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectHooksHardeningFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
+  findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
 
   const configSnapshot =

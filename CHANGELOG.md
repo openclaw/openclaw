@@ -17,6 +17,7 @@ Docs: https://docs.clawd.bot
 - Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) — thanks @sibbl.
 - Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) — thanks @steipete.
 - Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) — thanks @suminhthanh.
+- Security: warn when <=300B models run without sandboxing and with web tools enabled.
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Agents: preserve subagent announce thread/topic routing + queued replies across channels. (#1241) — thanks @gnarco.
