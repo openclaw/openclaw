@@ -1,77 +1,223 @@
 ---
 name: bird
-description: X/Twitter CLI for reading, searching, and posting via cookies or Sweetistics.
+description: X/Twitter CLI for reading, searching, posting, and engagement via cookies.
 homepage: https://bird.fast
-metadata: {"clawdbot":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"}]}}
+metadata: {"clawdbot":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"},{"id":"npm","kind":"npm","package":"@steipete/bird","bins":["bird"],"label":"Install bird (npm)"}]}}
 ---
 
-# bird
+# bird 🐦
 
-## Reading vs Writing - Different Tools
+Fast X/Twitter CLI using GraphQL + cookie auth. No API keys needed.
 
-**For READING tweets** (works great):
-- Use the `bird` CLI - it's fast and reliable
-- `bird read <url-or-id>` - grab a specific tweet
-- `bird search "query" -n 5` - search tweets
-- `bird mentions` - check notifications
-
-**For WRITING tweets** (here's where it gets spicy):
-- **Don't use the CLI for posting** - Twitter flags it as automated and you'll get rate limited or soft-banned fast
-- **Use the browser tool instead** - mimics real human behavior
-
-## Quick Reference (Reading Only)
+## Install
 
 ```bash
-bird whoami           # Check auth status
-bird read <url-or-id> # Read a specific tweet
-bird thread <url-or-id> # Read full thread
-bird search "query" -n 5 # Search tweets
-bird mentions         # Check notifications
+# npm/pnpm/bun (Node ≥ 20)
+npm install -g @steipete/bird
+
+# Homebrew (macOS, prebuilt binary)
+brew install steipete/tap/bird
+
+# One-shot (no install)
+bunx @steipete/bird whoami
 ```
 
-## The React Input Problem
+## Authentication
 
-Twitter's compose box is a React controlled input. You can't just set `.value` like a normal input - React ignores it. The workaround:
+`bird` uses your existing browser session (cookie auth). No password prompt.
 
-**Simulate a paste event:**
-```javascript
-// 1. Focus the editor
-var editor = document.querySelector('[data-testid="tweetTextarea_0"]');
-editor.focus();
+Resolution order:
+1. CLI flags: `--auth-token`, `--ct0`
+2. Environment: `AUTH_TOKEN`, `CT0`
+3. Browser cookies via `--cookie-source` (default: Safari → Chrome → Firefox)
 
-// 2. Create a fake paste event (this triggers React's state update)
-var dataTransfer = new DataTransfer();
-dataTransfer.setData('text/plain', 'your tweet text here');
-var pasteEvent = new ClipboardEvent('paste', {
-  clipboardData: dataTransfer,
-  bubbles: true,
-  cancelable: true
-});
-editor.dispatchEvent(pasteEvent);
+For Chromium variants (Arc/Brave), use `--chrome-profile-dir <path>`.
 
-// 3. Click the post button
-document.querySelector('[data-testid="tweetButtonInline"]').click();
+## Commands
+
+### Account & Auth
+
+```bash
+bird whoami                    # Show logged-in account
+bird check                     # Show credential sources
+bird query-ids --fresh         # Refresh GraphQL query ID cache
 ```
 
-## Browser Setup Notes
+### Reading Tweets
 
-- Use a dedicated browser profile (e.g. "clawd") so you're logged in persistently
-- The cookie config lives at `~/.config/bird/config.json5` for the CLI
-- If CDP fails, kill Chrome completely (`pkill -9 "Google Chrome"`) and restart with `browser action=start`
+```bash
+bird read <url-or-id>          # Read a single tweet
+bird <url-or-id>               # Shorthand for read
+bird thread <url-or-id>        # Full conversation thread
+bird replies <url-or-id>       # List replies to a tweet
+```
 
-## Rate Limiting & Detection
+### Timelines
 
-- Space out your posts - don't rapid-fire
-- Vary your timing slightly (don't post at exactly :00 every hour)
-- If you get flagged, the account might need a CAPTCHA solve manually
-- Reading is basically unlimited, posting is where they watch you
+```bash
+bird home                      # Home timeline (For You)
+bird home --following          # Following timeline
+bird user-tweets @handle -n 20 # User's profile timeline
+bird mentions                  # Tweets mentioning you
+bird mentions --user @handle   # Mentions of another user
+```
 
-## Selectors That Work (as of late 2025)
+### Search
 
-- Tweet compose box: `[data-testid="tweetTextarea_0"]`
-- Post button: `[data-testid="tweetButtonInline"]`
-- These change occasionally so if stuff breaks, inspect the page
+```bash
+bird search "query" -n 10
+bird search "from:steipete" --all --max-pages 3
+```
+
+### News & Trending
+
+```bash
+bird news -n 10                # AI-curated from Explore tabs
+bird news --ai-only            # Filter to AI-curated only
+bird news --sports             # Sports tab
+bird news --with-tweets        # Include related tweets
+bird trending                  # Alias for news
+```
+
+### Lists
+
+```bash
+bird lists                     # Your lists
+bird lists --member-of         # Lists you're a member of
+bird list-timeline <id> -n 20  # Tweets from a list
+```
+
+### Bookmarks & Likes
+
+```bash
+bird bookmarks -n 10
+bird bookmarks --folder-id <id>           # Specific folder
+bird bookmarks --include-parent           # Include parent tweet
+bird bookmarks --author-chain             # Author's self-reply chain
+bird bookmarks --full-chain-only          # Full reply chain
+bird unbookmark <url-or-id>
+bird likes -n 10
+```
+
+### Social Graph
+
+```bash
+bird following -n 20           # Users you follow
+bird followers -n 20           # Users following you
+bird following --user <id>     # Another user's following
+bird about @handle             # Account origin/location info
+```
+
+### Engagement Actions
+
+```bash
+bird follow @handle            # Follow a user
+bird unfollow @handle          # Unfollow a user
+```
+
+The library also exposes like/unlike/retweet/unretweet/bookmark mutations.
+
+### Posting
+
+```bash
+bird tweet "hello world"
+bird reply <url-or-id> "nice thread!"
+bird tweet "check this out" --media image.png --alt "description"
+```
+
+**⚠️ Posting risks**: Twitter may flag automated posting (error 226). `bird` falls back to legacy endpoints, but for high-volume or sensitive posting, consider using the browser tool instead.
+
+## Media Uploads
+
+```bash
+bird tweet "hi" --media img.png --alt "description"
+bird tweet "pics" --media a.jpg --media b.jpg  # Up to 4 images
+bird tweet "video" --media clip.mp4            # Or 1 video
+```
+
+Supported: jpg, jpeg, png, webp, gif, mp4, mov.
+
+## Pagination
+
+Commands supporting pagination: `replies`, `thread`, `search`, `bookmarks`, `likes`, `list-timeline`, `following`, `followers`, `user-tweets`
+
+```bash
+bird bookmarks --all                    # Fetch all pages
+bird bookmarks --max-pages 3            # Limit pages
+bird bookmarks --cursor <cursor>        # Resume from cursor
+bird replies <id> --all --delay 1000    # Delay between pages (ms)
+```
+
+## Output Options
+
+```bash
+--json          # JSON output
+--json-full     # JSON with raw API response
+--plain         # No emoji, no color (script-friendly)
+--no-emoji      # Disable emoji
+--no-color      # Disable ANSI colors (or set NO_COLOR=1)
+--quote-depth n # Max quoted tweet depth in JSON (default: 1)
+```
+
+## Global Options
+
+```bash
+--auth-token <token>       # Set auth_token cookie
+--ct0 <token>              # Set ct0 cookie
+--cookie-source <browser>  # safari|chrome|firefox (repeatable)
+--chrome-profile <name>    # Chrome profile name
+--chrome-profile-dir <path> # Chromium profile dir (Arc/Brave)
+--firefox-profile <name>   # Firefox profile
+--timeout <ms>             # Request timeout
+--cookie-timeout <ms>      # Cookie extraction timeout
+```
+
+## Config File
+
+`~/.config/bird/config.json5` (global) or `./.birdrc.json5` (project):
+
+```json5
+{
+  cookieSource: ["safari", "chrome"],
+  chromeProfileDir: "/path/to/Arc/Profile",
+  timeoutMs: 20000,
+  quoteDepth: 1
+}
+```
+
+Environment variables: `BIRD_TIMEOUT_MS`, `BIRD_COOKIE_TIMEOUT_MS`, `BIRD_QUOTE_DEPTH`
+
+## Library Usage
+
+```typescript
+import { TwitterClient, resolveCredentials } from '@steipete/bird';
+
+const { cookies } = await resolveCredentials({ cookieSource: 'safari' });
+const client = new TwitterClient({ cookies });
+
+const searchResult = await client.search('from:steipete', 50);
+const newsResult = await client.getNews(10, { aiOnly: true });
+```
+
+## Troubleshooting
+
+### Query IDs stale (404 errors)
+```bash
+bird query-ids --fresh
+```
+
+### Cookie extraction fails
+- Check browser is logged into X
+- Try different `--cookie-source`
+- For Arc/Brave: use `--chrome-profile-dir`
+
+### Rate limited (429)
+- Space out requests
+- Reading is generous; posting/engagement is watched more closely
+
+### Error 226 on posting
+Twitter flagged as automated. `bird` auto-retries with legacy endpoint, but may still fail. Use browser for reliable posting.
 
 ---
 
-**TL;DR: read with CLI, write with browser + paste hack.** 🐦
+**TL;DR**: Read/search/engage with CLI. Post carefully or use browser. 🐦
