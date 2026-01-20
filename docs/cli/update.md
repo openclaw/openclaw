@@ -11,6 +11,9 @@ Safely update a **source checkout** (git install) of Clawdbot.
 
 If you installed via **npm/pnpm** (global install, no git metadata), use the package manager flow in [Updating](/install/updating).
 
+> [!NOTE]
+> Two-clone workflow: keep a stable clone on tagged releases (`git checkout --tag latest`), and a separate clone for bleeding-edge hacking (`git pull`).
+
 ## Usage
 
 ```bash

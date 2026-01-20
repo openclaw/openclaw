@@ -14,6 +14,9 @@ Last updated: 2026-01-01
 - **Stable workflow:** install the macOS app; let it run the bundled Gateway.
 - **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
+> [!NOTE]
+> Two-clone workflow: keep a stable clone on tagged releases (`git checkout --tag latest`), and a separate clone for bleeding-edge hacking (`git pull`).
+
 ## Prereqs (from source)
 - Node `>=22`
 - `pnpm`

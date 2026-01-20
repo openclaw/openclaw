@@ -9,6 +9,9 @@ read_when:
 
 Clawdbot is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart → verify.
 
+> [!NOTE]
+> Two-clone workflow: keep a stable clone on tagged releases (`git checkout --tag latest`), and a separate clone for bleeding-edge hacking (`git pull`).
+
 ## Recommended: re-run the website installer (upgrade in place)
 
 The **preferred** update path is to re-run the installer from the website. It
