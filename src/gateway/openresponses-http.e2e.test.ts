@@ -60,6 +60,15 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   return events;
 }
 
+async function ensureResponseConsumed(res: Response) {
+  if (res.bodyUsed) return;
+  try {
+    await res.text();
+  } catch {
+    // Ignore drain failures; best-effort to release keep-alive sockets in tests.
+  }
+}
+
 describe("OpenResponses HTTP API (e2e)", () => {
   it("is disabled by default (requires config)", async () => {
     const port = await getFreePort();
@@ -70,6 +79,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hi",
       });
       expect(res.status).toBe(404);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -86,6 +96,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hi",
       });
       expect(res.status).toBe(404);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -100,6 +111,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { authorization: "Bearer secret" },
       });
       expect(res.status).toBe(405);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -115,6 +127,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         body: JSON.stringify({ model: "clawdbot", input: "hi" }),
       });
       expect(res.status).toBe(401);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -130,6 +143,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
         "invalid_request_error",
       );
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -155,6 +169,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -179,6 +194,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -203,6 +219,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
         "openresponses-user:alice",
       );
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -224,6 +241,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
       expect((opts as { message?: string } | undefined)?.message).toBe("hello world");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -245,6 +263,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
       expect((opts as { message?: string } | undefined)?.message).toBe("hello there");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -273,6 +292,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toContain("You are a helpful assistant.");
       expect(extraSystemPrompt).toContain("Be concise.");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -297,6 +317,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const extraSystemPrompt =
         (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toContain("Always respond in French.");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -328,6 +349,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(message).toContain("Assistant: I am Claude.");
       expect(message).toContain(CURRENT_MESSAGE_MARKER);
       expect(message).toContain("User: What did I just ask you?");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -353,6 +375,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const [opts] = agentCommand.mock.calls[0] ?? [];
       const message = (opts as { message?: string } | undefined)?.message ?? "";
       expect(message).toContain("Sunny, 70F.");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -395,6 +418,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (opts as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(message).toBe("read this");
       expect(extraSystemPrompt).toContain('<file name="hello.txt">');
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -423,6 +447,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
       const [opts] = agentCommand.mock.calls[0] ?? [];
       expect((opts as { clientTools?: unknown[] } | undefined)?.clientTools).toBeUndefined();
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -458,6 +483,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (opts as { clientTools?: Array<{ function?: { name?: string } }> })?.clientTools ?? [];
       expect(clientTools).toHaveLength(1);
       expect(clientTools[0]?.function?.name).toBe("get_time");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -479,6 +505,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: { type: "function", function: { name: "unknown_tool" } },
       });
       expect(res.status).toBe(400);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -503,6 +530,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(
         (opts as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams?.maxTokens,
       ).toBe(123);
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -529,6 +557,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(res.status).toBe(200);
       const json = (await res.json()) as Record<string, unknown>;
       expect(json.usage).toEqual({ input_tokens: 3, output_tokens: 5, total_tokens: 10 });
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -563,6 +592,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(content.length).toBe(1);
       expect(content[0]?.type).toBe("output_text");
       expect(content[0]?.text).toBe("hello");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -581,6 +611,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect((json.error as Record<string, unknown> | undefined)?.type).toBe(
         "invalid_request_error",
       );
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -631,6 +662,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         })
         .join("");
       expect(allDeltas).toBe("hello");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -653,6 +685,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const text = await res.text();
       expect(text).toContain("[DONE]");
       expect(text).toContain("hello");
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
@@ -681,6 +714,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }
+      await ensureResponseConsumed(res);
     } finally {
       await server.close({ reason: "test done" });
     }
