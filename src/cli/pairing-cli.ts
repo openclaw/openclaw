@@ -10,6 +10,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
 function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel {
@@ -95,12 +96,12 @@ export function registerPairingCli(program: Command) {
       const resolvedCode = opts.channel ? codeOrChannel : code;
       if (!opts.channel && !code) {
         throw new Error(
-          `Usage: clawdbot pairing approve <channel> <code> (or: clawdbot pairing approve --channel <channel> <code>)`,
+          `Usage: ${formatCliCommand("clawdbot pairing approve <channel> <code>")} (or: ${formatCliCommand("clawdbot pairing approve --channel <channel> <code>")})`,
         );
       }
       if (opts.channel && code != null) {
         throw new Error(
-          `Too many arguments. Use: clawdbot pairing approve --channel <channel> <code>`,
+          `Too many arguments. Use: ${formatCliCommand("clawdbot pairing approve --channel <channel> <code>")}`,
         );
       }
       const channel = parseChannel(channelRaw, channels);

@@ -7,6 +7,7 @@ import type { ClawdbotConfig, ConfigFileSnapshot } from "../config/config.js";
 import { createConfigIO } from "../config/config.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -105,7 +106,7 @@ export function collectSyncedFolderFindings(params: {
       severity: "warn",
       title: "State/config path looks like a synced folder",
       detail: `stateDir=${params.stateDir}, configPath=${params.configPath}. Synced folders (iCloud/Dropbox/OneDrive/Google Drive) can leak tokens and transcripts onto other devices.`,
-      remediation: `Keep CLAWDBOT_STATE_DIR on a local-only volume and re-run "clawdbot security audit --fix".`,
+      remediation: `Keep CLAWDBOT_STATE_DIR on a local-only volume and re-run "${formatCliCommand("clawdbot security audit --fix")}".`,
     });
   }
   return findings;

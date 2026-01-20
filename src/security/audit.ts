@@ -5,6 +5,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
 import {
@@ -264,7 +265,7 @@ function collectBrowserControlFindings(cfg: ClawdbotConfig): SecurityAuditFindin
       severity: "warn",
       title: "Browser control config looks invalid",
       detail: String(err),
-      remediation: `Fix browser.controlUrl/browser.cdpUrl in ${resolveConfigPath()} and re-run "clawdbot security audit --deep".`,
+      remediation: `Fix browser.controlUrl/browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
     });
     return findings;
   }
@@ -840,7 +841,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       severity: "warn",
       title: "Gateway probe failed (deep)",
       detail: deep.gateway.error ?? "gateway unreachable",
-      remediation: `Run "clawdbot status --all" to debug connectivity/auth, then re-run "clawdbot security audit --deep".`,
+      remediation: `Run "${formatCliCommand("clawdbot status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("clawdbot security audit --deep")}".`,
     });
   }
 

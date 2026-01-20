@@ -11,6 +11,7 @@ import { defaultRuntime } from "../runtime.js";
 import { movePathToTrash } from "../browser/trash.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 
 function bundledExtensionRootDir() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -103,7 +104,7 @@ export function registerBrowserExtensionCommands(
         defaultRuntime.error(
           danger(
             [
-              'Chrome extension is not installed. Run: "clawdbot browser extension install"',
+              `Chrome extension is not installed. Run: "${formatCliCommand("clawdbot browser extension install")}"`,
               `Docs: ${formatDocsLink("/tools/chrome-extension", "docs.clawd.bot/tools/chrome-extension")}`,
             ].join("\n"),
           ),

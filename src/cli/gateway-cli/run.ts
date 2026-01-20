@@ -18,6 +18,7 @@ import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
@@ -161,7 +162,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
-        "Missing config. Run `clawdbot setup` or set gateway.mode=local (or pass --allow-unconfigured).",
+        `Missing config. Run \`${formatCliCommand("clawdbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
       );
     } else {
       defaultRuntime.error(
@@ -277,7 +278,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot daemon stop`,
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("clawdbot daemon stop")}`,
       );
       try {
         const diagnostics = await inspectPortUsage(port);

@@ -6,6 +6,7 @@ import {
   resolveSystemNodeInfo,
 } from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type WarnFn = (message: string, title?: string) => void;
@@ -65,5 +66,5 @@ export async function buildGatewayInstallPlan(params: {
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: rerun from an elevated PowerShell (Start → type PowerShell → right-click → Run as administrator) or skip daemon install."
-    : "Tip: rerun `clawdbot daemon install` after fixing the error.";
+    : `Tip: rerun \`${formatCliCommand("clawdbot daemon install")}\` after fixing the error.`;
 }

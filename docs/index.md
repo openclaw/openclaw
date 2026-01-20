@@ -123,8 +123,10 @@ cd clawdbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-pnpm clawdbot onboard --install-daemon
+clawdbot onboard --install-daemon
 ```
+
+If you don’t have a global install yet, run the onboarding step via `pnpm clawdbot ...` from the repo.
 
 Multi-instance quickstart (optional):
 

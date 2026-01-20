@@ -4,6 +4,7 @@ import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { killProcessTree } from "../../agents/shell-utils.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logVerbose } from "../../globals.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
@@ -167,7 +168,9 @@ function formatElevatedUnavailableMessage(params: {
   lines.push("- agents.list[].tools.elevated.enabled");
   lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
   if (params.sessionKey) {
-    lines.push(`See: clawdbot sandbox explain --session ${params.sessionKey}`);
+    lines.push(
+      `See: ${formatCliCommand(`clawdbot sandbox explain --session ${params.sessionKey}`)}`,
+    );
   }
   return lines.join("\n");
 }

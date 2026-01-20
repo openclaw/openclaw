@@ -6,6 +6,7 @@ import { resolveUserPath } from "../utils.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
@@ -18,7 +19,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       [
         "Non-interactive onboarding requires explicit risk acknowledgement.",
         "Read: https://docs.clawd.bot/security",
-        "Re-run with: clawdbot onboard --non-interactive --accept-risk ...",
+        `Re-run with: ${formatCliCommand("clawdbot onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
     runtime.exit(1);

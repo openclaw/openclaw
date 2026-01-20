@@ -1,5 +1,6 @@
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { withProgress } from "../cli/progress.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -337,7 +338,7 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
-      { Item: "Security", Value: "Run: clawdbot security audit --deep" },
+      { Item: "Security", Value: `Run: ${formatCliCommand("clawdbot security audit --deep")}` },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
         : { Item: "Gateway self", Value: "unknown" },

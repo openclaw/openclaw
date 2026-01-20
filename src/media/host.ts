@@ -3,6 +3,7 @@ import { ensurePortAvailable, PortInUseError } from "../infra/ports.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { startMediaServer } from "./server.js";
 import { saveMediaSource } from "./store.js";
 
@@ -36,7 +37,7 @@ export async function ensureMediaHosted(
   if (needsServerStart && !opts.startServer) {
     await fs.rm(saved.path).catch(() => {});
     throw new Error(
-      "Media hosting requires the webhook/Funnel server. Start `clawdbot webhook`/`clawdbot up` or re-run with --serve-media.",
+      `Media hosting requires the webhook/Funnel server. Start \`${formatCliCommand("clawdbot webhook")}\`/\`${formatCliCommand("clawdbot up")}\` or re-run with --serve-media.`,
     );
   }
   if (needsServerStart && opts.startServer) {

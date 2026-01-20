@@ -116,6 +116,13 @@ If a token is configured, paste it into the Control UI settings (stored as `conn
 ⚠️ **Bun warning (WhatsApp + Telegram):** Bun has known issues with these
 channels. If you use WhatsApp or Telegram, run the Gateway with **Node**.
 
+## 3.5) Quick verify (2 min)
+
+```bash
+clawdbot status
+clawdbot health
+```
+
 ## 4) Pair + connect your first chat surface
 
 ### WhatsApp (QR login)
@@ -158,8 +165,10 @@ cd clawdbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-pnpm clawdbot onboard --install-daemon
+clawdbot onboard --install-daemon
 ```
+
+If you don’t have a global install yet, run the onboarding step via `pnpm clawdbot ...` from the repo.
 
 Gateway (from this repo):
 
@@ -169,15 +178,13 @@ node dist/entry.js gateway --port 18789 --verbose
 
 ## 7) Verify end-to-end
 
-In a new terminal:
+In a new terminal, send a test message:
 
 ```bash
-clawdbot status
-clawdbot health
 clawdbot message send --target +15555550123 --message "Hello from Clawdbot"
 ```
 
-If `health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.
+If `clawdbot health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.
 
 Tip: `clawdbot status --all` is the best pasteable, read-only debug report.
 Health probes: `clawdbot health` (or `clawdbot status --deep`) asks the running gateway for a health snapshot.

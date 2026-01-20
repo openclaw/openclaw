@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 export function classifyPortListener(listener: PortListener, port: number): PortListenerKind {
@@ -20,7 +21,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   const hints: string[] = [];
   if (kinds.has("gateway")) {
     hints.push(
-      "Gateway already running locally. Stop it (clawdbot daemon stop) or use a different port.",
+      `Gateway already running locally. Stop it (${formatCliCommand("clawdbot daemon stop")}) or use a different port.`,
     );
   }
   if (kinds.has("ssh")) {

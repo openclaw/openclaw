@@ -1,5 +1,6 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -124,7 +125,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawdhub.com",
     "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
-    "When diagnosing issues, run `clawdbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    `When diagnosing issues, run \`${formatCliCommand("clawdbot status")}\` yourself when possible; only ask the user if you lack access (e.g., sandboxed).`,
     "",
   ];
 }
@@ -364,11 +365,11 @@ export function buildAgentSystemPrompt(params: {
     "## Clawdbot CLI Quick Reference",
     "Clawdbot is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
-    "- clawdbot daemon status",
-    "- clawdbot daemon start",
-    "- clawdbot daemon stop",
-    "- clawdbot daemon restart",
-    "If unsure, ask the user to run `clawdbot help` (or `clawdbot daemon --help`) and paste the output.",
+    `- ${formatCliCommand("clawdbot daemon status")}`,
+    `- ${formatCliCommand("clawdbot daemon start")}`,
+    `- ${formatCliCommand("clawdbot daemon stop")}`,
+    `- ${formatCliCommand("clawdbot daemon restart")}`,
+    `If unsure, ask the user to run \`${formatCliCommand("clawdbot help")}\` (or \`${formatCliCommand("clawdbot daemon --help")}\`) and paste the output.`,
     "",
     ...skillsSection,
     ...memorySection,

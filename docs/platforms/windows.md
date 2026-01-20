@@ -97,7 +97,7 @@ cd clawdbot
 pnpm install
 pnpm ui:build # auto-installs UI deps on first run
 pnpm build
-pnpm clawdbot onboard
+clawdbot onboard
 ```
 
 Full guide: [Getting Started](/start/getting-started)

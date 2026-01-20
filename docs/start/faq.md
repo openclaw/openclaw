@@ -184,21 +184,24 @@ Clawdbot is a personal AI assistant you run on your own devices. It replies on t
 The repo recommends running from source and using the onboarding wizard:
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
-
-pnpm install
-
-# Optional if you want built output / global linking:
-pnpm build
-
-# If the Control UI assets are missing or you want the dashboard:
-pnpm ui:build # auto-installs UI deps on first run
-
-pnpm clawdbot onboard
+curl -fsSL https://clawd.bot/install.sh | bash
+clawdbot onboard --install-daemon
 ```
 
 The wizard can also build UI assets automatically. After onboarding, you typically run the Gateway on port **18789**.
+
+From source (contributors/dev):
+
+```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+pnpm install
+pnpm build
+pnpm ui:build # auto-installs UI deps on first run
+clawdbot onboard
+```
+
+If you don’t have a global install yet, run it via `pnpm clawdbot onboard`.
 
 ### How do I open the dashboard after onboarding?
 
@@ -330,7 +333,7 @@ git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
 pnpm build
-pnpm clawdbot doctor
+clawdbot doctor
 clawdbot daemon restart
 ```
 

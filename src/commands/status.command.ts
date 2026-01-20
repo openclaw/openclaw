@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,
@@ -374,8 +375,8 @@ export async function statusCommand(
       runtime.log(theme.muted(`… +${sorted.length - shown.length} more`));
     }
   }
-  runtime.log(theme.muted("Full report: clawdbot security audit"));
-  runtime.log(theme.muted("Deep probe: clawdbot security audit --deep"));
+  runtime.log(theme.muted(`Full report: ${formatCliCommand("clawdbot security audit")}`));
+  runtime.log(theme.muted(`Deep probe: ${formatCliCommand("clawdbot security audit --deep")}`));
 
   runtime.log("");
   runtime.log(theme.heading("Channels"));
@@ -531,11 +532,11 @@ export async function statusCommand(
     runtime.log("");
   }
   runtime.log("Next steps:");
-  runtime.log("  Need to share?      clawdbot status --all");
-  runtime.log("  Need to debug live? clawdbot logs --follow");
+  runtime.log(`  Need to share?      ${formatCliCommand("clawdbot status --all")}`);
+  runtime.log(`  Need to debug live? ${formatCliCommand("clawdbot logs --follow")}`);
   if (gatewayReachable) {
-    runtime.log("  Need to test channels? clawdbot status --deep");
+    runtime.log(`  Need to test channels? ${formatCliCommand("clawdbot status --deep")}`);
   } else {
-    runtime.log("  Fix reachability first: clawdbot gateway status");
+    runtime.log(`  Fix reachability first: ${formatCliCommand("clawdbot gateway status")}`);
   }
 }

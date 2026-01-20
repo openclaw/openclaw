@@ -24,6 +24,7 @@ import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { resolveUserPath } from "../utils.js";
 
 export type HooksListOptions = {
@@ -150,7 +151,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
 
   if (hooks.length === 0) {
     const message = opts.eligible
-      ? "No eligible hooks found. Run `clawdbot hooks list` to see all hooks."
+      ? `No eligible hooks found. Run \`${formatCliCommand("clawdbot hooks list")}\` to see all hooks.`
       : "No hooks found.";
     return message;
   }
@@ -194,7 +195,7 @@ export function formatHookInfo(
     if (opts.json) {
       return JSON.stringify({ error: "not found", hook: hookName }, null, 2);
     }
-    return `Hook "${hookName}" not found. Run \`clawdbot hooks list\` to see available hooks.`;
+    return `Hook "${hookName}" not found. Run \`${formatCliCommand("clawdbot hooks list")}\` to see available hooks.`;
   }
 
   if (opts.json) {

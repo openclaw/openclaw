@@ -48,7 +48,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Regression history
 - `2871657e` (2026-01-06): scripts changed from Bun to tsx to make Bun optional.
-- Before that (Bun path), `pnpm clawdbot status` and `gateway:watch` worked.
+- Before that (Bun path), `clawdbot status` and `gateway:watch` worked.
 
 ## Workarounds
 - Use Bun for dev scripts (current temporary revert).

@@ -12,6 +12,7 @@ import { danger, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
+import { formatCliCommand } from "../cli/command-format.js";
 
 import {
   maybeRestoreCredsFromBackup,
@@ -134,7 +135,11 @@ export async function createWaSocket(
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
-            console.error(danger("WhatsApp session logged out. Run: clawdbot channels login"));
+            console.error(
+              danger(
+                `WhatsApp session logged out. Run: ${formatCliCommand("clawdbot channels login")}`,
+              ),
+            );
           }
         }
         if (connection === "open" && verbose) {

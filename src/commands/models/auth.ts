@@ -15,6 +15,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   readConfigFileSnapshot,
@@ -340,7 +341,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
 
   const providers = resolvePluginProviders({ config, workspaceDir });
   if (providers.length === 0) {
-    throw new Error("No provider plugins found. Install one via `clawdbot plugins install`.");
+    throw new Error(
+      `No provider plugins found. Install one via \`${formatCliCommand("clawdbot plugins install")}\`.`,
+    );
   }
 
   const prompter = createClackPrompter();

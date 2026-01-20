@@ -1,3 +1,5 @@
+import { formatCliCommand } from "../cli/command-format.js";
+
 export function isSystemdUnavailableDetail(detail?: string): boolean {
   if (!detail) return false;
   const normalized = detail.toLowerCase();
@@ -20,6 +22,6 @@ export function renderSystemdUnavailableHints(options: { wsl?: boolean } = {}): 
   }
   return [
     "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-    "If you're in a container, run the gateway in the foreground instead of `clawdbot daemon`.",
+    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("clawdbot daemon")}\`.`,
   ];
 }

@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../../cli/command-format.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
 import { asString, isRecord } from "./shared.js";
 
@@ -47,7 +48,7 @@ export function collectWhatsAppStatusIssues(
         accountId,
         kind: "auth",
         message: "Not linked (no WhatsApp Web session).",
-        fix: "Run: clawdbot channels login (scan QR on the gateway host).",
+        fix: `Run: ${formatCliCommand("clawdbot channels login")} (scan QR on the gateway host).`,
       });
       continue;
     }
@@ -58,7 +59,7 @@ export function collectWhatsAppStatusIssues(
         accountId,
         kind: "runtime",
         message: `Linked but disconnected${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
-        fix: "Run: clawdbot doctor (or restart the gateway). If it persists, relink via channels login and check logs.",
+        fix: `Run: ${formatCliCommand("clawdbot doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
       });
     }
   }

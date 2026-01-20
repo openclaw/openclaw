@@ -155,7 +155,7 @@ Options:
 - `--timeout <ms>`: overall discovery window (default `2000`)
 - `--json`: structured output for diffing
 
-Tip: compare against `pnpm clawdbot gateway discover --json` to see whether the
+Tip: compare against `clawdbot gateway discover --json` to see whether the
 macOS app’s discovery pipeline (NWBrowser + tailnet DNS‑SD fallback) differs from
 the Node CLI’s `dns-sd` based discovery.
 

@@ -15,6 +15,7 @@ import {
 } from "../infra/update-runner.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { formatCliCommand } from "./command-format.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 
@@ -373,7 +374,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.reason === "not-git-install") {
       defaultRuntime.log(
         theme.warn(
-          "Skipped: this Clawdbot install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run `clawdbot doctor` and `clawdbot daemon restart`.",
+          `Skipped: this Clawdbot install isn't a git checkout, and the package manager couldn't be detected. Update via your package manager, then run \`${formatCliCommand("clawdbot doctor")}\` and \`${formatCliCommand("clawdbot daemon restart")}\`.`,
         ),
       );
       defaultRuntime.log(
@@ -410,7 +411,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       if (!opts.json) {
         defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
         defaultRuntime.log(
-          theme.muted("You may need to restart the daemon manually: clawdbot daemon restart"),
+          theme.muted(
+            `You may need to restart the daemon manually: ${formatCliCommand("clawdbot daemon restart")}`,
+          ),
         );
       }
     }
@@ -419,12 +422,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     if (result.mode === "npm" || result.mode === "pnpm") {
       defaultRuntime.log(
         theme.muted(
-          "Tip: Run `clawdbot doctor`, then `clawdbot daemon restart` to apply updates to a running gateway.",
+          `Tip: Run \`${formatCliCommand("clawdbot doctor")}\`, then \`${formatCliCommand("clawdbot daemon restart")}\` to apply updates to a running gateway.`,
         ),
       );
     } else {
       defaultRuntime.log(
-        theme.muted("Tip: Run `clawdbot daemon restart` to apply updates to a running gateway."),
+        theme.muted(
+          `Tip: Run \`${formatCliCommand("clawdbot daemon restart")}\` to apply updates to a running gateway.`,
+        ),
       );
     }
   }

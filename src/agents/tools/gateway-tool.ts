@@ -5,7 +5,7 @@ import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
-  DOCTOR_NONINTERACTIVE_HINT,
+  formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -83,7 +83,7 @@ export function createGatewayTool(opts?: {
           ts: Date.now(),
           sessionKey,
           message: note ?? reason ?? null,
-          doctorHint: DOCTOR_NONINTERACTIVE_HINT,
+          doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
             reason,

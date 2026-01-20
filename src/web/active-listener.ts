@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { PollInput } from "../polls.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -42,7 +43,7 @@ export function requireActiveWebListener(accountId?: string | null): {
   const listener = listeners.get(id) ?? null;
   if (!listener) {
     throw new Error(
-      `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: clawdbot channels login --channel whatsapp --account ${id}.`,
+      `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`clawdbot channels login --channel whatsapp --account ${id}`)}.`,
     );
   }
   return { accountId: id, listener };

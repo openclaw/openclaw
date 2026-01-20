@@ -26,6 +26,7 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -97,7 +98,7 @@ export async function runOnboardingWizard(
 
     if (!snapshot.valid) {
       await prompter.outro(
-        "Config invalid. Run `clawdbot doctor` to repair it, then re-run onboarding.",
+        `Config invalid. Run \`${formatCliCommand("clawdbot doctor")}\` to repair it, then re-run onboarding.`,
       );
       runtime.exit(1);
       return;
@@ -133,7 +134,7 @@ export async function runOnboardingWizard(
     }
   }
 
-  const quickstartHint = "Configure details later via clawdbot configure.";
+  const quickstartHint = `Configure details later via ${formatCliCommand("clawdbot configure")}.`;
   const advancedHint = "Configure port, network, Tailscale, and auth options.";
   const explicitFlowRaw = opts.flow?.trim();
   if (explicitFlowRaw && explicitFlowRaw !== "quickstart" && explicitFlowRaw !== "advanced") {

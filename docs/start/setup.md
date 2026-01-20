@@ -35,8 +35,10 @@ clawdbot setup
 From inside this repo, use the local CLI entry:
 
 ```bash
-pnpm clawdbot setup
+clawdbot setup
 ```
+
+If you don’t have a global install yet, run it via `pnpm clawdbot setup`.
 
 ## Stable workflow (macOS app first)
 
@@ -92,7 +94,7 @@ The app will attach to the running gateway on the configured port.
 - Or via CLI:
 
 ```bash
-pnpm clawdbot health
+clawdbot health
 ```
 
 ### Common footguns

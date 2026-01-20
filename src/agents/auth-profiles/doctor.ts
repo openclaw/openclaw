@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
@@ -37,6 +38,6 @@ export function formatAuthDoctorHint(params: {
     }`,
     `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
     `- suggested profile: ${suggested}`,
-    'Fix: run "clawdbot doctor --yes"',
+    `Fix: run "${formatCliCommand("clawdbot doctor --yes")}"`,
   ].join("\n");
 }

@@ -4,6 +4,7 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -103,7 +104,7 @@ export async function resolveApiKeyForProvider(params: {
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      "Configure auth for this agent (clawdbot agents add <id>) or copy auth-profiles.json from the main agentDir.",
+      `Configure auth for this agent (${formatCliCommand("clawdbot agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
   );
 }

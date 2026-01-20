@@ -10,6 +10,7 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   collectWorkspaceDirs,
   isPathWithin,
@@ -143,7 +144,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     for (const dir of sessionDirs) {
       await removePath(dir, runtime, { dryRun, label: dir });
     }
-    runtime.log("Next: clawdbot onboard --install-daemon");
+    runtime.log(`Next: ${formatCliCommand("clawdbot onboard --install-daemon")}`);
     return;
   }
 
@@ -158,7 +159,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     for (const workspace of workspaceDirs) {
       await removePath(workspace, runtime, { dryRun, label: workspace });
     }
-    runtime.log("Next: clawdbot onboard --install-daemon");
+    runtime.log(`Next: ${formatCliCommand("clawdbot onboard --install-daemon")}`);
     return;
   }
 }

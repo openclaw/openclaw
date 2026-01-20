@@ -1,4 +1,5 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -23,7 +24,7 @@ export async function removeChannelConfigWizard(
       note(
         [
           "No channel config found in clawdbot.json.",
-          "Tip: `clawdbot channels status` shows what is configured and enabled.",
+          `Tip: \`${formatCliCommand("clawdbot channels status")}\` shows what is configured and enabled.`,
         ].join("\n"),
         "Remove channel",
       );
