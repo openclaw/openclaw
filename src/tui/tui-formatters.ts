@@ -12,6 +12,25 @@ export function resolveFinalAssistantText(params: {
   return "(no output)";
 }
 
+export function composeThinkingAndContent(params: {
+  thinkingText?: string;
+  contentText?: string;
+  showThinking?: boolean;
+}) {
+  const thinkingText = params.thinkingText?.trim() ?? "";
+  const contentText = params.contentText?.trim() ?? "";
+  const parts: string[] = [];
+
+  if (params.showThinking && thinkingText) {
+    parts.push(`[thinking]\n${thinkingText}`);
+  }
+  if (contentText) {
+    parts.push(contentText);
+  }
+
+  return parts.join("\n\n").trim();
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
@@ -80,7 +99,6 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
 
-  // FIXED: Separate collection to ensure proper ordering (thinking before text)
   const thinkingParts: string[] = [];
   const textParts: string[] = [];
 
@@ -95,20 +113,15 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
       record.type === "thinking" &&
       typeof record.thinking === "string"
     ) {
-      thinkingParts.push(`[thinking]\n${record.thinking}`);
+      thinkingParts.push(record.thinking);
     }
   }
 
-  // FIXED: Always put thinking BEFORE text content for consistent ordering
-  const parts: string[] = [];
-  if (thinkingParts.length > 0) {
-    parts.push(...thinkingParts);
-  }
-  if (textParts.length > 0) {
-    parts.push(...textParts);
-  }
-
-  return parts.join("\n\n").trim();
+  return composeThinkingAndContent({
+    thinkingText: thinkingParts.join("\n").trim(),
+    contentText: textParts.join("\n").trim(),
+    showThinking: opts?.includeThinking ?? false,
+  });
 }
 
 export function extractTextFromMessage(

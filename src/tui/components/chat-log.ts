@@ -4,30 +4,15 @@ import { AssistantMessageComponent } from "./assistant-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
-/**
- * Per-run streaming state - isolates each run's thinking and content streams.
- * This enables proper sequencing regardless of network arrival order.
- */
-interface StreamingRunState {
-  component: AssistantMessageComponent;
-  thinkingText: string;
-  contentText: string;
-  showThinking: boolean;
-}
-
 export class ChatLog extends Container {
   private toolById = new Map<string, ToolExecutionComponent>();
-  // FIXED: Replace single streaming fields with per-runId Map for proper isolation
-  private streamingRuns = new Map<string, StreamingRunState>();
-  // Keep reference to most recent run for backward compatibility
-  private lastStreamingRunId: string | null = null;
+  private streamingRuns = new Map<string, AssistantMessageComponent>();
   private toolsExpanded = false;
 
   clearAll() {
     this.clear();
     this.toolById.clear();
     this.streamingRuns.clear();
-    this.lastStreamingRunId = null;
   }
 
   addSystem(text: string) {
@@ -39,141 +24,36 @@ export class ChatLog extends Container {
     this.addChild(new UserMessageComponent(text));
   }
 
-  /**
-   * Get or create streaming state for a specific runId.
-   */
-  private getOrCreateRunState(runId: string, showThinking: boolean): StreamingRunState {
-    let state = this.streamingRuns.get(runId);
-    if (!state) {
-      const component = new AssistantMessageComponent("");
-      this.addChild(component);
-      state = {
-        component,
-        thinkingText: "",
-        contentText: "",
-        showThinking,
-      };
-      this.streamingRuns.set(runId, state);
-      this.lastStreamingRunId = runId;
-    }
-    return state;
-  }
-
-  /**
-   * Compose the final display text from thinking + content.
-   * FIXED: Ensures thinking always appears before content regardless of arrival order.
-   */
-  private composeDisplayText(state: StreamingRunState): string {
-    const parts: string[] = [];
-
-    // Thinking comes first (if enabled and present)
-    if (state.showThinking && state.thinkingText.trim()) {
-      parts.push(`[thinking]\n${state.thinkingText}`);
-    }
-
-    // Content comes after thinking
-    if (state.contentText.trim()) {
-      parts.push(state.contentText);
-    }
-
-    return parts.join("\n\n").trim() || "";
+  private resolveRunId(runId?: string) {
+    return runId ?? "default";
   }
 
   startAssistant(text: string, runId?: string) {
     const component = new AssistantMessageComponent(text);
-    if (runId) {
-      // Create proper streaming state for tracked runs
-      this.streamingRuns.set(runId, {
-        component,
-        thinkingText: "",
-        contentText: text,
-        showThinking: false,
-      });
-      this.lastStreamingRunId = runId;
-    }
+    this.streamingRuns.set(this.resolveRunId(runId), component);
     this.addChild(component);
     return component;
   }
 
-  /**
-   * Update the assistant message with new streaming content.
-   * FIXED: Now properly isolates by runId and separates thinking/content.
-   */
-  updateAssistant(
-    text: string,
-    runId?: string,
-    options?: {
-      thinkingText?: string;
-      contentText?: string;
-      showThinking?: boolean;
-    },
-  ) {
-    const effectiveRunId = runId ?? "default";
-    const showThinking = options?.showThinking ?? false;
-    const state = this.getOrCreateRunState(effectiveRunId, showThinking);
-
-    // Update thinking and/or content separately if provided
-    if (options?.thinkingText !== undefined) {
-      state.thinkingText = options.thinkingText;
+  updateAssistant(text: string, runId?: string) {
+    const effectiveRunId = this.resolveRunId(runId);
+    const existing = this.streamingRuns.get(effectiveRunId);
+    if (!existing) {
+      this.startAssistant(text, runId);
+      return;
     }
-    if (options?.contentText !== undefined) {
-      state.contentText = options.contentText;
-    }
-
-    // If only raw text provided (backward compatibility), use as content
-    if (options?.thinkingText === undefined && options?.contentText === undefined) {
-      state.contentText = text;
-    }
-
-    state.showThinking = showThinking;
-
-    // Recompose and render with guaranteed ordering
-    const displayText = this.composeDisplayText(state);
-    state.component.setText(displayText);
-  }
-
-  getStreamingText(runId?: string) {
-    const effectiveRunId = runId ?? this.lastStreamingRunId;
-    if (!effectiveRunId) return null;
-
-    const state = this.streamingRuns.get(effectiveRunId);
-    if (!state) return null;
-
-    return this.composeDisplayText(state);
-  }
-
-  /**
-   * Get the raw streaming state (for diagnostics).
-   */
-  getStreamingState(runId: string): { thinking: string; content: string } | null {
-    const state = this.streamingRuns.get(runId);
-    if (!state) return null;
-    return {
-      thinking: state.thinkingText,
-      content: state.contentText,
-    };
+    existing.setText(text);
   }
 
   finalizeAssistant(text: string, runId?: string) {
-    const effectiveRunId = runId ?? this.lastStreamingRunId;
-    const state = effectiveRunId ? this.streamingRuns.get(effectiveRunId) : null;
-
-    if (state) {
-      // Use the final text, or compose from existing state if final is empty
-      const finalText = text.trim() || this.composeDisplayText(state);
-      state.component.setText(finalText);
-    } else {
-      // No existing state - create a new component with final text
-      this.startAssistant(text, runId);
-    }
-
-    // Clean up the streaming state for this run
-    if (effectiveRunId) {
+    const effectiveRunId = this.resolveRunId(runId);
+    const existing = this.streamingRuns.get(effectiveRunId);
+    if (existing) {
+      existing.setText(text);
       this.streamingRuns.delete(effectiveRunId);
-      if (this.lastStreamingRunId === effectiveRunId) {
-        this.lastStreamingRunId = null;
-      }
+      return;
     }
+    this.addChild(new AssistantMessageComponent(text));
   }
 
   startTool(toolCallId: string, toolName: string, args: unknown) {

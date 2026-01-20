@@ -4,8 +4,13 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.20-1
 
+### Changes
+- Repo: remove the Peekaboo git submodule now that the SPM release is used.
+
 ### Fixes
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
+- TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
+- CLI: avoid duplicating --profile/--dev flags when formatting commands.
 
 ## 2026.1.19-3
 

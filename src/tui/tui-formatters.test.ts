@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { extractTextFromMessage } from "./tui-formatters.js";
+import {
+  extractContentFromMessage,
+  extractTextFromMessage,
+  extractThinkingFromMessage,
+} from "./tui-formatters.js";
 
 describe("extractTextFromMessage", () => {
   it("renders errorMessage when assistant content is empty", () => {
@@ -26,5 +30,61 @@ describe("extractTextFromMessage", () => {
     });
 
     expect(text).toContain("unknown error");
+  });
+
+  it("joins multiple text blocks with single newlines", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+      ],
+    });
+
+    expect(text).toBe("first\nsecond");
+  });
+
+  it("places thinking before content when included", () => {
+    const text = extractTextFromMessage(
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hello" },
+          { type: "thinking", thinking: "ponder" },
+        ],
+      },
+      { includeThinking: true },
+    );
+
+    expect(text).toBe("[thinking]\nponder\n\nhello");
+  });
+});
+
+describe("extractThinkingFromMessage", () => {
+  it("collects only thinking blocks", () => {
+    const text = extractThinkingFromMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "alpha" },
+        { type: "text", text: "hello" },
+        { type: "thinking", thinking: "beta" },
+      ],
+    });
+
+    expect(text).toBe("alpha\nbeta");
+  });
+});
+
+describe("extractContentFromMessage", () => {
+  it("collects only text blocks", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "alpha" },
+        { type: "text", text: "hello" },
+      ],
+    });
+
+    expect(text).toBe("hello");
   });
 });
