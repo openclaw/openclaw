@@ -101,14 +101,16 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const chatId = readNumberParam(params, "chatId", { integer: true });
       const to = readStringParam(params, "to");
 
-      const target =
-        chatIdentifier?.trim()
-          ? ({ kind: "chat_identifier", chatIdentifier: chatIdentifier.trim() } as BlueBubblesSendTarget)
-          : typeof chatId === "number"
-            ? ({ kind: "chat_id", chatId } as BlueBubblesSendTarget)
-            : to
-              ? mapTarget(to)
-              : null;
+      const target = chatIdentifier?.trim()
+        ? ({
+            kind: "chat_identifier",
+            chatIdentifier: chatIdentifier.trim(),
+          } as BlueBubblesSendTarget)
+        : typeof chatId === "number"
+          ? ({ kind: "chat_id", chatId } as BlueBubblesSendTarget)
+          : to
+            ? mapTarget(to)
+            : null;
 
       if (!target) {
         throw new Error(`BlueBubbles ${action} requires chatGuid, chatIdentifier, chatId, or to.`);
@@ -130,9 +132,17 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         removeErrorMessage: "Emoji is required to remove a BlueBubbles reaction.",
       });
       if (isEmpty && !remove) {
-        throw new Error("Emoji is required to send a BlueBubbles reaction.");
+        throw new Error(
+          "BlueBubbles react requires emoji parameter. Use action=react with emoji=<emoji> and messageId=<message_guid>.",
+        );
       }
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const messageId = readStringParam(params, "messageId");
+      if (!messageId) {
+        throw new Error(
+          "BlueBubbles react requires messageId parameter (the message GUID to react to). " +
+            "Use action=react with messageId=<message_guid>, emoji=<emoji>, and to/chatGuid to identify the chat.",
+        );
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await resolveChatGuid();
 
@@ -150,10 +160,16 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle edit action
     if (action === "edit") {
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const messageId = readStringParam(params, "messageId");
       const newText = readStringParam(params, "text") ?? readStringParam(params, "newText");
-      if (!newText) {
-        throw new Error("BlueBubbles edit requires text or newText parameter.");
+      if (!messageId || !newText) {
+        const missing: string[] = [];
+        if (!messageId) missing.push("messageId (the message GUID to edit)");
+        if (!newText) missing.push("text (the new message content)");
+        throw new Error(
+          `BlueBubbles edit requires: ${missing.join(", ")}. ` +
+            `Use action=edit with messageId=<message_guid>, text=<new_content>.`,
+        );
       }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
@@ -169,7 +185,13 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle unsend action
     if (action === "unsend") {
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const messageId = readStringParam(params, "messageId");
+      if (!messageId) {
+        throw new Error(
+          "BlueBubbles unsend requires messageId parameter (the message GUID to unsend). " +
+            "Use action=unsend with messageId=<message_guid>.",
+        );
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       await unsendBlueBubblesMessage(messageId, {
@@ -182,9 +204,19 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle reply action
     if (action === "reply") {
-      const messageId = readStringParam(params, "messageId", { required: true });
-      const text = readStringParam(params, "text", { required: true });
-      const to = readStringParam(params, "to", { required: true });
+      const messageId = readStringParam(params, "messageId");
+      const text = readStringParam(params, "text");
+      const to = readStringParam(params, "to");
+      if (!messageId || !text || !to) {
+        const missing: string[] = [];
+        if (!messageId) missing.push("messageId (the message GUID to reply to)");
+        if (!text) missing.push("text (the reply message content)");
+        if (!to) missing.push("to (the chat target)");
+        throw new Error(
+          `BlueBubbles reply requires: ${missing.join(", ")}. ` +
+            `Use action=reply with messageId=<message_guid>, text=<your reply>, to=<chat_target>.`,
+        );
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
 
       const result = await sendMessageBlueBubbles(to, text, {
@@ -198,11 +230,21 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
 
     // Handle sendWithEffect action
     if (action === "sendWithEffect") {
-      const text = readStringParam(params, "text", { required: true });
-      const to = readStringParam(params, "to", { required: true });
+      const text = readStringParam(params, "text");
+      const to = readStringParam(params, "to");
       const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
-      if (!effectId) {
-        throw new Error("BlueBubbles sendWithEffect requires effectId or effect parameter.");
+      if (!text || !to || !effectId) {
+        const missing: string[] = [];
+        if (!text) missing.push("text (the message content)");
+        if (!to) missing.push("to (the chat target)");
+        if (!effectId)
+          missing.push(
+            "effectId or effect (e.g., slam, loud, gentle, invisible-ink, confetti, lasers, fireworks, balloons, heart)",
+          );
+        throw new Error(
+          `BlueBubbles sendWithEffect requires: ${missing.join(", ")}. ` +
+            `Use action=sendWithEffect with text=<message>, to=<chat_target>, effectId=<effect_name>.`,
+        );
       }
 
       const result = await sendMessageBlueBubbles(to, text, {
@@ -266,7 +308,8 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const to = readStringParam(params, "to", { required: true });
       const filename = readStringParam(params, "filename", { required: true });
       const caption = readStringParam(params, "caption");
-      const contentType = readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+      const contentType =
+        readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
 
       // Buffer can come from params.buffer (base64) or params.path (file path)
       const base64Buffer = readStringParam(params, "buffer");
@@ -278,7 +321,9 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
       } else if (filePath) {
         // Read file from path (will be handled by caller providing buffer)
-        throw new Error("BlueBubbles sendAttachment: filePath not supported in action, provide buffer as base64.");
+        throw new Error(
+          "BlueBubbles sendAttachment: filePath not supported in action, provide buffer as base64.",
+        );
       } else {
         throw new Error("BlueBubbles sendAttachment requires buffer (base64) parameter.");
       }

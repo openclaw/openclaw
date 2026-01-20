@@ -1,6 +1,39 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelAgentTool } from "../channels/plugins/types.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelAgentTool, ChannelMessageActionName } from "../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
+
+/**
+ * Get the list of supported message actions for a specific channel.
+ * Returns an empty array if channel is not found or has no actions configured.
+ */
+export function listChannelSupportedActions(params: {
+  cfg?: ClawdbotConfig;
+  channel?: string;
+}): ChannelMessageActionName[] {
+  if (!params.channel) return [];
+  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
+  if (!plugin?.actions?.listActions) return [];
+  const cfg = params.cfg ?? ({} as ClawdbotConfig);
+  return plugin.actions.listActions({ cfg });
+}
+
+/**
+ * Get the list of all supported message actions across all configured channels.
+ */
+export function listAllChannelSupportedActions(params: {
+  cfg?: ClawdbotConfig;
+}): ChannelMessageActionName[] {
+  const actions = new Set<ChannelMessageActionName>();
+  for (const plugin of listChannelPlugins()) {
+    if (!plugin.actions?.listActions) continue;
+    const cfg = params.cfg ?? ({} as ClawdbotConfig);
+    const channelActions = plugin.actions.listActions({ cfg });
+    for (const action of channelActions) {
+      actions.add(action);
+    }
+  }
+  return Array.from(actions);
+}
 
 export function listChannelAgentTools(params: { cfg?: ClawdbotConfig }): ChannelAgentTool[] {
   // Channel docking: aggregate channel-owned tools (login, etc.).

@@ -18,6 +18,7 @@ import { getToolResult, runMessageAction } from "../../infra/outbound/message-ac
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import { listChannelSupportedActions } from "../channel-tools.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
@@ -227,15 +228,49 @@ function resolveAgentAccountId(value?: string): string | undefined {
   return normalizeAccountId(trimmed);
 }
 
+function buildMessageToolDescription(options?: {
+  config?: ClawdbotConfig;
+  currentChannel?: string;
+}): string {
+  const baseDescription = "Send, delete, and manage messages via channel plugins.";
+
+  // If we have a current channel, show only its supported actions
+  if (options?.currentChannel) {
+    const channelActions = listChannelSupportedActions({
+      cfg: options.config,
+      channel: options.currentChannel,
+    });
+    if (channelActions.length > 0) {
+      // Always include "send" as a base action
+      const allActions = new Set(["send", ...channelActions]);
+      const actionList = Array.from(allActions).sort().join(", ");
+      return `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
+    }
+  }
+
+  // Fallback to generic description with all configured actions
+  if (options?.config) {
+    const actions = listChannelMessageActions(options.config);
+    if (actions.length > 0) {
+      return `${baseDescription} Supports actions: ${actions.join(", ")}.`;
+    }
+  }
+
+  return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const schema = options?.config ? buildMessageToolSchema(options.config) : MessageToolSchema;
+  const description = buildMessageToolDescription({
+    config: options?.config,
+    currentChannel: options?.currentChannelProvider,
+  });
 
   return {
     label: "Message",
     name: "message",
-    description:
-      "Send, delete, and manage messages via channel plugins. Supports actions: send, delete, react, poll, pin, threads, and more.",
+    description,
     parameters: schema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

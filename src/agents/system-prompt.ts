@@ -86,8 +86,22 @@ function buildMessagingSection(params: {
   messageChannelOptions: string;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
+  channelActions?: string[];
 }) {
   if (params.isMinimal) return [];
+
+  // Build channel-specific action description
+  let actionsDescription: string;
+  if (params.channelActions && params.channelActions.length > 0 && params.runtimeChannel) {
+    // Include "send" as a base action plus channel-specific actions
+    const allActions = new Set(["send", ...params.channelActions]);
+    const actionList = Array.from(allActions).sort().join(", ");
+    actionsDescription = `- Use \`message\` for proactive sends + channel actions. Current channel (${params.runtimeChannel}) supports: ${actionList}.`;
+  } else {
+    actionsDescription =
+      "- Use `message` for proactive sends + channel actions (send, react, edit, delete, etc.).";
+  }
+
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
@@ -97,7 +111,7 @@ function buildMessagingSection(params: {
       ? [
           "",
           "### message tool",
-          "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+          actionsDescription,
           "- For `action=send`, include `to` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
@@ -158,6 +172,8 @@ export function buildAgentSystemPrompt(params: {
     model?: string;
     channel?: string;
     capabilities?: string[];
+    /** Supported message actions for the current channel (e.g., react, edit, unsend) */
+    channelActions?: string[];
   };
   sandboxInfo?: {
     enabled: boolean;
@@ -468,6 +484,7 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       inlineButtonsEnabled,
       runtimeChannel,
+      channelActions: runtimeInfo?.channelActions,
     }),
   ];
 
