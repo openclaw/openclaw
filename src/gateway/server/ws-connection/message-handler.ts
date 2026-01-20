@@ -58,6 +58,44 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 10 * 60 * 1000;
 
+type AuthProvidedKind = "token" | "password" | "none";
+
+function formatGatewayAuthFailureMessage(params: {
+  authMode: ResolvedGatewayAuth["mode"];
+  authProvided: AuthProvidedKind;
+  reason?: string;
+}): string {
+  const { authMode, authProvided, reason } = params;
+  switch (reason) {
+    case "token_missing":
+      return "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)";
+    case "token_mismatch":
+      return "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)";
+    case "token_missing_config":
+      return "unauthorized: gateway token not configured on gateway (set gateway.auth.token)";
+    case "password_missing":
+      return "unauthorized: gateway password missing (set gateway.remote.password to match gateway.auth.password)";
+    case "password_mismatch":
+      return "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)";
+    case "password_missing_config":
+      return "unauthorized: gateway password not configured on gateway (set gateway.auth.password)";
+    case "tailscale_user_missing":
+      return "unauthorized: tailscale identity missing (use Tailscale Serve auth or gateway token/password)";
+    case "tailscale_proxy_missing":
+      return "unauthorized: tailscale proxy headers missing (use Tailscale Serve or gateway token/password)";
+    default:
+      break;
+  }
+
+  if (authMode === "token" && authProvided === "none") {
+    return "unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)";
+  }
+  if (authMode === "password" && authProvided === "none") {
+    return "unauthorized: gateway password missing (set gateway.remote.password to match gateway.auth.password)";
+  }
+  return "unauthorized";
+}
+
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
@@ -442,13 +480,18 @@ export function attachGatewayWsMessageHandler(params: {
         if (!authOk) {
           setHandshakeState("failed");
           logWsControl.warn(
-            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+            `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} reason=${authResult.reason ?? "unknown"}`,
           );
-          const authProvided = connectParams.auth?.token
+          const authProvided: AuthProvidedKind = connectParams.auth?.token
             ? "token"
             : connectParams.auth?.password
               ? "password"
               : "none";
+          const authMessage = formatGatewayAuthFailureMessage({
+            authMode: resolvedAuth.mode,
+            authProvided,
+            reason: authResult.reason,
+          });
           setCloseCause("unauthorized", {
             authMode: resolvedAuth.mode,
             authProvided,
@@ -463,9 +506,9 @@ export function attachGatewayWsMessageHandler(params: {
             type: "res",
             id: frame.id,
             ok: false,
-            error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
+            error: errorShape(ErrorCodes.INVALID_REQUEST, authMessage),
           });
-          close(1008, "unauthorized");
+          close(1008, truncateCloseReason(authMessage));
           return;
         }
 
