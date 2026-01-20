@@ -21,20 +21,40 @@ export function resolveExtraParams(params: {
   return modelConfig?.params ? { ...modelConfig.params } : undefined;
 }
 
+type CacheControlTtl = "5m" | "1h";
+
+function resolveCacheControlTtl(
+  extraParams: Record<string, unknown> | undefined,
+  provider: string,
+  modelId: string,
+): CacheControlTtl | undefined {
+  const raw = extraParams?.cacheControlTtl;
+  if (raw !== "5m" && raw !== "1h") return undefined;
+  if (provider === "anthropic") return raw;
+  if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
+  return undefined;
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
+  provider: string,
+  modelId: string,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
   }
 
-  const streamParams: Partial<SimpleStreamOptions> = {};
+  const streamParams: Partial<SimpleStreamOptions> & { cacheControlTtl?: CacheControlTtl } = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  const cacheControlTtl = resolveCacheControlTtl(extraParams, provider, modelId);
+  if (cacheControlTtl) {
+    streamParams.cacheControlTtl = cacheControlTtl;
   }
 
   if (Object.keys(streamParams).length === 0) {
@@ -77,7 +97,7 @@ export function applyExtraParamsToAgent(
         )
       : undefined;
   const merged = Object.assign({}, extraParams, override);
-  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged);
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, merged, provider, modelId);
 
   if (wrappedStreamFn) {
     log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);

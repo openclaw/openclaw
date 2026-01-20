@@ -9,6 +9,11 @@ overrides:
   hono: 4.11.4
   tar: 7.5.3
 
+patchedDependencies:
+  '@mariozechner/pi-ai@0.49.2':
+    hash: 4ae0a92a4b2c74703711e2a62b745ca8af6a9948ea7fa923097e875c76354d7e
+    path: patches/@mariozechner__pi-ai@0.49.2.patch
+
 importers:
 
   .:
@@ -39,12 +44,12 @@ importers:
         version: 0.49.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
         specifier: 0.49.2
-        version: 0.49.2(ws@8.19.0)(zod@4.3.5)
+        version: 0.49.2(patch_hash=4ae0a92a4b2c74703711e2a62b745ca8af6a9948ea7fa923097e875c76354d7e)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.49.2
+        specifier: 0.49.2
         version: 0.49.2(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.49.2
+        specifier: 0.49.2
         version: 0.49.2
       '@mozilla/readability':
         specifier: ^0.6.0
@@ -5931,7 +5936,7 @@ snapshots:
 
   '@mariozechner/pi-agent-core@0.49.2(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.49.2(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.49.2(patch_hash=4ae0a92a4b2c74703711e2a62b745ca8af6a9948ea7fa923097e875c76354d7e)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.49.2
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -5942,7 +5947,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.49.2(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.49.2(patch_hash=4ae0a92a4b2c74703711e2a62b745ca8af6a9948ea7fa923097e875c76354d7e)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@aws-sdk/client-bedrock-runtime': 3.971.0
@@ -5969,7 +5974,7 @@ snapshots:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.5
       '@mariozechner/pi-agent-core': 0.49.2(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.49.2(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.49.2(patch_hash=4ae0a92a4b2c74703711e2a62b745ca8af6a9948ea7fa923097e875c76354d7e)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui': 0.49.2
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
