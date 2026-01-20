@@ -25,6 +25,7 @@ import type {
   ExecApprovalsSnapshot,
 } from "./controllers/exec-approvals";
 import type { DevicePairingList } from "./controllers/devices";
+import type { ExecApprovalRequest } from "./controllers/exec-approval";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -60,6 +61,9 @@ export type AppViewState = {
   execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
+  execApprovalQueue: ExecApprovalRequest[];
+  execApprovalBusy: boolean;
+  execApprovalError: string | null;
   configLoading: boolean;
   configRaw: string;
   configValid: boolean | null;
@@ -137,6 +141,7 @@ export type AppViewState = {
   handleWhatsAppLogout: () => Promise<void>;
   handleChannelConfigSave: () => Promise<void>;
   handleChannelConfigReload: () => Promise<void>;
+  handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
   handleConfigLoad: () => Promise<void>;
   handleConfigSave: () => Promise<void>;
   handleConfigApply: () => Promise<void>;

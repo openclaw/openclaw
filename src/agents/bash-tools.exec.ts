@@ -477,6 +477,7 @@ export function createExecTool(
           (hostAsk === "on-miss" && hostSecurity === "allowlist" && !allowlistMatch);
 
         let approvedByAsk = false;
+        let approvalDecision: "allow-once" | "allow-always" | null = null;
         if (requiresAsk) {
           const decisionResult = (await callGatewayTool(
             "exec.approval.request",
@@ -504,20 +505,24 @@ export function createExecTool(
           if (!decision) {
             if (askFallback === "full") {
               approvedByAsk = true;
+              approvalDecision = "allow-once";
             } else if (askFallback === "allowlist") {
               if (!allowlistMatch) {
                 throw new Error("exec denied: approval required (approval UI not available)");
               }
               approvedByAsk = true;
+              approvalDecision = "allow-once";
             } else {
               throw new Error("exec denied: approval required (approval UI not available)");
             }
           }
           if (decision === "allow-once") {
             approvedByAsk = true;
+            approvalDecision = "allow-once";
           }
           if (decision === "allow-always") {
             approvedByAsk = true;
+            approvalDecision = "allow-always";
             if (hostSecurity === "allowlist") {
               const pattern =
                 resolution?.resolvedPath ??
@@ -556,6 +561,7 @@ export function createExecTool(
             agentId: defaults?.agentId,
             sessionKey: defaults?.sessionKey,
             approved: approvedByAsk,
+            approvalDecision: approvalDecision ?? undefined,
           },
           idempotencyKey: crypto.randomUUID(),
         };
