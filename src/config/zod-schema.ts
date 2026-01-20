@@ -261,6 +261,7 @@ export const ClawdbotSchema = z
             url: z.string().optional(),
             token: z.string().optional(),
             password: z.string().optional(),
+            tlsFingerprint: z.string().optional(),
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),
           })

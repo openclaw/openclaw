@@ -22,6 +22,7 @@ export type CallGatewayOptions = {
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   config?: ClawdbotConfig;
   method: string;
   params?: unknown;
@@ -139,7 +140,16 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
   const useLocalTls =
     config.gateway?.tls?.enabled === true && !urlOverride && !remoteUrl && url.startsWith("wss://");
   const tlsRuntime = useLocalTls ? await loadGatewayTlsRuntime(config.gateway?.tls) : undefined;
-  const tlsFingerprint = tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined;
+  const remoteTlsFingerprint =
+    isRemoteMode && !urlOverride && remoteUrl && typeof remote?.tlsFingerprint === "string"
+      ? remote.tlsFingerprint.trim()
+      : undefined;
+  const overrideTlsFingerprint =
+    typeof opts.tlsFingerprint === "string" ? opts.tlsFingerprint.trim() : undefined;
+  const tlsFingerprint =
+    overrideTlsFingerprint ||
+    remoteTlsFingerprint ||
+    (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
