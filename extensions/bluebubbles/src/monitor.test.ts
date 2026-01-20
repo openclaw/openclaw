@@ -1081,6 +1081,45 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.Body).toContain("[Replying to +15550000000 id:msg-0]");
       expect(callArgs.ctx.Body).toContain("original message");
     });
+
+    it("falls back to threadOriginatorGuid when reply metadata is absent", async () => {
+      const account = createMockAccount({ dmPolicy: "open" });
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "replying now",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          threadOriginatorGuid: "msg-0",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+    });
   });
 
   describe("ack reactions", () => {
