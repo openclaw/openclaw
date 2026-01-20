@@ -246,4 +246,85 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.payload?.deliver).toBe(false);
   });
+
+  it("does not include undefined delivery fields when updating message", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    // Update message without delivery flags - should NOT include undefined delivery fields
+    await program.parseAsync(
+      ["cron", "edit", "job-1", "--message", "Updated message"],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        payload?: {
+          message?: string;
+          deliver?: boolean;
+          channel?: string;
+          to?: string;
+          bestEffortDeliver?: boolean;
+        };
+      };
+    };
+
+    // Should include the new message
+    expect(patch?.patch?.payload?.message).toBe("Updated message");
+    
+    // Should NOT include delivery fields at all (to preserve existing values)
+    expect(patch?.patch?.payload).not.toHaveProperty("deliver");
+    expect(patch?.patch?.payload).not.toHaveProperty("channel");
+    expect(patch?.patch?.payload).not.toHaveProperty("to");
+    expect(patch?.patch?.payload).not.toHaveProperty("bestEffortDeliver");
+  });
+
+  it("includes delivery fields when explicitly provided with message", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    // Update message AND delivery - should include both
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--message",
+        "Updated message",
+        "--deliver",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        payload?: {
+          message?: string;
+          deliver?: boolean;
+          channel?: string;
+          to?: string;
+        };
+      };
+    };
+
+    // Should include everything
+    expect(patch?.patch?.payload?.message).toBe("Updated message");
+    expect(patch?.patch?.payload?.deliver).toBe(true);
+    expect(patch?.patch?.payload?.channel).toBe("telegram");
+    expect(patch?.patch?.payload?.to).toBe("19098680");
+  });
 });
