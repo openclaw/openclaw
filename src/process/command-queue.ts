@@ -111,7 +111,7 @@ export function enqueueCommand<T>(
   return enqueueCommandInLane(CommandLane.Main, task, opts);
 }
 
-export function getQueueSize(lane = CommandLane.Main) {
+export function getQueueSize(lane: string = CommandLane.Main) {
   const state = lanes.get(lane);
   if (!state) return 0;
   return state.queue.length + state.active;
@@ -125,7 +125,7 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane = CommandLane.Main) {
+export function clearCommandLane(lane: string = CommandLane.Main) {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = lanes.get(cleaned);
   if (!state) return 0;
