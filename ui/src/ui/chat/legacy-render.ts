@@ -64,11 +64,10 @@ export function renderMessage(
     display?.kind === "json"
       ? ["```json", display.value, "```"].join("\n")
       : (display?.value ?? null);
-  const markdown = extractedThinking
-    ? [formatReasoningMarkdown(extractedThinking), markdownBase]
-        .filter(Boolean)
-        .join("\n\n")
-    : markdownBase;
+  const reasoningMarkdown = extractedThinking
+    ? formatReasoningMarkdown(extractedThinking)
+    : null;
+  const markdown = markdownBase;
 
   const timestamp =
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
@@ -79,13 +78,17 @@ export function renderMessage(
       ? "assistant"
       : normalizedRole === "user"
         ? "user"
-        : "other";
+        : normalizedRole === "tool"
+          ? "tool"
+          : "other";
   const who =
     normalizedRole === "assistant"
       ? "Assistant"
       : normalizedRole === "user"
         ? "You"
-        : normalizedRole;
+        : normalizedRole === "tool"
+          ? "Working"
+          : normalizedRole;
 
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   const toolCardBase =
@@ -98,6 +101,11 @@ export function renderMessage(
     <div class="chat-line ${klass}">
       <div class="chat-msg">
         <div class="chat-bubble ${opts?.streaming ? "streaming" : ""}">
+          ${reasoningMarkdown
+            ? html`<div class="chat-thinking">${unsafeHTML(
+                toSanitizedMarkdownHtml(reasoningMarkdown),
+              )}</div>`
+            : nothing}
           ${markdown
             ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
             : nothing}

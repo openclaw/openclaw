@@ -14,8 +14,36 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = message as Record<string, unknown>;
   let role = typeof m.role === "string" ? m.role : "unknown";
 
-  // Detect tool result messages by presence of toolCallId or tool_call_id
-  if (typeof m.toolCallId === "string" || typeof m.tool_call_id === "string") {
+  // Detect tool messages by common gateway shapes.
+  // Some tool events come through as assistant role with tool_* items in the content array.
+  const hasToolId =
+    typeof m.toolCallId === "string" || typeof m.tool_call_id === "string";
+
+  const contentRaw = m.content;
+  const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
+  const hasToolContent =
+    Array.isArray(contentItems) &&
+    contentItems.some((item) => {
+      const x = item as Record<string, unknown>;
+      const t = String(x.type ?? "").toLowerCase();
+      return (
+        t === "toolcall" ||
+        t === "tool_call" ||
+        t === "tooluse" ||
+        t === "tool_use" ||
+        t === "toolresult" ||
+        t === "tool_result" ||
+        t === "tool_call" ||
+        t === "tool_result" ||
+        (typeof x.name === "string" && x.arguments != null)
+      );
+    });
+
+  const hasToolName =
+    typeof (m as Record<string, unknown>).toolName === "string" ||
+    typeof (m as Record<string, unknown>).tool_name === "string";
+
+  if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
   }
 
@@ -43,19 +71,22 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
 /**
  * Normalize role for grouping purposes.
- * Tool results should be grouped with assistant messages.
  */
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
-  // All tool-related roles should display as assistant
+  // Keep tool-related roles distinct so the UI can style/toggle them.
   if (
     lower === "toolresult" ||
     lower === "tool_result" ||
     lower === "tool" ||
-    lower === "function"
+    lower === "function" ||
+    lower === "toolresult"
   ) {
-    return "assistant";
+    return "tool";
   }
+  if (lower === "assistant") return "assistant";
+  if (lower === "user") return "user";
+  if (lower === "system") return "system";
   return role;
 }
 

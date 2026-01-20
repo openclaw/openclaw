@@ -84,6 +84,11 @@
   color: rgba(150, 150, 150, 1);
 }
 
+.chat-avatar.tool {
+  background: rgba(134, 142, 150, 0.2);
+  color: rgba(134, 142, 150, 1);
+}
+
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   display: inline-block;

@@ -2,6 +2,22 @@
    CHAT TEXT STYLING
    ============================================= */
 
+.chat-thinking {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+:root[data-theme="light"] .chat-thinking {
+  border-color: rgba(16, 24, 40, 0.18);
+  background: rgba(16, 24, 40, 0.03);
+}
+
 .chat-text {
   font-size: 14px;
   line-height: 1.5;

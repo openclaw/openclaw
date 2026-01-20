@@ -93,6 +93,18 @@ export function renderChatControls(state: AppViewState) {
       </button>
       <span class="chat-controls__separator">|</span>
       <button
+        class="btn btn--sm btn--icon ${state.settings.chatShowThinking ? "active" : ""}"
+        @click=${() =>
+          state.applySettings({
+            ...state.settings,
+            chatShowThinking: !state.settings.chatShowThinking,
+          })}
+        aria-pressed=${state.settings.chatShowThinking}
+        title="Toggle assistant thinking/working output"
+      >
+        🧠
+      </button>
+      <button
         class="btn btn--sm btn--icon ${state.settings.chatFocusMode ? "active" : ""}"
         @click=${() =>
           state.applySettings({
