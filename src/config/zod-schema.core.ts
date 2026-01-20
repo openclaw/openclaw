@@ -8,6 +8,7 @@ export const ModelApiSchema = z.union([
   z.literal("anthropic-messages"),
   z.literal("google-generative-ai"),
   z.literal("github-copilot"),
+  z.literal("bedrock-converse-stream"),
 ]);
 
 export const ModelCompatSchema = z
