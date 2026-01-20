@@ -39,7 +39,7 @@ export function resolveModel(
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels =
-      providers[provider]?.models ??
+      providers[provider]?.models?.map((entry) => ({ ...entry, provider })) ??
       Object.values(providers)
         .flatMap((entry) => entry?.models ?? [])
         .map((entry) => ({ ...entry, provider }));
