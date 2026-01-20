@@ -34,10 +34,14 @@ export async function loadModelCatalog(params?: {
   if (modelCatalogPromise) return modelCatalogPromise;
 
   modelCatalogPromise = (async () => {
-    const piSdk = await import("@mariozechner/pi-coding-agent");
-
-    const models: ModelCatalogEntry[] = [];
     try {
+      // IMPORTANT: keep the dynamic import *inside* the try/catch.
+      // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
+      // we must not poison the cache with a rejected promise (otherwise all channel handlers
+      // will keep failing until restart).
+      const piSdk = await import("@mariozechner/pi-coding-agent");
+
+      const models: ModelCatalogEntry[] = [];
       const cfg = params?.config ?? loadConfig();
       await ensureClawdbotModelsJson(cfg);
       const agentDir = resolveClawdbotAgentDir();
@@ -66,16 +70,17 @@ export async function loadModelCatalog(params?: {
         // If we found nothing, don't cache this result so we can try again.
         modelCatalogPromise = null;
       }
-    } catch {
-      // Leave models empty on discovery errors and don't cache.
-      modelCatalogPromise = null;
-    }
 
-    return models.sort((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) return p;
-      return a.name.localeCompare(b.name);
-    });
+      return models.sort((a, b) => {
+        const p = a.provider.localeCompare(b.provider);
+        if (p !== 0) return p;
+        return a.name.localeCompare(b.name);
+      });
+    } catch {
+      // Don't poison the cache on transient dependency/filesystem issues.
+      modelCatalogPromise = null;
+      return [];
+    }
   })();
 
   return modelCatalogPromise;
