@@ -120,7 +120,11 @@ CLI: `clawdbot approvals` supports gateway or node editing (see [Approvals CLI](
 
 ## Approval flow
 
-When a prompt is required, the companion app displays a confirmation dialog with:
+When a prompt is required, the gateway broadcasts `exec.approval.requested` to operator clients.
+The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
+approved request to the node host.
+
+The confirmation dialog includes:
 - command + args
 - cwd
 - agent id
