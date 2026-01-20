@@ -267,6 +267,23 @@ function isPluginDenied(cfg: ClawdbotConfig, pluginId: string): boolean {
   return Array.isArray(deny) && deny.includes(pluginId);
 }
 
+/**
+ * When both BlueBubbles and iMessage are configured, prefer BlueBubbles:
+ * skip auto-enabling iMessage unless BlueBubbles is explicitly disabled/denied.
+ * This is non-destructive: if iMessage is already enabled, it won't be touched.
+ */
+function shouldSkipImsgForBlueBubbles(
+  cfg: ClawdbotConfig,
+  pluginId: string,
+  configured: PluginEnableChange[],
+): boolean {
+  if (pluginId !== "imessage") return false;
+  const blueBubblesConfigured = configured.some((e) => e.pluginId === "bluebubbles");
+  if (!blueBubblesConfigured) return false;
+  // Skip imessage auto-enable if bluebubbles is configured and not blocked
+  return !isPluginExplicitlyDisabled(cfg, "bluebubbles") && !isPluginDenied(cfg, "bluebubbles");
+}
+
 function ensureAllowlisted(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfig {
   const allow = cfg.plugins?.allow;
   if (!Array.isArray(allow) || allow.includes(pluginId)) return cfg;
@@ -317,6 +334,8 @@ export function applyPluginAutoEnable(params: {
   for (const entry of configured) {
     if (isPluginDenied(next, entry.pluginId)) continue;
     if (isPluginExplicitlyDisabled(next, entry.pluginId)) continue;
+    // Prefer BlueBubbles over imessage: skip imsg auto-enable if bluebubbles is configured
+    if (shouldSkipImsgForBlueBubbles(next, entry.pluginId, configured)) continue;
     const allow = next.plugins?.allow;
     const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled = next.plugins?.entries?.[entry.pluginId]?.enabled === true;

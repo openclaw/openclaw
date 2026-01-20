@@ -17,6 +17,9 @@ export type CrossContextDecoration = {
 const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "poll",
+  "reply",
+  "sendWithEffect",
+  "sendAttachment",
   "thread-create",
   "thread-reply",
   "sticker",
@@ -25,6 +28,9 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
 const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "poll",
+  "reply",
+  "sendWithEffect",
+  "sendAttachment",
   "thread-reply",
   "sticker",
 ]);

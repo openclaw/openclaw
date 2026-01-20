@@ -28,7 +28,7 @@ import {
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
-import { actionRequiresTarget } from "./message-action-spec.js";
+import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 import { resolveChannelTarget } from "./target-resolver.js";
 
 export type MessageActionRunnerGateway = {
@@ -536,10 +536,7 @@ export async function runMessageAction(
 
   applyTargetToParams({ action, args: params });
   if (actionRequiresTarget(action)) {
-    const hasTarget =
-      (typeof params.to === "string" && params.to.trim()) ||
-      (typeof params.channelId === "string" && params.channelId.trim());
-    if (!hasTarget) {
+    if (!actionHasTarget(action, params)) {
       throw new Error(`Action ${action} requires a target.`);
     }
   }

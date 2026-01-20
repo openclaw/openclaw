@@ -17,11 +17,15 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const cfg = loadConfig();
-  const rawAction = typeof opts.action === "string" ? opts.action.trim().toLowerCase() : "";
-  const action = (rawAction || "send") as ChannelMessageActionName;
-  if (!(CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).includes(action)) {
-    throw new Error(`Unknown message action: ${action}`);
+  const rawAction = typeof opts.action === "string" ? opts.action.trim() : "";
+  const actionInput = rawAction || "send";
+  const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
+    (name) => name.toLowerCase() === actionInput.toLowerCase(),
+  );
+  if (!actionMatch) {
+    throw new Error(`Unknown message action: ${actionInput}`);
   }
+  const action = actionMatch as ChannelMessageActionName;
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 

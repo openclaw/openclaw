@@ -9,6 +9,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
+  getChatChannelMeta,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
@@ -31,13 +32,10 @@ import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./moni
 import { blueBubblesOnboardingAdapter } from "./onboarding.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
+// Use core registry meta for consistency (Gate A: core registry).
+// BlueBubbles is positioned before imessage per Gate C preference.
 const meta = {
-  id: "bluebubbles",
-  label: "BlueBubbles",
-  selectionLabel: "BlueBubbles (macOS app)",
-  docsPath: "/channels/bluebubbles",
-  docsLabel: "bluebubbles",
-  blurb: "iMessage via the BlueBubbles mac app + REST API.",
+  ...getChatChannelMeta("bluebubbles"),
   order: 75,
 };
 

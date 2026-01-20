@@ -4,12 +4,15 @@ import { requireActivePluginRegistry } from "../plugins/runtime.js";
 
 // Channel docking: add new core channels here (order + meta + aliases), then
 // register the plugin in its extension entrypoint and keep protocol IDs in sync.
+// BlueBubbles placed before imessage per Gate C decision: prefer BlueBubbles
+// for iMessage use cases when both are available.
 export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
   "discord",
   "slack",
   "signal",
+  "bluebubbles",
   "imessage",
 ] as const;
 
@@ -67,6 +70,14 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "signal",
     blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
   },
+  bluebubbles: {
+    id: "bluebubbles",
+    label: "BlueBubbles",
+    selectionLabel: "BlueBubbles (macOS app)",
+    docsPath: "/channels/bluebubbles",
+    docsLabel: "bluebubbles",
+    blurb: "recommended for iMessage — uses the BlueBubbles mac app + REST API.",
+  },
   imessage: {
     id: "imessage",
     label: "iMessage",
@@ -79,6 +90,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
+  bb: "bluebubbles",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
