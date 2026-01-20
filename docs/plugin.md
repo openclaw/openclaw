@@ -375,6 +375,8 @@ Notes:
 - Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` is used for labels in CLI/UI lists.
 - `meta.aliases` adds alternate ids for normalization and CLI inputs.
+- `meta.preferOver` lists channel ids to skip auto-enable when both are configured.
+- `meta.detailLabel` and `meta.systemImage` let UIs show richer channel labels/icons.
 
 ### Write a new messaging channel (step‑by‑step)
 
@@ -388,6 +390,8 @@ Model provider docs live under `/providers/*`.
 2) Define the channel metadata
 - `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
 - `meta.docsPath` should point at a docs page like `/channels/<id>`.
+- `meta.preferOver` lets a plugin replace another channel (auto-enable prefers it).
+- `meta.detailLabel` and `meta.systemImage` are used by UIs for detail text/icons.
 
 3) Implement the required adapters
 - `config.listAccountIds` + `config.resolveAccount`

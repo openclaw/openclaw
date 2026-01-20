@@ -42,7 +42,8 @@ extension CronJobEditor {
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
             self.deliver = deliver ?? false
-            self.channel = GatewayAgentChannel(raw: channel)
+            let trimmed = (channel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            self.channel = trimmed.isEmpty ? "last" : trimmed
             self.to = to ?? ""
             self.bestEffortDeliver = bestEffortDeliver ?? false
         }
@@ -210,7 +211,8 @@ extension CronJobEditor {
         if let n = Int(self.timeoutSeconds), n > 0 { payload["timeoutSeconds"] = n }
         payload["deliver"] = self.deliver
         if self.deliver {
-            payload["channel"] = self.channel.rawValue
+            let trimmed = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
+            payload["channel"] = trimmed.isEmpty ? "last" : trimmed
             let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
             if !to.isEmpty { payload["to"] = to }
             payload["bestEffortDeliver"] = self.bestEffortDeliver

@@ -156,6 +156,8 @@ struct ChannelsStatusSnapshot: Codable {
     let ts: Double
     let channelOrder: [String]
     let channelLabels: [String: String]
+    let channelDetailLabels: [String: String]? = nil
+    let channelSystemImages: [String: String]? = nil
     let channels: [String: AnyCodable]
     let channelAccounts: [String: [ChannelAccountSnapshot]]
     let channelDefaultAccountId: [String: String]

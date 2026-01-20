@@ -73,16 +73,7 @@ export function buildCronPayload(form: CronFormState) {
     kind: "agentTurn";
     message: string;
     deliver?: boolean;
-    channel?:
-      | "last"
-      | "whatsapp"
-      | "telegram"
-      | "discord"
-      | "slack"
-      | "signal"
-      | "imessage"
-      | "msteams"
-      | "bluebubbles";
+    channel?: string;
     to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };

@@ -9,7 +9,6 @@ import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../whatsapp/normalize.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import {
-  resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
   resolveIMessageGroupRequireMention,
   resolveSlackGroupRequireMention,
@@ -67,27 +66,6 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => entry.toLowerCase());
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-// Helper to delegate config operations to a plugin at runtime.
-// Used for BlueBubbles which is in CHAT_CHANNEL_ORDER but implemented as a plugin.
-function getPluginConfigAdapter(channelId: string) {
-  return {
-    resolveAllowFrom: (params: { cfg: ClawdbotConfig; accountId?: string | null }) => {
-      const registry = requireActivePluginRegistry();
-      const entry = registry.channels.find((e) => e.plugin.id === channelId);
-      return entry?.plugin.config?.resolveAllowFrom?.(params) ?? [];
-    },
-    formatAllowFrom: (params: {
-      cfg: ClawdbotConfig;
-      accountId?: string | null;
-      allowFrom: Array<string | number>;
-    }) => {
-      const registry = requireActivePluginRegistry();
-      const entry = registry.channels.find((e) => e.plugin.id === channelId);
-      return entry?.plugin.config?.formatAllowFrom?.(params) ?? params.allowFrom.map(String);
-    },
-  };
-}
 
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
@@ -279,30 +257,6 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean)
           .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
           .filter(Boolean),
-    },
-    threading: {
-      buildToolContext: ({ context, hasRepliedRef }) => ({
-        currentChannelId: context.To?.trim() || undefined,
-        currentThreadTs: context.ReplyToId,
-        hasRepliedRef,
-      }),
-    },
-  },
-  // BlueBubbles is in CHAT_CHANNEL_ORDER (Gate A: core registry) but implemented as a plugin.
-  // Config operations are delegated to the plugin at runtime.
-  // Note: Additional capabilities (edit, unsend, reply, effects, groupManagement) are exposed
-  // via the plugin's capabilities, not the dock's ChannelCapabilities type.
-  bluebubbles: {
-    id: "bluebubbles",
-    capabilities: {
-      chatTypes: ["direct", "group"],
-      reactions: true,
-      media: true,
-    },
-    outbound: { textChunkLimit: 4000 },
-    config: getPluginConfigAdapter("bluebubbles"),
-    groups: {
-      resolveRequireMention: resolveBlueBubblesGroupRequireMention,
     },
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) => ({
