@@ -20,6 +20,7 @@ import {
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import { probeBlueBubbles } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
+import { sendBlueBubblesAttachment } from "./attachments.js";
 import { normalizeBlueBubblesHandle } from "./targets.js";
 import { bluebubblesMessageActions } from "./actions.js";
 import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
@@ -40,8 +41,13 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   meta,
   capabilities: {
     chatTypes: ["direct", "group"],
-    media: false,
+    media: true,
     reactions: true,
+    edit: true,
+    unsend: true,
+    reply: true,
+    effects: true,
+    groupManagement: true,
   },
   reload: { configPrefixes: ["channels.bluebubbles"] },
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),
@@ -210,8 +216,34 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       });
       return { channel: "bluebubbles", ...result };
     },
-    sendMedia: async () => {
-      throw new Error("BlueBubbles media delivery is not supported yet.");
+    sendMedia: async ({ cfg, to, mediaPath, mediaBuffer, contentType, filename, caption, accountId }) => {
+      // Prefer buffer if provided, otherwise read from path
+      let buffer: Uint8Array;
+      if (mediaBuffer) {
+        buffer = mediaBuffer;
+      } else if (mediaPath) {
+        const fs = await import("node:fs/promises");
+        buffer = new Uint8Array(await fs.readFile(mediaPath));
+      } else {
+        throw new Error("BlueBubbles media delivery requires mediaPath or mediaBuffer.");
+      }
+
+      // Resolve filename from path if not provided
+      const resolvedFilename = filename ?? (mediaPath ? mediaPath.split("/").pop() ?? "attachment" : "attachment");
+
+      const result = await sendBlueBubblesAttachment({
+        to,
+        buffer,
+        filename: resolvedFilename,
+        contentType: contentType ?? undefined,
+        caption: caption ?? undefined,
+        opts: {
+          cfg: cfg as ClawdbotConfig,
+          accountId: accountId ?? undefined,
+        },
+      });
+
+      return { channel: "bluebubbles", ...result };
     },
   },
   status: {

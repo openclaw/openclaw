@@ -1,6 +1,7 @@
 import {
   createActionGate,
   jsonResult,
+  readBooleanParam,
   readNumberParam,
   readReactionParams,
   readStringParam,
@@ -12,7 +13,16 @@ import {
 
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { sendBlueBubblesReaction } from "./reactions.js";
-import { resolveChatGuidForTarget } from "./send.js";
+import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
+import {
+  editBlueBubblesMessage,
+  unsendBlueBubblesMessage,
+  renameBlueBubblesChat,
+  addBlueBubblesParticipant,
+  removeBlueBubblesParticipant,
+  leaveBlueBubblesChat,
+} from "./chat.js";
+import { sendBlueBubblesAttachment } from "./attachments.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
 import type { BlueBubblesSendTarget } from "./types.js";
 
@@ -32,6 +42,20 @@ function mapTarget(raw: string): BlueBubblesSendTarget {
   };
 }
 
+/** Supported action names for BlueBubbles */
+const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
+  "react",
+  "edit",
+  "unsend",
+  "reply",
+  "sendWithEffect",
+  "renameGroup",
+  "addParticipant",
+  "removeParticipant",
+  "leaveGroup",
+  "sendAttachment",
+]);
+
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const account = resolveBlueBubblesAccount({ cfg: cfg as ClawdbotConfig });
@@ -39,9 +63,18 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     const gate = createActionGate((cfg as ClawdbotConfig).channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
     if (gate("reactions")) actions.add("react");
+    if (gate("edit")) actions.add("edit");
+    if (gate("unsend")) actions.add("unsend");
+    if (gate("reply")) actions.add("reply");
+    if (gate("sendWithEffect")) actions.add("sendWithEffect");
+    if (gate("renameGroup")) actions.add("renameGroup");
+    if (gate("addParticipant")) actions.add("addParticipant");
+    if (gate("removeParticipant")) actions.add("removeParticipant");
+    if (gate("leaveGroup")) actions.add("leaveGroup");
+    if (gate("sendAttachment")) actions.add("sendAttachment");
     return Array.from(actions);
   },
-  supportsAction: ({ action }) => action === "react",
+  supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   extractToolSend: ({ args }): ChannelToolSend | null => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
     if (action !== "sendMessage") return null;
@@ -51,31 +84,23 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     return { to, accountId };
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
-    if (action !== "react") {
-      throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
-    }
-    const { emoji, remove, isEmpty } = readReactionParams(params, {
-      removeErrorMessage: "Emoji is required to remove a BlueBubbles reaction.",
-    });
-    if (isEmpty && !remove) {
-      throw new Error("Emoji is required to send a BlueBubbles reaction.");
-    }
-    const messageId = readStringParam(params, "messageId", { required: true });
-    const chatGuid = readStringParam(params, "chatGuid");
-    const chatIdentifier = readStringParam(params, "chatIdentifier");
-    const chatId = readNumberParam(params, "chatId", { integer: true });
-    const to = readStringParam(params, "to");
-    const partIndex = readNumberParam(params, "partIndex", { integer: true });
-
     const account = resolveBlueBubblesAccount({
       cfg: cfg as ClawdbotConfig,
       accountId: accountId ?? undefined,
     });
     const baseUrl = account.config.serverUrl?.trim();
     const password = account.config.password?.trim();
+    const opts = { cfg: cfg as ClawdbotConfig, accountId: accountId ?? undefined };
 
-    let resolvedChatGuid = chatGuid?.trim() || "";
-    if (!resolvedChatGuid) {
+    // Helper to resolve chatGuid from various params
+    const resolveChatGuid = async (): Promise<string> => {
+      const chatGuid = readStringParam(params, "chatGuid");
+      if (chatGuid?.trim()) return chatGuid.trim();
+
+      const chatIdentifier = readStringParam(params, "chatIdentifier");
+      const chatId = readNumberParam(params, "chatId", { integer: true });
+      const to = readStringParam(params, "to");
+
       const target =
         chatIdentifier?.trim()
           ? ({ kind: "chat_identifier", chatIdentifier: chatIdentifier.trim() } as BlueBubblesSendTarget)
@@ -84,38 +109,192 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
             : to
               ? mapTarget(to)
               : null;
+
       if (!target) {
-        throw new Error("BlueBubbles reaction requires chatGuid, chatIdentifier, chatId, or to.");
+        throw new Error(`BlueBubbles ${action} requires chatGuid, chatIdentifier, chatId, or to.`);
       }
       if (!baseUrl || !password) {
-        throw new Error("BlueBubbles reaction requires serverUrl and password.");
+        throw new Error(`BlueBubbles ${action} requires serverUrl and password.`);
       }
-      resolvedChatGuid =
-        (await resolveChatGuidForTarget({
-          baseUrl,
-          password,
-          target,
-        })) ?? "";
-    }
-    if (!resolvedChatGuid) {
-      throw new Error("BlueBubbles reaction failed: chatGuid not found for target.");
+
+      const resolved = await resolveChatGuidForTarget({ baseUrl, password, target });
+      if (!resolved) {
+        throw new Error(`BlueBubbles ${action} failed: chatGuid not found for target.`);
+      }
+      return resolved;
+    };
+
+    // Handle react action
+    if (action === "react") {
+      const { emoji, remove, isEmpty } = readReactionParams(params, {
+        removeErrorMessage: "Emoji is required to remove a BlueBubbles reaction.",
+      });
+      if (isEmpty && !remove) {
+        throw new Error("Emoji is required to send a BlueBubbles reaction.");
+      }
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const resolvedChatGuid = await resolveChatGuid();
+
+      await sendBlueBubblesReaction({
+        chatGuid: resolvedChatGuid,
+        messageGuid: messageId,
+        emoji,
+        remove: remove || undefined,
+        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        opts,
+      });
+
+      return jsonResult({ ok: true, ...(remove ? { removed: true } : { added: emoji }) });
     }
 
-    await sendBlueBubblesReaction({
-      chatGuid: resolvedChatGuid,
-      messageGuid: messageId,
-      emoji,
-      remove: remove || undefined,
-      partIndex: typeof partIndex === "number" ? partIndex : undefined,
-      opts: {
-        cfg: cfg as ClawdbotConfig,
-        accountId: accountId ?? undefined,
-      },
-    });
+    // Handle edit action
+    if (action === "edit") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const newText = readStringParam(params, "text") ?? readStringParam(params, "newText");
+      if (!newText) {
+        throw new Error("BlueBubbles edit requires text or newText parameter.");
+      }
+      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+      const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
 
-    if (!remove) {
-      return jsonResult({ ok: true, added: emoji });
+      await editBlueBubblesMessage(messageId, newText, {
+        ...opts,
+        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        backwardsCompatMessage: backwardsCompatMessage ?? undefined,
+      });
+
+      return jsonResult({ ok: true, edited: messageId });
     }
-    return jsonResult({ ok: true, removed: true });
+
+    // Handle unsend action
+    if (action === "unsend") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+
+      await unsendBlueBubblesMessage(messageId, {
+        ...opts,
+        partIndex: typeof partIndex === "number" ? partIndex : undefined,
+      });
+
+      return jsonResult({ ok: true, unsent: messageId });
+    }
+
+    // Handle reply action
+    if (action === "reply") {
+      const messageId = readStringParam(params, "messageId", { required: true });
+      const text = readStringParam(params, "text", { required: true });
+      const to = readStringParam(params, "to", { required: true });
+      const partIndex = readNumberParam(params, "partIndex", { integer: true });
+
+      const result = await sendMessageBlueBubbles(to, text, {
+        ...opts,
+        replyToMessageGuid: messageId,
+        replyToPartIndex: typeof partIndex === "number" ? partIndex : undefined,
+      });
+
+      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: messageId });
+    }
+
+    // Handle sendWithEffect action
+    if (action === "sendWithEffect") {
+      const text = readStringParam(params, "text", { required: true });
+      const to = readStringParam(params, "to", { required: true });
+      const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
+      if (!effectId) {
+        throw new Error("BlueBubbles sendWithEffect requires effectId or effect parameter.");
+      }
+
+      const result = await sendMessageBlueBubbles(to, text, {
+        ...opts,
+        effectId,
+      });
+
+      return jsonResult({ ok: true, messageId: result.messageId, effect: effectId });
+    }
+
+    // Handle renameGroup action
+    if (action === "renameGroup") {
+      const resolvedChatGuid = await resolveChatGuid();
+      const displayName = readStringParam(params, "displayName") ?? readStringParam(params, "name");
+      if (!displayName) {
+        throw new Error("BlueBubbles renameGroup requires displayName or name parameter.");
+      }
+
+      await renameBlueBubblesChat(resolvedChatGuid, displayName, opts);
+
+      return jsonResult({ ok: true, renamed: resolvedChatGuid, displayName });
+    }
+
+    // Handle addParticipant action
+    if (action === "addParticipant") {
+      const resolvedChatGuid = await resolveChatGuid();
+      const address = readStringParam(params, "address") ?? readStringParam(params, "participant");
+      if (!address) {
+        throw new Error("BlueBubbles addParticipant requires address or participant parameter.");
+      }
+
+      await addBlueBubblesParticipant(resolvedChatGuid, address, opts);
+
+      return jsonResult({ ok: true, added: address, chatGuid: resolvedChatGuid });
+    }
+
+    // Handle removeParticipant action
+    if (action === "removeParticipant") {
+      const resolvedChatGuid = await resolveChatGuid();
+      const address = readStringParam(params, "address") ?? readStringParam(params, "participant");
+      if (!address) {
+        throw new Error("BlueBubbles removeParticipant requires address or participant parameter.");
+      }
+
+      await removeBlueBubblesParticipant(resolvedChatGuid, address, opts);
+
+      return jsonResult({ ok: true, removed: address, chatGuid: resolvedChatGuid });
+    }
+
+    // Handle leaveGroup action
+    if (action === "leaveGroup") {
+      const resolvedChatGuid = await resolveChatGuid();
+
+      await leaveBlueBubblesChat(resolvedChatGuid, opts);
+
+      return jsonResult({ ok: true, left: resolvedChatGuid });
+    }
+
+    // Handle sendAttachment action
+    if (action === "sendAttachment") {
+      const to = readStringParam(params, "to", { required: true });
+      const filename = readStringParam(params, "filename", { required: true });
+      const caption = readStringParam(params, "caption");
+      const contentType = readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
+
+      // Buffer can come from params.buffer (base64) or params.path (file path)
+      const base64Buffer = readStringParam(params, "buffer");
+      const filePath = readStringParam(params, "path") ?? readStringParam(params, "filePath");
+
+      let buffer: Uint8Array;
+      if (base64Buffer) {
+        // Decode base64 to buffer
+        buffer = Uint8Array.from(atob(base64Buffer), (c) => c.charCodeAt(0));
+      } else if (filePath) {
+        // Read file from path (will be handled by caller providing buffer)
+        throw new Error("BlueBubbles sendAttachment: filePath not supported in action, provide buffer as base64.");
+      } else {
+        throw new Error("BlueBubbles sendAttachment requires buffer (base64) parameter.");
+      }
+
+      const result = await sendBlueBubblesAttachment({
+        to,
+        buffer,
+        filename,
+        contentType: contentType ?? undefined,
+        caption: caption ?? undefined,
+        opts,
+      });
+
+      return jsonResult({ ok: true, messageId: result.messageId });
+    }
+
+    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
   },
 };

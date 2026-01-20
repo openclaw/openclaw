@@ -49,6 +49,15 @@ export type BlueBubblesAccountConfig = {
 
 export type BlueBubblesActionConfig = {
   reactions?: boolean;
+  edit?: boolean;
+  unsend?: boolean;
+  reply?: boolean;
+  sendWithEffect?: boolean;
+  renameGroup?: boolean;
+  addParticipant?: boolean;
+  removeParticipant?: boolean;
+  leaveGroup?: boolean;
+  sendAttachment?: boolean;
 };
 
 export type BlueBubblesConfig = {

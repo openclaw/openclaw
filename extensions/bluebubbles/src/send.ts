@@ -15,11 +15,41 @@ export type BlueBubblesSendOpts = {
   accountId?: string;
   timeoutMs?: number;
   cfg?: ClawdbotConfig;
+  /** Message GUID to reply to (reply threading) */
+  replyToMessageGuid?: string;
+  /** Part index for reply (default: 0) */
+  replyToPartIndex?: number;
+  /** Effect ID or short name for message effects (e.g., "slam", "balloons") */
+  effectId?: string;
 };
 
 export type BlueBubblesSendResult = {
   messageId: string;
 };
+
+/** Maps short effect names to full Apple effect IDs */
+const EFFECT_MAP: Record<string, string> = {
+  // Bubble effects
+  slam: "com.apple.MobileSMS.expressivesend.impact",
+  loud: "com.apple.MobileSMS.expressivesend.loud",
+  gentle: "com.apple.MobileSMS.expressivesend.gentle",
+  invisible: "com.apple.MobileSMS.expressivesend.invisibleink",
+  // Screen effects
+  echo: "com.apple.messages.effect.CKEchoEffect",
+  spotlight: "com.apple.messages.effect.CKSpotlightEffect",
+  balloons: "com.apple.messages.effect.CKHappyBirthdayEffect",
+  confetti: "com.apple.messages.effect.CKConfettiEffect",
+  love: "com.apple.messages.effect.CKHeartEffect",
+  lasers: "com.apple.messages.effect.CKLasersEffect",
+  fireworks: "com.apple.messages.effect.CKFireworksEffect",
+  celebration: "com.apple.messages.effect.CKSparklesEffect",
+};
+
+function resolveEffectId(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim().toLowerCase();
+  return EFFECT_MAP[trimmed] ?? raw;
+}
 
 function resolveSendTarget(raw: string): BlueBubblesSendTarget {
   const parsed = parseBlueBubblesTarget(raw);
@@ -227,12 +257,27 @@ export async function sendMessageBlueBubbles(
       "BlueBubbles send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
     );
   }
+  const effectId = resolveEffectId(opts.effectId);
+  const needsPrivateApi = Boolean(opts.replyToMessageGuid || effectId);
   const payload: Record<string, unknown> = {
     chatGuid,
     tempGuid: crypto.randomUUID(),
     message: trimmedText,
-    method: "apple-script",
   };
+  if (needsPrivateApi) {
+    payload.method = "private-api";
+  }
+
+  // Add reply threading support
+  if (opts.replyToMessageGuid) {
+    payload.selectedMessageGuid = opts.replyToMessageGuid;
+    payload.partIndex = typeof opts.replyToPartIndex === "number" ? opts.replyToPartIndex : 0;
+  }
+
+  // Add message effects support
+  if (effectId) {
+    payload.effectId = effectId;
+  }
 
   const url = buildBlueBubblesApiUrl({
     baseUrl,
