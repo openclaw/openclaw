@@ -106,8 +106,9 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalMessageStart();
 
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    await signaler.signalTextDelta("hello");
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("hello");
   });
 
   it("signals on reasoning for thinking mode", async () => {
@@ -119,7 +120,8 @@ describe("createTypingSignaler", () => {
     });
 
     await signaler.signalReasoningDelta();
-
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalled();
   });
 
@@ -133,11 +135,12 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalTextDelta("hi");
 
+    expect(typing.startTypingLoop).toHaveBeenCalled();
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("starts typing on tool start when inactive", async () => {
+  it("does not start typing on tool start before text", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -147,11 +150,11 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.startTypingLoop).toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
   });
 
-  it("refreshes ttl on tool start when active", async () => {
+  it("refreshes ttl on tool start when active after text", async () => {
     const typing = createMockTypingController({
       isActive: vi.fn(() => true),
     });
@@ -161,6 +164,10 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
+    await signaler.signalTextDelta("hello");
+    typing.startTypingLoop.mockClear();
+    typing.startTypingOnText.mockClear();
+    typing.refreshTypingTtl.mockClear();
     await signaler.signalToolStart();
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();

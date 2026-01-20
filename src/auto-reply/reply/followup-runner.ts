@@ -116,7 +116,6 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
-    await typingSignals.signalRunStart();
     try {
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
