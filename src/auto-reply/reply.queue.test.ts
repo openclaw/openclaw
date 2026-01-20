@@ -82,7 +82,7 @@ describe("queue followups", () => {
       });
 
       const first = await getReplyFromConfig(
-        { Body: "first", From: "+1001", To: "+2000" },
+        { Body: "first", From: "+1001", To: "+2000", MessageSid: "m-1" },
         {},
         cfg,
       );
@@ -105,7 +105,11 @@ describe("queue followups", () => {
       await Promise.resolve();
 
       expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
-      expect(prompts.some((p) => p.includes("[Queued messages while agent was busy]"))).toBe(true);
+      const queuedPrompt = prompts.find((p) =>
+        p.includes("[Queued messages while agent was busy]"),
+      );
+      expect(queuedPrompt).toBeTruthy();
+      expect(queuedPrompt).toContain("[message_id: m-1]");
     });
   });
 

@@ -492,6 +492,7 @@ const BlueBubblesActionSchema = z
     reply: z.boolean().optional(),
     sendWithEffect: z.boolean().optional(),
     renameGroup: z.boolean().optional(),
+    setGroupIcon: z.boolean().optional(),
     addParticipant: z.boolean().optional(),
     removeParticipant: z.boolean().optional(),
     leaveGroup: z.boolean().optional(),

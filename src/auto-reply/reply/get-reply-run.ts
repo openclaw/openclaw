@@ -377,9 +377,14 @@ export async function runPreparedReply(
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
-  const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+  const queueMessageId = sessionCtx.MessageSid?.trim();
+  const queueMessageIdHint = queueMessageId ? `[message_id: ${queueMessageId}]` : "";
+  const queueBodyWithId = queueMessageIdHint
+    ? `${queueBodyBase}\n${queueMessageIdHint}`
     : queueBodyBase;
+  const queuedBody = mediaNote
+    ? [mediaNote, mediaReplyHint, queueBodyWithId].filter(Boolean).join("\n").trim()
+    : queueBodyWithId;
   const resolvedQueue = resolveQueueSettings({
     cfg,
     channel: sessionCtx.Provider,

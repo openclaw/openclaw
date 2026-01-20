@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ClawdbotConfig } from "clawdbot/plugin-sdk";
 
 import { sendBlueBubblesAttachment } from "./attachments.js";
+import { sendMessageBlueBubbles } from "./send.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -46,6 +47,7 @@ export async function sendBlueBubblesMedia(params: {
   contentType?: string;
   filename?: string;
   caption?: string;
+  replyToId?: string | null;
   accountId?: string;
 }) {
   const {
@@ -57,6 +59,7 @@ export async function sendBlueBubblesMedia(params: {
     contentType,
     filename,
     caption,
+    replyToId,
     accountId,
   } = params;
   const core = getBlueBubblesRuntime();
@@ -106,15 +109,25 @@ export async function sendBlueBubblesMedia(params: {
     }
   }
 
-  return sendBlueBubblesAttachment({
+  const attachmentResult = await sendBlueBubblesAttachment({
     to,
     buffer,
     filename: resolvedFilename ?? "attachment",
     contentType: resolvedContentType ?? undefined,
-    caption: caption ?? undefined,
     opts: {
       cfg,
       accountId,
     },
   });
+
+  const trimmedCaption = caption?.trim();
+  if (trimmedCaption) {
+    await sendMessageBlueBubbles(to, trimmedCaption, {
+      cfg,
+      accountId,
+      replyToMessageGuid: replyToId?.trim() || undefined,
+    });
+  }
+
+  return attachmentResult;
 }

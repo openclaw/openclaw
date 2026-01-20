@@ -170,6 +170,8 @@ export async function sendBlueBubblesAttachment(params: {
   // Add optional caption
   if (caption) {
     addField("message", caption);
+    addField("text", caption);
+    addField("caption", caption);
   }
 
   // Close the multipart body

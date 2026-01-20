@@ -1396,6 +1396,55 @@ describe("BlueBubbles webhook monitor", () => {
     });
   });
 
+  describe("outbound message ids", () => {
+    it("enqueues system event for outbound message id", async () => {
+      mockEnqueueSystemEvent.mockClear();
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
+      });
+
+      const account = createMockAccount();
+      const config: ClawdbotConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        "BlueBubbles sent message id: msg-123",
+        expect.objectContaining({
+          sessionKey: "agent:main:bluebubbles:dm:+15551234567",
+        }),
+      );
+    });
+  });
+
   describe("reaction events", () => {
     it("enqueues system event for reaction added", async () => {
       mockEnqueueSystemEvent.mockClear();

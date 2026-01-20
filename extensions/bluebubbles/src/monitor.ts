@@ -1316,6 +1316,15 @@ async function processMessage(
       ? formatBlueBubblesChatTarget({ chatGuid: chatGuidForActions })
       : message.senderId;
 
+  const maybeEnqueueOutboundMessageId = (messageId?: string) => {
+    const trimmed = messageId?.trim();
+    if (!trimmed || trimmed === "ok" || trimmed === "unknown") return;
+    core.system.enqueueSystemEvent(`BlueBubbles sent message id: ${trimmed}`, {
+      sessionKey: route.sessionKey,
+      contextKey: `bluebubbles:outbound:${outboundTarget}:${trimmed}`,
+    });
+  };
+
   const ctxPayload = {
     Body: body,
     BodyForAgent: body,
@@ -1368,13 +1377,15 @@ async function processMessage(
             for (const mediaUrl of mediaList) {
               const caption = first ? payload.text : undefined;
               first = false;
-              await sendBlueBubblesMedia({
+              const result = await sendBlueBubblesMedia({
                 cfg: config,
                 to: outboundTarget,
                 mediaUrl,
                 caption: caption ?? undefined,
+                replyToId: payload.replyToId ?? null,
                 accountId: account.accountId,
               });
+              maybeEnqueueOutboundMessageId(result.messageId);
               sentMessage = true;
               statusSink?.({ lastOutboundAt: Date.now() });
             }
@@ -1391,11 +1402,12 @@ async function processMessage(
           for (const chunk of chunks) {
             const replyToMessageGuid =
               typeof payload.replyToId === "string" ? payload.replyToId.trim() : "";
-            await sendMessageBlueBubbles(outboundTarget, chunk, {
+            const result = await sendMessageBlueBubbles(outboundTarget, chunk, {
               cfg: config,
               accountId: account.accountId,
               replyToMessageGuid: replyToMessageGuid || undefined,
             });
+            maybeEnqueueOutboundMessageId(result.messageId);
             sentMessage = true;
             statusSink?.({ lastOutboundAt: Date.now() });
           }
