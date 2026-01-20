@@ -3,8 +3,13 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
-import { syncExternalCliCredentials } from "./external-cli-sync.js";
+import {
+  AUTH_STORE_LOCK_OPTIONS,
+  AUTH_STORE_VERSION,
+  CODEX_CLI_PROFILE_ID,
+  log,
+} from "./constants.js";
+import { findDuplicateCodexProfile, syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -330,7 +335,18 @@ export function ensureAuthProfileStore(
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  return mergeAuthProfileStores(mainStore, store);
+  const merged = mergeAuthProfileStores(mainStore, store);
+
+  // Keep per-agent view clean even if the main store has codex-cli.
+  const codexProfile = merged.profiles[CODEX_CLI_PROFILE_ID];
+  if (codexProfile?.type === "oauth") {
+    const duplicateId = findDuplicateCodexProfile(merged, codexProfile);
+    if (duplicateId) {
+      delete merged.profiles[CODEX_CLI_PROFILE_ID];
+    }
+  }
+
+  return merged;
 }
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
