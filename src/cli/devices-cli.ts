@@ -123,7 +123,8 @@ export function registerDevicesCli(program: Command) {
             const name = req.displayName || req.deviceId;
             const repair = req.isRepair ? " (repair)" : "";
             const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
-            const age = typeof req.ts === "number" ? ` · ${formatAge(Date.now() - req.ts)} ago` : "";
+            const age =
+              typeof req.ts === "number" ? ` · ${formatAge(Date.now() - req.ts)} ago` : "";
             const role = req.role ? ` · role: ${req.role}` : "";
             defaultRuntime.log(`- ${req.requestId}: ${name}${repair}${role}${ip}${age}`);
           }
@@ -133,7 +134,9 @@ export function registerDevicesCli(program: Command) {
           for (const device of list.paired) {
             const name = device.displayName || device.deviceId;
             const roles = device.roles?.length ? `roles: ${device.roles.join(", ")}` : "roles: -";
-            const scopes = device.scopes?.length ? `scopes: ${device.scopes.join(", ")}` : "scopes: -";
+            const scopes = device.scopes?.length
+              ? `scopes: ${device.scopes.join(", ")}`
+              : "scopes: -";
             const ip = device.remoteIp ? ` · ${device.remoteIp}` : "";
             const tokens = formatTokenSummary(device.tokens);
             defaultRuntime.log(`- ${name} · ${roles} · ${scopes} · ${tokens}${ip}`);

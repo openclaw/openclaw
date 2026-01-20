@@ -72,7 +72,7 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 
 export class GatewayClient {
   private ws: WebSocket | null = null;
-  private opts: GatewayClientOptions;
+  private opts: GatewayClientOptions & { deviceIdentity: DeviceIdentity };
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
   private closed = false;
@@ -161,25 +161,23 @@ export class GatewayClient {
         : undefined;
     const signedAtMs = Date.now();
     const scopes = this.opts.scopes ?? ["operator.admin"];
-    const device = (() => {
-      if (!this.opts.deviceIdentity) return undefined;
-      const payload = buildDeviceAuthPayload({
-        deviceId: this.opts.deviceIdentity.deviceId,
-        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-        role,
-        scopes,
-        signedAtMs,
-        token: authToken ?? null,
-      });
-      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
-      return {
-        id: this.opts.deviceIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
-        signature,
-        signedAt: signedAtMs,
-      };
-    })();
+    const deviceIdentity = this.opts.deviceIdentity;
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceIdentity.deviceId,
+      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+      role,
+      scopes,
+      signedAtMs,
+      token: authToken ?? null,
+    });
+    const signature = signDevicePayload(deviceIdentity.privateKeyPem, payload);
+    const device = {
+      id: deviceIdentity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(deviceIdentity.publicKeyPem),
+      signature,
+      signedAt: signedAtMs,
+    };
     const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,

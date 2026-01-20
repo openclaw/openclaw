@@ -102,9 +102,8 @@ describe("gateway server auth/connect", () => {
 
   test("accepts device token auth for paired device", async () => {
     const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
-    const { approveDevicePairing, getPairedDevice, listDevicePairing } = await import(
-      "../infra/device-pairing.js"
-    );
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } =
+      await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const res = await connectReq(ws, { token: "secret" });
     if (!res.ok) {
