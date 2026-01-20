@@ -5,6 +5,7 @@ public let GATEWAY_PROTOCOL_VERSION = 3
 
 public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
+    case notPaired = "NOT_PAIRED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
@@ -15,6 +16,11 @@ public struct ConnectParams: Codable, Sendable {
     public let maxprotocol: Int
     public let client: [String: AnyCodable]
     public let caps: [String]?
+    public let commands: [String]?
+    public let permissions: [String: AnyCodable]?
+    public let role: String?
+    public let scopes: [String]?
+    public let device: [String: AnyCodable]?
     public let auth: [String: AnyCodable]?
     public let locale: String?
     public let useragent: String?
@@ -24,6 +30,11 @@ public struct ConnectParams: Codable, Sendable {
         maxprotocol: Int,
         client: [String: AnyCodable],
         caps: [String]?,
+        commands: [String]?,
+        permissions: [String: AnyCodable]?,
+        role: String?,
+        scopes: [String]?,
+        device: [String: AnyCodable]?,
         auth: [String: AnyCodable]?,
         locale: String?,
         useragent: String?
@@ -32,6 +43,11 @@ public struct ConnectParams: Codable, Sendable {
         self.maxprotocol = maxprotocol
         self.client = client
         self.caps = caps
+        self.commands = commands
+        self.permissions = permissions
+        self.role = role
+        self.scopes = scopes
+        self.device = device
         self.auth = auth
         self.locale = locale
         self.useragent = useragent
@@ -41,6 +57,11 @@ public struct ConnectParams: Codable, Sendable {
         case maxprotocol = "maxProtocol"
         case client
         case caps
+        case commands
+        case permissions
+        case role
+        case scopes
+        case device
         case auth
         case locale
         case useragent = "userAgent"
@@ -54,6 +75,7 @@ public struct HelloOk: Codable, Sendable {
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
     public let canvashosturl: String?
+    public let auth: [String: AnyCodable]?
     public let policy: [String: AnyCodable]
 
     public init(
@@ -63,6 +85,7 @@ public struct HelloOk: Codable, Sendable {
         features: [String: AnyCodable],
         snapshot: Snapshot,
         canvashosturl: String?,
+        auth: [String: AnyCodable]?,
         policy: [String: AnyCodable]
     ) {
         self.type = type
@@ -71,6 +94,7 @@ public struct HelloOk: Codable, Sendable {
         self.features = features
         self.snapshot = snapshot
         self.canvashosturl = canvashosturl
+        self.auth = auth
         self.policy = policy
     }
     private enum CodingKeys: String, CodingKey {
@@ -80,6 +104,7 @@ public struct HelloOk: Codable, Sendable {
         case features
         case snapshot
         case canvashosturl = "canvasHostUrl"
+        case auth
         case policy
     }
 }
@@ -701,6 +726,93 @@ public struct NodeInvokeParams: Codable, Sendable {
         case nodeid = "nodeId"
         case command
         case params
+        case timeoutms = "timeoutMs"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct NodeInvokeResultParams: Codable, Sendable {
+    public let id: String
+    public let nodeid: String
+    public let ok: Bool
+    public let payload: AnyCodable?
+    public let payloadjson: String?
+    public let error: [String: AnyCodable]?
+
+    public init(
+        id: String,
+        nodeid: String,
+        ok: Bool,
+        payload: AnyCodable?,
+        payloadjson: String?,
+        error: [String: AnyCodable]?
+    ) {
+        self.id = id
+        self.nodeid = nodeid
+        self.ok = ok
+        self.payload = payload
+        self.payloadjson = payloadjson
+        self.error = error
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case nodeid = "nodeId"
+        case ok
+        case payload
+        case payloadjson = "payloadJSON"
+        case error
+    }
+}
+
+public struct NodeEventParams: Codable, Sendable {
+    public let event: String
+    public let payload: AnyCodable?
+    public let payloadjson: String?
+
+    public init(
+        event: String,
+        payload: AnyCodable?,
+        payloadjson: String?
+    ) {
+        self.event = event
+        self.payload = payload
+        self.payloadjson = payloadjson
+    }
+    private enum CodingKeys: String, CodingKey {
+        case event
+        case payload
+        case payloadjson = "payloadJSON"
+    }
+}
+
+public struct NodeInvokeRequestEvent: Codable, Sendable {
+    public let id: String
+    public let nodeid: String
+    public let command: String
+    public let paramsjson: String?
+    public let timeoutms: Int?
+    public let idempotencykey: String?
+
+    public init(
+        id: String,
+        nodeid: String,
+        command: String,
+        paramsjson: String?,
+        timeoutms: Int?,
+        idempotencykey: String?
+    ) {
+        self.id = id
+        self.nodeid = nodeid
+        self.command = command
+        self.paramsjson = paramsjson
+        self.timeoutms = timeoutms
+        self.idempotencykey = idempotencykey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case nodeid = "nodeId"
+        case command
+        case paramsjson = "paramsJSON"
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
     }
@@ -1381,6 +1493,22 @@ public struct ModelsListResult: Codable, Sendable {
 public struct SkillsStatusParams: Codable, Sendable {
 }
 
+public struct SkillsBinsParams: Codable, Sendable {
+}
+
+public struct SkillsBinsResult: Codable, Sendable {
+    public let bins: [String]
+
+    public init(
+        bins: [String]
+    ) {
+        self.bins = bins
+    }
+    private enum CodingKeys: String, CodingKey {
+        case bins
+    }
+}
+
 public struct SkillsInstallParams: Codable, Sendable {
     public let name: String
     public let installid: String
@@ -1732,6 +1860,225 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
         case exists
         case hash
         case file
+    }
+}
+
+public struct ExecApprovalRequestParams: Codable, Sendable {
+    public let command: String
+    public let cwd: String?
+    public let host: String?
+    public let security: String?
+    public let ask: String?
+    public let agentid: String?
+    public let resolvedpath: String?
+    public let sessionkey: String?
+    public let timeoutms: Int?
+
+    public init(
+        command: String,
+        cwd: String?,
+        host: String?,
+        security: String?,
+        ask: String?,
+        agentid: String?,
+        resolvedpath: String?,
+        sessionkey: String?,
+        timeoutms: Int?
+    ) {
+        self.command = command
+        self.cwd = cwd
+        self.host = host
+        self.security = security
+        self.ask = ask
+        self.agentid = agentid
+        self.resolvedpath = resolvedpath
+        self.sessionkey = sessionkey
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case command
+        case cwd
+        case host
+        case security
+        case ask
+        case agentid = "agentId"
+        case resolvedpath = "resolvedPath"
+        case sessionkey = "sessionKey"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct ExecApprovalResolveParams: Codable, Sendable {
+    public let id: String
+    public let decision: String
+
+    public init(
+        id: String,
+        decision: String
+    ) {
+        self.id = id
+        self.decision = decision
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case decision
+    }
+}
+
+public struct DevicePairListParams: Codable, Sendable {
+}
+
+public struct DevicePairApproveParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String
+    ) {
+        self.requestid = requestid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct DevicePairRejectParams: Codable, Sendable {
+    public let requestid: String
+
+    public init(
+        requestid: String
+    ) {
+        self.requestid = requestid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct DeviceTokenRotateParams: Codable, Sendable {
+    public let deviceid: String
+    public let role: String
+    public let scopes: [String]?
+
+    public init(
+        deviceid: String,
+        role: String,
+        scopes: [String]?
+    ) {
+        self.deviceid = deviceid
+        self.role = role
+        self.scopes = scopes
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case role
+        case scopes
+    }
+}
+
+public struct DeviceTokenRevokeParams: Codable, Sendable {
+    public let deviceid: String
+    public let role: String
+
+    public init(
+        deviceid: String,
+        role: String
+    ) {
+        self.deviceid = deviceid
+        self.role = role
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case role
+    }
+}
+
+public struct DevicePairRequestedEvent: Codable, Sendable {
+    public let requestid: String
+    public let deviceid: String
+    public let publickey: String
+    public let displayname: String?
+    public let platform: String?
+    public let clientid: String?
+    public let clientmode: String?
+    public let role: String?
+    public let roles: [String]?
+    public let scopes: [String]?
+    public let remoteip: String?
+    public let silent: Bool?
+    public let isrepair: Bool?
+    public let ts: Int
+
+    public init(
+        requestid: String,
+        deviceid: String,
+        publickey: String,
+        displayname: String?,
+        platform: String?,
+        clientid: String?,
+        clientmode: String?,
+        role: String?,
+        roles: [String]?,
+        scopes: [String]?,
+        remoteip: String?,
+        silent: Bool?,
+        isrepair: Bool?,
+        ts: Int
+    ) {
+        self.requestid = requestid
+        self.deviceid = deviceid
+        self.publickey = publickey
+        self.displayname = displayname
+        self.platform = platform
+        self.clientid = clientid
+        self.clientmode = clientmode
+        self.role = role
+        self.roles = roles
+        self.scopes = scopes
+        self.remoteip = remoteip
+        self.silent = silent
+        self.isrepair = isrepair
+        self.ts = ts
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case deviceid = "deviceId"
+        case publickey = "publicKey"
+        case displayname = "displayName"
+        case platform
+        case clientid = "clientId"
+        case clientmode = "clientMode"
+        case role
+        case roles
+        case scopes
+        case remoteip = "remoteIp"
+        case silent
+        case isrepair = "isRepair"
+        case ts
+    }
+}
+
+public struct DevicePairResolvedEvent: Codable, Sendable {
+    public let requestid: String
+    public let deviceid: String
+    public let decision: String
+    public let ts: Int
+
+    public init(
+        requestid: String,
+        deviceid: String,
+        decision: String,
+        ts: Int
+    ) {
+        self.requestid = requestid
+        self.deviceid = deviceid
+        self.decision = decision
+        self.ts = ts
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case deviceid = "deviceId"
+        case decision
+        case ts
     }
 }
 

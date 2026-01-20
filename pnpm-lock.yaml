@@ -361,6 +361,9 @@ importers:
 
   ui:
     dependencies:
+      '@noble/ed25519':
+        specifier: 3.0.0
+        version: 3.0.0
       dompurify:
         specifier: ^3.3.1
         version: 3.3.1
@@ -1291,6 +1294,9 @@ packages:
 
   '@napi-rs/wasm-runtime@1.1.1':
     resolution: {integrity: sha512-p64ah1M1ld8xjWv3qbvFwHiFVWrq1yFvV4f7w+mzaqiR4IlSgkqhcRdHwsGgomwzBH51sRY4NEowLxnaBjcW/A==}
+
+  '@noble/ed25519@3.0.0':
+    resolution: {integrity: sha512-QyteqMNm0GLqfa5SoYbSC3+Pvykwpn95Zgth4MFVSMKBB75ELl9tX1LAVsN4c3HXOrakHsF2gL4zWDAYCcsnzg==}
 
   '@node-llama-cpp/linux-arm64@3.14.5':
     resolution: {integrity: sha512-58IcWW7EOqc/66mYWXRsoMCy1MR3pTX/YaC0HYF9Rg5XeAPKhUP7NHrglbqgjO62CkcuFZaSEiX2AtG972GQYQ==}
@@ -6130,6 +6136,8 @@ snapshots:
       '@emnapi/runtime': 1.8.1
       '@tybys/wasm-util': 0.10.1
     optional: true
+
+  '@noble/ed25519@3.0.0': {}
 
   '@node-llama-cpp/linux-arm64@3.14.5':
     optional: true

@@ -57,6 +57,22 @@ describe("gateway server auth/connect", () => {
     await server.close();
   });
 
+  test("sends connect challenge on open", async () => {
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const evtPromise = onceMessage<{ payload?: unknown }>(
+      ws,
+      (o) => o.type === "event" && o.event === "connect.challenge",
+    );
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+    const evt = await evtPromise;
+    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
+    expect(typeof nonce).toBe("string");
+    ws.close();
+    await server.close();
+  });
+
   test("rejects protocol mismatch", async () => {
     const { server, ws } = await startServerWithClient();
     try {

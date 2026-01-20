@@ -72,11 +72,14 @@ export function describeGatewayCloseCode(code: number): string | undefined {
 
 export class GatewayClient {
   private ws: WebSocket | null = null;
-  private opts: GatewayClientOptions & { deviceIdentity: DeviceIdentity };
+  private opts: GatewayClientOptions;
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
   private closed = false;
   private lastSeq: number | null = null;
+  private connectNonce: string | null = null;
+  private connectSent = false;
+  private connectTimer: NodeJS.Timeout | null = null;
   // Track last tick to detect silent stalls.
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
@@ -121,7 +124,7 @@ export class GatewayClient {
     }
     this.ws = new WebSocket(url, wsOptions);
 
-    this.ws.on("open", () => this.sendConnect());
+    this.ws.on("open", () => this.queueConnect());
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
@@ -147,6 +150,12 @@ export class GatewayClient {
   }
 
   private sendConnect() {
+    if (this.connectSent) return;
+    this.connectSent = true;
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     const role = this.opts.role ?? "operator";
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
@@ -160,24 +169,29 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
+    const nonce = this.connectNonce ?? undefined;
     const scopes = this.opts.scopes ?? ["operator.admin"];
-    const deviceIdentity = this.opts.deviceIdentity;
-    const payload = buildDeviceAuthPayload({
-      deviceId: deviceIdentity.deviceId,
-      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-      role,
-      scopes,
-      signedAtMs,
-      token: authToken ?? null,
-    });
-    const signature = signDevicePayload(deviceIdentity.privateKeyPem, payload);
-    const device = {
-      id: deviceIdentity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(deviceIdentity.publicKeyPem),
-      signature,
-      signedAt: signedAtMs,
-    };
+    const device = (() => {
+      if (!this.opts.deviceIdentity) return undefined;
+      const payload = buildDeviceAuthPayload({
+        deviceId: this.opts.deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? null,
+        nonce,
+      });
+      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
+      return {
+        id: this.opts.deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    })();
     const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -235,6 +249,15 @@ export class GatewayClient {
       const parsed = JSON.parse(raw);
       if (validateEventFrame(parsed)) {
         const evt = parsed as EventFrame;
+        if (evt.event === "connect.challenge") {
+          const payload = evt.payload as { nonce?: unknown } | undefined;
+          const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
+          if (nonce) {
+            this.connectNonce = nonce;
+            this.sendConnect();
+          }
+          return;
+        }
         const seq = typeof evt.seq === "number" ? evt.seq : null;
         if (seq !== null) {
           if (this.lastSeq !== null && seq > this.lastSeq + 1) {
@@ -264,6 +287,15 @@ export class GatewayClient {
     } catch (err) {
       logDebug(`gateway client parse error: ${String(err)}`);
     }
+  }
+
+  private queueConnect() {
+    this.connectNonce = null;
+    this.connectSent = false;
+    if (this.connectTimer) clearTimeout(this.connectTimer);
+    this.connectTimer = setTimeout(() => {
+      this.sendConnect();
+    }, 750);
   }
 
   private scheduleReconnect() {

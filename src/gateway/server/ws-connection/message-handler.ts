@@ -68,6 +68,7 @@ export function attachGatewayWsMessageHandler(params: {
   requestOrigin?: string;
   requestUserAgent?: string;
   canvasHostUrl?: string;
+  connectNonce: string;
   resolvedAuth: ResolvedGatewayAuth;
   gatewayMethods: string[];
   events: string[];
@@ -96,6 +97,7 @@ export function attachGatewayWsMessageHandler(params: {
     requestOrigin,
     requestUserAgent,
     canvasHostUrl,
+    connectNonce,
     resolvedAuth,
     gatewayMethods,
     events,
@@ -307,6 +309,40 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device signature expired");
             return;
           }
+          const nonceRequired = !isLoopbackAddress(remoteAddr);
+          const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
+          if (nonceRequired && !providedNonce) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-nonce-missing",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce required"),
+            });
+            close(1008, "device nonce required");
+            return;
+          }
+          if (providedNonce && providedNonce !== connectNonce) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-nonce-mismatch",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce mismatch"),
+            });
+            close(1008, "device nonce mismatch");
+            return;
+          }
           const payload = buildDeviceAuthPayload({
             deviceId: device.id,
             clientId: connectParams.client.id,
@@ -315,8 +351,41 @@ export function attachGatewayWsMessageHandler(params: {
             scopes: requestedScopes,
             signedAtMs: signedAt,
             token: connectParams.auth?.token ?? null,
+            nonce: providedNonce || undefined,
+            version: providedNonce ? "v2" : "v1",
           });
-          if (!verifyDeviceSignature(device.publicKey, payload, device.signature)) {
+          const signatureOk = verifyDeviceSignature(device.publicKey, payload, device.signature);
+          const allowLegacy = !nonceRequired && !providedNonce;
+          if (!signatureOk && allowLegacy) {
+            const legacyPayload = buildDeviceAuthPayload({
+              deviceId: device.id,
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
+              role,
+              scopes: requestedScopes,
+              signedAtMs: signedAt,
+              token: connectParams.auth?.token ?? null,
+              version: "v1",
+            });
+            if (verifyDeviceSignature(device.publicKey, legacyPayload, device.signature)) {
+              // accepted legacy loopback signature
+            } else {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-signature",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid"),
+              });
+              close(1008, "device signature invalid");
+              return;
+            }
+          } else if (!signatureOk) {
             setHandshakeState("failed");
             setCloseCause("device-auth-invalid", {
               reason: "device-signature",
@@ -460,11 +529,7 @@ export function attachGatewayWsMessageHandler(params: {
             if (!ok) return;
           } else {
             const allowedRoles = new Set(
-              Array.isArray(paired.roles)
-                ? paired.roles
-                : paired.role
-                  ? [paired.role]
-                  : [],
+              Array.isArray(paired.roles) ? paired.roles : paired.role ? [paired.role] : [],
             );
             if (allowedRoles.size === 0) {
               const ok = await requirePairing("role-upgrade", paired);

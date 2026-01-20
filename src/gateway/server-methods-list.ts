@@ -81,6 +81,7 @@ export function listGatewayMethods(): string[] {
 }
 
 export const GATEWAY_EVENTS = [
+  "connect.challenge",
   "agent",
   "chat",
   "presence",

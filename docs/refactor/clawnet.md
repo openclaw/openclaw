@@ -288,6 +288,26 @@ Same `deviceId` across roles → single “Instance” row:
 
 ---
 
+# Execution checklist (ship order)
+- [x] **Device‑bound auth (PoP):** nonce challenge + signature verify on connect; remove bearer‑only for non‑local.
+- [ ] **Role‑scoped creds:** issue per‑role tokens, rotate, revoke, list; UI/CLI surfaced; audit log entries.
+- [ ] **Scope enforcement:** keep paired scopes in sync on rotation; reject/upgrade flows explicit; tests.
+- [ ] **Approvals routing:** gateway‑hosted approvals; operator UI prompt/resolve; node stops prompting.
+- [ ] **TLS pinning for WS:** reuse bridge TLS runtime; discovery advertises fingerprint; client validation.
+- [ ] **Discovery + allowlist:** WS discovery TXT includes TLS fingerprint + role hints; node commands filtered by server allowlist.
+- [ ] **Presence unification:** dedupe deviceId across roles; include role/scope metadata; “single instance row”.
+- [ ] **Docs + examples:** protocol doc, CLI docs, onboarding + security notes; no personal hostnames.
+- [ ] **Test coverage:** connect auth paths, rotation/revoke, approvals, TLS fingerprint mismatch, presence.
+
+Process per item:
+- Do implementation.
+- Fresh‑eyes review (scan for regressions + missing tests).
+- Fix issues.
+- Commit with Conventional Commit.
+- Move to next item.
+
+---
+
 # Security notes
 
 - Role/allowlist enforced at gateway boundary.

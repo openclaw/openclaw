@@ -5,6 +5,8 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
+import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity";
 
 export type GatewayEventFrame = {
   type: "event";
@@ -58,6 +60,9 @@ export class GatewayBrowserClient {
   private pending = new Map<string, Pending>();
   private closed = false;
   private lastSeq: number | null = null;
+  private connectNonce: string | null = null;
+  private connectSent = false;
+  private connectTimer: number | null = null;
   private backoffMs = 800;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
@@ -81,7 +86,7 @@ export class GatewayBrowserClient {
   private connect() {
     if (this.closed) return;
     this.ws = new WebSocket(this.opts.url);
-    this.ws.onopen = () => this.sendConnect();
+    this.ws.onopen = () => this.queueConnect();
     this.ws.onmessage = (ev) => this.handleMessage(String(ev.data ?? ""));
     this.ws.onclose = (ev) => {
       const reason = String(ev.reason ?? "");
@@ -107,7 +112,14 @@ export class GatewayBrowserClient {
     this.pending.clear();
   }
 
-  private sendConnect() {
+  private async sendConnect() {
+    if (this.connectSent) return;
+    this.connectSent = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    const deviceIdentity = await loadOrCreateDeviceIdentity();
     const auth =
       this.opts.token || this.opts.password
         ? {
@@ -115,6 +127,21 @@ export class GatewayBrowserClient {
             password: this.opts.password,
           }
         : undefined;
+    const scopes = ["operator.admin"];
+    const role = "operator";
+    const signedAtMs = Date.now();
+    const nonce = this.connectNonce ?? undefined;
+    const payload = buildDeviceAuthPayload({
+      deviceId: deviceIdentity.deviceId,
+      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+      role,
+      scopes,
+      signedAtMs,
+      token: this.opts.token ?? null,
+      nonce,
+    });
+    const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
     const params = {
       minProtocol: 3,
       maxProtocol: 3,
@@ -124,6 +151,15 @@ export class GatewayBrowserClient {
         platform: this.opts.platform ?? navigator.platform ?? "web",
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
         instanceId: this.opts.instanceId,
+      },
+      role,
+      scopes,
+      device: {
+        id: deviceIdentity.deviceId,
+        publicKey: deviceIdentity.publicKey,
+        signature,
+        signedAt: signedAtMs,
+        nonce,
       },
       caps: [],
       auth,
@@ -152,6 +188,15 @@ export class GatewayBrowserClient {
     const frame = parsed as { type?: unknown };
     if (frame.type === "event") {
       const evt = parsed as GatewayEventFrame;
+      if (evt.event === "connect.challenge") {
+        const payload = evt.payload as { nonce?: unknown } | undefined;
+        const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
+        if (nonce) {
+          this.connectNonce = nonce;
+          void this.sendConnect();
+        }
+        return;
+      }
       const seq = typeof evt.seq === "number" ? evt.seq : null;
       if (seq !== null) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
@@ -185,5 +230,14 @@ export class GatewayBrowserClient {
     });
     this.ws.send(JSON.stringify(frame));
     return p;
+  }
+
+  private queueConnect() {
+    this.connectNonce = null;
+    this.connectSent = false;
+    if (this.connectTimer !== null) window.clearTimeout(this.connectTimer);
+    this.connectTimer = window.setTimeout(() => {
+      void this.sendConnect();
+    }, 750);
   }
 }

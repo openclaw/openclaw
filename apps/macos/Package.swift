@@ -78,6 +78,7 @@ let package = Package(
         .executableTarget(
             name: "ClawdbotWizardCLI",
             dependencies: [
+                .product(name: "ClawdbotKit", package: "ClawdbotKit"),
                 .product(name: "ClawdbotProtocol", package: "ClawdbotKit"),
             ],
             path: "Sources/ClawdbotWizardCLI",

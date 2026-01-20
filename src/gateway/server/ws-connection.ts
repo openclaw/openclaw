@@ -116,6 +116,13 @@ export function attachGatewayWsConnectionHandler(params: {
       }
     };
 
+    const connectNonce = randomUUID();
+    send({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: connectNonce, ts: Date.now() },
+    });
+
     const close = (code = 1000, reason?: string) => {
       if (closed) return;
       closed = true;
@@ -224,6 +231,7 @@ export function attachGatewayWsConnectionHandler(params: {
       requestOrigin,
       requestUserAgent,
       canvasHostUrl,
+      connectNonce,
       resolvedAuth,
       gatewayMethods,
       events,

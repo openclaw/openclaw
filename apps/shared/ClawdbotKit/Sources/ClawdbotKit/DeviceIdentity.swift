@@ -1,11 +1,18 @@
 import CryptoKit
 import Foundation
 
-struct DeviceIdentity: Codable, Sendable {
-    var deviceId: String
-    var publicKey: String
-    var privateKey: String
-    var createdAtMs: Int
+public struct DeviceIdentity: Codable, Sendable {
+    public var deviceId: String
+    public var publicKey: String
+    public var privateKey: String
+    public var createdAtMs: Int
+
+    public init(deviceId: String, publicKey: String, privateKey: String, createdAtMs: Int) {
+        self.deviceId = deviceId
+        self.publicKey = publicKey
+        self.privateKey = privateKey
+        self.createdAtMs = createdAtMs
+    }
 }
 
 enum DeviceIdentityPaths {
@@ -27,10 +34,10 @@ enum DeviceIdentityPaths {
     }
 }
 
-enum DeviceIdentityStore {
+public enum DeviceIdentityStore {
     private static let fileName = "device.json"
 
-    static func loadOrCreate() -> DeviceIdentity {
+    public static func loadOrCreate() -> DeviceIdentity {
         let url = self.fileURL()
         if let data = try? Data(contentsOf: url),
            let decoded = try? JSONDecoder().decode(DeviceIdentity.self, from: data),
@@ -44,7 +51,7 @@ enum DeviceIdentityStore {
         return identity
     }
 
-    static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
+    public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
         guard let privateKeyData = Data(base64Encoded: identity.privateKey) else { return nil }
         do {
             let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyData)
@@ -76,7 +83,7 @@ enum DeviceIdentityStore {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    static func publicKeyBase64Url(_ identity: DeviceIdentity) -> String? {
+    public static func publicKeyBase64Url(_ identity: DeviceIdentity) -> String? {
         guard let data = Data(base64Encoded: identity.publicKey) else { return nil }
         return self.base64UrlEncode(data)
     }

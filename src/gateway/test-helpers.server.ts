@@ -279,6 +279,7 @@ export async function connectReq(
       publicKey: string;
       signature: string;
       signedAt: number;
+      nonce?: string;
     };
   },
 ): Promise<ConnectResponse> {
@@ -310,6 +311,7 @@ export async function connectReq(
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
+      nonce: opts?.device?.nonce,
     };
   })();
   ws.send(

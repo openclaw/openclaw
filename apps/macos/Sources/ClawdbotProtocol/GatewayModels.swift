@@ -20,7 +20,7 @@ public struct ConnectParams: Codable, Sendable {
     public let permissions: [String: AnyCodable]?
     public let role: String?
     public let scopes: [String]?
-    public let device: [String: AnyCodable]
+    public let device: [String: AnyCodable]?
     public let auth: [String: AnyCodable]?
     public let locale: String?
     public let useragent: String?
@@ -34,7 +34,7 @@ public struct ConnectParams: Codable, Sendable {
         permissions: [String: AnyCodable]?,
         role: String?,
         scopes: [String]?,
-        device: [String: AnyCodable],
+        device: [String: AnyCodable]?,
         auth: [String: AnyCodable]?,
         locale: String?,
         useragent: String?

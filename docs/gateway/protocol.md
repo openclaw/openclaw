@@ -20,6 +20,16 @@ handshake time.
 
 ## Handshake (connect)
 
+Gateway → Client (pre-connect challenge):
+
+```json
+{
+  "type": "event",
+  "event": "connect.challenge",
+  "payload": { "nonce": "…", "ts": 1737264000000 }
+}
+```
+
 Client → Gateway:
 
 ```json
@@ -43,7 +53,14 @@ Client → Gateway:
     "permissions": {},
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "clawdbot-cli/1.2.3"
+    "userAgent": "clawdbot-cli/1.2.3",
+    "device": {
+      "id": "device_fingerprint",
+      "publicKey": "…",
+      "signature": "…",
+      "signedAt": 1737264000000,
+      "nonce": "…"
+    }
   }
 }
 ```
@@ -99,7 +116,8 @@ When a device token is issued, `hello-ok` also includes:
       "id": "device_fingerprint",
       "publicKey": "…",
       "signature": "…",
-      "signedAt": 1737264000000
+      "signedAt": 1737264000000,
+      "nonce": "…"
     }
   }
 }
@@ -167,6 +185,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
 - All WS clients must include `device` identity during `connect` (operator + node).
+- Non-local connections must sign the server-provided `connect.challenge` nonce.
 
 ## TLS + pinning
 
