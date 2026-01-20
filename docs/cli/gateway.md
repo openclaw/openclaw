@@ -124,6 +124,8 @@ clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
 Wide-Area discovery records include (TXT):
+- `role` (gateway role hint)
+- `transport` (transport hint, e.g. `gateway`)
 - `gatewayPort` (WebSocket port, usually `18789`)
 - `sshPort` (SSH port; defaults to `22` if not present)
 - `tailnetDns` (MagicDNS hostname, when available)

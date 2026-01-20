@@ -2697,6 +2697,7 @@ Remote client defaults (CLI):
 - `gateway.remote.url` sets the default Gateway WebSocket URL for CLI calls when `gateway.mode = "remote"`.
 - `gateway.remote.token` supplies the token for remote calls (leave unset for no auth).
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
+- `gateway.remote.tlsFingerprint` pins the gateway TLS cert fingerprint (sha256).
 
 macOS app behavior:
 - Clawdbot.app watches `~/.clawdbot/clawdbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
@@ -2710,7 +2711,8 @@ macOS app behavior:
     remote: {
       url: "ws://gateway.tailnet:18789",
       token: "your-token",
-      password: "your-password"
+      password: "your-password",
+      tlsFingerprint: "sha256:ab12cd34..."
     }
   }
 }

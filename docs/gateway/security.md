@@ -267,6 +267,7 @@ Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
 
 Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
 protect local WS access.
+Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 
 Auth modes:
 - `gateway.auth.mode: "token"`: shared bearer token (recommended for most setups).
