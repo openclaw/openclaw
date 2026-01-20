@@ -170,7 +170,11 @@ export function buildEmbeddedRunPayloads(params: {
       errorLower.includes("needs") ||
       errorLower.includes("requires");
 
-    if (!hasUserFacingReply || !isRecoverableError) {
+    // Show tool errors only when:
+    // 1. There's no user-facing reply AND the error is not recoverable
+    // Recoverable errors (validation, missing params) are already in the model's context
+    // and shouldn't be surfaced to users since the model should retry.
+    if (!hasUserFacingReply && !isRecoverableError) {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
@@ -182,8 +186,6 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
       });
     }
-    // Note: Recoverable errors are already in the model's context as tool_result is_error.
-    // We only suppress them when a user-facing reply already exists.
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
