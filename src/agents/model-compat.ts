@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model, OpenAICompletionsCompat } from "@mariozechner/pi-ai";
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
   return model.api === "openai-completions";
@@ -9,11 +9,12 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
   if (!isZai || !isOpenAiCompletionsModel(model)) return model;
 
-  const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
+  const openaiModel = model as Model<"openai-completions">;
+  const compat = openaiModel.compat as OpenAICompletionsCompat | undefined;
   if (compat?.supportsDeveloperRole === false) return model;
 
-  model.compat = compat
+  openaiModel.compat = compat
     ? { ...compat, supportsDeveloperRole: false }
     : { supportsDeveloperRole: false };
-  return model;
+  return openaiModel;
 }
