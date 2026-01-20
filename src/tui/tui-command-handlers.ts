@@ -5,9 +5,14 @@ import {
   resolveResponseUsageMode,
 } from "../auto-reply/thinking.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { formatRelativeTime } from "../utils/time-format.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
-import { createSearchableSelectList, createSettingsList } from "./components/selectors.js";
+import {
+  createFilterableSelectList,
+  createSearchableSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
@@ -134,16 +139,37 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const result = await client.listSessions({
         includeGlobal: false,
         includeUnknown: false,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
         agentId: state.currentAgentId,
       });
-      const items = result.sessions.map((session) => ({
-        value: session.key,
-        label: session.displayName
-          ? `${session.displayName} (${formatSessionKey(session.key)})`
-          : formatSessionKey(session.key),
-        description: session.updatedAt ? new Date(session.updatedAt).toLocaleString() : "",
-      }));
-      const selector = createSearchableSelectList(items, 9);
+      const items = result.sessions.map((session) => {
+        const title = session.derivedTitle ?? session.displayName;
+        const formattedKey = formatSessionKey(session.key);
+        // Avoid redundant "title (key)" when title matches key
+        const label = title && title !== formattedKey ? `${title} (${formattedKey})` : formattedKey;
+        // Build description: time + message preview
+        const timePart = session.updatedAt ? formatRelativeTime(session.updatedAt) : "";
+        const preview = session.lastMessagePreview?.replace(/\s+/g, " ").trim();
+        const description =
+          timePart && preview ? `${timePart} · ${preview}` : (preview ?? timePart);
+        return {
+          value: session.key,
+          label,
+          description,
+          searchText: [
+            session.displayName,
+            session.label,
+            session.subject,
+            session.sessionId,
+            session.key,
+            session.lastMessagePreview,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        };
+      });
+      const selector = createFilterableSelectList(items, 9);
       selector.onSelect = (item) => {
         void (async () => {
           closeOverlay();

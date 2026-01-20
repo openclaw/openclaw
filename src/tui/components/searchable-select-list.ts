@@ -1,6 +1,7 @@
 import {
   type Component,
   fuzzyFilter,
+  getEditorKeybindings,
   Input,
   isKeyRelease,
   matchesKey,
@@ -9,6 +10,7 @@ import {
   truncateToWidth,
 } from "@mariozechner/pi-tui";
 import { visibleWidth } from "../../terminal/ansi.js";
+import { findWordBoundaryIndex } from "./fuzzy-filter.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -80,7 +82,7 @@ export class SearchableSelectList implements Component {
         continue;
       }
       // Tier 2: Word-boundary prefix in label (score 100-199)
-      const wordBoundaryIndex = this.findWordBoundaryIndex(label, q);
+      const wordBoundaryIndex = findWordBoundaryIndex(label, q);
       if (wordBoundaryIndex !== null) {
         wordBoundary.push({ item, score: wordBoundaryIndex });
         continue;
@@ -109,28 +111,6 @@ export class SearchableSelectList implements Component {
       ...descriptionMatches.map((s) => s.item),
       ...fuzzyMatches,
     ];
-  }
-
-  /**
-   * Check if query matches at a word boundary in text.
-   * E.g., "gpt" matches "openai/gpt-4" at the "gpt" word boundary.
-   */
-  private matchesWordBoundary(text: string, query: string): boolean {
-    return this.findWordBoundaryIndex(text, query) !== null;
-  }
-
-  private findWordBoundaryIndex(text: string, query: string): number | null {
-    if (!query) return null;
-    const maxIndex = text.length - query.length;
-    if (maxIndex < 0) return null;
-    for (let i = 0; i <= maxIndex; i++) {
-      if (text.startsWith(query, i)) {
-        if (i === 0 || /[\s\-_./:]/.test(text[i - 1] ?? "")) {
-          return i;
-        }
-      }
-    }
-    return null;
   }
 
   private escapeRegex(str: string): string {
@@ -258,14 +238,24 @@ export class SearchableSelectList implements Component {
   handleInput(keyData: string): void {
     if (isKeyRelease(keyData)) return;
 
+    const allowVimNav = !this.searchInput.getValue().trim();
+
     // Navigation keys
-    if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
+    if (
+      matchesKey(keyData, "up") ||
+      matchesKey(keyData, "ctrl+p") ||
+      (allowVimNav && keyData === "k")
+    ) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.notifySelectionChange();
       return;
     }
 
-    if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
+    if (
+      matchesKey(keyData, "down") ||
+      matchesKey(keyData, "ctrl+n") ||
+      (allowVimNav && keyData === "j")
+    ) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
       this.notifySelectionChange();
       return;
@@ -279,7 +269,8 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    if (matchesKey(keyData, "escape")) {
+    const kb = getEditorKeybindings();
+    if (kb.matches(keyData, "selectCancel")) {
       if (this.onCancel) {
         this.onCancel();
       }
