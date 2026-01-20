@@ -321,9 +321,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     throw new Error("Failed to resolve Discord application id");
   }
 
-  const skillCommands =
+  const maxDiscordCommands = 100;
+  let skillCommands =
     nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
-  const commandSpecs = nativeEnabled ? listNativeCommandSpecsForConfig(cfg, { skillCommands }) : [];
+  let commandSpecs = nativeEnabled ? listNativeCommandSpecsForConfig(cfg, { skillCommands }) : [];
+  const initialCommandCount = commandSpecs.length;
+  if (nativeEnabled && nativeSkillsEnabled && commandSpecs.length > maxDiscordCommands) {
+    skillCommands = [];
+    commandSpecs = listNativeCommandSpecsForConfig(cfg, { skillCommands: [] });
+    runtime.log?.(
+      warn(
+        `discord: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+      ),
+    );
+  }
+  if (nativeEnabled && commandSpecs.length > maxDiscordCommands) {
+    runtime.log?.(
+      warn(
+        `discord: ${commandSpecs.length} commands exceeds limit; some commands may fail to deploy.`,
+      ),
+    );
+  }
   const commands = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,

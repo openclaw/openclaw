@@ -391,6 +391,7 @@ export function buildHelpMessage(cfg?: ClawdbotConfig): string {
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink (if enabled)",
     `Options: ${options.join(" | ")}`,
+    "Skills: /skill <name> [input]",
     "More: /commands for all slash commands",
   ].join("\n");
 }

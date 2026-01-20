@@ -132,6 +132,26 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/commands",
     }),
     defineChatCommand({
+      key: "skill",
+      nativeName: "skill",
+      description: "Run a skill by name.",
+      textAlias: "/skill",
+      args: [
+        {
+          name: "name",
+          description: "Skill name",
+          type: "string",
+          required: true,
+        },
+        {
+          name: "input",
+          description: "Skill input",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",

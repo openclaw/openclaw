@@ -55,6 +55,31 @@ export function listSkillCommandsForAgents(params: {
   return entries;
 }
 
+function normalizeSkillCommandLookup(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-");
+}
+
+function findSkillCommand(
+  skillCommands: SkillCommandSpec[],
+  rawName: string,
+): SkillCommandSpec | undefined {
+  const trimmed = rawName.trim();
+  if (!trimmed) return undefined;
+  const lowered = trimmed.toLowerCase();
+  const normalized = normalizeSkillCommandLookup(trimmed);
+  return skillCommands.find((entry) => {
+    if (entry.name.toLowerCase() === lowered) return true;
+    if (entry.skillName.toLowerCase() === lowered) return true;
+    return (
+      normalizeSkillCommandLookup(entry.name) === normalized ||
+      normalizeSkillCommandLookup(entry.skillName) === normalized
+    );
+  });
+}
+
 export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
@@ -65,6 +90,16 @@ export function resolveSkillCommandInvocation(params: {
   if (!match) return null;
   const commandName = match[1]?.trim().toLowerCase();
   if (!commandName) return null;
+  if (commandName === "skill") {
+    const remainder = match[2]?.trim();
+    if (!remainder) return null;
+    const skillMatch = remainder.match(/^([^\s]+)(?:\s+([\s\S]+))?$/);
+    if (!skillMatch) return null;
+    const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
+    if (!skillCommand) return null;
+    const args = skillMatch[2]?.trim();
+    return { command: skillCommand, args: args || undefined };
+  }
   const command = params.skillCommands.find((entry) => entry.name.toLowerCase() === commandName);
   if (!command) return null;
   const args = match[2]?.trim();
