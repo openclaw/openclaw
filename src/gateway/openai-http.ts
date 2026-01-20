@@ -7,8 +7,15 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  sendUnauthorized,
+  setSseHeaders,
+  writeDone,
+} from "./http-common.js";
 import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
-import { readJsonBody } from "./hooks.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -28,18 +35,8 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
 };
 
-function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
-
 function writeSse(res: ServerResponse, data: unknown) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
-
-function writeDone(res: ServerResponse) {
-  res.write("data: [DONE]\n\n");
 }
 
 function asMessages(val: unknown): OpenAiChatMessage[] {
@@ -162,10 +159,7 @@ export async function handleOpenAiHttpRequest(
   if (url.pathname !== "/v1/chat/completions") return false;
 
   if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
+    sendMethodNotAllowed(res);
     return true;
   }
 
@@ -176,21 +170,14 @@ export async function handleOpenAiHttpRequest(
     req,
   });
   if (!authResult.ok) {
-    sendJson(res, 401, {
-      error: { message: "Unauthorized", type: "unauthorized" },
-    });
+    sendUnauthorized(res);
     return true;
   }
 
-  const body = await readJsonBody(req, opts.maxBodyBytes ?? 1024 * 1024);
-  if (!body.ok) {
-    sendJson(res, 400, {
-      error: { message: body.error, type: "invalid_request_error" },
-    });
-    return true;
-  }
+  const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? 1024 * 1024);
+  if (body === undefined) return true;
 
-  const payload = coerceRequest(body.value);
+  const payload = coerceRequest(body);
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "clawdbot";
   const user = typeof payload.user === "string" ? payload.user : undefined;
@@ -258,11 +245,7 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
+  setSseHeaders(res);
 
   let wroteRole = false;
   let sawAssistantDelta = false;

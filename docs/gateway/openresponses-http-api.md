@@ -173,6 +173,14 @@ Current behavior:
 - PDFs are parsed for text. If little text is found, the first pages are rasterized
   into images and passed to the model.
 
+PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
+PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
+
+URL fetch defaults:
+- `files.allowUrl`: `true`
+- `images.allowUrl`: `true`
+- Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
+
 ## File + image limits (config)
 
 Defaults can be tuned under `gateway.http.endpoints.responses`:
@@ -211,6 +219,19 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
   }
 }
 ```
+
+Defaults when omitted:
+- `maxBodyBytes`: 20MB
+- `files.maxBytes`: 5MB
+- `files.maxChars`: 200k
+- `files.maxRedirects`: 3
+- `files.timeoutMs`: 10s
+- `files.pdf.maxPages`: 4
+- `files.pdf.maxPixels`: 4,000,000
+- `files.pdf.minTextChars`: 200
+- `images.maxBytes`: 10MB
+- `images.maxRedirects`: 3
+- `images.timeoutMs`: 10s
 
 ## Streaming (SSE)
 
