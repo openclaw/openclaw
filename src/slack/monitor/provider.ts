@@ -27,20 +27,21 @@ import { normalizeAllowList } from "./allow-list.js";
 import type { MonitorSlackOpts } from "./types.js";
 
 type SlackBoltNamespace = typeof import("@slack/bolt");
+type SlackBoltDefault = SlackBoltNamespace | SlackBoltNamespace["App"];
 
-const slackBoltDefault = SlackBoltDefault as unknown;
+const slackBoltDefaultImport = SlackBoltDefault as SlackBoltDefault | undefined;
+const slackBoltModuleDefault = (SlackBoltModule as { default?: SlackBoltDefault }).default;
+const slackBoltDefault = slackBoltDefaultImport ?? slackBoltModuleDefault;
 const slackBoltNamespace =
-  (typeof slackBoltDefault === "object" && slackBoltDefault
-    ? ("default" in slackBoltDefault
-        ? (slackBoltDefault as { default?: unknown }).default
-        : slackBoltDefault)
-    : undefined) as SlackBoltNamespace | undefined;
+  typeof slackBoltDefault === "object" && slackBoltDefault
+    ? (slackBoltDefault as SlackBoltNamespace)
+    : typeof slackBoltModuleDefault === "object" && slackBoltModuleDefault
+      ? (slackBoltModuleDefault as SlackBoltNamespace)
+      : undefined;
 // Bun allows named imports from CJS; Node ESM doesn't. Resolve default/module shapes for compatibility.
-const App =
-  ((typeof slackBoltDefault === "function"
-    ? slackBoltDefault
-    : slackBoltNamespace?.App) ??
-    SlackBoltModule.App) as SlackBoltNamespace["App"];
+const App = ((typeof slackBoltDefault === "function" ? slackBoltDefault : undefined) ??
+  slackBoltNamespace?.App ??
+  SlackBoltModule.App) as SlackBoltNamespace["App"];
 const HTTPReceiver = (slackBoltNamespace?.HTTPReceiver ??
   SlackBoltModule.HTTPReceiver) as SlackBoltNamespace["HTTPReceiver"];
 function parseApiAppIdFromAppToken(raw?: string) {
@@ -131,6 +132,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+
+  if (!App) {
+    throw new Error("Slack Bolt App export missing; check @slack/bolt installation.");
+  }
+  if (slackMode === "http" && !HTTPReceiver) {
+    throw new Error("Slack Bolt HTTPReceiver export missing; check @slack/bolt installation.");
+  }
 
   const receiver =
     slackMode === "http"
