@@ -106,6 +106,7 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
+  "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
   "tools.media.image.enabled": "Enable Image Understanding",
@@ -311,6 +312,8 @@ const FIELD_HELP: Record<string, string> = {
   "update.channel": 'Update channel for npm installs ("stable" or "beta").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
+  "gateway.remote.tlsFingerprint":
+    "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
@@ -558,6 +561,7 @@ const FIELD_HELP: Record<string, string> = {
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
+  "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
 };

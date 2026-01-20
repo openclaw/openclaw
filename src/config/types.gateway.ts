@@ -82,6 +82,8 @@ export type GatewayRemoteConfig = {
   token?: string;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: string;
+  /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
+  tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
