@@ -155,6 +155,10 @@ Bundled/managed skills can be toggled and supplied with env values:
         apiKey: "GEMINI_KEY_HERE",
         env: {
           GEMINI_API_KEY: "GEMINI_KEY_HERE"
+        },
+        config: {
+          endpoint: "https://example.invalid",
+          model: "nano-pro"
         }
       },
       peekaboo: { enabled: true },
@@ -173,6 +177,7 @@ Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.clawdbot.primaryEnv`.
+- `config`: optional bag for custom per-skill fields; custom keys must live here.
 - `allowBundled`: optional allowlist for **bundled** skills only. If set, only
   bundled skills in the list are eligible (managed/workspace skills unaffected).
 

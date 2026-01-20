@@ -2,7 +2,7 @@ export type SkillConfig = {
   enabled?: boolean;
   apiKey?: string;
   env?: Record<string, string>;
-  [key: string]: unknown;
+  config?: Record<string, unknown>;
 };
 
 export type SkillsLoadConfig = {

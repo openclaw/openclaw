@@ -380,6 +380,7 @@ export const ClawdbotSchema = z
                 enabled: z.boolean().optional(),
                 apiKey: z.string().optional(),
                 env: z.record(z.string(), z.string()).optional(),
+                config: z.record(z.string(), z.unknown()).optional(),
               })
               .strict(),
           )
