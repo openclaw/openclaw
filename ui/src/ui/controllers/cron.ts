@@ -80,7 +80,9 @@ export function buildCronPayload(form: CronFormState) {
       | "discord"
       | "slack"
       | "signal"
-      | "imessage";
+      | "imessage"
+      | "msteams"
+      | "bluebubbles";
     to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };

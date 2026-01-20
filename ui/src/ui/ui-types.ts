@@ -28,7 +28,8 @@ export type CronFormState = {
     | "slack"
     | "signal"
     | "imessage"
-    | "msteams";
+    | "msteams"
+    | "bluebubbles";
   to: string;
   timeoutSeconds: string;
   postToMainPrefix: string;

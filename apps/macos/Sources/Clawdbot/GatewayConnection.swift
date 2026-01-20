@@ -15,6 +15,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case signal
     case imessage
     case msteams
+    case bluebubbles
     case webchat
 
     init(raw: String?) {

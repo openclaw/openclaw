@@ -244,7 +244,7 @@ extension ChannelsSettings {
     }
 
     var orderedChannels: [ChannelItem] {
-        let fallback = ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"]
+        let fallback = ["whatsapp", "telegram", "discord", "slack", "signal", "imessage", "bluebubbles"]
         let order = self.store.snapshot?.channelOrder ?? fallback
         let channels = order.enumerated().map { index, id in
             ChannelItem(
@@ -440,6 +440,7 @@ extension ChannelsSettings {
         case "slack": "Slack Bot"
         case "signal": "Signal REST"
         case "imessage": "iMessage"
+        case "bluebubbles": "BlueBubbles"
         default: self.resolveChannelTitle(id)
         }
     }
@@ -452,6 +453,7 @@ extension ChannelsSettings {
         case "slack": "number"
         case "signal": "antenna.radiowaves.left.and.right"
         case "imessage": "message.fill"
+        case "bluebubbles": "bubble.left.and.text.bubble.right"
         default: "message"
         }
     }
