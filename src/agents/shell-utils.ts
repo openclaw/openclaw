@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import path from "node:path";
 
 function resolvePowerShellPath(): string {
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
@@ -35,10 +34,29 @@ export function getShellConfig(): { shell: string; args: string[] } {
   const shellName = envShell ? path.basename(envShell) : "";
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
-    return { shell: "/bin/bash", args: ["-c"] };
+    const bash = resolveShellFromPath("bash");
+    if (bash) return { shell: bash, args: ["-c"] };
+    const sh = resolveShellFromPath("sh");
+    if (sh) return { shell: sh, args: ["-c"] };
   }
-  const shell = envShell || "sh";
+  const shell = envShell && envShell.length > 0 ? envShell : "sh";
   return { shell, args: ["-c"] };
+}
+
+function resolveShellFromPath(name: string): string | undefined {
+  const envPath = process.env.PATH ?? "";
+  if (!envPath) return undefined;
+  const entries = envPath.split(path.delimiter).filter(Boolean);
+  for (const entry of entries) {
+    const candidate = path.join(entry, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // ignore missing or non-executable entries
+    }
+  }
+  return undefined;
 }
 
 export function sanitizeBinaryOutput(text: string): string {

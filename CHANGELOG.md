@@ -12,6 +12,7 @@ Docs: https://docs.clawd.bot
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.
+- Exec: prefer bash when fish is default shell, falling back to sh if bash is missing. (#1297) — thanks @ysqander.
 
 ## 2026.1.19-3
 
