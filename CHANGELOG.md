@@ -23,6 +23,7 @@ Docs: https://docs.clawd.bot
 - Exec: prefer bash when fish is default shell, falling back to sh if bash is missing. (#1297) — thanks @ysqander.
 - Exec: merge login-shell PATH for host=gateway exec while keeping daemon PATH minimal. (#1304)
 - Plugins: add Nextcloud Talk manifest for plugin config validation. (#1297) — thanks @ysqander.
+- Anthropic: default API prompt caching to 1h with configurable TTL override; ignore TTL for OAuth.
 
 ## 2026.1.19-3
 

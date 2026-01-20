@@ -1,0 +1,135 @@
+diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
+index 1cba2f1365812fd2f88993009c9cc06e9c348279..664dd6d8b400ec523fb735480741b9ad64f9a68c 100644
+--- a/dist/providers/anthropic.js
++++ b/dist/providers/anthropic.js
+@@ -298,10 +298,11 @@ function createClient(model, apiKey, interleavedThinking) {
+         });
+         return { client, isOAuthToken: true };
+     }
++    const apiBetaFeatures = ["extended-cache-ttl-2025-04-11", ...betaFeatures];
+     const defaultHeaders = {
+         accept: "application/json",
+         "anthropic-dangerous-direct-browser-access": "true",
+-        "anthropic-beta": betaFeatures.join(","),
++        "anthropic-beta": apiBetaFeatures.join(","),
+         ...(model.headers || {}),
+     };
+     const client = new Anthropic({
+@@ -313,9 +314,11 @@ function createClient(model, apiKey, interleavedThinking) {
+     return { client, isOAuthToken: false };
+ }
+ function buildParams(model, context, isOAuthToken, options) {
++    const cacheControlTtl = !isOAuthToken ? (options?.cacheControlTtl ?? "1h") : undefined;
++    const cacheControl = cacheControlTtl ? { type: "ephemeral", ttl: cacheControlTtl } : { type: "ephemeral" };
+     const params = {
+         model: model.id,
+-        messages: convertMessages(context.messages, model, isOAuthToken),
++        messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
+         max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
+         stream: true,
+     };
+@@ -325,18 +328,14 @@ function buildParams(model, context, isOAuthToken, options) {
+             {
+                 type: "text",
+                 text: "You are Claude Code, Anthropic's official CLI for Claude.",
+-                cache_control: {
+-                    type: "ephemeral",
+-                },
++                cache_control: cacheControl,
+             },
+         ];
+         if (context.systemPrompt) {
+             params.system.push({
+                 type: "text",
+                 text: sanitizeSurrogates(context.systemPrompt),
+-                cache_control: {
+-                    type: "ephemeral",
+-                },
++                cache_control: cacheControl,
+             });
+         }
+     }
+@@ -346,9 +345,7 @@ function buildParams(model, context, isOAuthToken, options) {
+             {
+                 type: "text",
+                 text: sanitizeSurrogates(context.systemPrompt),
+-                cache_control: {
+-                    type: "ephemeral",
+-                },
++                cache_control: cacheControl,
+             },
+         ];
+     }
+@@ -378,7 +375,7 @@ function buildParams(model, context, isOAuthToken, options) {
+ function normalizeToolCallId(id) {
+     return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
+ }
+-function convertMessages(messages, model, isOAuthToken) {
++function convertMessages(messages, model, isOAuthToken, cacheControl) {
+     const params = [];
+     // Transform messages for cross-provider compatibility
+     const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
+@@ -514,7 +511,7 @@ function convertMessages(messages, model, isOAuthToken) {
+                 const lastBlock = lastMessage.content[lastMessage.content.length - 1];
+                 if (lastBlock &&
+                     (lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")) {
+-                    lastBlock.cache_control = { type: "ephemeral" };
++                    lastBlock.cache_control = cacheControl;
+                 }
+             }
+         }
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index ee5c88d8e280ceeff45ed075f2c7357d40005578..89daad7b0e53753e094028291226d32da9446440 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -305,7 +305,7 @@ function createClient(model, context, apiKey) {
+ function buildParams(model, context, options) {
+     const compat = getCompat(model);
+     const messages = convertMessages(model, context, compat);
+-    maybeAddOpenRouterAnthropicCacheControl(model, messages);
++    maybeAddOpenRouterAnthropicCacheControl(model, messages, options?.cacheControlTtl);
+     const params = {
+         model: model.id,
+         messages,
+@@ -349,9 +349,10 @@ function buildParams(model, context, options) {
+     }
+     return params;
+ }
+-function maybeAddOpenRouterAnthropicCacheControl(model, messages) {
++function maybeAddOpenRouterAnthropicCacheControl(model, messages, cacheControlTtl) {
+     if (model.provider !== "openrouter" || !model.id.startsWith("anthropic/"))
+         return;
++    const cacheControl = cacheControlTtl ? { type: "ephemeral", ttl: cacheControlTtl } : { type: "ephemeral" };
+     // Anthropic-style caching requires cache_control on a text part. Add a breakpoint
+     // on the last user/assistant message (walking backwards until we find text content).
+     for (let i = messages.length - 1; i >= 0; i--) {
+@@ -361,7 +362,7 @@ function maybeAddOpenRouterAnthropicCacheControl(model, messages) {
+         const content = msg.content;
+         if (typeof content === "string") {
+             msg.content = [
+-                Object.assign({ type: "text", text: content }, { cache_control: { type: "ephemeral" } }),
++                Object.assign({ type: "text", text: content }, { cache_control: cacheControl }),
+             ];
+             return;
+         }
+@@ -371,7 +372,7 @@ function maybeAddOpenRouterAnthropicCacheControl(model, messages) {
+         for (let j = content.length - 1; j >= 0; j--) {
+             const part = content[j];
+             if (part?.type === "text") {
+-                Object.assign(part, { cache_control: { type: "ephemeral" } });
++                Object.assign(part, { cache_control: cacheControl });
+                 return;
+             }
+         }
+diff --git a/dist/stream.js b/dist/stream.js
+index d23fdd9f226a949fac4f2c7160af76f7f5fe71d1..3500f074bd88b85f4c7dd9bf42279f80fdf264d1 100644
+--- a/dist/stream.js
++++ b/dist/stream.js
+@@ -146,6 +146,7 @@ function mapOptionsForApi(model, options, apiKey) {
+         signal: options?.signal,
+         apiKey: apiKey || options?.apiKey,
+         sessionId: options?.sessionId,
++        cacheControlTtl: options?.cacheControlTtl,
+     };
+     // Helper to clamp xhigh to high for providers that don't support it
+     const clampReasoning = (effort) => (effort === "xhigh" ? "high" : effort);

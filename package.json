@@ -152,8 +152,8 @@
     "@lydell/node-pty": "1.2.0-beta.3",
     "@mariozechner/pi-agent-core": "0.49.2",
     "@mariozechner/pi-ai": "0.49.2",
-    "@mariozechner/pi-coding-agent": "^0.49.2",
-    "@mariozechner/pi-tui": "^0.49.2",
+    "@mariozechner/pi-coding-agent": "0.49.2",
+    "@mariozechner/pi-tui": "0.49.2",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
@@ -232,6 +232,9 @@
       "@sinclair/typebox": "0.34.47",
       "hono": "4.11.4",
       "tar": "7.5.3"
+    },
+    "patchedDependencies": {
+      "@mariozechner/pi-ai@0.49.2": "patches/@mariozechner__pi-ai@0.49.2.patch"
     }
   },
   "vitest": {
