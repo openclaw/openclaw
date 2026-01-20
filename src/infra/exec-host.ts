@@ -10,6 +10,7 @@ export type ExecHostRequest = {
   needsScreenRecording?: boolean | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  approvalDecision?: "allow-once" | "allow-always" | null;
 };
 
 export type ExecHostRunResult = {

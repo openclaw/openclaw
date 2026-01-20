@@ -16,7 +16,14 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings";
 import { handleChatEvent, type ChatEventPayload } from "./controllers/chat";
+import {
+  addExecApproval,
+  parseExecApprovalRequested,
+  parseExecApprovalResolved,
+  removeExecApproval,
+} from "./controllers/exec-approval";
 import type { ClawdbotApp } from "./app";
+import type { ExecApprovalRequest } from "./controllers/exec-approval";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -34,6 +41,8 @@ type GatewayHost = {
   debugHealth: HealthSnapshot | null;
   sessionKey: string;
   chatRunId: string | null;
+  execApprovalQueue: ExecApprovalRequest[];
+  execApprovalError: string | null;
 };
 
 type SessionDefaultsSnapshot = {
@@ -94,6 +103,8 @@ export function connectGateway(host: GatewayHost) {
   host.lastError = null;
   host.hello = null;
   host.connected = false;
+  host.execApprovalQueue = [];
+  host.execApprovalError = null;
 
   host.client?.stop();
   host.client = new GatewayBrowserClient({
@@ -174,6 +185,26 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
     void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+  }
+
+  if (evt.event === "exec.approval.requested") {
+    const entry = parseExecApprovalRequested(evt.payload);
+    if (entry) {
+      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      host.execApprovalError = null;
+      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+      window.setTimeout(() => {
+        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+      }, delay);
+    }
+    return;
+  }
+
+  if (evt.event === "exec.approval.resolved") {
+    const resolved = parseExecApprovalResolved(evt.payload);
+    if (resolved) {
+      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
   }
 }
 

@@ -127,7 +127,7 @@ export class GatewayBrowserClient {
       this.connectTimer = null;
     }
     const deviceIdentity = await loadOrCreateDeviceIdentity();
-    const scopes = ["operator.admin"];
+    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
     const storedToken = loadDeviceAuthToken({
       deviceId: deviceIdentity.deviceId,

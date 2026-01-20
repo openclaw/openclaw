@@ -38,6 +38,7 @@ import { renderLogs } from "./views/logs";
 import { renderNodes } from "./views/nodes";
 import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
+import { renderExecApprovalPrompt } from "./views/exec-approval";
 import {
   approveDevicePairing,
   loadDevices,
@@ -518,6 +519,7 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
+      ${renderExecApprovalPrompt(state)}
     </div>
   `;
 }

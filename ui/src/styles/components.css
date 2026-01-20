@@ -1181,3 +1181,96 @@
   border-radius: 10px;
   image-rendering: pixelated;
 }
+
+.exec-approval-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 18, 0.7);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 200;
+}
+
+.exec-approval-card {
+  width: min(560px, 100%);
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.35);
+  animation: rise 0.25s ease;
+}
+
+.exec-approval-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.exec-approval-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+
+.exec-approval-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-queue {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+
+.exec-approval-command {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.exec-approval-meta {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.exec-approval-meta-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.exec-approval-meta-row span:last-child {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.exec-approval-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.exec-approval-actions {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

@@ -46,6 +46,7 @@ private struct ExecHostRequest: Codable {
     var needsScreenRecording: Bool?
     var agentId: String?
     var sessionKey: String?
+    var approvalDecision: ExecApprovalDecision?
 }
 
 private struct ExecHostRunResult: Codable {
@@ -328,8 +329,21 @@ private enum ExecHostExecutor {
             return false
         }()
 
-        var approvedByAsk = false
-        if requiresAsk {
+        let approvalDecision = request.approvalDecision
+        if approvalDecision == .deny {
+            return ExecHostResponse(
+                type: "exec-res",
+                id: UUID().uuidString,
+                ok: false,
+                payload: nil,
+                error: ExecHostError(
+                    code: "UNAVAILABLE",
+                    message: "SYSTEM_RUN_DENIED: user denied",
+                    reason: "user-denied"))
+        }
+
+        var approvedByAsk = approvalDecision != nil
+        if requiresAsk, approvalDecision == nil {
             let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: displayCommand,
@@ -361,6 +375,13 @@ private enum ExecHostExecutor {
                 }
             case .allowOnce:
                 approvedByAsk = true
+            }
+        }
+
+        if approvalDecision == .allowAlways, security == .allowlist {
+            let pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? command.first ?? ""
+            if !pattern.isEmpty {
+                ExecApprovalsStore.addAllowlistEntry(agentId: trimmedAgent, pattern: pattern)
             }
         }
 

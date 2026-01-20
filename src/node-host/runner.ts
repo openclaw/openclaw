@@ -50,6 +50,7 @@ type SystemRunParams = {
   agentId?: string | null;
   sessionKey?: string | null;
   approved?: boolean | null;
+  approvalDecision?: string | null;
 };
 
 type SystemWhichParams = {
@@ -561,6 +562,10 @@ async function handleInvoke(
   const useMacAppExec =
     process.platform === "darwin" && (execHostEnforced || !execHostFallbackAllowed);
   if (useMacAppExec) {
+    const approvalDecision =
+      params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
+        ? params.approvalDecision
+        : null;
     const execRequest: ExecHostRequest = {
       command: argv,
       rawCommand: rawCommand || null,
@@ -570,6 +575,7 @@ async function handleInvoke(
       needsScreenRecording: params.needsScreenRecording ?? null,
       agentId: agentId ?? null,
       sessionKey: sessionKey ?? null,
+      approvalDecision,
     };
     const response = await runViaMacAppExecHost({ approvals, request: execRequest });
     if (!response) {
@@ -660,7 +666,11 @@ async function handleInvoke(
     ask === "always" ||
     (ask === "on-miss" && security === "allowlist" && !allowlistMatch && !skillAllow);
 
-  const approvedByAsk = params.approved === true;
+  const approvalDecision =
+    params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
+      ? params.approvalDecision
+      : null;
+  const approvedByAsk = approvalDecision !== null || params.approved === true;
   if (requiresAsk && !approvedByAsk) {
     await sendNodeEvent(
       client,
@@ -679,7 +689,7 @@ async function handleInvoke(
     });
     return;
   }
-  if (approvedByAsk && security === "allowlist") {
+  if (approvalDecision === "allow-always" && security === "allowlist") {
     const pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? argv[0] ?? "";
     if (pattern) addAllowlistEntry(approvals.file, agentId, pattern);
   }
