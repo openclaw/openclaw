@@ -95,6 +95,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "devices",
+    description: "Device pairing + token management",
+    register: async (program) => {
+      const mod = await import("../devices-cli.js");
+      mod.registerDevicesCli(program);
+    },
+  },
+  {
     name: "node",
     description: "Node control",
     register: async (program) => {

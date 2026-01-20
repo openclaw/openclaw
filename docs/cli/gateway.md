@@ -116,17 +116,18 @@ clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 
 ## Discover gateways (Bonjour)
 
-`gateway discover` scans for Gateway bridge beacons (`_clawdbot-bridge._tcp`).
+`gateway discover` scans for Gateway beacons (`_clawdbot-gateway._tcp`).
 
 - Multicast DNS-SD: `local.`
 - Unicast DNS-SD (Wide-Area Bonjour): `clawdbot.internal.` (requires split DNS + DNS server; see [/gateway/bonjour](/gateway/bonjour))
 
-Only gateways with the **bridge enabled** will advertise the discovery beacon.
+Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
 Wide-Area discovery records include (TXT):
 - `gatewayPort` (WebSocket port, usually `18789`)
 - `sshPort` (SSH port; defaults to `22` if not present)
 - `tailnetDns` (MagicDNS hostname, when available)
+- `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint)
 - `cliPath` (optional hint for remote installs)
 
 ### `gateway discover`

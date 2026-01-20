@@ -12,7 +12,7 @@ export type ResolvedGatewayAuth = {
 
 export type GatewayAuthResult = {
   ok: boolean;
-  method?: "none" | "token" | "password" | "tailscale";
+  method?: "none" | "token" | "password" | "tailscale" | "device-token";
   user?: string;
   reason?: string;
 };

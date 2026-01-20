@@ -2677,7 +2677,7 @@ Notes:
 
 Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
-- `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
+- `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine and as the bootstrap credential for device pairing).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
 - `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` allows Tailscale Serve identity headers
@@ -2686,6 +2686,9 @@ Auth and Tailscale:
   `true`, Serve requests do not need a token/password; set `false` to require
   explicit credentials. Defaults to `true` when `tailscale.mode = "serve"` and
   auth mode is not `password`.
+- After pairing, the Gateway issues **device tokens** scoped to the device role + scopes.
+  These are returned in `hello-ok.auth.deviceToken`; clients should persist and reuse them
+  instead of the shared token. Rotate/revoke via `device.token.rotate`/`device.token.revoke`.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.

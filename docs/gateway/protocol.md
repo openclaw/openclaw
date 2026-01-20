@@ -59,6 +59,18 @@ Gateway → Client:
 }
 ```
 
+When a device token is issued, `hello-ok` also includes:
+
+```json
+{
+  "auth": {
+    "deviceToken": "…",
+    "role": "operator",
+    "scopes": ["operator.read", "operator.write"]
+  }
+}
+```
+
 ### Node example
 
 ```json
@@ -141,6 +153,11 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 - If `CLAWDBOT_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
   must match or the socket is closed.
+- After pairing, the Gateway issues a **device token** scoped to the connection
+  role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
+  persisted by the client for future connects.
+- Device tokens can be rotated/revoked via `device.token.rotate` and
+  `device.token.revoke` (requires `operator.pairing` scope).
 
 ## Device identity + pairing
 

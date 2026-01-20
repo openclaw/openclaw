@@ -73,7 +73,7 @@ describe("gateway server auth/connect", () => {
   });
 
   test("rejects invalid token", async () => {
-    const { server, ws, prevToken } = await startServerWithClient("secret");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const res = await connectReq(ws, { token: "wrong" });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("unauthorized");
@@ -98,6 +98,81 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
     await server.close();
+  });
+
+  test("accepts device token auth for paired device", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing } = await import(
+      "../infra/device-pairing.js"
+    );
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, { token: "secret" });
+    if (!res.ok) {
+      const list = await listDevicePairing();
+      const pending = list.pending.at(0);
+      expect(pending?.requestId).toBeDefined();
+      if (pending?.requestId) {
+        await approveDevicePairing(pending.requestId);
+      }
+    }
+
+    const identity = loadOrCreateDeviceIdentity();
+    const paired = await getPairedDevice(identity.deviceId);
+    const deviceToken = paired?.tokens?.operator?.token;
+    expect(deviceToken).toBeDefined();
+
+    ws.close();
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const res2 = await connectReq(ws2, { token: deviceToken });
+    expect(res2.ok).toBe(true);
+
+    ws2.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
+
+  test("rejects revoked device token", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, revokeDeviceToken } =
+      await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const res = await connectReq(ws, { token: "secret" });
+    if (!res.ok) {
+      const list = await listDevicePairing();
+      const pending = list.pending.at(0);
+      expect(pending?.requestId).toBeDefined();
+      if (pending?.requestId) {
+        await approveDevicePairing(pending.requestId);
+      }
+    }
+
+    const identity = loadOrCreateDeviceIdentity();
+    const paired = await getPairedDevice(identity.deviceId);
+    const deviceToken = paired?.tokens?.operator?.token;
+    expect(deviceToken).toBeDefined();
+
+    await revokeDeviceToken({ deviceId: identity.deviceId, role: "operator" });
+
+    ws.close();
+
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const res2 = await connectReq(ws2, { token: deviceToken });
+    expect(res2.ok).toBe(false);
+
+    ws2.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
   });
 
   test("rejects invalid password", async () => {

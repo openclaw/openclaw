@@ -64,6 +64,8 @@ import {
   DevicePairRejectParamsSchema,
   DevicePairRequestedEventSchema,
   DevicePairResolvedEventSchema,
+  DeviceTokenRevokeParamsSchema,
+  DeviceTokenRotateParamsSchema,
 } from "./devices.js";
 import {
   ConnectParamsSchema,
@@ -206,6 +208,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
+  DeviceTokenRotateParams: DeviceTokenRotateParamsSchema,
+  DeviceTokenRevokeParams: DeviceTokenRevokeParamsSchema,
   DevicePairRequestedEvent: DevicePairRequestedEventSchema,
   DevicePairResolvedEvent: DevicePairResolvedEventSchema,
   ChatHistoryParams: ChatHistoryParamsSchema,

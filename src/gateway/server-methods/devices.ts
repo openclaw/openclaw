@@ -1,7 +1,11 @@
 import {
   approveDevicePairing,
   listDevicePairing,
+  type DeviceAuthToken,
   rejectDevicePairing,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
 import {
   ErrorCodes,
@@ -10,8 +14,18 @@ import {
   validateDevicePairApproveParams,
   validateDevicePairListParams,
   validateDevicePairRejectParams,
+  validateDeviceTokenRevokeParams,
+  validateDeviceTokenRotateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+function redactPairedDevice(device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>) {
+  const { tokens, ...rest } = device;
+  return {
+    ...rest,
+    tokens: summarizeDeviceTokens(tokens),
+  };
+}
 
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond }) => {
@@ -29,7 +43,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const list = await listDevicePairing();
-    respond(true, list, undefined);
+    respond(
+      true,
+      {
+        pending: list.pending,
+        paired: list.paired.map((device) => redactPairedDevice(device)),
+      },
+      undefined,
+    );
   },
   "device.pair.approve": async ({ params, respond, context }) => {
     if (!validateDevicePairApproveParams(params)) {
@@ -58,10 +79,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
         deviceId: approved.device.deviceId,
         decision: "approved",
         ts: Date.now(),
-      },
+        },
       { dropIfSlow: true },
     );
-    respond(true, approved, undefined);
+    respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
   },
   "device.pair.reject": async ({ params, respond, context }) => {
     if (!validateDevicePairRejectParams(params)) {
@@ -94,5 +115,67 @@ export const deviceHandlers: GatewayRequestHandlers = {
       { dropIfSlow: true },
     );
     respond(true, rejected, undefined);
+  },
+  "device.token.rotate": async ({ params, respond }) => {
+    if (!validateDeviceTokenRotateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid device.token.rotate params: ${formatValidationErrors(
+            validateDeviceTokenRotateParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const { deviceId, role, scopes } = params as {
+      deviceId: string;
+      role: string;
+      scopes?: string[];
+    };
+    const entry = await rotateDeviceToken({ deviceId, role, scopes });
+    if (!entry) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
+      return;
+    }
+    respond(
+      true,
+      {
+        deviceId,
+        role: entry.role,
+        token: entry.token,
+        scopes: entry.scopes,
+        rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
+      },
+      undefined,
+    );
+  },
+  "device.token.revoke": async ({ params, respond }) => {
+    if (!validateDeviceTokenRevokeParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid device.token.revoke params: ${formatValidationErrors(
+            validateDeviceTokenRevokeParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const { deviceId, role } = params as { deviceId: string; role: string };
+    const entry = await revokeDeviceToken({ deviceId, role });
+    if (!entry) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId/role"));
+      return;
+    }
+    respond(
+      true,
+      { deviceId, role: entry.role, revokedAtMs: entry.revokedAtMs ?? Date.now() },
+      undefined,
+    );
   },
 };

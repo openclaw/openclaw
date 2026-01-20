@@ -60,6 +60,8 @@ import type {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
   DevicePairRejectParamsSchema,
+  DeviceTokenRevokeParamsSchema,
+  DeviceTokenRotateParamsSchema,
 } from "./devices.js";
 import type {
   ConnectParamsSchema,
@@ -195,6 +197,8 @@ export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsS
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
+export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
+export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;

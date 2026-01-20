@@ -58,6 +58,7 @@ describe("gateway node command allowlist", () => {
       role: "node",
       client: {
         id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        displayName: "node-empty",
         version: "1.0.0",
         platform: "ios",
         mode: GATEWAY_CLIENT_MODES.NODE,
@@ -94,6 +95,7 @@ describe("gateway node command allowlist", () => {
       role: "node",
       client: {
         id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        displayName: "node-allowed",
         version: "1.0.0",
         platform: "ios",
         mode: GATEWAY_CLIENT_MODES.NODE,

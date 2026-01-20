@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -223,8 +224,9 @@ describe("gateway server health/presence", () => {
     );
 
     const presenceRes = await presenceP;
+    const identity = loadOrCreateDeviceIdentity();
     const entries = presenceRes.payload as Array<Record<string, unknown>>;
-    const clientEntry = entries.find((e) => e.instanceId === "abc");
+    const clientEntry = entries.find((e) => e.instanceId === identity.deviceId);
     expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");

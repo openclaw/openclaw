@@ -8,6 +8,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { loadDeviceAuthToken, storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -146,36 +147,39 @@ export class GatewayClient {
   }
 
   private sendConnect() {
+    const role = this.opts.role ?? "operator";
+    const storedToken = this.opts.deviceIdentity
+      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
+      : null;
+    const authToken = this.opts.token ?? storedToken ?? undefined;
     const auth =
-      this.opts.token || this.opts.password
+      authToken || this.opts.password
         ? {
-            token: this.opts.token,
+            token: authToken,
             password: this.opts.password,
           }
         : undefined;
     const signedAtMs = Date.now();
-    const role = this.opts.role ?? "operator";
     const scopes = this.opts.scopes ?? ["operator.admin"];
-    const identity = this.opts.deviceIdentity;
-    if (!identity) {
-      throw new Error("gateway client requires a device identity");
-    }
-    const payload = buildDeviceAuthPayload({
-      deviceId: identity.deviceId,
-      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-      role,
-      scopes,
-      signedAtMs,
-      token: this.opts.token ?? null,
-    });
-    const signature = signDevicePayload(identity.privateKeyPem, payload);
-    const device = {
-      id: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      signature,
-      signedAt: signedAtMs,
-    };
+    const device = (() => {
+      if (!this.opts.deviceIdentity) return undefined;
+      const payload = buildDeviceAuthPayload({
+        deviceId: this.opts.deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? null,
+      });
+      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
+      return {
+        id: this.opts.deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
+        signature,
+        signedAt: signedAtMs,
+      };
+    })();
     const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -201,6 +205,15 @@ export class GatewayClient {
 
     void this.request<HelloOk>("connect", params)
       .then((helloOk) => {
+        const authInfo = helloOk?.auth;
+        if (authInfo?.deviceToken && this.opts.deviceIdentity) {
+          storeDeviceAuthToken({
+            deviceId: this.opts.deviceIdentity.deviceId,
+            role: authInfo.role ?? role,
+            token: authInfo.deviceToken,
+            scopes: authInfo.scopes ?? [],
+          });
+        }
         this.backoffMs = 1000;
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"

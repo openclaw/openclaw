@@ -41,6 +41,8 @@ const PAIRING_METHODS = new Set([
   "device.pair.list",
   "device.pair.approve",
   "device.pair.reject",
+  "device.token.rotate",
+  "device.token.revoke",
   "node.rename",
 ]);
 const ADMIN_METHOD_PREFIXES = ["exec.approvals."];

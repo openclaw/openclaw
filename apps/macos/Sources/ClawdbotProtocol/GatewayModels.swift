@@ -75,6 +75,7 @@ public struct HelloOk: Codable, Sendable {
     public let features: [String: AnyCodable]
     public let snapshot: Snapshot
     public let canvashosturl: String?
+    public let auth: [String: AnyCodable]?
     public let policy: [String: AnyCodable]
 
     public init(
@@ -84,6 +85,7 @@ public struct HelloOk: Codable, Sendable {
         features: [String: AnyCodable],
         snapshot: Snapshot,
         canvashosturl: String?,
+        auth: [String: AnyCodable]?,
         policy: [String: AnyCodable]
     ) {
         self.type = type
@@ -92,6 +94,7 @@ public struct HelloOk: Codable, Sendable {
         self.features = features
         self.snapshot = snapshot
         self.canvashosturl = canvashosturl
+        self.auth = auth
         self.policy = policy
     }
     private enum CodingKeys: String, CodingKey {
@@ -101,6 +104,7 @@ public struct HelloOk: Codable, Sendable {
         case features
         case snapshot
         case canvashosturl = "canvasHostUrl"
+        case auth
         case policy
     }
 }
@@ -1947,6 +1951,44 @@ public struct DevicePairRejectParams: Codable, Sendable {
     }
     private enum CodingKeys: String, CodingKey {
         case requestid = "requestId"
+    }
+}
+
+public struct DeviceTokenRotateParams: Codable, Sendable {
+    public let deviceid: String
+    public let role: String
+    public let scopes: [String]?
+
+    public init(
+        deviceid: String,
+        role: String,
+        scopes: [String]?
+    ) {
+        self.deviceid = deviceid
+        self.role = role
+        self.scopes = scopes
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case role
+        case scopes
+    }
+}
+
+public struct DeviceTokenRevokeParams: Codable, Sendable {
+    public let deviceid: String
+    public let role: String
+
+    public init(
+        deviceid: String,
+        role: String
+    ) {
+        self.deviceid = deviceid
+        self.role = role
+    }
+    private enum CodingKeys: String, CodingKey {
+        case deviceid = "deviceId"
+        case role
     }
 }
 

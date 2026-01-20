@@ -14,6 +14,23 @@ export const DevicePairRejectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const DeviceTokenRotateParamsSchema = Type.Object(
+  {
+    deviceId: NonEmptyString,
+    role: NonEmptyString,
+    scopes: Type.Optional(Type.Array(NonEmptyString)),
+  },
+  { additionalProperties: false },
+);
+
+export const DeviceTokenRevokeParamsSchema = Type.Object(
+  {
+    deviceId: NonEmptyString,
+    role: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const DevicePairRequestedEventSchema = Type.Object(
   {
     requestId: NonEmptyString,

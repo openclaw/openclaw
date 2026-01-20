@@ -34,6 +34,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`models`](/cli/models)
 - [`memory`](/cli/memory)
 - [`nodes`](/cli/nodes)
+- [`devices`](/cli/devices)
 - [`node`](/cli/node)
 - [`approvals`](/cli/approvals)
 - [`sandbox`](/cli/sandbox)
@@ -188,6 +189,7 @@ clawdbot [--dev] [--profile <name>] <command>
     runs
     run
   nodes
+  devices
   node
     start
     daemon

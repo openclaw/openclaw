@@ -1,4 +1,5 @@
 import { lookup } from "node:dns/promises";
+import { logWarn } from "../logger.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -289,7 +290,14 @@ async function extractPdfContent(params: {
     return { text, images: [] };
   }
 
-  const { createCanvas } = await loadCanvasModule();
+  let canvasModule: CanvasModule;
+  try {
+    canvasModule = await loadCanvasModule();
+  } catch (err) {
+    logWarn(`media: PDF image extraction skipped; ${String(err)}`);
+    return { text, images: [] };
+  }
+  const { createCanvas } = canvasModule;
   const images: InputImageContent[] = [];
   for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
     const page = await pdf.getPage(pageNum);
