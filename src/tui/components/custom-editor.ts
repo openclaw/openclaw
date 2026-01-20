@@ -1,11 +1,4 @@
-import {
-  Editor,
-  Key,
-  matchesKey,
-  type EditorOptions,
-  type EditorTheme,
-  type TUI,
-} from "@mariozechner/pi-tui";
+import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;
@@ -19,26 +12,22 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
 
-  constructor(tui: TUI, theme: EditorTheme, options?: EditorOptions);
-  constructor(theme: EditorTheme, options?: EditorOptions);
-  constructor(
-    tuiOrTheme: TUI | EditorTheme,
-    themeOrOptions?: EditorTheme | EditorOptions,
-    options?: EditorOptions,
-  ) {
-    const hasTui = typeof (tuiOrTheme as TUI).terminal !== "undefined";
-    const theme = hasTui ? (themeOrOptions as EditorTheme) : (tuiOrTheme as EditorTheme);
-    const resolvedOptions = hasTui ? options : (themeOrOptions as EditorOptions | undefined);
+  constructor(tuiOrTheme: unknown, themeOrOptions?: unknown, options?: { paddingX?: number }) {
+    const hasTui = Boolean((tuiOrTheme as { terminal?: unknown })?.terminal);
     const useTuiArg = hasTui && Editor.length >= 2;
-    const baseArgs = (useTuiArg
-      ? [tuiOrTheme, theme, resolvedOptions]
-      : [theme, resolvedOptions]) as unknown as ConstructorParameters<typeof Editor>;
 
-    super(...baseArgs);
-
-    if (hasTui && !useTuiArg) {
-      (this as unknown as { tui?: TUI }).tui = tuiOrTheme as TUI;
+    if (hasTui) {
+      const theme = themeOrOptions;
+      if (useTuiArg) {
+        super(tuiOrTheme as never, theme as never, options as never);
+      } else {
+        super(theme as never, options as never);
+        this.tui = tuiOrTheme as unknown as typeof this.tui;
+      }
+      return;
     }
+
+    super(tuiOrTheme as never, themeOrOptions as never);
   }
 
   handleInput(data: string): void {
