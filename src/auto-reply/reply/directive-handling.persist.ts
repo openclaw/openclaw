@@ -1,16 +1,15 @@
 import {
   resolveAgentDir,
-  resolveAgentModelPrimary,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -239,36 +238,14 @@ export function resolveDefaultModel(params: { cfg: ClawdbotConfig; agentId?: str
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
 } {
-  const agentModelOverride = params.agentId
-    ? resolveAgentModelPrimary(params.cfg, params.agentId)
-    : undefined;
-  const cfg =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...params.cfg.agents?.defaults,
-              model: {
-                ...(typeof params.cfg.agents?.defaults?.model === "object"
-                  ? params.cfg.agents.defaults.model
-                  : undefined),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : params.cfg;
-  const mainModel = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+  const mainModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
   });
   const defaultProvider = mainModel.provider;
   const defaultModel = mainModel.model;
   const aliasIndex = buildModelAliasIndex({
-    cfg,
+    cfg: params.cfg,
     defaultProvider,
   });
   return { defaultProvider, defaultModel, aliasIndex };

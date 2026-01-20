@@ -7,6 +7,7 @@ import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -93,6 +94,11 @@ async function resolveContextReport(
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
+  const defaultModelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: sessionAgentId,
+  });
+  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.cfg,
     agentId: sessionAgentId,
@@ -102,6 +108,7 @@ async function resolveContextReport(
       arch: "unknown",
       node: process.version,
       model: `${params.provider}/${params.model}`,
+      defaultModel: defaultModelLabel,
     },
   });
   const sandboxInfo = sandboxRuntime.sandboxed

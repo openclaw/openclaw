@@ -1,6 +1,8 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
+import { resolveAgentModelPrimary } from "./agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 
 export type ModelRef = {
   provider: string;
@@ -139,6 +141,38 @@ export function resolveConfiguredModelRef(params: {
     return { provider: "anthropic", model: trimmed };
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
+}
+
+export function resolveDefaultModelForAgent(params: {
+  cfg: ClawdbotConfig;
+  agentId?: string;
+}): ModelRef {
+  const agentModelOverride = params.agentId
+    ? resolveAgentModelPrimary(params.cfg, params.agentId)
+    : undefined;
+  const cfg =
+    agentModelOverride && agentModelOverride.length > 0
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...params.cfg.agents?.defaults,
+              model: {
+                ...(typeof params.cfg.agents?.defaults?.model === "object"
+                  ? params.cfg.agents.defaults.model
+                  : undefined),
+                primary: agentModelOverride,
+              },
+            },
+          },
+        }
+      : params.cfg;
+  return resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
 }
 
 export function buildAllowedModelSet(params: {

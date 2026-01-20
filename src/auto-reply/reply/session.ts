@@ -40,6 +40,7 @@ export type SessionInitResult = {
   sessionKey: string;
   sessionId: string;
   isNewSession: boolean;
+  resetTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -327,6 +328,7 @@ export async function initSessionState(params: {
     sessionKey,
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
+    resetTriggered,
     systemSent,
     abortedLastRun,
     storePath,
