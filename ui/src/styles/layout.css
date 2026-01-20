@@ -6,6 +6,8 @@
   --shell-focus-duration: 220ms;
   --shell-focus-ease: cubic-bezier(0.2, 0.85, 0.25, 1);
   min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -307,6 +309,11 @@
   min-height: 0;
   overflow-y: auto; /* Enable vertical scrolling for pages with long content */
   overflow-x: hidden;
+}
+
+/* Chat handles its own scrolling (chat-thread); avoid double scrollbars. */
+.content--chat {
+  overflow: hidden;
 }
 
 .shell--chat .content {
