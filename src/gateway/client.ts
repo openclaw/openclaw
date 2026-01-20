@@ -156,25 +156,26 @@ export class GatewayClient {
     const signedAtMs = Date.now();
     const role = this.opts.role ?? "operator";
     const scopes = this.opts.scopes ?? ["operator.admin"];
-    const device = (() => {
-      if (!this.opts.deviceIdentity) return undefined;
-      const payload = buildDeviceAuthPayload({
-        deviceId: this.opts.deviceIdentity.deviceId,
-        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
-        role,
-        scopes,
-        signedAtMs,
-        token: this.opts.token ?? null,
-      });
-      const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
-      return {
-        id: this.opts.deviceIdentity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(this.opts.deviceIdentity.publicKeyPem),
-        signature,
-        signedAt: signedAtMs,
-      };
-    })();
+    const identity = this.opts.deviceIdentity;
+    if (!identity) {
+      throw new Error("gateway client requires a device identity");
+    }
+    const payload = buildDeviceAuthPayload({
+      deviceId: identity.deviceId,
+      clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
+      role,
+      scopes,
+      signedAtMs,
+      token: this.opts.token ?? null,
+    });
+    const signature = signDevicePayload(identity.privateKeyPem, payload);
+    const device = {
+      id: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      signature,
+      signedAt: signedAtMs,
+    };
     const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
