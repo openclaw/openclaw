@@ -165,7 +165,7 @@ actor GatewayEndpointStore {
             }
             return trimmed
         }
-        
+
         if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
            !configToken.isEmpty
         {
@@ -177,7 +177,7 @@ actor GatewayEndpointStore {
         {
             return token
         }
-        
+
         return nil
     }
 

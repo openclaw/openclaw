@@ -365,7 +365,8 @@ actor GatewayWizardClient {
         }
         let payload = payloadParts.joined(separator: "|")
         if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
+           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity)
+        {
             var device: [String: ProtoAnyCodable] = [
                 "id": ProtoAnyCodable(identity.deviceId),
                 "publicKey": ProtoAnyCodable(publicKey),
@@ -413,7 +414,8 @@ actor GatewayWizardClient {
                         let frame = try decodeFrame(message)
                         if case let .event(evt) = frame, evt.event == "connect.challenge" {
                             if let payload = evt.payload?.value as? [String: ProtoAnyCodable],
-                               let nonce = payload["nonce"]?.value as? String {
+                               let nonce = payload["nonce"]?.value as? String
+                            {
                                 return nonce
                             }
                         }
