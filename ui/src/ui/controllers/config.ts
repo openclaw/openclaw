@@ -28,8 +28,11 @@ export type ConfigState = {
   configSchemaLoading: boolean;
   configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
+  configFormOriginal: Record<string, unknown> | null;
   configFormDirty: boolean;
   configFormMode: "form" | "raw";
+  configSearchQuery: string;
+  configActiveSection: string | null;
   lastError: string | null;
 };
 
@@ -93,6 +96,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
 
   if (!state.configFormDirty) {
     state.configForm = cloneConfigObject(snapshot.config ?? {});
+    state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
   }
 }
 
