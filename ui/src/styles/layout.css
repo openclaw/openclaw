@@ -6,8 +6,6 @@
   --shell-focus-duration: 220ms;
   --shell-focus-ease: cubic-bezier(0.2, 0.85, 0.25, 1);
   min-height: 100vh;
-  height: 100vh;
-  overflow: hidden;
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -17,6 +15,18 @@
   gap: 0;
   animation: dashboard-enter 0.6s ease-out;
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
+}
+
+.shell--chat {
+  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+}
+
+@supports (height: 100dvh) {
+  .shell--chat {
+    height: 100dvh;
+  }
 }
 
 .shell--nav-collapsed {

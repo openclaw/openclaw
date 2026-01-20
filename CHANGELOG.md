@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 
 ### Fixes
 - Gateway: strip inbound envelope headers from chat history messages to keep clients clean.
+- UI: prevent double-scroll in Control UI chat by locking chat layout to the viewport. (#1283) — thanks @bradleypriest.
 
 ## 2026.1.19-2
 
