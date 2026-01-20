@@ -1,7 +1,35 @@
 import { lookup } from "node:dns/promises";
 
-import { createCanvas } from "@napi-rs/canvas";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+type CanvasModule = typeof import("@napi-rs/canvas");
+type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+let canvasModulePromise: Promise<CanvasModule> | null = null;
+let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+
+// Lazy-load optional PDF/image deps so non-PDF paths don't require native installs.
+async function loadCanvasModule(): Promise<CanvasModule> {
+  if (!canvasModulePromise) {
+    canvasModulePromise = import("@napi-rs/canvas").catch((err) => {
+      canvasModulePromise = null;
+      throw new Error(
+        `Optional dependency @napi-rs/canvas is required for PDF image extraction: ${String(err)}`,
+      );
+    });
+  }
+  return canvasModulePromise;
+}
+
+async function loadPdfJsModule(): Promise<PdfJsModule> {
+  if (!pdfJsModulePromise) {
+    pdfJsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs").catch((err) => {
+      pdfJsModulePromise = null;
+      throw new Error(
+        `Optional dependency pdfjs-dist is required for PDF extraction: ${String(err)}`,
+      );
+    });
+  }
+  return pdfJsModulePromise;
+}
 
 export type InputImageContent = {
   type: "image";
@@ -238,9 +266,9 @@ async function extractPdfContent(params: {
   limits: InputFileLimits;
 }): Promise<{ text: string; images: InputImageContent[] }> {
   const { buffer, limits } = params;
+  const { getDocument } = await loadPdfJsModule();
   const pdf = await getDocument({
     data: new Uint8Array(buffer),
-    // @ts-expect-error pdfjs-dist legacy option not in current type defs.
     disableWorker: true,
   }).promise;
   const maxPages = Math.min(pdf.numPages, limits.pdf.maxPages);
@@ -261,6 +289,7 @@ async function extractPdfContent(params: {
     return { text, images: [] };
   }
 
+  const { createCanvas } = await loadCanvasModule();
   const images: InputImageContent[] = [];
   for (let pageNum = 1; pageNum <= maxPages; pageNum += 1) {
     const page = await pdf.getPage(pageNum);
