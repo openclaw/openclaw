@@ -22,6 +22,7 @@ export type CallGatewayOptions = {
   url?: string;
   token?: string;
   password?: string;
+  config?: ClawdbotConfig;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -109,7 +110,7 @@ export function buildGatewayConnectionDetails(
 
 export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
-  const config = loadConfig();
+  const config = opts.config ?? loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const urlOverride =
