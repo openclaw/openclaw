@@ -141,6 +141,9 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent;
 
+type DiagnosticEventInput<T extends DiagnosticEventPayload = DiagnosticEventPayload> =
+  T extends DiagnosticEventPayload ? Omit<T, "seq" | "ts"> : never;
+
 let seq = 0;
 const listeners = new Set<(evt: DiagnosticEventPayload) => void>();
 
@@ -148,12 +151,14 @@ export function isDiagnosticsEnabled(config?: ClawdbotConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
-export function emitDiagnosticEvent(event: Omit<DiagnosticEventPayload, "seq" | "ts">) {
-  const enriched: DiagnosticEventPayload = {
+export function emitDiagnosticEvent<T extends DiagnosticEventPayload>(
+  event: DiagnosticEventInput<T>,
+) {
+  const enriched = {
     ...event,
     seq: (seq += 1),
     ts: Date.now(),
-  };
+  } as DiagnosticEventPayload;
   for (const listener of listeners) {
     try {
       listener(enriched);
