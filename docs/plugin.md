@@ -41,6 +41,7 @@ See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 - [Voice Call](/plugins/voice-call) — `@clawdbot/voice-call`
 - [Zalo Personal](/plugins/zalouser) — `@clawdbot/zalouser`
 - [Matrix](/channels/matrix) — `@clawdbot/matrix`
+- [Nostr](/channels/nostr) — `@clawdbot/nostr`
 - [Zalo](/channels/zalo) — `@clawdbot/zalo`
 - [Microsoft Teams](/channels/msteams) — `@clawdbot/msteams`
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)

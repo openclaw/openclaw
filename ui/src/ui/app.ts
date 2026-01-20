@@ -20,6 +20,7 @@ import type {
   SessionsListResult,
   SkillStatusReport,
   StatusSummary,
+  NostrProfile,
 } from "./types";
 import { type ChatQueueItem, type CronFormState } from "./ui-types";
 import type { EventLogEntry } from "./app-events";
@@ -64,10 +65,17 @@ import {
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
+  handleNostrProfileCancel as handleNostrProfileCancelInternal,
+  handleNostrProfileEdit as handleNostrProfileEditInternal,
+  handleNostrProfileFieldChange as handleNostrProfileFieldChangeInternal,
+  handleNostrProfileImport as handleNostrProfileImportInternal,
+  handleNostrProfileSave as handleNostrProfileSaveInternal,
+  handleNostrProfileToggleAdvanced as handleNostrProfileToggleAdvancedInternal,
   handleWhatsAppLogout as handleWhatsAppLogoutInternal,
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
 
 declare global {
   interface Window {
@@ -153,6 +161,8 @@ export class ClawdbotApp extends LitElement {
   @state() whatsappLoginQrDataUrl: string | null = null;
   @state() whatsappLoginConnected: boolean | null = null;
   @state() whatsappBusy = false;
+  @state() nostrProfileFormState: NostrProfileFormState | null = null;
+  @state() nostrProfileAccountId: string | null = null;
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
@@ -370,6 +380,30 @@ export class ClawdbotApp extends LitElement {
 
   async handleChannelConfigReload() {
     await handleChannelConfigReloadInternal(this);
+  }
+
+  handleNostrProfileEdit(accountId: string, profile: NostrProfile | null) {
+    handleNostrProfileEditInternal(this, accountId, profile);
+  }
+
+  handleNostrProfileCancel() {
+    handleNostrProfileCancelInternal(this);
+  }
+
+  handleNostrProfileFieldChange(field: keyof NostrProfile, value: string) {
+    handleNostrProfileFieldChangeInternal(this, field, value);
+  }
+
+  async handleNostrProfileSave() {
+    await handleNostrProfileSaveInternal(this);
+  }
+
+  async handleNostrProfileImport() {
+    await handleNostrProfileImportInternal(this);
+  }
+
+  handleNostrProfileToggleAdvanced() {
+    handleNostrProfileToggleAdvancedInternal(this);
   }
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
