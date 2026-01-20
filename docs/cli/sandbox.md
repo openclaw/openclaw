@@ -114,6 +114,9 @@ clawdbot sandbox recreate --agent alfred
 
 **Solution:** Use `clawdbot sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
 
+Tip: prefer `clawdbot sandbox recreate` over manual `docker rm`. It uses the
+Gateway’s container naming and avoids mismatches when scope/session keys change.
+
 ## Configuration
 
 Sandbox settings live in `~/.clawdbot/clawdbot.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):

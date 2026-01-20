@@ -87,6 +87,17 @@ WhatsApp + Telegram channels require **Node**; Bun is unsupported. If your
 service was installed with Bun or a version-managed Node path, run `clawdbot doctor`
 to migrate to a system Node install.
 
+### Skill missing API key in sandbox
+
+**Symptom:** Skill works on host but fails in sandbox with missing API key.
+
+**Why:** sandboxed exec runs inside Docker and does **not** inherit host `process.env`.
+
+**Fix:**
+- set `agents.defaults.sandbox.docker.env` (or per-agent `agents.list[].sandbox.docker.env`)
+- or bake the key into your custom sandbox image
+- then run `clawdbot sandbox recreate --agent <id>` (or `--all`)
+
 ### Service Running but Port Not Listening
 
 If the service reports **running** but nothing is listening on the gateway port,

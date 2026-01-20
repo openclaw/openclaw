@@ -62,3 +62,14 @@ Per-skill fields:
 - Keys under `entries` map to the skill name by default. If a skill defines
   `metadata.clawdbot.skillKey`, use that key instead.
 - Changes to skills are picked up on the next agent turn when the watcher is enabled.
+
+### Sandboxed skills + env vars
+
+When a session is **sandboxed**, skill processes run inside Docker. The sandbox
+does **not** inherit the host `process.env`.
+
+Use one of:
+- `agents.defaults.sandbox.docker.env` (or per-agent `agents.list[].sandbox.docker.env`)
+- bake the env into your custom sandbox image
+
+Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
