@@ -112,7 +112,8 @@ export function enqueueCommand<T>(
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {
-  const state = lanes.get(lane);
+  const resolved = lane.trim() || CommandLane.Main;
+  const state = lanes.get(resolved);
   if (!state) return 0;
   return state.queue.length + state.active;
 }

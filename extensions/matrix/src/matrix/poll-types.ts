@@ -7,8 +7,6 @@
  * - m.poll.end - Closes a poll
  */
 
-import type { TimelineEvents } from "matrix-js-sdk/lib/@types/event.js";
-import type { ExtensibleAnyMessageEventContent } from "matrix-js-sdk/lib/@types/extensible_events.js";
 import type { PollInput } from "clawdbot/plugin-sdk";
 
 export const M_POLL_START = "m.poll.start" as const;
@@ -34,7 +32,9 @@ export const POLL_END_TYPES = [M_POLL_END, ORG_POLL_END];
 
 export type PollKind = "m.poll.disclosed" | "m.poll.undisclosed";
 
-export type TextContent = ExtensibleAnyMessageEventContent & {
+export type TextContent = {
+  "m.text"?: string;
+  "org.matrix.msc1767.text"?: string;
   body?: string;
 };
 
@@ -53,7 +53,13 @@ export type LegacyPollStartContent = {
   "m.poll"?: PollStartSubtype;
 };
 
-export type PollStartContent = TimelineEvents[typeof M_POLL_START] | LegacyPollStartContent;
+export type PollStartContent = {
+  [M_POLL_START]?: PollStartSubtype;
+  [ORG_POLL_START]?: PollStartSubtype;
+  "m.poll"?: PollStartSubtype;
+  "m.text"?: string;
+  "org.matrix.msc1767.text"?: string;
+};
 
 export type PollSummary = {
   eventId: string;

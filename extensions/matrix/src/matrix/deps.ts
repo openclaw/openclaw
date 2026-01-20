@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { RuntimeEnv } from "clawdbot/plugin-sdk";
 import { getMatrixRuntime } from "../runtime.js";
 
-const MATRIX_SDK_PACKAGE = "matrix-js-sdk";
+const MATRIX_SDK_PACKAGE = "matrix-bot-sdk";
 
 export function isMatrixSdkAvailable(): boolean {
   try {
@@ -30,9 +30,9 @@ export async function ensureMatrixSdkInstalled(params: {
   if (isMatrixSdkAvailable()) return;
   const confirm = params.confirm;
   if (confirm) {
-    const ok = await confirm("Matrix requires matrix-js-sdk. Install now?");
+    const ok = await confirm("Matrix requires matrix-bot-sdk. Install now?");
     if (!ok) {
-      throw new Error("Matrix requires matrix-js-sdk (install dependencies first).");
+      throw new Error("Matrix requires matrix-bot-sdk (install dependencies first).");
     }
   }
 
@@ -52,6 +52,6 @@ export async function ensureMatrixSdkInstalled(params: {
     );
   }
   if (!isMatrixSdkAvailable()) {
-    throw new Error("Matrix dependency install completed but matrix-js-sdk is still missing.");
+    throw new Error("Matrix dependency install completed but matrix-bot-sdk is still missing.");
   }
 }

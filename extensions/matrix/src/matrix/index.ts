@@ -3,6 +3,7 @@ export { probeMatrix } from "./probe.js";
 export {
   reactMatrixMessage,
   resolveMatrixRoomId,
+  sendReadReceiptMatrix,
   sendMessageMatrix,
   sendPollMatrix,
   sendTypingMatrix,

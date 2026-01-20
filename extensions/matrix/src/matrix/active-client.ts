@@ -1,4 +1,4 @@
-import type { MatrixClient } from "matrix-js-sdk";
+import type { MatrixClient } from "matrix-bot-sdk";
 
 let activeClient: MatrixClient | null = null;
 

@@ -1,16 +1,22 @@
-import type { RoomMessageEventContent } from "matrix-js-sdk/lib/@types/events.js";
-
 import { getMatrixRuntime } from "../../runtime.js";
 
+// Type for room message content with mentions
+type MessageContentWithMentions = {
+  msgtype: string;
+  body: string;
+  "m.mentions"?: {
+    user_ids?: string[];
+    room?: boolean;
+  };
+};
+
 export function resolveMentions(params: {
-  content: RoomMessageEventContent;
+  content: MessageContentWithMentions;
   userId?: string | null;
   text?: string;
   mentionRegexes: RegExp[];
 }) {
-  const mentions = params.content["m.mentions"] as
-    | { user_ids?: string[]; room?: boolean }
-    | undefined;
+  const mentions = params.content["m.mentions"];
   const mentionedUsers = Array.isArray(mentions?.user_ids)
     ? new Set(mentions.user_ids)
     : new Set<string>();

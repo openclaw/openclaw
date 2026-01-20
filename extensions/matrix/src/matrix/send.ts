@@ -1,9 +1,14 @@
-import type { AccountDataEvents, MatrixClient } from "matrix-js-sdk";
-import { EventType, MsgType, RelationType } from "matrix-js-sdk";
 import type {
-  RoomMessageEventContent,
-  ReactionEventContent,
-} from "matrix-js-sdk/lib/@types/events.js";
+  DimensionalFileInfo,
+  EncryptedFile,
+  FileWithThumbnailInfo,
+  MessageEventContent,
+  TextualMessageEventContent,
+  TimedFileInfo,
+  VideoFileInfo,
+  MatrixClient,
+} from "matrix-bot-sdk";
+import { parseBuffer, type IFileInfo } from "music-metadata";
 
 import type { PollInput } from "clawdbot/plugin-sdk";
 import { getMatrixRuntime } from "../runtime.js";
@@ -13,7 +18,6 @@ import {
   isBunRuntime,
   resolveMatrixAuth,
   resolveSharedMatrixClient,
-  waitForMatrixSync,
 } from "./client.js";
 import { markdownToMatrixHtml } from "./format.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
@@ -22,18 +26,72 @@ import type { CoreConfig } from "../types.js";
 const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
-type MatrixDirectAccountData = AccountDataEvents[EventType.Direct];
+// Message types
+const MsgType = {
+  Text: "m.text",
+  Image: "m.image",
+  Audio: "m.audio",
+  Video: "m.video",
+  File: "m.file",
+  Notice: "m.notice",
+} as const;
+
+// Relation types
+const RelationType = {
+  Annotation: "m.annotation",
+  Replace: "m.replace",
+  Thread: "m.thread",
+} as const;
+
+// Event types
+const EventType = {
+  Direct: "m.direct",
+  Reaction: "m.reaction",
+  RoomMessage: "m.room.message",
+} as const;
+
+type MatrixDirectAccountData = Record<string, string[]>;
 
 type MatrixReplyRelation = {
   "m.in_reply_to": { event_id: string };
 };
 
-type MatrixMessageContent = Record<string, unknown> & {
-  msgtype: MsgType;
-  body: string;
+type MatrixThreadRelation = {
+  rel_type: typeof RelationType.Thread;
+  event_id: string;
+  is_falling_back?: boolean;
+  "m.in_reply_to"?: { event_id: string };
 };
 
-type MatrixUploadContent = Parameters<MatrixClient["uploadContent"]>[0];
+type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
+
+type MatrixReplyMeta = {
+  "m.relates_to"?: MatrixRelation;
+};
+
+type MatrixMediaInfo = FileWithThumbnailInfo | DimensionalFileInfo | TimedFileInfo | VideoFileInfo;
+
+type MatrixTextContent = TextualMessageEventContent & MatrixReplyMeta;
+
+type MatrixMediaContent = MessageEventContent &
+  MatrixReplyMeta & {
+    info?: MatrixMediaInfo;
+    url?: string;
+    file?: EncryptedFile;
+    filename?: string;
+    "org.matrix.msc3245.voice"?: Record<string, never>;
+    "org.matrix.msc1767.audio"?: { duration: number };
+  };
+
+type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
+
+type ReactionEventContent = {
+  "m.relates_to": {
+    rel_type: typeof RelationType.Annotation;
+    event_id: string;
+    key: string;
+  };
+};
 
 export type MatrixSendResult = {
   messageId: string;
@@ -83,13 +141,14 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   if (!trimmed.startsWith("@")) {
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
   }
-  const directEvent = client.getAccountData(EventType.Direct);
-  const directContent = directEvent?.getContent<MatrixDirectAccountData>();
-  const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
-  if (list.length > 0) return list[0];
-  const server = await client.getAccountDataFromServer(EventType.Direct);
-  const serverList = Array.isArray(server?.[trimmed]) ? server[trimmed] : [];
-  if (serverList.length > 0) return serverList[0];
+  // matrix-bot-sdk: use getAccountData to retrieve m.direct
+  try {
+    const directContent = await client.getAccountData(EventType.Direct) as MatrixDirectAccountData | null;
+    const list = Array.isArray(directContent?.[trimmed]) ? directContent[trimmed] : [];
+    if (list.length > 0) return list[0];
+  } catch {
+    // Ignore errors, try fetching from server
+  }
   throw new Error(
     `No m.direct room found for ${trimmed}. Open a DM first so Matrix can set m.direct.`,
   );
@@ -117,75 +176,116 @@ export async function resolveMatrixRoomId(
     return await resolveDirectRoomId(client, target);
   }
   if (target.startsWith("#")) {
-    const resolved = await client.getRoomIdForAlias(target);
-    if (!resolved?.room_id) {
+    const resolved = await client.resolveRoom(target);
+    if (!resolved) {
       throw new Error(`Matrix alias ${target} could not be resolved`);
     }
-    return resolved.room_id;
+    return resolved;
   }
   return target;
 }
 
-type MatrixImageInfo = {
-  w?: number;
-  h?: number;
-  thumbnail_url?: string;
-  thumbnail_info?: {
-    w: number;
-    h: number;
-    mimetype: string;
-    size: number;
-  };
+type MatrixMediaMsgType =
+  | typeof MsgType.Image
+  | typeof MsgType.Audio
+  | typeof MsgType.Video
+  | typeof MsgType.File;
+
+type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
+
+function buildMatrixMediaInfo(params: {
+  size: number;
+  mimetype?: string;
+  durationMs?: number;
+  imageInfo?: DimensionalFileInfo;
+}): MatrixMediaInfo | undefined {
+  const base: FileWithThumbnailInfo = {};
+  if (Number.isFinite(params.size)) {
+    base.size = params.size;
+  }
+  if (params.mimetype) {
+    base.mimetype = params.mimetype;
+  }
+  if (params.imageInfo) {
+    const dimensional: DimensionalFileInfo = {
+      ...base,
+      ...params.imageInfo,
+    };
+    if (typeof params.durationMs === "number") {
+      const videoInfo: VideoFileInfo = {
+        ...dimensional,
+        duration: params.durationMs,
+      };
+      return videoInfo;
+    }
+    return dimensional;
+  }
+  if (typeof params.durationMs === "number") {
+    const timedInfo: TimedFileInfo = {
+      ...base,
+      duration: params.durationMs,
+    };
+    return timedInfo;
+  }
+  if (Object.keys(base).length === 0) return undefined;
+  return base;
+}
+
+type MatrixFormattedContent = MessageEventContent & {
+  format?: string;
+  formatted_body?: string;
 };
 
 function buildMediaContent(params: {
-  msgtype: MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File;
+  msgtype: MatrixMediaMsgType;
   body: string;
-  url: string;
+  url?: string;
   filename?: string;
   mimetype?: string;
   size: number;
-  relation?: MatrixReplyRelation;
+  relation?: MatrixRelation;
   isVoice?: boolean;
   durationMs?: number;
-  imageInfo?: MatrixImageInfo;
-}): RoomMessageEventContent {
-  const info: Record<string, unknown> = { mimetype: params.mimetype, size: params.size };
-  if (params.durationMs !== undefined) {
-    info.duration = params.durationMs;
-  }
-  if (params.imageInfo) {
-    if (params.imageInfo.w) info.w = params.imageInfo.w;
-    if (params.imageInfo.h) info.h = params.imageInfo.h;
-    if (params.imageInfo.thumbnail_url) {
-      info.thumbnail_url = params.imageInfo.thumbnail_url;
-      if (params.imageInfo.thumbnail_info) {
-        info.thumbnail_info = params.imageInfo.thumbnail_info;
-      }
-    }
-  }
-  const base: MatrixMessageContent = {
+  imageInfo?: DimensionalFileInfo;
+  file?: EncryptedFile; // For encrypted media
+}): MatrixMediaContent {
+  const info = buildMatrixMediaInfo({
+    size: params.size,
+    mimetype: params.mimetype,
+    durationMs: params.durationMs,
+    imageInfo: params.imageInfo,
+  });
+  const base: MatrixMediaContent = {
     msgtype: params.msgtype,
     body: params.body,
     filename: params.filename,
-    info,
-    url: params.url,
+    info: info ?? undefined,
   };
+  // Encrypted media should only include the "file" payload, not top-level "url".
+  if (!params.file && params.url) {
+    base.url = params.url;
+  }
+  // For encrypted files, add the file object
+  if (params.file) {
+    base.file = params.file;
+  }
   if (params.isVoice) {
     base["org.matrix.msc3245.voice"] = {};
-    base["org.matrix.msc1767.audio"] = {
-      duration: params.durationMs,
-    };
+    if (typeof params.durationMs === "number") {
+      base["org.matrix.msc1767.audio"] = {
+        duration: params.durationMs,
+      };
+    }
   }
   if (params.relation) {
     base["m.relates_to"] = params.relation;
   }
   applyMatrixFormatting(base, params.body);
-  return base as RoomMessageEventContent;
+  return base;
 }
 
-function buildTextContent(body: string, relation?: MatrixReplyRelation): RoomMessageEventContent {
-  const content: MatrixMessageContent = relation
+function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
+  const content: MatrixTextContent = relation
     ? {
         msgtype: MsgType.Text,
         body,
@@ -196,10 +296,10 @@ function buildTextContent(body: string, relation?: MatrixReplyRelation): RoomMes
         body,
       };
   applyMatrixFormatting(content, body);
-  return content as RoomMessageEventContent;
+  return content;
 }
 
-function applyMatrixFormatting(content: MatrixMessageContent, body: string): void {
+function applyMatrixFormatting(content: MatrixFormattedContent, body: string): void {
   const formatted = markdownToMatrixHtml(body ?? "");
   if (!formatted) return;
   content.format = "org.matrix.custom.html";
@@ -212,10 +312,20 @@ function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined
   return { "m.in_reply_to": { event_id: trimmed } };
 }
 
+function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
+  const trimmed = threadId.trim();
+  return {
+    rel_type: RelationType.Thread,
+    event_id: trimmed,
+    is_falling_back: true,
+    "m.in_reply_to": { event_id: (replyToId?.trim() || trimmed) },
+  };
+}
+
 function resolveMatrixMsgType(
   contentType?: string,
   fileName?: string,
-): MsgType.Image | MsgType.Audio | MsgType.Video | MsgType.File {
+): MatrixMediaMsgType {
   const kind = getCore().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":
@@ -247,10 +357,10 @@ const THUMBNAIL_QUALITY = 80;
 async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
-}): Promise<MatrixImageInfo | undefined> {
+}): Promise<DimensionalFileInfo | undefined> {
   const meta = await getCore().media.getImageMetadata(params.buffer).catch(() => null);
   if (!meta) return undefined;
-  const imageInfo: MatrixImageInfo = { w: meta.width, h: meta.height };
+  const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
@@ -261,11 +371,12 @@ async function prepareImageInfo(params: {
         withoutEnlargement: true,
       });
       const thumbMeta = await getCore().media.getImageMetadata(thumbBuffer).catch(() => null);
-      const thumbUri = await params.client.uploadContent(thumbBuffer as MatrixUploadContent, {
-        type: "image/jpeg",
-        name: "thumbnail.jpg",
-      });
-      imageInfo.thumbnail_url = thumbUri.content_uri;
+      const thumbUri = await params.client.uploadContent(
+        thumbBuffer,
+        "image/jpeg",
+        "thumbnail.jpg",
+      );
+      imageInfo.thumbnail_url = thumbUri;
       if (thumbMeta) {
         imageInfo.thumbnail_info = {
           w: thumbMeta.width,
@@ -281,21 +392,76 @@ async function prepareImageInfo(params: {
   return imageInfo;
 }
 
+async function resolveMediaDurationMs(params: {
+  buffer: Buffer;
+  contentType?: string;
+  fileName?: string;
+  kind: MediaKind;
+}): Promise<number | undefined> {
+  if (params.kind !== "audio" && params.kind !== "video") return undefined;
+  try {
+    const fileInfo: IFileInfo | string | undefined =
+      params.contentType || params.fileName
+        ? {
+            mimeType: params.contentType,
+            size: params.buffer.byteLength,
+            path: params.fileName,
+          }
+        : undefined;
+    const metadata = await parseBuffer(params.buffer, fileInfo, {
+      duration: true,
+      skipCovers: true,
+    });
+    const durationSeconds = metadata.format.duration;
+    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
+      return Math.max(0, Math.round(durationSeconds * 1000));
+    }
+  } catch {
+    // Duration is optional; ignore parse failures.
+  }
+  return undefined;
+}
+
 async function uploadFile(
   client: MatrixClient,
-  file: MatrixUploadContent | Buffer,
+  file: Buffer,
   params: {
     contentType?: string;
     filename?: string;
-    includeFilename?: boolean;
   },
 ): Promise<string> {
-  const upload = await client.uploadContent(file as MatrixUploadContent, {
-    type: params.contentType,
-    name: params.filename,
-    includeFilename: params.includeFilename,
-  });
-  return upload.content_uri;
+  return await client.uploadContent(file, params.contentType, params.filename);
+}
+
+/**
+ * Upload media with optional encryption for E2EE rooms.
+ */
+async function uploadMediaMaybeEncrypted(
+  client: MatrixClient,
+  roomId: string,
+  buffer: Buffer,
+  params: {
+    contentType?: string;
+    filename?: string;
+  },
+): Promise<{ url: string; file?: EncryptedFile }> {
+  // Check if room is encrypted and crypto is available
+  const isEncrypted = client.crypto && await client.crypto.isRoomEncrypted(roomId);
+  
+  if (isEncrypted && client.crypto) {
+    // Encrypt the media before uploading
+    const encrypted = await client.crypto.encryptMedia(buffer);
+    const mxc = await client.uploadContent(encrypted.buffer, params.contentType, params.filename);
+    const file: EncryptedFile = { url: mxc, ...encrypted.file };
+    return {
+      url: mxc,
+      file,
+    };
+  }
+  
+  // Upload unencrypted
+  const mxc = await uploadFile(client, buffer, params);
+  return { url: mxc };
 }
 
 async function resolveMatrixClient(opts: {
@@ -318,14 +484,19 @@ async function resolveMatrixClient(opts: {
     homeserver: auth.homeserver,
     userId: auth.userId,
     accessToken: auth.accessToken,
+    encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
   });
-  await client.startClient({
-    initialSyncLimit: 0,
-    lazyLoadMembers: true,
-    threadSupport: true,
-  });
-  await waitForMatrixSync({ client, timeoutMs: opts.timeoutMs });
+  if (auth.encryption && client.crypto) {
+    try {
+      const joinedRooms = await client.getJoinedRooms();
+      await client.crypto.prepare(joinedRooms);
+    } catch {
+      // Ignore crypto prep failures for one-off sends; normal sync will retry.
+    }
+  }
+  // matrix-bot-sdk uses start() instead of startClient()
+  await client.start();
   return { client, stopOnDone: true };
 }
 
@@ -349,17 +520,28 @@ export async function sendMessageMatrix(
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
     const chunks = getCore().channel.text.chunkMarkdownText(trimmedMessage, chunkLimit);
     const threadId = normalizeThreadId(opts.threadId);
-    const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
-    const sendContent = (content: RoomMessageEventContent) =>
-      threadId ? client.sendMessage(roomId, threadId, content) : client.sendMessage(roomId, content);
+    const relation = threadId
+      ? buildThreadRelation(threadId, opts.replyToId)
+      : buildReplyRelation(opts.replyToId);
+    const sendContent = async (content: MatrixOutboundContent) => {
+      // matrix-bot-sdk uses sendMessage differently
+      const eventId = await client.sendMessage(roomId, content);
+      return eventId;
+    };
 
     let lastMessageId = "";
     if (opts.mediaUrl) {
       const maxBytes = resolveMediaMaxBytes();
       const media = await getCore().media.loadWebMedia(opts.mediaUrl, maxBytes);
-      const contentUri = await uploadFile(client, media.buffer, {
+      const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
         contentType: media.contentType,
         filename: media.fileName,
+      });
+      const durationMs = await resolveMediaDurationMs({
+        buffer: media.buffer,
+        contentType: media.contentType,
+        fileName: media.fileName,
+        kind: media.kind,
       });
       const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
       const { useVoice } = resolveMatrixVoiceDecision({
@@ -375,31 +557,34 @@ export async function sendMessageMatrix(
       const content = buildMediaContent({
         msgtype,
         body,
-        url: contentUri,
+        url: uploaded.url,
+        file: uploaded.file,
         filename: media.fileName,
         mimetype: media.contentType,
         size: media.buffer.byteLength,
+        durationMs,
         relation,
         isVoice: useVoice,
         imageInfo,
       });
-      const response = await sendContent(content);
-      lastMessageId = response.event_id ?? lastMessageId;
+      const eventId = await sendContent(content);
+      lastMessageId = eventId ?? lastMessageId;
       const textChunks = useVoice ? chunks : rest;
+      const followupRelation = threadId ? relation : undefined;
       for (const chunk of textChunks) {
         const text = chunk.trim();
         if (!text) continue;
-        const followup = buildTextContent(text);
-        const followupRes = await sendContent(followup);
-        lastMessageId = followupRes.event_id ?? lastMessageId;
+        const followup = buildTextContent(text, followupRelation);
+        const followupEventId = await sendContent(followup);
+        lastMessageId = followupEventId ?? lastMessageId;
       }
     } else {
       for (const chunk of chunks.length ? chunks : [""]) {
         const text = chunk.trim();
         if (!text) continue;
         const content = buildTextContent(text, relation);
-        const response = await sendContent(content);
-        lastMessageId = response.event_id ?? lastMessageId;
+        const eventId = await sendContent(content);
+        lastMessageId = eventId ?? lastMessageId;
       }
     }
 
@@ -409,7 +594,7 @@ export async function sendMessageMatrix(
     };
   } finally {
     if (stopOnDone) {
-      client.stopClient();
+      client.stop();
     }
   }
 }
@@ -434,26 +619,19 @@ export async function sendPollMatrix(
     const roomId = await resolveMatrixRoomId(client, to);
     const pollContent = buildPollStartContent(poll);
     const threadId = normalizeThreadId(opts.threadId);
-    const response = threadId
-      ? await client.sendEvent(
-          roomId,
-          threadId,
-          M_POLL_START,
-          pollContent,
-        )
-      : await client.sendEvent(
-          roomId,
-          M_POLL_START,
-          pollContent,
-        );
+    const pollPayload = threadId
+      ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
+      : pollContent;
+    // matrix-bot-sdk sendEvent returns eventId string directly
+    const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
 
     return {
-      eventId: response.event_id ?? "unknown",
+      eventId: eventId ?? "unknown",
       roomId,
     };
   } finally {
     if (stopOnDone) {
-      client.stopClient();
+      client.stop();
     }
   }
 }
@@ -470,10 +648,29 @@ export async function sendTypingMatrix(
   });
   try {
     const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
-    await resolved.sendTyping(roomId, typing, resolvedTimeoutMs);
+    await resolved.setTyping(roomId, typing, resolvedTimeoutMs);
   } finally {
     if (stopOnDone) {
-      resolved.stopClient();
+      resolved.stop();
+    }
+  }
+}
+
+export async function sendReadReceiptMatrix(
+  roomId: string,
+  eventId: string,
+  client?: MatrixClient,
+): Promise<void> {
+  if (!eventId?.trim()) return;
+  const { client: resolved, stopOnDone } = await resolveMatrixClient({
+    client,
+  });
+  try {
+    const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
+    await resolved.sendReadReceipt(resolvedRoom, eventId.trim());
+  } finally {
+    if (stopOnDone) {
+      resolved.stop();
     }
   }
 }
@@ -502,7 +699,7 @@ export async function reactMatrixMessage(
     await resolved.sendEvent(resolvedRoom, EventType.Reaction, reaction);
   } finally {
     if (stopOnDone) {
-      resolved.stopClient();
+      resolved.stop();
     }
   }
 }
