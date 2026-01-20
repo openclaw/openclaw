@@ -3,7 +3,11 @@ import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../infra/device-identity.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -78,7 +82,10 @@ export class GatewayClient {
   private tickTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: GatewayClientOptions) {
-    this.opts = opts;
+    this.opts = {
+      ...opts,
+      deviceIdentity: opts.deviceIdentity ?? loadOrCreateDeviceIdentity(),
+    };
   }
 
   start() {

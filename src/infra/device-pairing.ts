@@ -154,6 +154,19 @@ function mergeRoles(...items: Array<string | string[] | undefined>): string[] | 
   return [...roles];
 }
 
+function mergeScopes(...items: Array<string[] | undefined>): string[] | undefined {
+  const scopes = new Set<string>();
+  for (const item of items) {
+    if (!item) continue;
+    for (const scope of item) {
+      const trimmed = scope.trim();
+      if (trimmed) scopes.add(trimmed);
+    }
+  }
+  if (scopes.size === 0) return undefined;
+  return [...scopes];
+}
+
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
   const state = await loadState(baseDir);
   const pending = Object.values(state.pendingById).sort((a, b) => b.ts - a.ts);
@@ -223,6 +236,7 @@ export async function approveDevicePairing(
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
+    const scopes = mergeScopes(existing?.scopes, pending.scopes);
     const device: PairedDevice = {
       deviceId: pending.deviceId,
       publicKey: pending.publicKey,
@@ -232,7 +246,7 @@ export async function approveDevicePairing(
       clientMode: pending.clientMode,
       role: pending.role,
       roles,
-      scopes: pending.scopes,
+      scopes,
       remoteIp: pending.remoteIp,
       createdAtMs: existing?.createdAtMs ?? now,
       approvedAtMs: now,
@@ -268,6 +282,7 @@ export async function updatePairedDeviceMetadata(
     const existing = state.pairedByDeviceId[normalizeDeviceId(deviceId)];
     if (!existing) return;
     const roles = mergeRoles(existing.roles, existing.role, patch.role);
+    const scopes = mergeScopes(existing.scopes, patch.scopes);
     state.pairedByDeviceId[deviceId] = {
       ...existing,
       ...patch,
@@ -276,6 +291,7 @@ export async function updatePairedDeviceMetadata(
       approvedAtMs: existing.approvedAtMs,
       role: patch.role ?? existing.role,
       roles,
+      scopes,
     };
     await persistState(state, baseDir);
   });

@@ -138,6 +138,10 @@ import {
   SessionsResolveParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
+  type SkillsBinsParams,
+  SkillsBinsParamsSchema,
+  type SkillsBinsResult,
+  SkillsBinsResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
   type SkillsStatusParams,
@@ -247,6 +251,7 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
+export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
@@ -424,6 +429,8 @@ export type {
   AgentsListParams,
   AgentsListResult,
   SkillsStatusParams,
+  SkillsBinsParams,
+  SkillsBinsResult,
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,

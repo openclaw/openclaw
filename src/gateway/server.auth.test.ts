@@ -150,6 +150,12 @@ describe("gateway server auth/connect", () => {
               platform: "web",
               mode: "webchat",
             },
+            device: {
+              id: 123,
+              publicKey: "bad",
+              signature: "bad",
+              signedAt: "bad",
+            },
           },
         }),
       );

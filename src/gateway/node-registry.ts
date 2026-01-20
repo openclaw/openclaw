@@ -155,6 +155,7 @@ export class NodeRegistry {
   }): boolean {
     const pending = this.pendingInvokes.get(params.id);
     if (!pending) return false;
+    if (pending.nodeId !== params.nodeId) return false;
     clearTimeout(pending.timer);
     this.pendingInvokes.delete(params.id);
     pending.resolve({

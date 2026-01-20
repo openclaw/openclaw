@@ -2713,6 +2713,29 @@ macOS app behavior:
 }
 ```
 
+### `gateway.nodes` (Node command allowlist)
+
+The Gateway enforces a per-platform command allowlist for `node.invoke`. Nodes must both
+**declare** a command and have it **allowed** by the Gateway to run it.
+
+Use this section to extend or deny commands:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      allowCommands: ["custom.vendor.command"], // extra commands beyond defaults
+      denyCommands: ["sms.send"]      // block a command even if declared
+    }
+  }
+}
+```
+
+Notes:
+- `allowCommands` extends the built-in per-platform defaults.
+- `denyCommands` always wins (even if the node claims the command).
+- `node.invoke` rejects commands that are not declared by the node.
+
 ### `gateway.reload` (Config hot reload)
 
 The Gateway watches `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`) and applies changes automatically.

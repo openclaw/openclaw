@@ -27,6 +27,7 @@ const BASE_METHODS = [
   "models.list",
   "agents.list",
   "skills.status",
+  "skills.bins",
   "skills.install",
   "skills.update",
   "update.run",

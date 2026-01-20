@@ -44,6 +44,15 @@ export const ModelsListResultSchema = Type.Object(
 
 export const SkillsStatusParamsSchema = Type.Object({}, { additionalProperties: false });
 
+export const SkillsBinsParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const SkillsBinsResultSchema = Type.Object(
+  {
+    bins: Type.Array(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsInstallParamsSchema = Type.Object(
   {
     name: NonEmptyString,

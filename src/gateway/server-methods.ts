@@ -25,11 +25,13 @@ import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
 const ADMIN_SCOPE = "operator.admin";
+const READ_SCOPE = "operator.read";
+const WRITE_SCOPE = "operator.write";
 const APPROVALS_SCOPE = "operator.approvals";
 const PAIRING_SCOPE = "operator.pairing";
 
 const APPROVAL_METHODS = new Set(["exec.approval.request", "exec.approval.resolve"]);
-const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event"]);
+const NODE_ROLE_METHODS = new Set(["node.invoke.result", "node.event", "skills.bins"]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
   "node.pair.list",
@@ -39,15 +41,51 @@ const PAIRING_METHODS = new Set([
   "device.pair.list",
   "device.pair.approve",
   "device.pair.reject",
+  "node.rename",
 ]);
 const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
+const READ_METHODS = new Set([
+  "health",
+  "logs.tail",
+  "channels.status",
+  "status",
+  "usage.status",
+  "usage.cost",
+  "models.list",
+  "agents.list",
+  "skills.status",
+  "voicewake.get",
+  "sessions.list",
+  "cron.list",
+  "cron.status",
+  "cron.runs",
+  "system-presence",
+  "last-heartbeat",
+  "node.list",
+  "node.describe",
+  "chat.history",
+]);
+const WRITE_METHODS = new Set([
+  "send",
+  "agent",
+  "agent.wait",
+  "wake",
+  "talk.mode",
+  "voicewake.set",
+  "node.invoke",
+  "chat.send",
+  "chat.abort",
+]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
   if (!client?.connect) return null;
   const role = client.connect.role ?? "operator";
   const scopes = client.connect.scopes ?? [];
+  if (NODE_ROLE_METHODS.has(method)) {
+    if (role === "node") return null;
+    return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
+  }
   if (role === "node") {
-    if (NODE_ROLE_METHODS.has(method)) return null;
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role !== "operator") {
@@ -60,10 +98,38 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (PAIRING_METHODS.has(method) && !scopes.includes(PAIRING_SCOPE)) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.pairing");
   }
+  if (READ_METHODS.has(method) && !(scopes.includes(READ_SCOPE) || scopes.includes(WRITE_SCOPE))) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.read");
+  }
+  if (WRITE_METHODS.has(method) && !scopes.includes(WRITE_SCOPE)) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.write");
+  }
+  if (APPROVAL_METHODS.has(method)) return null;
+  if (PAIRING_METHODS.has(method)) return null;
+  if (READ_METHODS.has(method)) return null;
+  if (WRITE_METHODS.has(method)) return null;
   if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
     return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
   }
-  return null;
+  if (
+    method.startsWith("config.") ||
+    method.startsWith("wizard.") ||
+    method.startsWith("update.") ||
+    method === "channels.logout" ||
+    method === "skills.install" ||
+    method === "skills.update" ||
+    method === "cron.add" ||
+    method === "cron.update" ||
+    method === "cron.remove" ||
+    method === "cron.run" ||
+    method === "sessions.patch" ||
+    method === "sessions.reset" ||
+    method === "sessions.delete" ||
+    method === "sessions.compact"
+  ) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
+  }
+  return errorShape(ErrorCodes.INVALID_REQUEST, "missing scope: operator.admin");
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {

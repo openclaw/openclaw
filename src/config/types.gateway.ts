@@ -170,6 +170,13 @@ export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
 };
 
+export type GatewayNodesConfig = {
+  /** Additional node.invoke commands to allow on the gateway. */
+  allowCommands?: string[];
+  /** Commands to deny even if they appear in the defaults or node claims. */
+  denyCommands?: string[];
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -196,4 +203,5 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  nodes?: GatewayNodesConfig;
 };

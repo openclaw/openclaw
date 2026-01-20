@@ -341,6 +341,13 @@ export const ClawdbotSchema = z
           })
           .strict()
           .optional(),
+        nodes: z
+          .object({
+            allowCommands: z.array(z.string()).optional(),
+            denyCommands: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

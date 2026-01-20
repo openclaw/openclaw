@@ -123,6 +123,11 @@ Nodes declare capability claims at connect time:
 
 The Gateway treats these as **claims** and enforces server-side allowlists.
 
+### Node helper methods
+
+- Nodes may call `skills.bins` to fetch the current list of skill executables
+  for auto-allow checks.
+
 ## Versioning
 
 - `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.
@@ -144,6 +149,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
+- All WS clients must include `device` identity during `connect` (operator + node).
 
 ## TLS + pinning
 
