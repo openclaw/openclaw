@@ -1,5 +1,6 @@
 import { resolveTalkApiKey } from "./talk.js";
 import type { ClawdbotConfig } from "./types.js";
+import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 
 type WarnState = { warned: boolean };
 
@@ -101,6 +102,43 @@ export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
     agents: {
       ...cfg.agents,
       defaults: { ...existingAgent, models: nextModels },
+    },
+  };
+}
+
+export function applyAgentDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const agents = cfg.agents;
+  const defaults = agents?.defaults;
+  const hasMax =
+    typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
+  const hasSubMax =
+    typeof defaults?.subagents?.maxConcurrent === "number" &&
+    Number.isFinite(defaults.subagents.maxConcurrent);
+  if (hasMax && hasSubMax) return cfg;
+
+  let mutated = false;
+  const nextDefaults = defaults ? { ...defaults } : {};
+  if (!hasMax) {
+    nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
+    mutated = true;
+  }
+
+  const nextSubagents = defaults?.subagents ? { ...defaults.subagents } : {};
+  if (!hasSubMax) {
+    nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
+    mutated = true;
+  }
+
+  if (!mutated) return cfg;
+
+  return {
+    ...cfg,
+    agents: {
+      ...agents,
+      defaults: {
+        ...nextDefaults,
+        subagents: nextSubagents,
+      },
     },
   };
 }
