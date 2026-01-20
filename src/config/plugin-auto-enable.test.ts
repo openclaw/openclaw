@@ -13,7 +13,7 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "slack"]);
-    expect(result.changes.join("\n")).toContain('Enabled plugin "slack"');
+    expect(result.changes.join("\n")).toContain("Slack configured, not enabled yet.");
   });
 
   it("respects explicit disable", () => {
@@ -74,8 +74,8 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBeUndefined();
-      expect(result.changes.join("\n")).toContain('Enabled plugin "bluebubbles"');
-      expect(result.changes.join("\n")).not.toContain('Enabled plugin "imessage"');
+      expect(result.changes.join("\n")).toContain("bluebubbles configured, not enabled yet.");
+      expect(result.changes.join("\n")).not.toContain("iMessage configured, not enabled yet.");
     });
 
     it("keeps imessage enabled if already explicitly enabled (non-destructive)", () => {
@@ -108,7 +108,7 @@ describe("applyPluginAutoEnable", () => {
 
       expect(result.config.plugins?.entries?.bluebubbles?.enabled).toBe(false);
       expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain('Enabled plugin "imessage"');
+      expect(result.changes.join("\n")).toContain("iMessage configured, not enabled yet.");
     });
 
     it("allows imessage auto-enable when bluebubbles is in deny list", () => {
@@ -136,7 +136,7 @@ describe("applyPluginAutoEnable", () => {
       });
 
       expect(result.config.plugins?.entries?.imessage?.enabled).toBe(true);
-      expect(result.changes.join("\n")).toContain('Enabled plugin "imessage"');
+      expect(result.changes.join("\n")).toContain("iMessage configured, not enabled yet.");
     });
   });
 });

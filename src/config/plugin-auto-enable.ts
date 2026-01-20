@@ -335,6 +335,16 @@ function enablePluginEntry(cfg: ClawdbotConfig, pluginId: string): ClawdbotConfi
   };
 }
 
+function formatAutoEnableChange(entry: PluginEnableChange): string {
+  let reason = entry.reason.trim();
+  const channelId = normalizeChatChannelId(entry.pluginId);
+  if (channelId) {
+    const label = getChatChannelMeta(channelId).label;
+    reason = reason.replace(new RegExp(`^${channelId}\\b`, "i"), label);
+  }
+  return `${reason}, not enabled yet.`;
+}
+
 export function applyPluginAutoEnable(params: {
   config: ClawdbotConfig;
   env?: NodeJS.ProcessEnv;
@@ -362,7 +372,7 @@ export function applyPluginAutoEnable(params: {
     if (alreadyEnabled && !allowMissing) continue;
     next = enablePluginEntry(next, entry.pluginId);
     next = ensureAllowlisted(next, entry.pluginId);
-    changes.push(`Enabled plugin "${entry.pluginId}" (${entry.reason}).`);
+    changes.push(formatAutoEnableChange(entry));
   }
 
   return { config: next, changes };
