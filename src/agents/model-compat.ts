@@ -1,9 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 
-function isOpenAICompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {
-  return model.api === "openai-completions";
-}
-
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const isOpenAICompletionsModel = (
     candidate: Model<Api>,
