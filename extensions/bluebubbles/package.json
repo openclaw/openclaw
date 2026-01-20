@@ -9,9 +9,17 @@
       "id": "bluebubbles",
       "label": "BlueBubbles",
       "selectionLabel": "BlueBubbles (macOS app)",
+      "detailLabel": "BlueBubbles",
       "docsPath": "/channels/bluebubbles",
       "docsLabel": "bluebubbles",
       "blurb": "iMessage via the BlueBubbles mac app + REST API.",
+      "aliases": [
+        "bb"
+      ],
+      "preferOver": [
+        "imessage"
+      ],
+      "systemImage": "bubble.left.and.text.bubble.right",
       "order": 75
     },
     "install": {

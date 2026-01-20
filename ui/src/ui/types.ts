@@ -2,10 +2,14 @@ export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
   channelLabels: Record<string, string>;
+  channelDetailLabels?: Record<string, string>;
+  channelSystemImages?: Record<string, string>;
   channels: Record<string, unknown>;
   channelAccounts: Record<string, ChannelAccountSnapshot[]>;
   channelDefaultAccountId: Record<string, string>;
 };
+
+export const CRON_CHANNEL_LAST = "last";
 
 export type ChannelAccountSnapshot = {
   accountId: string;
@@ -324,16 +328,8 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      provider?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams"
-        | "bluebubbles";
+      channel?: string;
+      provider?: string;
       to?: string;
       bestEffortDeliver?: boolean;
     };

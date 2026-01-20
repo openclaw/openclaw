@@ -33,17 +33,21 @@ function toChannelMeta(params: {
   const label = params.channel.label?.trim();
   if (!label) return null;
   const selectionLabel = params.channel.selectionLabel?.trim() || label;
+  const detailLabel = params.channel.detailLabel?.trim();
   const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
   const blurb = params.channel.blurb?.trim() || "";
+  const systemImage = params.channel.systemImage?.trim();
 
   return {
     id: params.id,
     label,
     selectionLabel,
+    ...(detailLabel ? { detailLabel } : {}),
     docsPath,
     docsLabel: params.channel.docsLabel?.trim() || undefined,
     blurb,
     ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
+    ...(params.channel.preferOver ? { preferOver: params.channel.preferOver } : {}),
     ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
     ...(params.channel.selectionDocsPrefix
       ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
@@ -52,6 +56,7 @@ function toChannelMeta(params: {
       ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
       : {}),
     ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
+    ...(systemImage ? { systemImage } : {}),
     ...(params.channel.showConfigured !== undefined
       ? { showConfigured: params.channel.showConfigured }
       : {}),

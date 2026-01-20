@@ -8,13 +8,20 @@ extension CronSettings {
             self.content
             Spacer(minLength: 0)
         }
-        .onAppear { self.store.start() }
-        .onDisappear { self.store.stop() }
+        .onAppear {
+            self.store.start()
+            self.channelsStore.start()
+        }
+        .onDisappear {
+            self.store.stop()
+            self.channelsStore.stop()
+        }
         .sheet(isPresented: self.$showEditor) {
             CronJobEditor(
                 job: self.editingJob,
                 isSaving: self.$isSaving,
                 error: self.$editorError,
+                channelsStore: self.channelsStore,
                 onCancel: {
                     self.showEditor = false
                     self.editingJob = nil

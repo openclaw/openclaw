@@ -4,15 +4,12 @@ import { requireActivePluginRegistry } from "../plugins/runtime.js";
 
 // Channel docking: add new core channels here (order + meta + aliases), then
 // register the plugin in its extension entrypoint and keep protocol IDs in sync.
-// BlueBubbles placed before imessage per Gate C decision: prefer BlueBubbles
-// for iMessage use cases when both are available.
 export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
   "discord",
   "slack",
   "signal",
-  "bluebubbles",
   "imessage",
 ] as const;
 
@@ -31,9 +28,11 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     id: "telegram",
     label: "Telegram",
     selectionLabel: "Telegram (Bot API)",
+    detailLabel: "Telegram Bot",
     docsPath: "/channels/telegram",
     docsLabel: "telegram",
     blurb: "simplest way to get started — register a bot with @BotFather and get going.",
+    systemImage: "paperplane",
     selectionDocsPrefix: "",
     selectionDocsOmitLabel: true,
     selectionExtras: [WEBSITE_URL],
@@ -42,55 +41,56 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     id: "whatsapp",
     label: "WhatsApp",
     selectionLabel: "WhatsApp (QR link)",
+    detailLabel: "WhatsApp Web",
     docsPath: "/channels/whatsapp",
     docsLabel: "whatsapp",
     blurb: "works with your own number; recommend a separate phone + eSIM.",
+    systemImage: "message",
   },
   discord: {
     id: "discord",
     label: "Discord",
     selectionLabel: "Discord (Bot API)",
+    detailLabel: "Discord Bot",
     docsPath: "/channels/discord",
     docsLabel: "discord",
     blurb: "very well supported right now.",
+    systemImage: "bubble.left.and.bubble.right",
   },
   slack: {
     id: "slack",
     label: "Slack",
     selectionLabel: "Slack (Socket Mode)",
+    detailLabel: "Slack Bot",
     docsPath: "/channels/slack",
     docsLabel: "slack",
     blurb: "supported (Socket Mode).",
+    systemImage: "number",
   },
   signal: {
     id: "signal",
     label: "Signal",
     selectionLabel: "Signal (signal-cli)",
+    detailLabel: "Signal REST",
     docsPath: "/channels/signal",
     docsLabel: "signal",
     blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
-  },
-  bluebubbles: {
-    id: "bluebubbles",
-    label: "BlueBubbles",
-    selectionLabel: "BlueBubbles (macOS app)",
-    docsPath: "/channels/bluebubbles",
-    docsLabel: "bluebubbles",
-    blurb: "recommended for iMessage — uses the BlueBubbles mac app + REST API.",
+    systemImage: "antenna.radiowaves.left.and.right",
   },
   imessage: {
     id: "imessage",
     label: "iMessage",
     selectionLabel: "iMessage (imsg)",
+    detailLabel: "iMessage",
     docsPath: "/channels/imessage",
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
+    systemImage: "message.fill",
   },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
-  bb: "bluebubbles",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

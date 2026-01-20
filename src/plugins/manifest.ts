@@ -95,11 +95,14 @@ export type PluginPackageChannel = {
   id?: string;
   label?: string;
   selectionLabel?: string;
+  detailLabel?: string;
   docsPath?: string;
   docsLabel?: string;
   blurb?: string;
   order?: number;
   aliases?: string[];
+  preferOver?: string[];
+  systemImage?: string;
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: string[];

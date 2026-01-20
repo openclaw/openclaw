@@ -47,7 +47,7 @@ struct CronSettings_Previews: PreviewProvider {
                 durationMs: 1234,
                 nextRunAtMs: nil),
         ]
-        return CronSettings(store: store)
+        return CronSettings(store: store, channelsStore: ChannelsStore(isPreview: true))
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
     }
 }
@@ -103,7 +103,7 @@ extension CronSettings {
         store.selectedJobId = job.id
         store.runEntries = [run]
 
-        let view = CronSettings(store: store)
+        let view = CronSettings(store: store, channelsStore: ChannelsStore(isPreview: true))
         _ = view.body
         _ = view.jobRow(job)
         _ = view.jobContextMenu(job)

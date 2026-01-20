@@ -188,10 +188,24 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
+    const channelLabels = Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.meta.label]));
+    const channelDetailLabels = Object.fromEntries(
+      plugins.map((plugin) => [
+        plugin.id,
+        plugin.meta.detailLabel ?? plugin.meta.selectionLabel ?? plugin.meta.label,
+      ]),
+    );
+    const channelSystemImages = Object.fromEntries(
+      plugins.flatMap((plugin) =>
+        plugin.meta.systemImage ? [[plugin.id, plugin.meta.systemImage]] : [],
+      ),
+    );
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: plugins.map((plugin) => plugin.id),
-      channelLabels: Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.meta.label])),
+      channelLabels,
+      channelDetailLabels,
+      channelSystemImages,
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,

@@ -307,6 +307,7 @@ export async function loadChannelsTab(host: SettingsHost) {
 
 export async function loadCron(host: SettingsHost) {
   await Promise.all([
+    loadChannels(host as unknown as ClawdbotApp, false),
     loadCronStatus(host as unknown as ClawdbotApp),
     loadCronJobs(host as unknown as ClawdbotApp),
   ]);

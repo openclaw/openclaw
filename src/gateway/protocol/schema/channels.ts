@@ -60,6 +60,8 @@ export const ChannelsStatusResultSchema = Type.Object(
     ts: Type.Integer({ minimum: 0 }),
     channelOrder: Type.Array(NonEmptyString),
     channelLabels: Type.Record(NonEmptyString, NonEmptyString),
+    channelDetailLabels: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+    channelSystemImages: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     channels: Type.Record(NonEmptyString, Type.Unknown()),
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),

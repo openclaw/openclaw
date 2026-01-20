@@ -10,6 +10,24 @@
   "clawdbot": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "channel": {
+      "id": "zalouser",
+      "label": "Zalo Personal",
+      "selectionLabel": "Zalo (Personal Account)",
+      "docsPath": "/channels/zalouser",
+      "docsLabel": "zalouser",
+      "blurb": "Zalo personal account via QR code login.",
+      "aliases": [
+        "zlu"
+      ],
+      "order": 85,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@clawdbot/zalouser",
+      "localPath": "extensions/zalouser",
+      "defaultChoice": "npm"
+    }
   }
 }

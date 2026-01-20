@@ -27,6 +27,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     error: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
+    channels: [],
+    channelLabels: {},
     runsJobId: null,
     runs: [],
     onFormChange: () => undefined,

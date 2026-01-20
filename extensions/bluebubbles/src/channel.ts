@@ -6,10 +6,10 @@ import {
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
-  getChatChannelMeta,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
   PAIRING_APPROVED_MESSAGE,
+  resolveBlueBubblesGroupRequireMention,
   setAccountEnabledInConfigSection,
 } from "clawdbot/plugin-sdk";
 
@@ -32,11 +32,18 @@ import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./moni
 import { blueBubblesOnboardingAdapter } from "./onboarding.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
 
-// Use core registry meta for consistency (Gate A: core registry).
-// BlueBubbles is positioned before imessage per Gate C preference.
 const meta = {
-  ...getChatChannelMeta("bluebubbles"),
+  id: "bluebubbles",
+  label: "BlueBubbles",
+  selectionLabel: "BlueBubbles (macOS app)",
+  detailLabel: "BlueBubbles",
+  docsPath: "/channels/bluebubbles",
+  docsLabel: "bluebubbles",
+  blurb: "iMessage via the BlueBubbles mac app + REST API.",
+  systemImage: "bubble.left.and.text.bubble.right",
+  aliases: ["bb"],
   order: 75,
+  preferOver: ["imessage"],
 };
 
 export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
@@ -51,6 +58,16 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
     reply: true,
     effects: true,
     groupManagement: true,
+  },
+  groups: {
+    resolveRequireMention: resolveBlueBubblesGroupRequireMention,
+  },
+  threading: {
+    buildToolContext: ({ context, hasRepliedRef }) => ({
+      currentChannelId: context.To?.trim() || undefined,
+      currentThreadTs: context.ReplyToId,
+      hasRepliedRef,
+    }),
   },
   reload: { configPrefixes: ["channels.bluebubbles"] },
   configSchema: buildChannelConfigSchema(BlueBubblesConfigSchema),

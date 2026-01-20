@@ -74,10 +74,13 @@ export type ChannelMeta = {
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: string[];
+  detailLabel?: string;
+  systemImage?: string;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
+  preferOver?: string[];
 };
 
 export type ChannelAccountSnapshot = {

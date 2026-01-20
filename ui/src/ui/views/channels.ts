@@ -88,7 +88,7 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
   }
-  return ["whatsapp", "telegram", "discord", "slack", "signal", "imessage", "bluebubbles"];
+  return ["whatsapp", "telegram", "discord", "slack", "signal", "imessage"];
 }
 
 function renderChannel(
