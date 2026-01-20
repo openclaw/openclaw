@@ -14,6 +14,8 @@ export type GatewayBonjourBeacon = {
   gatewayTls?: boolean;
   gatewayTlsFingerprintSha256?: string;
   cliPath?: string;
+  role?: string;
+  transport?: string;
   txt?: Record<string, string>;
 };
 
@@ -211,6 +213,8 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
     beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
   }
   if (txt.gatewayTlsSha256) beacon.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
+  if (txt.role) beacon.role = txt.role;
+  if (txt.transport) beacon.transport = txt.transport;
 
   if (!beacon.displayName) beacon.displayName = decodedInstanceName;
   return beacon;
@@ -351,6 +355,8 @@ async function discoverWideAreaViaTailnetDns(
       beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
     }
     if (txtMap.gatewayTlsSha256) beacon.gatewayTlsFingerprintSha256 = txtMap.gatewayTlsSha256;
+    if (txtMap.role) beacon.role = txtMap.role;
+    if (txtMap.transport) beacon.transport = txtMap.transport;
 
     results.push(beacon);
   }
@@ -409,6 +415,8 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
         current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
       }
       if (txt.gatewayTlsSha256) current.gatewayTlsFingerprintSha256 = txt.gatewayTlsSha256;
+      if (txt.role) current.role = txt.role;
+      if (txt.transport) current.transport = txt.transport;
     }
   }
 

@@ -82,6 +82,12 @@ export function renderBeaconLines(beacon: GatewayBonjourBeacon, rich: boolean): 
   if (wsUrl) {
     lines.push(`  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`);
   }
+  if (beacon.role) {
+    lines.push(`  ${colorize(rich, theme.muted, "role")}: ${beacon.role}`);
+  }
+  if (beacon.transport) {
+    lines.push(`  ${colorize(rich, theme.muted, "transport")}: ${beacon.transport}`);
+  }
   if (beacon.gatewayTls) {
     const fingerprint = beacon.gatewayTlsFingerprintSha256
       ? `sha256 ${beacon.gatewayTlsFingerprintSha256}`
