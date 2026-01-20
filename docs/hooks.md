@@ -235,6 +235,12 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+### Tool Result Hooks (Plugin API)
+
+These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before Clawdbot persists them.
+
+- **`tool_result_persist`**: transform tool results before they are written to the session transcript. Must be synchronous; return the updated tool result payload or `undefined` to keep it as-is. See [Agent Loop](/concepts/agent-loop).
+
 ### Future Events
 
 Planned event types:
