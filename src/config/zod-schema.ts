@@ -73,7 +73,7 @@ export const ClawdbotSchema = z
       .optional(),
     update: z
       .object({
-        channel: z.union([z.literal("stable"), z.literal("beta")]).optional(),
+        channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
         checkOnStart: z.boolean().optional(),
       })
       .strict()

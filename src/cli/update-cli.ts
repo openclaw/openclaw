@@ -13,6 +13,13 @@ import {
   type UpdateStepInfo,
   type UpdateStepProgress,
 } from "../infra/update-runner.js";
+import {
+  channelToNpmTag,
+  DEFAULT_GIT_CHANNEL,
+  DEFAULT_PACKAGE_CHANNEL,
+  normalizeUpdateChannel,
+  type UpdateChannel,
+} from "../infra/update-channels.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { formatCliCommand } from "./command-format.js";
@@ -40,9 +47,6 @@ const STEP_LABELS: Record<string, string> = {
   "global update": "Updating via package manager",
 };
 
-type UpdateChannel = "stable" | "beta";
-
-const DEFAULT_UPDATE_CHANNEL: UpdateChannel = "stable";
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
   "Fresh code, same lobster. Miss me?",
@@ -66,22 +70,11 @@ const UPDATE_QUIPS = [
   "Version bump! Same chaos energy, fewer crashes (probably).",
 ];
 
-function normalizeChannel(value?: string | null): UpdateChannel | null {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "stable" || normalized === "beta") return normalized;
-  return null;
-}
-
 function normalizeTag(value?: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed.startsWith("clawdbot@") ? trimmed.slice("clawdbot@".length) : trimmed;
-}
-
-function channelToTag(channel: UpdateChannel): string {
-  return channel === "beta" ? "beta" : "latest";
 }
 
 function pickUpdateQuip(): string {
@@ -263,12 +256,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const configSnapshot = await readConfigFileSnapshot();
   const storedChannel = configSnapshot.valid
-    ? normalizeChannel(configSnapshot.config.update?.channel)
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
     : null;
 
-  const requestedChannel = normalizeChannel(opts.channel);
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(`--channel must be "stable" or "beta" (got "${opts.channel}")`);
+    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
     defaultRuntime.exit(1);
     return;
   }
@@ -279,10 +272,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  const channel = requestedChannel ?? storedChannel ?? DEFAULT_UPDATE_CHANNEL;
-  const tag = normalizeTag(opts.tag) ?? channelToTag(channel);
-
   const gitCheckout = await isGitCheckout(root);
+  const defaultChannel = gitCheckout ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
+  const channel = requestedChannel ?? storedChannel ?? defaultChannel;
+  const tag = normalizeTag(opts.tag) ?? channelToNpmTag(channel);
   if (!gitCheckout) {
     const currentVersion = await readPackageVersion(root);
     const targetVersion = await resolveTargetVersion(tag, timeoutMs);
@@ -317,9 +310,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         return;
       }
     }
-  } else if ((opts.channel || opts.tag) && !opts.json) {
+  } else if (opts.tag && !opts.json) {
     defaultRuntime.log(
-      theme.muted("Note: --channel/--tag apply to npm installs only; git updates ignore them."),
+      theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
   }
 
@@ -351,6 +344,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     argv1: process.argv[1],
     timeoutMs,
     progress,
+    channel,
     tag,
   });
 
@@ -445,7 +439,7 @@ export function registerUpdateCli(program: Command) {
     .description("Update Clawdbot to the latest version")
     .option("--json", "Output result as JSON", false)
     .option("--restart", "Restart the gateway daemon after a successful update", false)
-    .option("--channel <stable|beta>", "Persist update channel (npm installs only)")
+    .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
     .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
     .addHelpText(
@@ -454,7 +448,8 @@ export function registerUpdateCli(program: Command) {
         `
 Examples:
   clawdbot update                   # Update a source checkout (git)
-  clawdbot update --channel beta    # Switch to the beta channel (npm installs)
+  clawdbot update --channel beta    # Switch to beta channel (git + npm)
+  clawdbot update --channel dev     # Switch to dev channel (git + npm)
   clawdbot update --tag beta        # One-off update to a dist-tag or version
   clawdbot update --restart         # Update and restart the daemon
   clawdbot update --json            # Output result as JSON

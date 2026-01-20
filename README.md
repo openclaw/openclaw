@@ -71,6 +71,15 @@ clawdbot agent --message "Ship checklist" --thinking high
 
 Upgrading? [Updating guide](https://docs.clawd.bot/install/updating) (and run `clawdbot doctor`).
 
+## Development channels
+
+- **stable**: tagged releases (`vYYYY.M.D` or `vYYYY.M.D-<patch>`), npm dist-tag `latest`.
+- **beta**: prerelease tags (`vYYYY.M.D-beta.N`), npm dist-tag `beta` (macOS app may be missing).
+- **dev**: moving head of `main`, npm dist-tag `dev` (when published).
+
+Switch channels (git + npm): `clawdbot update --channel stable|beta|dev`.
+Details: [Development channels](https://docs.clawd.bot/install/development-channels).
+
 ## From source (development)
 
 Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.

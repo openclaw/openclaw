@@ -55,8 +55,8 @@ export type ClawdbotConfig = {
   };
   logging?: LoggingConfig;
   update?: {
-    /** Update channel for npm installs ("stable" or "beta"). */
-    channel?: "stable" | "beta";
+    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
+    channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
   };
