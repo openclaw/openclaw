@@ -1,9 +1,12 @@
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
+const cpuCount = os.cpus().length;
+const localWorkers = Math.min(16, Math.max(4, Math.floor(cpuCount * 0.5)));
 
 export default defineConfig({
   resolve: {
@@ -15,7 +18,7 @@ export default defineConfig({
     testTimeout: 60_000,
     hookTimeout: 120_000,
     pool: "forks",
-    maxWorkers: isCI ? 3 : 4,
+    maxWorkers: isCI ? 3 : localWorkers,
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
