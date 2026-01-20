@@ -131,3 +131,38 @@ describe("sendMessageMatrix media", () => {
     expect(content.file?.url).toBe("mxc://example/file");
   });
 });
+
+describe("sendMessageMatrix threads", () => {
+  beforeAll(async () => {
+    setMatrixRuntime(runtimeStub);
+    ({ sendMessageMatrix } = await import("./send.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMatrixRuntime(runtimeStub);
+  });
+
+  it("includes thread relation metadata when threadId is set", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello thread", {
+      client,
+      threadId: "$thread",
+    });
+
+    const content = sendMessage.mock.calls[0]?.[1] as {
+      "m.relates_to"?: {
+        rel_type?: string;
+        event_id?: string;
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(content["m.relates_to"]).toMatchObject({
+      rel_type: "m.thread",
+      event_id: "$thread",
+      "m.in_reply_to": { event_id: "$thread" },
+    });
+  });
+});

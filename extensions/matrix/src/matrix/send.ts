@@ -56,8 +56,17 @@ type MatrixReplyRelation = {
   "m.in_reply_to": { event_id: string };
 };
 
+type MatrixThreadRelation = {
+  rel_type: typeof RelationType.Thread;
+  event_id: string;
+  is_falling_back?: boolean;
+  "m.in_reply_to"?: { event_id: string };
+};
+
+type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
+
 type MatrixReplyMeta = {
-  "m.relates_to"?: MatrixReplyRelation;
+  "m.relates_to"?: MatrixRelation;
 };
 
 type MatrixMediaInfo = FileWithThumbnailInfo | DimensionalFileInfo | TimedFileInfo | VideoFileInfo;
@@ -234,7 +243,7 @@ function buildMediaContent(params: {
   filename?: string;
   mimetype?: string;
   size: number;
-  relation?: MatrixReplyRelation;
+  relation?: MatrixRelation;
   isVoice?: boolean;
   durationMs?: number;
   imageInfo?: DimensionalFileInfo;
@@ -275,7 +284,7 @@ function buildMediaContent(params: {
   return base;
 }
 
-function buildTextContent(body: string, relation?: MatrixReplyRelation): MatrixTextContent {
+function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
         msgtype: MsgType.Text,
@@ -301,6 +310,16 @@ function buildReplyRelation(replyToId?: string): MatrixReplyRelation | undefined
   const trimmed = replyToId?.trim();
   if (!trimmed) return undefined;
   return { "m.in_reply_to": { event_id: trimmed } };
+}
+
+function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
+  const trimmed = threadId.trim();
+  return {
+    rel_type: RelationType.Thread,
+    event_id: trimmed,
+    is_falling_back: true,
+    "m.in_reply_to": { event_id: (replyToId?.trim() || trimmed) },
+  };
 }
 
 function resolveMatrixMsgType(
@@ -468,6 +487,14 @@ async function resolveMatrixClient(opts: {
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
   });
+  if (auth.encryption && client.crypto) {
+    try {
+      const joinedRooms = await client.getJoinedRooms();
+      await client.crypto.prepare(joinedRooms);
+    } catch {
+      // Ignore crypto prep failures for one-off sends; normal sync will retry.
+    }
+  }
   // matrix-bot-sdk uses start() instead of startClient()
   await client.start();
   return { client, stopOnDone: true };
@@ -493,7 +520,9 @@ export async function sendMessageMatrix(
     const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
     const chunks = getCore().channel.text.chunkMarkdownText(trimmedMessage, chunkLimit);
     const threadId = normalizeThreadId(opts.threadId);
-    const relation = threadId ? undefined : buildReplyRelation(opts.replyToId);
+    const relation = threadId
+      ? buildThreadRelation(threadId, opts.replyToId)
+      : buildReplyRelation(opts.replyToId);
     const sendContent = async (content: MatrixOutboundContent) => {
       // matrix-bot-sdk uses sendMessage differently
       const eventId = await client.sendMessage(roomId, content);
@@ -541,10 +570,11 @@ export async function sendMessageMatrix(
       const eventId = await sendContent(content);
       lastMessageId = eventId ?? lastMessageId;
       const textChunks = useVoice ? chunks : rest;
+      const followupRelation = threadId ? relation : undefined;
       for (const chunk of textChunks) {
         const text = chunk.trim();
         if (!text) continue;
-        const followup = buildTextContent(text);
+        const followup = buildTextContent(text, followupRelation);
         const followupEventId = await sendContent(followup);
         lastMessageId = followupEventId ?? lastMessageId;
       }
@@ -588,8 +618,12 @@ export async function sendPollMatrix(
   try {
     const roomId = await resolveMatrixRoomId(client, to);
     const pollContent = buildPollStartContent(poll);
+    const threadId = normalizeThreadId(opts.threadId);
+    const pollPayload = threadId
+      ? { ...pollContent, "m.relates_to": buildThreadRelation(threadId) }
+      : pollContent;
     // matrix-bot-sdk sendEvent returns eventId string directly
-    const eventId = await client.sendEvent(roomId, M_POLL_START, pollContent);
+    const eventId = await client.sendEvent(roomId, M_POLL_START, pollPayload);
 
     return {
       eventId: eventId ?? "unknown",

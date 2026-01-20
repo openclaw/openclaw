@@ -129,6 +129,14 @@ async function resolveActionClient(opts: MatrixActionClientOpts = {}): Promise<M
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
   });
+  if (auth.encryption && client.crypto) {
+    try {
+      const joinedRooms = await client.getJoinedRooms();
+      await client.crypto.prepare(joinedRooms);
+    } catch {
+      // Ignore crypto prep failures for one-off actions.
+    }
+  }
   await client.start();
   return { client, stopOnDone: true };
 }

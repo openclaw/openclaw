@@ -36,9 +36,13 @@ export function registerMatrixAutoJoin(params: {
     
     // Get room alias if available
     let alias: string | undefined;
+    let altAliases: string[] = [];
     try {
-      const aliasState = await client.getRoomStateEvent(roomId, "m.room.canonical_alias", "").catch(() => null);
+      const aliasState = await client
+        .getRoomStateEvent(roomId, "m.room.canonical_alias", "")
+        .catch(() => null);
       alias = aliasState?.alias;
+      altAliases = Array.isArray(aliasState?.alt_aliases) ? aliasState.alt_aliases : [];
     } catch {
       // Ignore errors
     }
@@ -46,7 +50,8 @@ export function registerMatrixAutoJoin(params: {
     const allowed =
       autoJoinAllowlist.includes("*") ||
       autoJoinAllowlist.includes(roomId) ||
-      (alias ? autoJoinAllowlist.includes(alias) : false);
+      (alias ? autoJoinAllowlist.includes(alias) : false) ||
+      altAliases.some((value) => autoJoinAllowlist.includes(value));
 
     if (!allowed) {
       logVerbose(`matrix: invite ignored (not in allowlist) room=${roomId}`);

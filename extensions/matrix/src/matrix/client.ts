@@ -1,3 +1,8 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import {
   ConsoleLogger,
   LogService,
@@ -90,6 +95,139 @@ function clean(value?: string): string {
   return value?.trim() ?? "";
 }
 
+const DEFAULT_ACCOUNT_KEY = "default";
+const STORAGE_META_FILENAME = "storage-meta.json";
+
+type MatrixStoragePaths = {
+  rootDir: string;
+  storagePath: string;
+  cryptoPath: string;
+  metaPath: string;
+  accountKey: string;
+  tokenHash: string;
+};
+
+function sanitizePathSegment(value: string): string {
+  const cleaned = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return cleaned || "unknown";
+}
+
+function resolveHomeserverKey(homeserver: string): string {
+  try {
+    const url = new URL(homeserver);
+    if (url.host) return sanitizePathSegment(url.host);
+  } catch {
+    // fall through
+  }
+  return sanitizePathSegment(homeserver);
+}
+
+function hashAccessToken(accessToken: string): string {
+  return crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
+}
+
+function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
+  storagePath: string;
+  cryptoPath: string;
+} {
+  const stateDir = getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  return {
+    storagePath: path.join(stateDir, "matrix", "bot-storage.json"),
+    cryptoPath: path.join(stateDir, "matrix", "crypto"),
+  };
+}
+
+function resolveMatrixStoragePaths(params: {
+  homeserver: string;
+  userId: string;
+  accessToken: string;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): MatrixStoragePaths {
+  const env = params.env ?? process.env;
+  const stateDir = getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  const accountKey = sanitizePathSegment(params.accountId ?? DEFAULT_ACCOUNT_KEY);
+  const userKey = sanitizePathSegment(params.userId);
+  const serverKey = resolveHomeserverKey(params.homeserver);
+  const tokenHash = hashAccessToken(params.accessToken);
+  const rootDir = path.join(
+    stateDir,
+    "matrix",
+    "accounts",
+    accountKey,
+    `${serverKey}__${userKey}`,
+    tokenHash,
+  );
+  return {
+    rootDir,
+    storagePath: path.join(rootDir, "bot-storage.json"),
+    cryptoPath: path.join(rootDir, "crypto"),
+    metaPath: path.join(rootDir, STORAGE_META_FILENAME),
+    accountKey,
+    tokenHash,
+  };
+}
+
+function maybeMigrateLegacyStorage(params: {
+  storagePaths: MatrixStoragePaths;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const legacy = resolveLegacyStoragePaths(params.env);
+  const hasLegacyStorage = fs.existsSync(legacy.storagePath);
+  const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
+  const hasNewStorage =
+    fs.existsSync(params.storagePaths.storagePath) ||
+    fs.existsSync(params.storagePaths.cryptoPath);
+
+  if (!hasLegacyStorage && !hasLegacyCrypto) return;
+  if (hasNewStorage) return;
+
+  fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
+  if (hasLegacyStorage) {
+    try {
+      fs.renameSync(legacy.storagePath, params.storagePaths.storagePath);
+    } catch {
+      // Ignore migration failures; new store will be created.
+    }
+  }
+  if (hasLegacyCrypto) {
+    try {
+      fs.renameSync(legacy.cryptoPath, params.storagePaths.cryptoPath);
+    } catch {
+      // Ignore migration failures; new store will be created.
+    }
+  }
+}
+
+function writeStorageMeta(params: {
+  storagePaths: MatrixStoragePaths;
+  homeserver: string;
+  userId: string;
+  accountId?: string | null;
+}): void {
+  try {
+    const payload = {
+      homeserver: params.homeserver,
+      userId: params.userId,
+      accountId: params.accountId ?? DEFAULT_ACCOUNT_KEY,
+      accessTokenHash: params.storagePaths.tokenHash,
+      createdAt: new Date().toISOString(),
+    };
+    fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
+    fs.writeFileSync(
+      params.storagePaths.metaPath,
+      JSON.stringify(payload, null, 2),
+      "utf-8",
+    );
+  } catch {
+    // ignore meta write failures
+  }
+}
+
 function sanitizeUserIdList(input: unknown, label: string): string[] {
   if (input == null) return [];
   if (!Array.isArray(input)) {
@@ -137,22 +275,6 @@ export function resolveMatrixConfig(
     initialSyncLimit,
     encryption,
   };
-}
-
-export function resolveCryptoStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = getMatrixRuntime().state.resolveStateDir(env, () =>
-    require("node:os").homedir(),
-  );
-  const path = require("node:path");
-  return path.join(stateDir, "matrix", "crypto");
-}
-
-export function resolveStoragePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = getMatrixRuntime().state.resolveStateDir(env, () =>
-    require("node:os").homedir(),
-  );
-  const path = require("node:path");
-  return path.join(stateDir, "matrix", "bot-storage.json");
 }
 
 export async function resolveMatrixAuth(params?: {
@@ -288,30 +410,45 @@ export async function createMatrixClient(params: {
   accessToken: string;
   encryption?: boolean;
   localTimeoutMs?: number;
+  accountId?: string | null;
 }): Promise<MatrixClient> {
   ensureMatrixSdkLoggingConfigured();
   const env = process.env;
 
   // Create storage provider
-  const storagePath = resolveStoragePath(env);
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  fs.mkdirSync(path.dirname(storagePath), { recursive: true });
-  const storage: IStorageProvider = new SimpleFsStorageProvider(storagePath);
+  const storagePaths = resolveMatrixStoragePaths({
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    accountId: params.accountId,
+    env,
+  });
+  maybeMigrateLegacyStorage({ storagePaths, env });
+  fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+  const storage: IStorageProvider = new SimpleFsStorageProvider(storagePaths.storagePath);
 
   // Create crypto storage if encryption is enabled
   let cryptoStorage: ICryptoStorageProvider | undefined;
   if (params.encryption) {
-    const cryptoPath = resolveCryptoStorePath(env);
-    fs.mkdirSync(cryptoPath, { recursive: true });
-    
+    fs.mkdirSync(storagePaths.cryptoPath, { recursive: true });
+
     try {
       const { StoreType } = await import("@matrix-org/matrix-sdk-crypto-nodejs");
-      cryptoStorage = new RustSdkCryptoStorageProvider(cryptoPath, StoreType.Sqlite);
+      cryptoStorage = new RustSdkCryptoStorageProvider(
+        storagePaths.cryptoPath,
+        StoreType.Sqlite,
+      );
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to initialize crypto storage, E2EE disabled:", err);
     }
   }
+
+  writeStorageMeta({
+    storagePaths,
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accountId: params.accountId,
+  });
 
   const client = new MatrixClient(
     params.homeserver,
@@ -357,13 +494,20 @@ export async function createMatrixClient(params: {
   return client;
 }
 
-function buildSharedClientKey(auth: MatrixAuth): string {
-  return [auth.homeserver, auth.userId, auth.accessToken, auth.encryption ? "e2ee" : "plain"].join("|");
+function buildSharedClientKey(auth: MatrixAuth, accountId?: string | null): string {
+  return [
+    auth.homeserver,
+    auth.userId,
+    auth.accessToken,
+    auth.encryption ? "e2ee" : "plain",
+    accountId ?? DEFAULT_ACCOUNT_KEY,
+  ].join("|");
 }
 
 async function createSharedMatrixClient(params: {
   auth: MatrixAuth;
   timeoutMs?: number;
+  accountId?: string | null;
 }): Promise<SharedMatrixClientState> {
   const client = await createMatrixClient({
     homeserver: params.auth.homeserver,
@@ -371,10 +515,11 @@ async function createSharedMatrixClient(params: {
     accessToken: params.auth.accessToken,
     encryption: params.auth.encryption,
     localTimeoutMs: params.timeoutMs,
+    accountId: params.accountId,
   });
   return {
     client,
-    key: buildSharedClientKey(params.auth),
+    key: buildSharedClientKey(params.auth, params.accountId),
     started: false,
     cryptoReady: false,
   };
@@ -424,10 +569,11 @@ export async function resolveSharedMatrixClient(
     timeoutMs?: number;
     auth?: MatrixAuth;
     startClient?: boolean;
+    accountId?: string | null;
   } = {},
 ): Promise<MatrixClient> {
   const auth = params.auth ?? (await resolveMatrixAuth({ cfg: params.cfg, env: params.env }));
-  const key = buildSharedClientKey(auth);
+  const key = buildSharedClientKey(auth, params.accountId);
   const shouldStart = params.startClient !== false;
 
   if (sharedClientState?.key === key) {
@@ -463,6 +609,7 @@ export async function resolveSharedMatrixClient(
   sharedClientPromise = createSharedMatrixClient({
     auth,
     timeoutMs: params.timeoutMs,
+    accountId: params.accountId,
   });
   try {
     const created = await sharedClientPromise;
