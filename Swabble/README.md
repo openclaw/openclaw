@@ -101,8 +101,8 @@ Environment variables:
 - Authorization requested at first start; requires macOS 26 + new Speech.framework APIs.
 
 ## Development
-- Format: `./scripts/format.sh` (uses ../peekaboo/.swiftformat if present)
-- Lint: `./scripts/lint.sh` (uses ../peekaboo/.swiftlint.yml if present)
+- Format: `./scripts/format.sh` (uses local `.swiftformat`)
+- Lint: `./scripts/lint.sh` (uses local `.swiftlint.yml`)
 - Tests: `swift test` (uses swift-testing package)
 
 ## Roadmap
