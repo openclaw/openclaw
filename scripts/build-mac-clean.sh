@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build macOS companion app for a specific release version with hotfixes applied
+# Build macOS companion app from a clean upstream release (no hotfixes)
 #
-# Usage: ./scripts/build-mac-release.sh <version>
-# Example: ./scripts/build-mac-release.sh v2026.1.15
+# Usage: ./scripts/build-mac-clean.sh <version>
+# Example: ./scripts/build-mac-clean.sh v2026.1.15
 
 VERSION="${1:-}"
 if [[ -z "$VERSION" ]]; then
@@ -18,5 +18,5 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/build-mac-release-common.sh
 source "$SCRIPT_DIR/lib/build-mac-release-common.sh"
 
-# Call shared function with hotfixes enabled
-build_mac_release_worktree "$VERSION" "true"
+# Call shared function with hotfixes disabled
+build_mac_release_worktree "$VERSION" "false"

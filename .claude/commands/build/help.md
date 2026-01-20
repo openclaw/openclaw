@@ -13,6 +13,7 @@ Display this help information to the user:
 | Command | Description |
 |---------|-------------|
 | `/build:mac-release [version]` | Build latest (or specific) macOS release with hotfixes |
+| `/build:mac-clean [version]` | Build latest (or specific) macOS release without hotfixes |
 | `/build:help` | Show this help |
 
 ## Hotfix Workflow
@@ -36,6 +37,7 @@ git checkout -b hotfix/my-fix
 | Script | Purpose |
 |--------|---------|
 | `./scripts/build-mac-release.sh <version>` | Build macOS app from release with hotfixes |
+| `./scripts/build-mac-clean.sh <version>` | Build macOS app from release without hotfixes |
 | `./scripts/deploy-release.sh [path]` | Deploy macOS app to /Applications (requires sudo) |
 | `./scripts/release-fixes-status.sh [target]` | Show hotfix status |
 | `./scripts/apply-release-fixes.sh [--dry-run]` | Apply hotfixes manually |
