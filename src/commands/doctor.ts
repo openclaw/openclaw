@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -251,6 +253,10 @@ export async function doctorCommand(
     cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
     await writeConfigFile(cfg);
     runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+    const backupPath = `${CONFIG_PATH_CLAWDBOT}.bak`;
+    if (fs.existsSync(backupPath)) {
+      runtime.log(`Backup: ${backupPath}`);
+    }
   } else {
     runtime.log('Run "clawdbot doctor --fix" to apply changes.');
   }

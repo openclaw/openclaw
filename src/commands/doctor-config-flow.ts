@@ -1,5 +1,8 @@
+import type { ZodIssue } from "zod";
+
 import type { ClawdbotConfig } from "../config/config.js";
 import {
+  ClawdbotSchema,
   CONFIG_PATH_CLAWDBOT,
   migrateLegacyConfig,
   readConfigFileSnapshot,
@@ -11,6 +14,68 @@ import type { DoctorOptions } from "./doctor-prompter.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+type UnrecognizedKeysIssue = ZodIssue & {
+  code: "unrecognized_keys";
+  keys: string[];
+};
+
+function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
+  return issue.code === "unrecognized_keys";
+}
+
+function formatPath(parts: Array<string | number>): string {
+  if (parts.length === 0) return "<root>";
+  let out = "";
+  for (const part of parts) {
+    if (typeof part === "number") {
+      out += `[${part}]`;
+      continue;
+    }
+    out = out ? `${out}.${part}` : part;
+  }
+  return out || "<root>";
+}
+
+function resolvePathTarget(root: unknown, path: Array<string | number>): unknown {
+  let current: unknown = root;
+  for (const part of path) {
+    if (typeof part === "number") {
+      if (!Array.isArray(current)) return null;
+      if (part < 0 || part >= current.length) return null;
+      current = current[part];
+      continue;
+    }
+    if (!current || typeof current !== "object" || Array.isArray(current)) return null;
+    const record = current as Record<string, unknown>;
+    if (!(part in record)) return null;
+    current = record[part];
+  }
+  return current;
+}
+
+function stripUnknownConfigKeys(config: ClawdbotConfig): { config: ClawdbotConfig; removed: string[] } {
+  const parsed = ClawdbotSchema.safeParse(config);
+  if (parsed.success) {
+    return { config, removed: [] };
+  }
+
+  const next = structuredClone(config) as ClawdbotConfig;
+  const removed: string[] = [];
+  for (const issue of parsed.error.issues) {
+    if (!isUnrecognizedKeysIssue(issue)) continue;
+    const target = resolvePathTarget(next, issue.path);
+    if (!target || typeof target !== "object" || Array.isArray(target)) continue;
+    const record = target as Record<string, unknown>;
+    for (const key of issue.keys) {
+      if (!(key in record)) continue;
+      delete record[key];
+      removed.push(formatPath([...issue.path, key]));
+    }
+  }
+
+  return { config: next, removed };
 }
 
 function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
@@ -86,6 +151,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = autoEnable.config;
     } else {
       note('Run "clawdbot doctor --fix" to apply these changes.', "Doctor");
+    }
+  }
+
+  const unknown = stripUnknownConfigKeys(cfg);
+  if (unknown.removed.length > 0) {
+    const lines = unknown.removed.map((path) => `- ${path}`).join("\n");
+    if (shouldRepair) {
+      cfg = unknown.config;
+      note(lines, "Doctor changes");
+    } else {
+      note(lines, "Unknown config keys");
+      note('Run "clawdbot doctor --fix" to remove these keys.', "Doctor");
     }
   }
 
