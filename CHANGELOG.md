@@ -10,6 +10,7 @@ Docs: https://docs.clawd.bot
 - Config: centralize default agent concurrency limits.
 
 ### Fixes
+- Cron: serialize scheduler operations per store path to prevent duplicate runs across hot reloads. (#1216) — thanks @carlulsoe.
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
 - Agents: treat OAuth refresh failures as auth errors to trigger model fallback. (#1261) — thanks @zknicker.
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.

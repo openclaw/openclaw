@@ -4,8 +4,15 @@ import type { CronJob } from "../types.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 
+const storeCache = new Map<string, { version: 1; jobs: CronJob[] }>();
+
 export async function ensureLoaded(state: CronServiceState) {
   if (state.store) return;
+  const cached = storeCache.get(state.deps.storePath);
+  if (cached) {
+    state.store = cached;
+    return;
+  }
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
@@ -35,6 +42,7 @@ export async function ensureLoaded(state: CronServiceState) {
     }
   }
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
+  storeCache.set(state.deps.storePath, state.store);
   if (mutated) await persist(state);
 }
 
