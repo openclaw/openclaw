@@ -136,6 +136,72 @@ Tool summaries can redact sensitive tokens before they hit the console:
 
 Redaction affects **console output only** and does not alter file logs.
 
+## Diagnostics + OpenTelemetry
+
+Diagnostics are **opt-in** structured events for model runs (usage + cost +
+context + duration). They do **not** replace logs; they exist to feed metrics,
+traces, and other exporters.
+
+Clawdbot currently emits a `model.usage` event after each agent run with:
+
+- Token counts (input/output/cache/prompt/total)
+- Estimated cost (USD)
+- Context window used/limit
+- Duration (ms)
+- Provider/channel/model + session identifiers
+
+### Enable diagnostics (no exporter)
+
+Use this if you want diagnostics events available to plugins or custom sinks:
+
+```json
+{
+  "diagnostics": {
+    "enabled": true
+  }
+}
+```
+
+### Export to OpenTelemetry
+
+Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
+works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
+
+```json
+{
+  "plugins": {
+    "allow": ["diagnostics-otel"],
+    "entries": {
+      "diagnostics-otel": {
+        "enabled": true
+      }
+    }
+  },
+  "diagnostics": {
+    "enabled": true,
+    "otel": {
+      "enabled": true,
+      "endpoint": "http://otel-collector:4318",
+      "protocol": "http/protobuf",
+      "serviceName": "clawdbot-gateway",
+      "traces": true,
+      "metrics": true,
+      "sampleRate": 0.2,
+      "flushIntervalMs": 60000
+    }
+  }
+}
+```
+
+Notes:
+- You can also enable the plugin with `clawdbot plugins enable diagnostics-otel`.
+- `protocol` currently supports `http/protobuf`.
+- Metrics include token usage, cost, context size, and run duration.
+- Traces/metrics can be toggled with `traces` / `metrics` (default: on).
+- Set `headers` when your collector requires auth.
+- Environment variables supported: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
+
 ## Troubleshooting tips
 
 - **Gateway not reachable?** Run `clawdbot doctor` first.

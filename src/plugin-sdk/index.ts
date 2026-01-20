@@ -58,7 +58,11 @@ export type {
   ChannelToolSend,
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { ClawdbotPluginApi } from "../plugins/types.js";
+export type {
+  ClawdbotPluginApi,
+  ClawdbotPluginService,
+  ClawdbotPluginServiceContext,
+} from "../plugins/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { ClawdbotConfig } from "../config/config.js";
@@ -178,6 +182,12 @@ export { formatDocsLink } from "../terminal/links.js";
 export type { HookEntry } from "../hooks/types.js";
 export { normalizeE164 } from "../utils.js";
 export { missingTargetError } from "../infra/outbound/target-errors.js";
+export {
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  onDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
+export type { DiagnosticEventPayload, DiagnosticUsageEvent } from "../infra/diagnostic-events.js";
 
 // Channel: Discord
 export {

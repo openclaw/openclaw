@@ -102,6 +102,26 @@ export type LoggingConfig = {
   redactPatterns?: string[];
 };
 
+export type DiagnosticsOtelConfig = {
+  enabled?: boolean;
+  endpoint?: string;
+  protocol?: "http/protobuf" | "grpc";
+  headers?: Record<string, string>;
+  serviceName?: string;
+  traces?: boolean;
+  metrics?: boolean;
+  logs?: boolean;
+  /** Trace sample rate (0.0 - 1.0). */
+  sampleRate?: number;
+  /** Metric export interval (ms). */
+  flushIntervalMs?: number;
+};
+
+export type DiagnosticsConfig = {
+  enabled?: boolean;
+  otel?: DiagnosticsOtelConfig;
+};
+
 export type WebReconnectConfig = {
   initialMs?: number;
   maxMs?: number;

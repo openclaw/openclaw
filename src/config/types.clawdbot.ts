@@ -1,6 +1,6 @@
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CronConfig } from "./types.cron.js";
@@ -53,6 +53,7 @@ export type ClawdbotConfig = {
     lastRunCommand?: string;
     lastRunMode?: "local" | "remote";
   };
+  diagnostics?: DiagnosticsConfig;
   logging?: LoggingConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "beta", or "dev"). */

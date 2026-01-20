@@ -38,6 +38,27 @@ export const ClawdbotSchema = z
       })
       .strict()
       .optional(),
+    diagnostics: z
+      .object({
+        enabled: z.boolean().optional(),
+        otel: z
+          .object({
+            enabled: z.boolean().optional(),
+            endpoint: z.string().optional(),
+            protocol: z.union([z.literal("http/protobuf"), z.literal("grpc")]).optional(),
+            headers: z.record(z.string(), z.string()).optional(),
+            serviceName: z.string().optional(),
+            traces: z.boolean().optional(),
+            metrics: z.boolean().optional(),
+            logs: z.boolean().optional(),
+            sampleRate: z.number().min(0).max(1).optional(),
+            flushIntervalMs: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: z
