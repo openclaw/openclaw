@@ -244,9 +244,9 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func sessionDefaultString(_ defaults: [String: AnyCodable]?, key: String) -> String {
-        (defaults?[key]?.stringValue ?? "")
-            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+    private func sessionDefaultString(_ defaults: [String: ClawdbotProtocol.AnyCodable]?, key: String) -> String {
+        let raw = defaults?[key]?.value as? String
+        return (raw ?? "").trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 
     func cachedMainSessionKey() -> String? {
