@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
+import { compareSemverStrings } from "./update-check.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { trimLogTail } from "./restart-sentinel.js";
 
@@ -143,8 +144,16 @@ async function resolveChannelTag(
   channel: Exclude<UpdateChannel, "dev">,
 ): Promise<string | null> {
   const tags = await listGitTags(runCommand, root, timeoutMs);
-  const predicate = channel === "beta" ? isBetaTag : isStableTag;
-  return tags.find((tag) => predicate(tag)) ?? null;
+  if (channel === "beta") {
+    const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
+    const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;
+    if (!betaTag) return stableTag;
+    if (!stableTag) return betaTag;
+    const cmp = compareSemverStrings(betaTag, stableTag);
+    if (cmp != null && cmp < 0) return stableTag;
+    return betaTag;
+  }
+  return tags.find((tag) => isStableTag(tag)) ?? null;
 }
 
 async function resolveGitRoot(

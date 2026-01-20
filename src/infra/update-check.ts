@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseSemver } from "./runtime-guard.js";
+import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -313,6 +314,30 @@ export async function fetchNpmTagVersion(params: {
   } catch (err) {
     return { tag, version: null, error: String(err) };
   }
+}
+
+export async function resolveNpmChannelTag(params: {
+  channel: UpdateChannel;
+  timeoutMs?: number;
+}): Promise<{ tag: string; version: string | null }> {
+  const channelTag = channelToNpmTag(params.channel);
+  const channelStatus = await fetchNpmTagVersion({ tag: channelTag, timeoutMs: params.timeoutMs });
+  if (params.channel !== "beta") {
+    return { tag: channelTag, version: channelStatus.version };
+  }
+
+  const latestStatus = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params.timeoutMs });
+  if (!latestStatus.version) {
+    return { tag: channelTag, version: channelStatus.version };
+  }
+  if (!channelStatus.version) {
+    return { tag: "latest", version: latestStatus.version };
+  }
+  const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
+  if (cmp != null && cmp < 0) {
+    return { tag: "latest", version: latestStatus.version };
+  }
+  return { tag: channelTag, version: channelStatus.version };
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {

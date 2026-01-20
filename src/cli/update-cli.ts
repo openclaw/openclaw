@@ -9,6 +9,7 @@ import {
   checkUpdateStatus,
   compareSemverStrings,
   fetchNpmTagVersion,
+  resolveNpmChannelTag,
 } from "../infra/update-check.js";
 import { parseSemver } from "../infra/runtime-guard.js";
 import {
@@ -411,10 +412,16 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const gitCheckout = await isGitCheckout(root);
   const defaultChannel = gitCheckout ? DEFAULT_GIT_CHANNEL : DEFAULT_PACKAGE_CHANNEL;
   const channel = requestedChannel ?? storedChannel ?? defaultChannel;
-  const tag = normalizeTag(opts.tag) ?? channelToNpmTag(channel);
+  const explicitTag = normalizeTag(opts.tag);
+  let tag = explicitTag ?? channelToNpmTag(channel);
   if (!gitCheckout) {
     const currentVersion = await readPackageVersion(root);
-    const targetVersion = await resolveTargetVersion(tag, timeoutMs);
+    const targetVersion = explicitTag
+      ? await resolveTargetVersion(tag, timeoutMs)
+      : await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
+          tag = resolved.tag;
+          return resolved.version;
+        });
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
     const needsConfirm =

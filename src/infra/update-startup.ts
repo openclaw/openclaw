@@ -4,12 +4,8 @@ import path from "node:path";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveClawdbotPackageRoot } from "./clawdbot-root.js";
-import { compareSemverStrings, fetchNpmTagVersion, checkUpdateStatus } from "./update-check.js";
-import {
-  channelToNpmTag,
-  normalizeUpdateChannel,
-  DEFAULT_PACKAGE_CHANNEL,
-} from "./update-channels.js";
+import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
+import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { VERSION } from "../version.js";
 import { formatCliCommand } from "../cli/command-format.js";
 
@@ -84,22 +80,22 @@ export async function runGatewayUpdateCheck(params: {
   }
 
   const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
-  const tag = channelToNpmTag(channel);
-  const tagStatus = await fetchNpmTagVersion({ tag, timeoutMs: 2500 });
-  if (!tagStatus.version) {
+  const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
+  const tag = resolved.tag;
+  if (!resolved.version) {
     await writeState(statePath, nextState);
     return;
   }
 
-  const cmp = compareSemverStrings(VERSION, tagStatus.version);
+  const cmp = compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
     const shouldNotify =
-      state.lastNotifiedVersion !== tagStatus.version || state.lastNotifiedTag !== tag;
+      state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
       params.log.info(
-        `update available (${tag}): v${tagStatus.version} (current v${VERSION}). Run: ${formatCliCommand("clawdbot update")}`,
+        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("clawdbot update")}`,
       );
-      nextState.lastNotifiedVersion = tagStatus.version;
+      nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;
     }
   }
