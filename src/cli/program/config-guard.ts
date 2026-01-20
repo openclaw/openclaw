@@ -1,4 +1,5 @@
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { loadAndMaybeMigrateDoctorConfig } from "../../commands/doctor-config-flow.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadClawdbotPlugins } from "../../plugins/loader.js";
@@ -50,17 +51,28 @@ export async function ensureConfigReady(params: {
   const invalid = snapshot.exists && (!snapshot.valid || pluginIssues.length > 0);
   if (!invalid) return;
 
-  params.runtime.error(`Config invalid at ${snapshot.path}.`);
+  const rich = isRich();
+  const muted = (value: string) => colorize(rich, theme.muted, value);
+  const error = (value: string) => colorize(rich, theme.error, value);
+  const heading = (value: string) => colorize(rich, theme.heading, value);
+  const command = (value: string) => colorize(rich, theme.command, value);
+
+  params.runtime.error(heading("Config invalid"));
+  params.runtime.error(`${muted("File:")} ${muted(snapshot.path)}`);
   if (issues.length > 0) {
-    params.runtime.error(issues.join("\n"));
+    params.runtime.error(muted("Problem:"));
+    params.runtime.error(issues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   if (legacyIssues.length > 0) {
-    params.runtime.error(`Legacy config keys detected:\n${legacyIssues.join("\n")}`);
+    params.runtime.error(muted("Legacy config keys detected:"));
+    params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   if (pluginIssues.length > 0) {
-    params.runtime.error(`Plugin config errors:\n${pluginIssues.join("\n")}`);
+    params.runtime.error(muted("Plugin config errors:"));
+    params.runtime.error(pluginIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
-  params.runtime.error("Run `clawdbot doctor --fix` to repair, then retry.");
+  params.runtime.error("");
+  params.runtime.error(`${muted("Run:")} ${command("clawdbot doctor --fix")}`);
   if (!allowInvalid) {
     params.runtime.exit(1);
   }
