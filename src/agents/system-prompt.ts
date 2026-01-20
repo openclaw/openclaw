@@ -1,6 +1,5 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -86,22 +85,8 @@ function buildMessagingSection(params: {
   messageChannelOptions: string;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
-  channelActions?: string[];
 }) {
   if (params.isMinimal) return [];
-
-  // Build channel-specific action description
-  let actionsDescription: string;
-  if (params.channelActions && params.channelActions.length > 0 && params.runtimeChannel) {
-    // Include "send" as a base action plus channel-specific actions
-    const allActions = new Set(["send", ...params.channelActions]);
-    const actionList = Array.from(allActions).sort().join(", ");
-    actionsDescription = `- Use \`message\` for proactive sends + channel actions. Current channel (${params.runtimeChannel}) supports: ${actionList}.`;
-  } else {
-    actionsDescription =
-      "- Use `message` for proactive sends + channel actions (send, react, edit, delete, etc.).";
-  }
-
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
@@ -111,7 +96,7 @@ function buildMessagingSection(params: {
       ? [
           "",
           "### message tool",
-          actionsDescription,
+          "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
           "- For `action=send`, include `to` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
           `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
@@ -139,7 +124,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "Community: https://discord.com/invite/clawd",
     "Find new skills: https://clawdhub.com",
     "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
-    `When diagnosing issues, run \`${formatCliCommand("clawdbot status")}\` yourself when possible; only ask the user if you lack access (e.g., sandboxed).`,
+    "When diagnosing issues, run `clawdbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
 }
@@ -170,10 +155,9 @@ export function buildAgentSystemPrompt(params: {
     arch?: string;
     node?: string;
     model?: string;
+    defaultModel?: string;
     channel?: string;
     capabilities?: string[];
-    /** Supported message actions for the current channel (e.g., react, edit, unsend) */
-    channelActions?: string[];
   };
   sandboxInfo?: {
     enabled: boolean;
@@ -381,11 +365,11 @@ export function buildAgentSystemPrompt(params: {
     "## Clawdbot CLI Quick Reference",
     "Clawdbot is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
-    `- ${formatCliCommand("clawdbot daemon status")}`,
-    `- ${formatCliCommand("clawdbot daemon start")}`,
-    `- ${formatCliCommand("clawdbot daemon stop")}`,
-    `- ${formatCliCommand("clawdbot daemon restart")}`,
-    `If unsure, ask the user to run \`${formatCliCommand("clawdbot help")}\` (or \`${formatCliCommand("clawdbot daemon --help")}\`) and paste the output.`,
+    "- clawdbot daemon status",
+    "- clawdbot daemon start",
+    "- clawdbot daemon stop",
+    "- clawdbot daemon restart",
+    "If unsure, ask the user to run `clawdbot help` (or `clawdbot daemon --help`) and paste the output.",
     "",
     ...skillsSection,
     ...memorySection,
@@ -484,7 +468,6 @@ export function buildAgentSystemPrompt(params: {
       messageChannelOptions,
       inlineButtonsEnabled,
       runtimeChannel,
-      channelActions: runtimeInfo?.channelActions,
     }),
   ];
 
