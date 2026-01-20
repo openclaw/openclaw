@@ -7,7 +7,7 @@ struct ConnectOptions {
     var token: String?
     var password: String?
     var mode: String?
-    var timeoutMs: Int = 15_000
+    var timeoutMs: Int = 15000
     var json: Bool = false
     var probe: Bool = false
     var clientId: String = "clawdbot-macos"
@@ -254,8 +254,12 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
 
     if resolvedMode == "remote" {
         guard let raw = config.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
+              !raw.isEmpty
+        else {
+            throw NSError(
+                domain: "Gateway",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "gateway.remote.url is missing"])
         }
         guard let url = URL(string: raw) else {
             throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: \(raw)"])
@@ -270,7 +274,10 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
     let port = config.port ?? 18789
     let host = "127.0.0.1"
     guard let url = URL(string: "ws://\(host):\(port)") else {
-        throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid url: ws://\(host):\(port)"])
+        throw NSError(
+            domain: "Gateway",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "invalid url: ws://\(host):\(port)"])
     }
     return GatewayEndpoint(
         url: url,
@@ -280,7 +287,7 @@ private func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig)
 }
 
 private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> GatewayEndpoint? {
-    return try? resolveGatewayEndpoint(opts: opts, config: config)
+    try? resolveGatewayEndpoint(opts: opts, config: config)
 }
 
 private func resolvedToken(opts: ConnectOptions, mode: String, config: GatewayConfig) -> String? {
