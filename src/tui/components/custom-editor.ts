@@ -13,10 +13,9 @@ export class CustomEditor extends Editor {
   onAltEnter?: () => void;
 
   constructor(tuiOrTheme: TUI | EditorTheme, themeMaybe?: EditorTheme) {
-    const useTui = typeof themeMaybe !== "undefined" && Editor.length >= 2;
-    const args = (useTui ? [tuiOrTheme, themeMaybe] : [tuiOrTheme]) as ConstructorParameters<
-      typeof Editor
-    >;
+    const useLegacyCtor = typeof themeMaybe !== "undefined" && Editor.length >= 2;
+    const args = (useLegacyCtor ? [tuiOrTheme, themeMaybe] : [themeMaybe ?? tuiOrTheme]) as
+      ConstructorParameters<typeof Editor>;
     super(...args);
   }
   handleInput(data: string): void {
