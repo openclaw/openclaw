@@ -15,7 +15,6 @@ export class CustomEditor extends Editor {
   constructor(theme: EditorTheme) {
     super(theme);
   }
-
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
