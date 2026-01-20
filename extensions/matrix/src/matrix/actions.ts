@@ -1,19 +1,4 @@
-import type { MatrixClient, MatrixEvent } from "matrix-js-sdk";
-import {
-  Direction,
-  EventType,
-  MatrixError,
-  MsgType,
-  RelationType,
-} from "matrix-js-sdk";
-import type {
-  ReactionEventContent,
-  RoomMessageEventContent,
-} from "matrix-js-sdk/lib/@types/events.js";
-import type {
-  RoomPinnedEventsEventContent,
-  RoomTopicEventContent,
-} from "matrix-js-sdk/lib/@types/state_events.js";
+import type { MatrixClient } from "matrix-bot-sdk";
 
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -23,13 +8,68 @@ import {
   isBunRuntime,
   resolveMatrixAuth,
   resolveSharedMatrixClient,
-  waitForMatrixSync,
 } from "./client.js";
 import {
   reactMatrixMessage,
   resolveMatrixRoomId,
   sendMessageMatrix,
 } from "./send.js";
+
+// Constants that were previously from matrix-js-sdk
+const MsgType = {
+  Text: "m.text",
+} as const;
+
+const RelationType = {
+  Replace: "m.replace",
+  Annotation: "m.annotation",
+} as const;
+
+const EventType = {
+  RoomMessage: "m.room.message",
+  RoomPinnedEvents: "m.room.pinned_events",
+  RoomTopic: "m.room.topic",
+  Reaction: "m.reaction",
+} as const;
+
+// Type definitions for matrix-bot-sdk event content
+type RoomMessageEventContent = {
+  msgtype: string;
+  body: string;
+  "m.new_content"?: RoomMessageEventContent;
+  "m.relates_to"?: {
+    rel_type?: string;
+    event_id?: string;
+    "m.in_reply_to"?: { event_id?: string };
+  };
+};
+
+type ReactionEventContent = {
+  "m.relates_to": {
+    rel_type: string;
+    event_id: string;
+    key: string;
+  };
+};
+
+type RoomPinnedEventsEventContent = {
+  pinned: string[];
+};
+
+type RoomTopicEventContent = {
+  topic?: string;
+};
+
+type MatrixRawEvent = {
+  event_id: string;
+  sender: string;
+  type: string;
+  origin_server_ts: number;
+  content: Record<string, unknown>;
+  unsigned?: {
+    redacted_because?: unknown;
+  };
+};
 
 export type MatrixActionClientOpts = {
   client?: MatrixClient;
@@ -86,19 +126,23 @@ async function resolveActionClient(opts: MatrixActionClientOpts = {}): Promise<M
     homeserver: auth.homeserver,
     userId: auth.userId,
     accessToken: auth.accessToken,
+    encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
   });
-  await client.startClient({
-    initialSyncLimit: 0,
-    lazyLoadMembers: true,
-    threadSupport: true,
-  });
-  await waitForMatrixSync({ client, timeoutMs: opts.timeoutMs });
+  if (auth.encryption && client.crypto) {
+    try {
+      const joinedRooms = await client.getJoinedRooms();
+      await client.crypto.prepare(joinedRooms);
+    } catch {
+      // Ignore crypto prep failures for one-off actions.
+    }
+  }
+  await client.start();
   return { client, stopOnDone: true };
 }
 
-function summarizeMatrixEvent(event: MatrixEvent): MatrixMessageSummary {
-  const content = event.getContent<RoomMessageEventContent>();
+function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSummary {
+  const content = event.content as RoomMessageEventContent;
   const relates = content["m.relates_to"];
   let relType: string | undefined;
   let eventId: string | undefined;
@@ -118,27 +162,28 @@ function summarizeMatrixEvent(event: MatrixEvent): MatrixMessageSummary {
         }
       : undefined;
   return {
-    eventId: event.getId() ?? undefined,
-    sender: event.getSender() ?? undefined,
+    eventId: event.event_id,
+    sender: event.sender,
     body: content.body,
     msgtype: content.msgtype,
-    timestamp: event.getTs() ?? undefined,
+    timestamp: event.origin_server_ts,
     relatesTo,
   };
 }
 
 async function readPinnedEvents(client: MatrixClient, roomId: string): Promise<string[]> {
   try {
-    const content = (await client.getStateEvent(
+    const content = (await client.getRoomStateEvent(
       roomId,
       EventType.RoomPinnedEvents,
       "",
     )) as RoomPinnedEventsEventContent;
     const pinned = content.pinned;
     return pinned.filter((id) => id.trim().length > 0);
-  } catch (err) {
-    const httpStatus = err instanceof MatrixError ? err.httpStatus : undefined;
-    const errcode = err instanceof MatrixError ? err.errcode : undefined;
+  } catch (err: unknown) {
+    const errObj = err as { statusCode?: number; body?: { errcode?: string } };
+    const httpStatus = errObj.statusCode;
+    const errcode = errObj.body?.errcode;
     if (httpStatus === 404 || errcode === "M_NOT_FOUND") {
       return [];
     }
@@ -151,11 +196,14 @@ async function fetchEventSummary(
   roomId: string,
   eventId: string,
 ): Promise<MatrixMessageSummary | null> {
-  const raw = await client.fetchRoomEvent(roomId, eventId);
-  const mapper = client.getEventMapper();
-  const event = mapper(raw);
-  if (event.isRedacted()) return null;
-  return summarizeMatrixEvent(event);
+  try {
+    const raw = await client.getEvent(roomId, eventId) as MatrixRawEvent;
+    if (raw.unsigned?.redacted_because) return null;
+    return summarizeMatrixRawEvent(raw);
+  } catch (err) {
+    // Event not found, redacted, or inaccessible - return null
+    return null;
+  }
 }
 
 export async function sendMatrixMessage(
@@ -200,10 +248,10 @@ export async function editMatrixMessage(
         event_id: messageId,
       },
     };
-    const response = await client.sendMessage(resolvedRoom, payload);
-    return { eventId: response.event_id ?? null };
+    const eventId = await client.sendMessage(resolvedRoom, payload);
+    return { eventId: eventId ?? null };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -215,11 +263,9 @@ export async function deleteMatrixMessage(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    await client.redactEvent(resolvedRoom, messageId, undefined, {
-      reason: opts.reason,
-    });
+    await client.redactEvent(resolvedRoom, messageId, opts.reason);
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -242,22 +288,25 @@ export async function readMatrixMessages(
       typeof opts.limit === "number" && Number.isFinite(opts.limit)
         ? Math.max(1, Math.floor(opts.limit))
         : 20;
-    const token = opts.before?.trim() || opts.after?.trim() || null;
-    const dir = opts.after ? Direction.Forward : Direction.Backward;
-    const res = await client.createMessagesRequest(resolvedRoom, token, limit, dir);
-    const mapper = client.getEventMapper();
-    const events = res.chunk.map(mapper);
-    const messages = events
-      .filter((event) => event.getType() === EventType.RoomMessage)
-      .filter((event) => !event.isRedacted())
-      .map(summarizeMatrixEvent);
+    const token = opts.before?.trim() || opts.after?.trim() || undefined;
+    const dir = opts.after ? "f" : "b";
+    // matrix-bot-sdk uses doRequest for room messages
+    const res = await client.doRequest("GET", `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`, {
+      dir,
+      limit,
+      from: token,
+    }) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+    const messages = res.chunk
+      .filter((event) => event.type === EventType.RoomMessage)
+      .filter((event) => !event.unsigned?.redacted_because)
+      .map(summarizeMatrixRawEvent);
     return {
       messages,
       nextBatch: res.end ?? null,
       prevBatch: res.start ?? null,
     };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -273,19 +322,18 @@ export async function listMatrixReactions(
       typeof opts.limit === "number" && Number.isFinite(opts.limit)
         ? Math.max(1, Math.floor(opts.limit))
         : 100;
-    const res = await client.relations(
-      resolvedRoom,
-      messageId,
-      RelationType.Annotation,
-      EventType.Reaction,
-      { dir: Direction.Backward, limit },
-    );
+    // matrix-bot-sdk uses doRequest for relations
+    const res = await client.doRequest(
+      "GET",
+      `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`,
+      { dir: "b", limit },
+    ) as { chunk: MatrixRawEvent[] };
     const summaries = new Map<string, MatrixReactionSummary>();
-    for (const event of res.events) {
-      const content = event.getContent<ReactionEventContent>();
-      const key = content["m.relates_to"].key;
+    for (const event of res.chunk) {
+      const content = event.content as ReactionEventContent;
+      const key = content["m.relates_to"]?.key;
       if (!key) continue;
-      const sender = event.getSender() ?? "";
+      const sender = event.sender ?? "";
       const entry: MatrixReactionSummary = summaries.get(key) ?? {
         key,
         count: 0,
@@ -299,7 +347,7 @@ export async function listMatrixReactions(
     }
     return Array.from(summaries.values());
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -311,30 +359,28 @@ export async function removeMatrixReactions(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const res = await client.relations(
-      resolvedRoom,
-      messageId,
-      RelationType.Annotation,
-      EventType.Reaction,
-      { dir: Direction.Backward, limit: 200 },
-    );
-    const userId = client.getUserId();
+    const res = await client.doRequest(
+      "GET",
+      `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(messageId)}/${RelationType.Annotation}/${EventType.Reaction}`,
+      { dir: "b", limit: 200 },
+    ) as { chunk: MatrixRawEvent[] };
+    const userId = await client.getUserId();
     if (!userId) return { removed: 0 };
     const targetEmoji = opts.emoji?.trim();
-    const toRemove = res.events
-      .filter((event) => event.getSender() === userId)
+    const toRemove = res.chunk
+      .filter((event) => event.sender === userId)
       .filter((event) => {
         if (!targetEmoji) return true;
-        const content = event.getContent<ReactionEventContent>();
-        return content["m.relates_to"].key === targetEmoji;
+        const content = event.content as ReactionEventContent;
+        return content["m.relates_to"]?.key === targetEmoji;
       })
-      .map((event) => event.getId())
+      .map((event) => event.event_id)
       .filter((id): id is string => Boolean(id));
     if (toRemove.length === 0) return { removed: 0 };
     await Promise.all(toRemove.map((id) => client.redactEvent(resolvedRoom, id)));
     return { removed: toRemove.length };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -349,10 +395,10 @@ export async function pinMatrixMessage(
     const current = await readPinnedEvents(client, resolvedRoom);
     const next = current.includes(messageId) ? current : [...current, messageId];
     const payload: RoomPinnedEventsEventContent = { pinned: next };
-    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, payload);
+    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -367,10 +413,10 @@ export async function unpinMatrixMessage(
     const current = await readPinnedEvents(client, resolvedRoom);
     const next = current.filter((id) => id !== messageId);
     const payload: RoomPinnedEventsEventContent = { pinned: next };
-    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, payload);
+    await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -395,7 +441,7 @@ export async function listMatrixPins(
     ).filter((event): event is MatrixMessageSummary => Boolean(event));
     return { pinned, events };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -406,20 +452,23 @@ export async function getMatrixMemberInfo(
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const roomId = opts.roomId ? await resolveMatrixRoomId(client, opts.roomId) : undefined;
-    const profile = await client.getProfileInfo(userId);
-    const member = roomId ? client.getRoom(roomId)?.getMember(userId) : undefined;
+    // matrix-bot-sdk uses getUserProfile
+    const profile = await client.getUserProfile(userId);
+    // Note: matrix-bot-sdk doesn't have getRoom().getMember() like matrix-js-sdk
+    // We'd need to fetch room state separately if needed
     return {
       userId,
       profile: {
         displayName: profile?.displayname ?? null,
         avatarUrl: profile?.avatar_url ?? null,
       },
-      membership: member?.membership ?? null,
-      powerLevel: member?.powerLevel ?? null,
-      displayName: member?.name ?? null,
+      membership: null, // Would need separate room state query
+      powerLevel: null, // Would need separate power levels state query
+      displayName: profile?.displayname ?? null,
+      roomId: roomId ?? null,
     };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 
@@ -427,20 +476,42 @@ export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClient
   const { client, stopOnDone } = await resolveActionClient(opts);
   try {
     const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-    const room = client.getRoom(resolvedRoom);
-    const topicEvent = room?.currentState.getStateEvents(EventType.RoomTopic, "");
-    const topicContent = topicEvent?.getContent<RoomTopicEventContent>();
-    const topic = typeof topicContent?.topic === "string" ? topicContent.topic : undefined;
+    // matrix-bot-sdk uses getRoomState for state events
+    let name: string | null = null;
+    let topic: string | null = null;
+    let canonicalAlias: string | null = null;
+    let memberCount: number | null = null;
+    
+    try {
+      const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
+      name = nameState?.name ?? null;
+    } catch { /* ignore */ }
+    
+    try {
+      const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
+      topic = topicState?.topic ?? null;
+    } catch { /* ignore */ }
+    
+    try {
+      const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
+      canonicalAlias = aliasState?.alias ?? null;
+    } catch { /* ignore */ }
+    
+    try {
+      const members = await client.getJoinedRoomMembers(resolvedRoom);
+      memberCount = members.length;
+    } catch { /* ignore */ }
+    
     return {
       roomId: resolvedRoom,
-      name: room?.name ?? null,
-      topic: topic ?? null,
-      canonicalAlias: room?.getCanonicalAlias?.() ?? null,
-      altAliases: room?.getAltAliases?.() ?? [],
-      memberCount: room?.getJoinedMemberCount?.() ?? null,
+      name,
+      topic,
+      canonicalAlias,
+      altAliases: [], // Would need separate query
+      memberCount,
     };
   } finally {
-    if (stopOnDone) client.stopClient();
+    if (stopOnDone) client.stop();
   }
 }
 

@@ -35,8 +35,9 @@ function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
 async function noteMatrixAuthHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
-      "Matrix requires a homeserver URL + user ID.",
-      "Use an access token or a password (password logs in and stores a token).",
+      "Matrix requires a homeserver URL.",
+      "Use an access token (recommended) or a password (logs in and stores a token).",
+      "With access token: user ID is fetched automatically.",
       "Env vars supported: MATRIX_HOMESERVER, MATRIX_USER_ID, MATRIX_ACCESS_TOKEN, MATRIX_PASSWORD.",
       `Docs: ${formatDocsLink("/channels/matrix", "channels/matrix")}`,
     ].join("\n"),
@@ -146,8 +147,8 @@ function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist"
   };
 }
 
-function setMatrixRoomAllowlist(cfg: CoreConfig, roomKeys: string[]) {
-  const rooms = Object.fromEntries(roomKeys.map((key) => [key, { allow: true }]));
+function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[]) {
+  const groups = Object.fromEntries(roomKeys.map((key) => [key, { allow: true }]));
   return {
     ...cfg,
     channels: {
@@ -155,7 +156,7 @@ function setMatrixRoomAllowlist(cfg: CoreConfig, roomKeys: string[]) {
       matrix: {
         ...cfg.channels?.matrix,
         enabled: true,
-        rooms,
+        groups,
       },
     },
   };
@@ -180,9 +181,11 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [`Matrix: ${configured ? "configured" : "needs homeserver + user id"}`],
+      statusLines: [
+        `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
+      ],
       selectionHint: !sdkReady
-        ? "install matrix-js-sdk"
+        ? "install matrix-bot-sdk"
         : configured
           ? "configured"
           : "needs auth",
@@ -208,7 +211,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     const envUserId = process.env.MATRIX_USER_ID?.trim();
     const envAccessToken = process.env.MATRIX_ACCESS_TOKEN?.trim();
     const envPassword = process.env.MATRIX_PASSWORD?.trim();
-    const envReady = Boolean(envHomeserver && envUserId && (envAccessToken || envPassword));
+    const envReady = Boolean(envHomeserver && (envAccessToken || (envUserId && envPassword)));
 
     if (
       envReady &&
@@ -252,22 +255,9 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       }),
     ).trim();
 
-    const userId = String(
-      await prompter.text({
-        message: "Matrix user ID",
-        initialValue: existing.userId ?? envUserId,
-        validate: (value) => {
-          const raw = String(value ?? "").trim();
-          if (!raw) return "Required";
-          if (!raw.startsWith("@")) return "Matrix user IDs should start with @";
-          if (!raw.includes(":")) return "Matrix user IDs should include a server (:@server)";
-          return undefined;
-        },
-      }),
-    ).trim();
-
     let accessToken = existing.accessToken ?? "";
     let password = existing.password ?? "";
+    let userId = existing.userId ?? "";
 
     if (accessToken || password) {
       const keep = await prompter.confirm({
@@ -277,15 +267,17 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       if (!keep) {
         accessToken = "";
         password = "";
+        userId = "";
       }
     }
 
     if (!accessToken && !password) {
+      // Ask auth method FIRST before asking for user ID
       const authMode = (await prompter.select({
         message: "Matrix auth method",
         options: [
-          { value: "token", label: "Access token" },
-          { value: "password", label: "Password (stores token)" },
+          { value: "token", label: "Access token (user ID fetched automatically)" },
+          { value: "password", label: "Password (requires user ID)" },
         ],
       })) as "token" | "password";
 
@@ -296,7 +288,24 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             validate: (value) => (value?.trim() ? undefined : "Required"),
           }),
         ).trim();
+        // With access token, we can fetch the userId automatically - don't prompt for it
+        // The client.ts will use whoami() to get it
+        userId = "";
       } else {
+        // Password auth requires user ID upfront
+        userId = String(
+          await prompter.text({
+            message: "Matrix user ID",
+            initialValue: existing.userId ?? envUserId,
+            validate: (value) => {
+              const raw = String(value ?? "").trim();
+              if (!raw) return "Required";
+              if (!raw.startsWith("@")) return "Matrix user IDs should start with @";
+              if (!raw.includes(":")) return "Matrix user IDs should include a server (:server)";
+              return undefined;
+            },
+          }),
+        ).trim();
         password = String(
           await prompter.text({
             message: "Matrix password",
@@ -313,6 +322,12 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       }),
     ).trim();
 
+    // Ask about E2EE encryption
+    const enableEncryption = await prompter.confirm({
+      message: "Enable end-to-end encryption (E2EE)?",
+      initialValue: existing.encryption ?? false,
+    });
+
     next = {
       ...next,
       channels: {
@@ -321,10 +336,11 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
           ...next.channels?.matrix,
           enabled: true,
           homeserver,
-          userId,
+          userId: userId || undefined,
           accessToken: accessToken || undefined,
           password: password || undefined,
           deviceName: deviceName || undefined,
+          encryption: enableEncryption || undefined,
         },
       },
     };
@@ -333,13 +349,14 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       next = await promptMatrixAllowFrom({ cfg: next, prompter });
     }
 
+    const existingGroups = next.channels?.matrix?.groups ?? next.channels?.matrix?.rooms;
     const accessConfig = await promptChannelAccessConfig({
       prompter,
       label: "Matrix rooms",
       currentPolicy: next.channels?.matrix?.groupPolicy ?? "allowlist",
-      currentEntries: Object.keys(next.channels?.matrix?.rooms ?? {}),
+      currentEntries: Object.keys(existingGroups ?? {}),
       placeholder: "!roomId:server, #alias:server, Project Room",
-      updatePrompt: Boolean(next.channels?.matrix?.rooms),
+      updatePrompt: Boolean(existingGroups),
     });
     if (accessConfig) {
       if (accessConfig.policy !== "allowlist") {
@@ -398,7 +415,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
           }
         }
         next = setMatrixGroupPolicy(next, "allowlist");
-        next = setMatrixRoomAllowlist(next, roomKeys);
+        next = setMatrixGroupRooms(next, roomKeys);
       }
     }
 

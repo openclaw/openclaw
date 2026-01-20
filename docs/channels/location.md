@@ -14,6 +14,7 @@ Clawdbot normalizes shared locations from chat channels into:
 Currently supported:
 - **Telegram** (location pins + venues + live locations)
 - **WhatsApp** (locationMessage + liveLocationMessage)
+- **Matrix** (`m.location` with `geo_uri`)
 
 ## Text formatting
 Locations are rendered as friendly lines without brackets:
@@ -44,3 +45,4 @@ When a location is present, these fields are added to `ctx`:
 ## Channel notes
 - **Telegram**: venues map to `LocationName/LocationAddress`; live locations use `live_period`.
 - **WhatsApp**: `locationMessage.comment` and `liveLocationMessage.caption` are appended as the caption line.
+- **Matrix**: `geo_uri` is parsed as a pin location; altitude is ignored and `LocationIsLive` is always false.

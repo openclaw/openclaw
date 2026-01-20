@@ -51,12 +51,16 @@ export type MatrixConfig = {
   password?: string;
   /** Optional device name when logging in via password. */
   deviceName?: string;
-  /** Initial sync limit for startup (default: matrix-js-sdk default). */
+  /** Initial sync limit for startup (default: matrix-bot-sdk default). */
   initialSyncLimit?: number;
+  /** Enable end-to-end encryption (E2EE). Default: false. */
+  encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Allowlist for group senders (user IDs or localparts). */
+  groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   /** How to handle thread replies (off|inbound|always). */
@@ -72,6 +76,8 @@ export type MatrixConfig = {
   /** Direct message policy + allowlist overrides. */
   dm?: MatrixDmConfig;
   /** Room config allowlist keyed by room ID, alias, or name. */
+  groups?: Record<string, MatrixRoomConfig>;
+  /** Room config allowlist keyed by room ID, alias, or name. Legacy; use groups. */
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
