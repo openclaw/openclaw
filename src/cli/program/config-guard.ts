@@ -21,8 +21,8 @@ export async function ensureConfigReady(params: {
   });
 
   const snapshot = await readConfigFileSnapshot();
-  const command = params.commandPath?.[0];
-  const allowInvalid = command ? ALLOWED_INVALID_COMMANDS.has(command) : false;
+  const commandName = params.commandPath?.[0];
+  const allowInvalid = commandName ? ALLOWED_INVALID_COMMANDS.has(commandName) : false;
   const issues = snapshot.exists && !snapshot.valid ? formatConfigIssues(snapshot.issues) : [];
   const legacyIssues =
     snapshot.legacyIssues.length > 0
@@ -55,7 +55,7 @@ export async function ensureConfigReady(params: {
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
   const heading = (value: string) => colorize(rich, theme.heading, value);
-  const command = (value: string) => colorize(rich, theme.command, value);
+  const commandText = (value: string) => colorize(rich, theme.command, value);
 
   params.runtime.error(heading("Config invalid"));
   params.runtime.error(`${muted("File:")} ${muted(snapshot.path)}`);
@@ -72,7 +72,7 @@ export async function ensureConfigReady(params: {
     params.runtime.error(pluginIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
-  params.runtime.error(`${muted("Run:")} ${command("clawdbot doctor --fix")}`);
+  params.runtime.error(`${muted("Run:")} ${commandText("clawdbot doctor --fix")}`);
   if (!allowInvalid) {
     params.runtime.exit(1);
   }
