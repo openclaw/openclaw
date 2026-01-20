@@ -1,4 +1,9 @@
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
+export {
+  BLUEBUBBLES_ACTIONS,
+  BLUEBUBBLES_ACTION_NAMES,
+  BLUEBUBBLES_GROUP_ACTIONS,
+} from "../channels/plugins/bluebubbles-actions.js";
 export type {
   ChannelAccountSnapshot,
   ChannelAccountState,

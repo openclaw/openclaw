@@ -55,6 +55,16 @@ export const ChannelAccountSnapshotSchema = Type.Object(
   { additionalProperties: true },
 );
 
+export const ChannelUiMetaSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    detailLabel: NonEmptyString,
+    systemImage: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -62,6 +72,7 @@ export const ChannelsStatusResultSchema = Type.Object(
     channelLabels: Type.Record(NonEmptyString, NonEmptyString),
     channelDetailLabels: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     channelSystemImages: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
+    channelMeta: Type.Optional(Type.Array(ChannelUiMetaSchema)),
     channels: Type.Record(NonEmptyString, Type.Unknown()),
     channelAccounts: Type.Record(NonEmptyString, Type.Array(ChannelAccountSnapshotSchema)),
     channelDefaultAccountId: Type.Record(NonEmptyString, NonEmptyString),

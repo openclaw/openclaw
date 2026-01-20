@@ -153,11 +153,19 @@ struct ChannelsStatusSnapshot: Codable {
         let application: AnyCodable?
     }
 
+    struct ChannelUiMetaEntry: Codable {
+        let id: String
+        let label: String
+        let detailLabel: String
+        let systemImage: String?
+    }
+
     let ts: Double
     let channelOrder: [String]
     let channelLabels: [String: String]
     let channelDetailLabels: [String: String]? = nil
     let channelSystemImages: [String: String]? = nil
+    let channelMeta: [ChannelUiMetaEntry]? = nil
     let channels: [String: AnyCodable]
     let channelAccounts: [String: [ChannelAccountSnapshot]]
     let channelDefaultAccountId: [String: String]
@@ -218,6 +226,47 @@ final class ChannelsStore {
     var pollTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
+
+    func channelMetaEntry(_ id: String) -> ChannelsStatusSnapshot.ChannelUiMetaEntry? {
+        self.snapshot?.channelMeta?.first(where: { $0.id == id })
+    }
+
+    func resolveChannelLabel(_ id: String) -> String {
+        if let meta = self.channelMetaEntry(id), !meta.label.isEmpty {
+            return meta.label
+        }
+        if let label = self.snapshot?.channelLabels[id], !label.isEmpty {
+            return label
+        }
+        return id
+    }
+
+    func resolveChannelDetailLabel(_ id: String) -> String {
+        if let meta = self.channelMetaEntry(id), !meta.detailLabel.isEmpty {
+            return meta.detailLabel
+        }
+        if let detail = self.snapshot?.channelDetailLabels?[id], !detail.isEmpty {
+            return detail
+        }
+        return self.resolveChannelLabel(id)
+    }
+
+    func resolveChannelSystemImage(_ id: String) -> String {
+        if let meta = self.channelMetaEntry(id), let symbol = meta.systemImage, !symbol.isEmpty {
+            return symbol
+        }
+        if let symbol = self.snapshot?.channelSystemImages?[id], !symbol.isEmpty {
+            return symbol
+        }
+        return "message"
+    }
+
+    func orderedChannelIds() -> [String] {
+        if let meta = self.snapshot?.channelMeta, !meta.isEmpty {
+            return meta.map { $0.id }
+        }
+        return self.snapshot?.channelOrder ?? []
+    }
 
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {
         self.isPreview = isPreview

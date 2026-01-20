@@ -426,24 +426,17 @@ extension ChannelsSettings {
     }
 
     private func resolveChannelTitle(_ id: String) -> String {
-        if let label = self.store.snapshot?.channelLabels[id], !label.isEmpty {
-            return label
-        }
+        let label = self.store.resolveChannelLabel(id)
+        if label != id { return label }
         return id.prefix(1).uppercased() + id.dropFirst()
     }
 
     private func resolveChannelDetailTitle(_ id: String) -> String {
-        if let detail = self.store.snapshot?.channelDetailLabels?[id], !detail.isEmpty {
-            return detail
-        }
-        return self.resolveChannelTitle(id)
+        return self.store.resolveChannelDetailLabel(id)
     }
 
     private func resolveChannelSystemImage(_ id: String) -> String {
-        if let symbol = self.store.snapshot?.channelSystemImages?[id], !symbol.isEmpty {
-            return symbol
-        }
-        return "message"
+        return self.store.resolveChannelSystemImage(id)
     }
 
     private func channelStatusDictionary(_ id: String) -> [String: AnyCodable]? {

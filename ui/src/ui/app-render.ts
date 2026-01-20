@@ -272,8 +272,11 @@ export function renderApp(state: AppViewState) {
               error: state.cronError,
               busy: state.cronBusy,
               form: state.cronForm,
-              channels: state.channelsSnapshot?.channelOrder ?? [],
+              channels: state.channelsSnapshot?.channelMeta?.length
+                ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
+                : state.channelsSnapshot?.channelOrder ?? [],
               channelLabels: state.channelsSnapshot?.channelLabels ?? {},
+              channelMeta: state.channelsSnapshot?.channelMeta ?? [],
               runsJobId: state.cronRunsJobId,
               runs: state.cronRuns,
               onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),

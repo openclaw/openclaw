@@ -1,4 +1,6 @@
 import {
+  BLUEBUBBLES_ACTION_NAMES,
+  BLUEBUBBLES_ACTIONS,
   createActionGate,
   jsonResult,
   readBooleanParam,
@@ -49,19 +51,7 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
 }
 
 /** Supported action names for BlueBubbles */
-const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
-  "react",
-  "edit",
-  "unsend",
-  "reply",
-  "sendWithEffect",
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "sendAttachment",
-]);
+const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>(BLUEBUBBLES_ACTION_NAMES);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
@@ -69,19 +59,13 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     if (!account.enabled || !account.configured) return [];
     const gate = createActionGate((cfg as ClawdbotConfig).channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
-    // Check if running on macOS 26+ (edit not supported)
     const macOS26 = isMacOS26OrHigher(account.accountId);
-    if (gate("reactions")) actions.add("react");
-    if (gate("edit") && !macOS26) actions.add("edit");
-    if (gate("unsend")) actions.add("unsend");
-    if (gate("reply")) actions.add("reply");
-    if (gate("sendWithEffect")) actions.add("sendWithEffect");
-    if (gate("renameGroup")) actions.add("renameGroup");
-    if (gate("setGroupIcon")) actions.add("setGroupIcon");
-    if (gate("addParticipant")) actions.add("addParticipant");
-    if (gate("removeParticipant")) actions.add("removeParticipant");
-    if (gate("leaveGroup")) actions.add("leaveGroup");
-    if (gate("sendAttachment")) actions.add("sendAttachment");
+    for (const action of BLUEBUBBLES_ACTION_NAMES) {
+      const spec = BLUEBUBBLES_ACTIONS[action];
+      if (!spec?.gate) continue;
+      if (spec.unsupportedOnMacOS26 && macOS26) continue;
+      if (gate(spec.gate)) actions.add(action);
+    }
     return Array.from(actions);
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),

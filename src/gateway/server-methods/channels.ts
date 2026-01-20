@@ -5,6 +5,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
+import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
@@ -188,24 +189,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
-    const channelLabels = Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.meta.label]));
-    const channelDetailLabels = Object.fromEntries(
-      plugins.map((plugin) => [
-        plugin.id,
-        plugin.meta.detailLabel ?? plugin.meta.selectionLabel ?? plugin.meta.label,
-      ]),
-    );
-    const channelSystemImages = Object.fromEntries(
-      plugins.flatMap((plugin) =>
-        plugin.meta.systemImage ? [[plugin.id, plugin.meta.systemImage]] : [],
-      ),
-    );
+    const uiCatalog = buildChannelUiCatalog(plugins);
     const payload: Record<string, unknown> = {
       ts: Date.now(),
-      channelOrder: plugins.map((plugin) => plugin.id),
-      channelLabels,
-      channelDetailLabels,
-      channelSystemImages,
+      channelOrder: uiCatalog.order,
+      channelLabels: uiCatalog.labels,
+      channelDetailLabels: uiCatalog.detailLabels,
+      channelSystemImages: uiCatalog.systemImages,
+      channelMeta: uiCatalog.entries,
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,

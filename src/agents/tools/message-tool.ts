@@ -7,6 +7,7 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
+import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -25,14 +26,6 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-const BLUEBUBBLES_GROUP_ACTIONS = new Set<ChannelMessageActionName>([
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-]);
-
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),

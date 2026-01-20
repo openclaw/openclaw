@@ -1326,6 +1326,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
     public let channellabels: [String: AnyCodable]
     public let channeldetaillabels: [String: AnyCodable]?
     public let channelsystemimages: [String: AnyCodable]?
+    public let channelmeta: [[String: AnyCodable]]?
     public let channels: [String: AnyCodable]
     public let channelaccounts: [String: AnyCodable]
     public let channeldefaultaccountid: [String: AnyCodable]
@@ -1336,6 +1337,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         channellabels: [String: AnyCodable],
         channeldetaillabels: [String: AnyCodable]?,
         channelsystemimages: [String: AnyCodable]?,
+        channelmeta: [[String: AnyCodable]]?,
         channels: [String: AnyCodable],
         channelaccounts: [String: AnyCodable],
         channeldefaultaccountid: [String: AnyCodable]
@@ -1345,6 +1347,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         self.channellabels = channellabels
         self.channeldetaillabels = channeldetaillabels
         self.channelsystemimages = channelsystemimages
+        self.channelmeta = channelmeta
         self.channels = channels
         self.channelaccounts = channelaccounts
         self.channeldefaultaccountid = channeldefaultaccountid
@@ -1355,6 +1358,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channellabels = "channelLabels"
         case channeldetaillabels = "channelDetailLabels"
         case channelsystemimages = "channelSystemImages"
+        case channelmeta = "channelMeta"
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"

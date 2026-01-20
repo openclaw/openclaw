@@ -928,8 +928,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       }
       if (auth.encryption === true && !client.crypto && !warnedCryptoMissingRooms.has(roomId)) {
         warnedCryptoMissingRooms.add(roomId);
-        const warning =
-          "matrix: encryption enabled but crypto is unavailable; install @matrix-org/matrix-sdk-crypto-nodejs and restart";
+        const hint = core.system.formatNativeDependencyHint({
+          packageName: "@matrix-org/matrix-sdk-crypto-nodejs",
+          manager: "pnpm",
+          downloadCommand:
+            "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+        });
+        const warning = `matrix: encryption enabled but crypto is unavailable; ${hint}`;
         logger.warn({ roomId }, warning);
       }
       return;

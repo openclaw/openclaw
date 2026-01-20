@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { formatAgo } from "../format";
 import type {
   ChannelAccountSnapshot,
+  ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
   DiscordStatus,
   IMessageStatus,
@@ -85,6 +86,9 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
+  if (snapshot?.channelMeta?.length) {
+    return snapshot.channelMeta.map((entry) => entry.id) as ChannelKey[];
+  }
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
   }
@@ -148,7 +152,7 @@ function renderGenericChannelCard(
   props: ChannelsProps,
   channelAccounts: Record<string, ChannelAccountSnapshot[]>,
 ) {
-  const label = props.snapshot?.channelLabels?.[key] ?? key;
+  const label = resolveChannelLabel(props.snapshot, key);
   const status = props.snapshot?.channels?.[key] as Record<string, unknown> | undefined;
   const configured = typeof status?.configured === "boolean" ? status.configured : undefined;
   const running = typeof status?.running === "boolean" ? status.running : undefined;
@@ -195,6 +199,21 @@ function renderGenericChannelCard(
       ${renderChannelConfigSection({ channelId: key, props })}
     </div>
   `;
+}
+
+function resolveChannelMetaMap(
+  snapshot: ChannelsStatusSnapshot | null,
+): Record<string, ChannelUiMetaEntry> {
+  if (!snapshot?.channelMeta?.length) return {};
+  return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
+}
+
+function resolveChannelLabel(
+  snapshot: ChannelsStatusSnapshot | null,
+  key: string,
+): string {
+  const meta = resolveChannelMetaMap(snapshot)[key];
+  return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
 }
 
 const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
