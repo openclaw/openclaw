@@ -409,6 +409,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         mediaMaxMb: account.config.mediaMaxMb,
         initialSyncLimit: account.config.initialSyncLimit,
         replyToMode: account.config.replyToMode,
+        accountId: account.accountId,
       });
     },
   },

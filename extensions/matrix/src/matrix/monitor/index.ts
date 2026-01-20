@@ -1,4 +1,5 @@
 import type {
+  EncryptedFile,
   LocationMessageEventContent,
   MatrixClient,
   MessageEventContent,
@@ -77,6 +78,7 @@ type MatrixRawEvent = {
 
 type RoomMessageEventContent = MessageEventContent & {
   url?: string;
+  file?: EncryptedFile;
   info?: {
     mimetype?: string;
   };
@@ -168,6 +170,7 @@ export type MonitorMatrixOpts = {
   mediaMaxMb?: number;
   initialSyncLimit?: number;
   replyToMode?: ReplyToMode;
+  accountId?: string | null;
 };
 
 const DEFAULT_MEDIA_MAX_MB = 20;
@@ -316,6 +319,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     cfg,
     auth: authWithLimit,
     startClient: false,
+    accountId: opts.accountId,
   });
   setActiveMatrixClient(client);
 
@@ -592,7 +596,12 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       } | null = null;
       const contentUrl =
         "url" in content && typeof content.url === "string" ? content.url : undefined;
-      if (!rawBody && !contentUrl) {
+      const contentFile =
+        "file" in content && content.file && typeof content.file === "object"
+          ? (content.file as EncryptedFile)
+          : undefined;
+      const mediaUrl = contentUrl ?? contentFile?.url;
+      if (!rawBody && !mediaUrl) {
         return;
       }
 
@@ -600,13 +609,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         "info" in content && content.info && "mimetype" in content.info
           ? (content.info as { mimetype?: string }).mimetype
           : undefined;
-      if (contentUrl?.startsWith("mxc://")) {
+      if (mediaUrl?.startsWith("mxc://")) {
         try {
           media = await downloadMatrixMedia({
             client,
-            mxcUrl: contentUrl,
+            mxcUrl: mediaUrl,
             contentType,
             maxBytes: mediaMaxBytes,
+            file: contentFile,
           });
         } catch (err) {
           logVerboseMessage(`matrix: media download failed: ${String(err)}`);
@@ -937,6 +947,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   await resolveSharedMatrixClient({
     cfg,
     auth: authWithLimit,
+    accountId: opts.accountId,
   });
   logVerboseMessage("matrix: client started");
 

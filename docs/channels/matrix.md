@@ -118,7 +118,11 @@ Enable with `channels.matrix.encryption: true`:
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
   Clawdbot logs a warning.
 
-Crypto state is stored in `~/.clawdbot/matrix/crypto/` (SQLite database).
+Crypto state is stored per account + access token in
+`~/.clawdbot/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
+(SQLite database). Sync state lives alongside it in `bot-storage.json`.
+If the access token (device) changes, a new store is created and the bot must be
+re-verified for encrypted rooms.
 
 **Device verification:**
 When E2EE is enabled, the bot will request verification from your other sessions on startup.
