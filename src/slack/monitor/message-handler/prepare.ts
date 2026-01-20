@@ -479,6 +479,7 @@ export async function prepareSlackMessage(params: {
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadLabel: threadLabel,
+    MessageThreadId: isThreadReply ? threadTs : undefined,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
     MediaPath: media?.path,

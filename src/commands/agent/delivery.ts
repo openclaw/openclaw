@@ -61,6 +61,7 @@ export async function deliverAgentCommandResult(params: {
     sessionEntry,
     requestedChannel: opts.replyChannel ?? opts.channel,
     explicitTo: opts.replyTo ?? opts.to,
+    explicitThreadId: opts.threadId,
     accountId: opts.replyAccountId ?? opts.accountId,
     wantsDelivery: deliver,
   });
@@ -93,6 +94,10 @@ export async function deliverAgentCommandResult(params: {
         };
   const resolvedTarget = resolved.resolvedTarget;
   const deliveryTarget = resolved.resolvedTo;
+  const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
+  const resolvedReplyToId =
+    deliveryChannel === "slack" && resolvedThreadId != null ? String(resolvedThreadId) : undefined;
+  const resolvedThreadTarget = deliveryChannel === "slack" ? undefined : resolvedThreadId;
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
@@ -153,6 +158,8 @@ export async function deliverAgentCommandResult(params: {
         to: deliveryTarget,
         accountId: resolvedAccountId,
         payloads: deliveryPayloads,
+        replyToId: resolvedReplyToId ?? null,
+        threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,

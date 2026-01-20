@@ -57,6 +57,7 @@ export const AgentParamsSchema = Type.Object(
     replyChannel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     replyAccountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),

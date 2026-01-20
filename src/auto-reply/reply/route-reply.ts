@@ -100,6 +100,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
+  const resolvedReplyToId =
+    replyToId ??
+    (channelId === "slack" && threadId != null && threadId !== "" ? String(threadId) : undefined);
+  const resolvedThreadId = channelId === "slack" ? null : (threadId ?? null);
+
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
@@ -110,8 +115,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       to,
       accountId: accountId ?? undefined,
       payloads: [normalized],
-      replyToId: replyToId ?? null,
-      threadId: threadId ?? null,
+      replyToId: resolvedReplyToId ?? null,
+      threadId: resolvedThreadId,
       abortSignal,
       mirror: params.sessionKey
         ? {

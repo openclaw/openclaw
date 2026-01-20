@@ -22,6 +22,7 @@ export type AgentDeliveryPlan = {
   resolvedChannel: GatewayMessageChannel;
   resolvedTo?: string;
   resolvedAccountId?: string;
+  resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
 };
 
@@ -29,6 +30,7 @@ export function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
   requestedChannel?: string;
   explicitTo?: string;
+  explicitThreadId?: string | number;
   accountId?: string;
   wantsDelivery: boolean;
 }): AgentDeliveryPlan {
@@ -46,6 +48,7 @@ export function resolveAgentDeliveryPlan(params: {
     entry: params.sessionEntry,
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
+    explicitThreadId: params.explicitThreadId,
   });
 
   const resolvedChannel = (() => {
@@ -89,6 +92,7 @@ export function resolveAgentDeliveryPlan(params: {
     resolvedChannel,
     resolvedTo,
     resolvedAccountId,
+    resolvedThreadId: baseDelivery.threadId,
     deliveryTargetMode,
   };
 }

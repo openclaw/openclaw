@@ -407,6 +407,8 @@ export async function agentCommand(
             sessionKey,
             messageChannel,
             agentAccountId: runContext.accountId,
+            messageTo: opts.replyTo ?? opts.to,
+            messageThreadId: opts.threadId,
             currentChannelId: runContext.currentChannelId,
             currentThreadTs: runContext.currentThreadTs,
             replyToMode: runContext.replyToMode,

@@ -69,7 +69,8 @@ Note: the merge is additive, so main profiles are always available as fallbacks.
 Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- Otherwise the announce reply is posted to the requester chat channel via the gateway `send` method.
+- Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
+- Announce replies preserve thread/topic routing when available (Slack threads, Telegram topics, Matrix threads).
 - Announce messages are normalized to a stable template:
   - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
   - `Result:` the summary content from the announce step (or `(not available)` if missing).

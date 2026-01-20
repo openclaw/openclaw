@@ -5,6 +5,7 @@ export type DeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
+  threadId?: string | number;
 };
 
 export type DeliveryContextSessionSource = {
@@ -12,6 +13,7 @@ export type DeliveryContextSessionSource = {
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
   deliveryContext?: DeliveryContext;
 };
 
@@ -23,12 +25,22 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
       : undefined;
   const to = typeof context.to === "string" ? context.to.trim() : undefined;
   const accountId = normalizeAccountId(context.accountId);
-  if (!channel && !to && !accountId) return undefined;
-  return {
+  const threadId =
+    typeof context.threadId === "number" && Number.isFinite(context.threadId)
+      ? Math.trunc(context.threadId)
+      : typeof context.threadId === "string"
+        ? context.threadId.trim()
+        : undefined;
+  const normalizedThreadId =
+    typeof threadId === "string" ? (threadId ? threadId : undefined) : threadId;
+  if (!channel && !to && !accountId && normalizedThreadId == null) return undefined;
+  const normalized: DeliveryContext = {
     channel: channel || undefined,
     to: to || undefined,
     accountId,
   };
+  if (normalizedThreadId != null) normalized.threadId = normalizedThreadId;
+  return normalized;
 }
 
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
@@ -36,6 +48,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
 } {
   if (!source) {
     return {
@@ -43,6 +56,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
+      lastThreadId: undefined,
     };
   }
 
@@ -51,6 +65,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
       channel: source.lastChannel ?? source.channel,
       to: source.lastTo,
       accountId: source.lastAccountId,
+      threadId: source.lastThreadId,
     }),
     normalizeDeliveryContext(source.deliveryContext),
   );
@@ -61,6 +76,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
       lastChannel: undefined,
       lastTo: undefined,
       lastAccountId: undefined,
+      lastThreadId: undefined,
     };
   }
 
@@ -69,6 +85,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     lastChannel: merged.channel,
     lastTo: merged.to,
     lastAccountId: merged.accountId,
+    lastThreadId: merged.threadId,
   };
 }
 
@@ -90,11 +107,14 @@ export function mergeDeliveryContext(
     channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
     to: normalizedPrimary?.to ?? normalizedFallback?.to,
     accountId: normalizedPrimary?.accountId ?? normalizedFallback?.accountId,
+    threadId: normalizedPrimary?.threadId ?? normalizedFallback?.threadId,
   });
 }
 
 export function deliveryContextKey(context?: DeliveryContext): string | undefined {
   const normalized = normalizeDeliveryContext(context);
   if (!normalized?.channel || !normalized?.to) return undefined;
-  return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}`;
+  const threadId =
+    normalized.threadId != null && normalized.threadId !== "" ? String(normalized.threadId) : "";
+  return `${normalized.channel}|${normalized.to}|${normalized.accountId ?? ""}|${threadId}`;
 }

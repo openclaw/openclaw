@@ -18,6 +18,7 @@ Docs: https://docs.clawd.bot
 - Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) — thanks @suminhthanh.
 ### Fixes
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
+- Agents: preserve subagent announce thread/topic routing + queued replies across channels. (#1241) — thanks @gnarco.
 - Doctor: clarify plugin auto-enable hint text in the startup banner.
 - Gateway: clarify unauthorized handshake responses with token/password mismatch guidance.
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).

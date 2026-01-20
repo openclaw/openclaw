@@ -39,10 +39,13 @@ describe("delivery context helpers", () => {
   });
 
   it("builds stable keys only when channel and to are present", () => {
-    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe("whatsapp|+1555|");
+    expect(deliveryContextKey({ channel: "whatsapp", to: "+1555" })).toBe("whatsapp|+1555||");
     expect(deliveryContextKey({ channel: "whatsapp" })).toBeUndefined();
     expect(deliveryContextKey({ channel: "whatsapp", to: "+1555", accountId: "acct-1" })).toBe(
-      "whatsapp|+1555|acct-1",
+      "whatsapp|+1555|acct-1|",
+    );
+    expect(deliveryContextKey({ channel: "slack", to: "channel:C1", threadId: "123.456" })).toBe(
+      "slack|channel:C1||123.456",
     );
   });
 
@@ -64,17 +67,24 @@ describe("delivery context helpers", () => {
       deliveryContextFromSession({
         channel: "telegram",
         lastTo: " 123 ",
+        lastThreadId: " 999 ",
       }),
     ).toEqual({
       channel: "telegram",
       to: "123",
       accountId: undefined,
+      threadId: "999",
     });
   });
 
   it("normalizes delivery fields and mirrors them on session entries", () => {
     const normalized = normalizeSessionDeliveryFields({
-      deliveryContext: { channel: " Slack ", to: " channel:1 ", accountId: " acct-2 " },
+      deliveryContext: {
+        channel: " Slack ",
+        to: " channel:1 ",
+        accountId: " acct-2 ",
+        threadId: " 444 ",
+      },
       lastChannel: " whatsapp ",
       lastTo: " +1555 ",
     });
@@ -83,9 +93,11 @@ describe("delivery context helpers", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "acct-2",
+      threadId: "444",
     });
     expect(normalized.lastChannel).toBe("whatsapp");
     expect(normalized.lastTo).toBe("+1555");
     expect(normalized.lastAccountId).toBe("acct-2");
+    expect(normalized.lastThreadId).toBe("444");
   });
 });

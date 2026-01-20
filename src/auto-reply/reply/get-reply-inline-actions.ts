@@ -168,6 +168,8 @@ export async function handleInlineActions(params: {
         agentSessionKey: sessionKey,
         agentChannel: channel,
         agentAccountId: (ctx as { AccountId?: string }).AccountId,
+        agentTo: ctx.OriginatingTo ?? ctx.To,
+        agentThreadId: ctx.MessageThreadId ?? undefined,
         agentDir,
         workspaceDir,
         config: cfg,

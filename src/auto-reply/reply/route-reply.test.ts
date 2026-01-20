@@ -255,6 +255,22 @@ describe("routeReply", () => {
     );
   });
 
+  it("uses threadId as threadTs for Slack when replyToId is missing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "1710000000.9999",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "hi",
+      expect.objectContaining({ threadTs: "1710000000.9999" }),
+    );
+  });
+
   it("sends multiple mediaUrls (caption only on first)", async () => {
     mocks.sendMessageSlack.mockClear();
     await routeReply({

@@ -61,6 +61,8 @@ export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -83,6 +85,8 @@ export function createSessionsSpawnTool(opts?: {
       const requesterOrigin = normalizeDeliveryContext({
         channel: opts?.agentChannel,
         accountId: opts?.agentAccountId,
+        to: opts?.agentTo,
+        threadId: opts?.agentThreadId,
       });
       const runTimeoutSeconds = (() => {
         const explicit =

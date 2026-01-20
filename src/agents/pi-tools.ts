@@ -102,6 +102,8 @@ export function createClawdbotCodingTools(options?: {
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   agentDir?: string;
@@ -265,6 +267,8 @@ export function createClawdbotCodingTools(options?: {
       agentSessionKey: options?.sessionKey,
       agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
+      agentTo: options?.messageTo,
+      agentThreadId: options?.messageThreadId,
       agentDir: options?.agentDir,
       sandboxRoot,
       workspaceDir: options?.workspaceDir,

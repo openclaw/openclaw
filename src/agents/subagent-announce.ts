@@ -98,6 +98,8 @@ function resolveAnnounceOrigin(
 
 async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
+  const threadId =
+    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
   await callGateway({
     method: "agent",
     params: {
@@ -106,6 +108,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       channel: origin?.channel,
       accountId: origin?.accountId,
       to: origin?.to,
+      threadId,
       deliver: true,
       idempotencyKey: crypto.randomUUID(),
     },
@@ -424,6 +427,11 @@ export async function runSubagentAnnounceFlow(params: {
         deliver: true,
         channel: directOrigin?.channel,
         accountId: directOrigin?.accountId,
+        to: directOrigin?.to,
+        threadId:
+          directOrigin?.threadId != null && directOrigin.threadId !== ""
+            ? String(directOrigin.threadId)
+            : undefined,
         idempotencyKey: crypto.randomUUID(),
       },
       expectFinal: true,
