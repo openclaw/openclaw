@@ -434,6 +434,7 @@ export async function agentCommand(
             streamParams: opts.streamParams,
             agentDir,
             onAgentEvent: (evt) => {
+              // Track lifecycle end for fallback emission below.
               if (
                 evt.stream === "lifecycle" &&
                 typeof evt.data?.phase === "string" &&
@@ -441,11 +442,6 @@ export async function agentCommand(
               ) {
                 lifecycleEnded = true;
               }
-              emitAgentEvent({
-                runId,
-                stream: evt.stream,
-                data: evt.data,
-              });
             },
           });
         },

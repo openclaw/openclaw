@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type StubSession = {
@@ -53,6 +54,44 @@ describe("subscribeEmbeddedPiSession", () => {
 
     await waitPromise;
     expect(resolved).toBe(true);
+  });
+
+  it("emits compaction events on the agent event bus", async () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const events: Array<{ phase: string; willRetry?: boolean }> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId !== "run-compaction") return;
+      if (evt.stream !== "compaction") return;
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      events.push({
+        phase,
+        willRetry: typeof evt.data?.willRetry === "boolean" ? evt.data.willRetry : undefined,
+      });
+    });
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run-compaction",
+    });
+
+    handler?.({ type: "auto_compaction_start" });
+    handler?.({ type: "auto_compaction_end", willRetry: true });
+    handler?.({ type: "auto_compaction_end", willRetry: false });
+
+    stop();
+
+    expect(events).toEqual([
+      { phase: "start" },
+      { phase: "end", willRetry: true },
+      { phase: "end", willRetry: false },
+    ]);
   });
   it("emits tool summaries at tool start when verbose is on", async () => {
     let handler: ((evt: unknown) => void) | undefined;
