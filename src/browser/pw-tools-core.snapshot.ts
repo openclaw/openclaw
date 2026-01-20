@@ -6,11 +6,12 @@ import {
   buildRoleSnapshotFromAriaSnapshot,
   getRoleSnapshotStats,
   type RoleSnapshotOptions,
+  type RoleRefMap,
 } from "./pw-role-snapshot.js";
 import {
   ensurePageState,
   getPageForTargetId,
-  rememberRoleRefsForTarget,
+  storeRoleRefsForTarget,
   type WithSnapshotForAI,
 } from "./pw-session.js";
 
@@ -43,7 +44,7 @@ export async function snapshotAiViaPlaywright(opts: {
   targetId?: string;
   timeoutMs?: number;
   maxChars?: number;
-}): Promise<{ snapshot: string; truncated?: boolean }> {
+}): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -65,11 +66,21 @@ export async function snapshotAiViaPlaywright(opts: {
     typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
       ? Math.floor(maxChars)
       : undefined;
+  let truncated = false;
   if (limit && snapshot.length > limit) {
     snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
-    return { snapshot, truncated: true };
+    truncated = true;
   }
-  return { snapshot };
+
+  const built = buildRoleSnapshotFromAiSnapshot(snapshot);
+  storeRoleRefsForTarget({
+    page,
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: built.refs,
+    mode: "aria",
+  });
+  return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
 }
 
 export async function snapshotRoleViaPlaywright(opts: {
@@ -88,7 +99,7 @@ export async function snapshotRoleViaPlaywright(opts: {
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
   });
-  const state = ensurePageState(page);
+  ensurePageState(page);
 
   if (opts.refsMode === "aria") {
     if (opts.selector?.trim() || opts.frameSelector?.trim()) {
@@ -103,17 +114,13 @@ export async function snapshotRoleViaPlaywright(opts: {
       track: "response",
     });
     const built = buildRoleSnapshotFromAiSnapshot(String(result?.full ?? ""), opts.options);
-    state.roleRefs = built.refs;
-    state.roleRefsFrameSelector = undefined;
-    state.roleRefsMode = "aria";
-    if (opts.targetId) {
-      rememberRoleRefsForTarget({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        refs: built.refs,
-        mode: "aria",
-      });
-    }
+    storeRoleRefsForTarget({
+      page,
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      refs: built.refs,
+      mode: "aria",
+    });
     return {
       snapshot: built.snapshot,
       refs: built.refs,
@@ -133,18 +140,14 @@ export async function snapshotRoleViaPlaywright(opts: {
 
   const ariaSnapshot = await locator.ariaSnapshot();
   const built = buildRoleSnapshotFromAriaSnapshot(String(ariaSnapshot ?? ""), opts.options);
-  state.roleRefs = built.refs;
-  state.roleRefsFrameSelector = frameSelector || undefined;
-  state.roleRefsMode = "role";
-  if (opts.targetId) {
-    rememberRoleRefsForTarget({
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      refs: built.refs,
-      frameSelector: frameSelector || undefined,
-      mode: "role",
-    });
-  }
+  storeRoleRefsForTarget({
+    page,
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    refs: built.refs,
+    frameSelector: frameSelector || undefined,
+    mode: "role",
+  });
   return {
     snapshot: built.snapshot,
     refs: built.refs,

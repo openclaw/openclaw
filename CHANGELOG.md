@@ -33,9 +33,8 @@ Docs: https://docs.clawd.bot
 ### Fixes
 - Gateway: strip inbound envelope headers from chat history messages to keep clients clean.
 - UI: prevent double-scroll in Control UI chat by locking chat layout to the viewport. (#1283) — thanks @bradleypriest.
-
-### Fixes
 - Config: allow Perplexity as a web_search provider in config validation. (#1230)
+- Browser: register AI snapshot refs for act commands. (#1282) — thanks @John-Rood.
 
 ## 2026.1.19-2
 

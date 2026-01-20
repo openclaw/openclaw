@@ -188,11 +188,11 @@ export async function runTui(opts: TuiOptions) {
     password: opts.password,
   });
 
+  const tui = new TUI(new ProcessTerminal());
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
   const chatLog = new ChatLog();
-  const tui = new TUI(new ProcessTerminal());
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
