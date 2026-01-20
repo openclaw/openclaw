@@ -256,6 +256,52 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
 
 Peer bindings always win, so keep them above the channel-wide rule.
 
+## Family agent bound to a WhatsApp group
+
+Bind a dedicated family agent to a single WhatsApp group, with mention gating
+and a tighter tool policy:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "family",
+        name: "Family",
+        workspace: "~/clawd-family",
+        identity: { name: "Family Bot" },
+        groupChat: {
+          mentionPatterns: ["@family", "@familybot", "@Family Bot"]
+        },
+        sandbox: {
+          mode: "all",
+          scope: "agent"
+        },
+        tools: {
+          allow: ["exec", "read", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
+          deny: ["write", "edit", "apply_patch", "browser", "canvas", "nodes", "cron"]
+        }
+      }
+    ]
+  },
+  bindings: [
+    {
+      agentId: "family",
+      match: {
+        channel: "whatsapp",
+        peer: { kind: "group", id: "120363999999999999@g.us" }
+      }
+    }
+  ]
+}
+```
+
+Notes:
+- Tool allow/deny lists are **tools**, not skills. If a skill needs to run a
+  binary, ensure `exec` is allowed and the binary exists in the sandbox.
+- For stricter gating, set `agents.list[].groupChat.mentionPatterns` and keep
+  group allowlists enabled for the channel.
+
 ## Per-Agent Sandbox and Tool Configuration
 
 Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
