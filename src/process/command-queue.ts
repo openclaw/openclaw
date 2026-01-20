@@ -1,3 +1,5 @@
+import { CommandLane } from "./lanes.js";
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -69,7 +71,7 @@ function drainLane(lane: string) {
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
-  const cleaned = lane.trim() || "main";
+  const cleaned = lane.trim() || CommandLane.Main;
   const state = getLaneState(cleaned);
   state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
   drainLane(cleaned);
@@ -83,7 +85,7 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  const cleaned = lane.trim() || "main";
+  const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
@@ -106,10 +108,10 @@ export function enqueueCommand<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  return enqueueCommandInLane("main", task, opts);
+  return enqueueCommandInLane(CommandLane.Main, task, opts);
 }
 
-export function getQueueSize(lane = "main") {
+export function getQueueSize(lane = CommandLane.Main) {
   const state = lanes.get(lane);
   if (!state) return 0;
   return state.queue.length + state.active;
@@ -123,8 +125,8 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane = "main") {
-  const cleaned = lane.trim() || "main";
+export function clearCommandLane(lane = CommandLane.Main) {
+  const cleaned = lane.trim() || CommandLane.Main;
   const state = lanes.get(cleaned);
   if (!state) return 0;
   const removed = state.queue.length;

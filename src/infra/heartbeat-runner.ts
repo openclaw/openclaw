@@ -24,6 +24,7 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
@@ -327,7 +328,7 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "disabled" };
   }
 
-  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)("main");
+  const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
   }
