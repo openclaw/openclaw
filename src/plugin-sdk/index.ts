@@ -245,3 +245,6 @@ export {
   normalizeWhatsAppMessagingTarget,
 } from "../channels/plugins/normalize/whatsapp.js";
 export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/whatsapp.js";
+
+// Channel: BlueBubbles
+export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";

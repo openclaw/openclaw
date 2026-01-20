@@ -5,6 +5,7 @@ import type { ChannelAccountSnapshot, ChannelPlugin, ClawdbotConfig } from "claw
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  collectBlueBubblesStatusIssues,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -331,19 +332,7 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       lastStopAt: null,
       lastError: null,
     },
-    collectStatusIssues: (accounts) =>
-      accounts.flatMap((account) => {
-        const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) return [];
-        return [
-          {
-            channel: "bluebubbles",
-            accountId: account.accountId,
-            kind: "runtime",
-            message: `Channel error: ${lastError}`,
-          },
-        ];
-      }),
+    collectStatusIssues: collectBlueBubblesStatusIssues,
     buildChannelSummary: ({ snapshot }) => ({
       configured: snapshot.configured ?? false,
       baseUrl: snapshot.baseUrl ?? null,

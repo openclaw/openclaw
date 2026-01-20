@@ -16,8 +16,8 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Discord](/channels/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
-- [iMessage](/channels/imessage) — macOS only; native integration.
-- [BlueBubbles](/channels/bluebubbles) — iMessage via BlueBubbles macOS server (bundled plugin, disabled by default).
+- [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (edit, unsend, effects, reactions, group management).
+- [iMessage](/channels/imessage) — macOS only; native integration via imsg (legacy, consider BlueBubbles for new setups).
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).
 - [Nextcloud Talk](/channels/nextcloud-talk) — Self-hosted chat via Nextcloud Talk (plugin, installed separately).
 - [Matrix](/channels/matrix) — Matrix protocol (plugin, installed separately).
