@@ -41,6 +41,7 @@ export const MatrixConfigSchema = z.object({
   password: z.string().optional(),
   deviceName: z.string().optional(),
   initialSyncLimit: z.number().optional(),
+  encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
@@ -49,7 +50,9 @@ export const MatrixConfigSchema = z.object({
   mediaMaxMb: z.number().optional(),
   autoJoin: z.enum(["always", "allowlist", "off"]).optional(),
   autoJoinAllowlist: z.array(allowFromEntry).optional(),
+  groupAllowFrom: z.array(allowFromEntry).optional(),
   dm: matrixDmSchema,
+  groups: z.object({}).catchall(matrixRoomSchema).optional(),
   rooms: z.object({}).catchall(matrixRoomSchema).optional(),
   actions: matrixActionSchema,
 });

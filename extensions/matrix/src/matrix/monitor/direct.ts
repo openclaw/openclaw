@@ -1,80 +1,105 @@
-import type {
-  AccountDataEvents,
-  MatrixClient,
-  MatrixEvent,
-  Room,
-  RoomMember,
-} from "matrix-js-sdk";
-import { ClientEvent, EventType } from "matrix-js-sdk";
+import type { MatrixClient } from "matrix-bot-sdk";
 
-function hasDirectFlag(member?: RoomMember | null): boolean {
-  if (!member?.events.member) return false;
-  const content = member.events.member.getContent() as { is_direct?: boolean } | undefined;
-  if (content?.is_direct === true) return true;
-  const prev = member.events.member.getPrevContent() as { is_direct?: boolean } | undefined;
-  return prev?.is_direct === true;
-}
+type DirectMessageCheck = {
+  roomId: string;
+  senderId?: string;
+  selfUserId?: string;
+};
 
-export function isLikelyDirectRoom(params: {
-  room: Room;
-  senderId: string;
-  selfId?: string | null;
-}): boolean {
-  if (!params.selfId) return false;
-  const memberCount = params.room.getJoinedMemberCount?.();
-  if (typeof memberCount !== "number" || memberCount !== 2) return false;
-  return true;
-}
+type DirectRoomTrackerOptions = {
+  log?: (message: string) => void;
+};
 
-export function isDirectRoomByFlag(params: {
-  room: Room;
-  senderId: string;
-  selfId?: string | null;
-}): boolean {
-  if (!params.selfId) return false;
-  const selfMember = params.room.getMember(params.selfId);
-  const senderMember = params.room.getMember(params.senderId);
-  if (hasDirectFlag(selfMember) || hasDirectFlag(senderMember)) return true;
-  const inviter = selfMember?.getDMInviter() ?? senderMember?.getDMInviter();
-  return Boolean(inviter);
-}
+const DM_CACHE_TTL_MS = 30_000;
 
-type MatrixDirectAccountData = AccountDataEvents[EventType.Direct];
+export function createDirectRoomTracker(
+  client: MatrixClient,
+  opts: DirectRoomTrackerOptions = {},
+) {
+  const log = opts.log ?? (() => {});
+  let lastDmUpdateMs = 0;
+  let cachedSelfUserId: string | null = null;
+  const memberCountCache = new Map<string, { count: number; ts: number }>();
 
-export function createDirectRoomTracker(client: MatrixClient) {
-  const directMap = new Map<string, Set<string>>();
+  const ensureSelfUserId = async (): Promise<string | null> => {
+    if (cachedSelfUserId) return cachedSelfUserId;
+    try {
+      cachedSelfUserId = await client.getUserId();
+    } catch {
+      cachedSelfUserId = null;
+    }
+    return cachedSelfUserId;
+  };
 
-  const updateDirectMap = (content: MatrixDirectAccountData) => {
-    directMap.clear();
-    for (const [userId, rooms] of Object.entries(content)) {
-      if (!Array.isArray(rooms)) continue;
-      const ids = rooms.map((roomId) => String(roomId).trim()).filter(Boolean);
-      if (ids.length === 0) continue;
-      directMap.set(userId, new Set(ids));
+  const refreshDmCache = async (): Promise<void> => {
+    const now = Date.now();
+    if (now - lastDmUpdateMs < DM_CACHE_TTL_MS) return;
+    lastDmUpdateMs = now;
+    try {
+      await client.dms.update();
+    } catch (err) {
+      log(`matrix: dm cache refresh failed (${String(err)})`);
     }
   };
 
-  const initialDirect = client.getAccountData(EventType.Direct);
-  if (initialDirect) {
-    updateDirectMap(initialDirect.getContent<MatrixDirectAccountData>() ?? {});
-  }
+  const resolveMemberCount = async (roomId: string): Promise<number | null> => {
+    const cached = memberCountCache.get(roomId);
+    const now = Date.now();
+    if (cached && now - cached.ts < DM_CACHE_TTL_MS) {
+      return cached.count;
+    }
+    try {
+      const members = await client.getJoinedRoomMembers(roomId);
+      const count = members.length;
+      memberCountCache.set(roomId, { count, ts: now });
+      return count;
+    } catch (err) {
+      log(`matrix: dm member count failed room=${roomId} (${String(err)})`);
+      return null;
+    }
+  };
 
-  client.on(ClientEvent.AccountData, (event: MatrixEvent) => {
-    if (event.getType() !== EventType.Direct) return;
-    updateDirectMap(event.getContent<MatrixDirectAccountData>() ?? {});
-  });
+  const hasDirectFlag = async (roomId: string, userId?: string): Promise<boolean> => {
+    const target = userId?.trim();
+    if (!target) return false;
+    try {
+      const state = await client.getRoomStateEvent(roomId, "m.room.member", target);
+      return state?.is_direct === true;
+    } catch {
+      return false;
+    }
+  };
 
   return {
-    isDirectMessage: (room: Room, senderId: string) => {
-      const roomId = room.roomId;
-      const directRooms = directMap.get(senderId);
-      const selfId = client.getUserId();
-      const isDirectByFlag = isDirectRoomByFlag({ room, senderId, selfId });
-      return (
-        Boolean(directRooms?.has(roomId)) ||
-        isDirectByFlag ||
-        isLikelyDirectRoom({ room, senderId, selfId })
+    isDirectMessage: async (params: DirectMessageCheck): Promise<boolean> => {
+      const { roomId, senderId } = params;
+      await refreshDmCache();
+
+      if (client.dms.isDm(roomId)) {
+        log(`matrix: dm detected via m.direct room=${roomId}`);
+        return true;
+      }
+
+      const memberCount = await resolveMemberCount(roomId);
+      if (memberCount === 2) {
+        log(`matrix: dm detected via member count room=${roomId} members=${memberCount}`);
+        return true;
+      }
+
+      const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
+      const directViaState =
+        (await hasDirectFlag(roomId, senderId)) || (await hasDirectFlag(roomId, selfUserId ?? ""));
+      if (directViaState) {
+        log(`matrix: dm detected via member state room=${roomId}`);
+        return true;
+      }
+
+      log(
+        `matrix: dm check room=${roomId} result=group members=${
+          memberCount ?? "unknown"
+        }`,
       );
+      return false;
     },
   };
 }

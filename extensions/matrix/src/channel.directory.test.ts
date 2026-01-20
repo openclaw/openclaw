@@ -1,4 +1,3 @@
-import os from "node:os";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { PluginRuntime } from "clawdbot/plugin-sdk";
@@ -11,7 +10,7 @@ describe("matrix directory", () => {
   beforeEach(() => {
     setMatrixRuntime({
       state: {
-        resolveStateDir: () => os.tmpdir(),
+        resolveStateDir: (_env, homeDir) => homeDir(),
       },
     } as PluginRuntime);
   });
@@ -21,7 +20,8 @@ describe("matrix directory", () => {
       channels: {
         matrix: {
           dm: { allowFrom: ["matrix:@alice:example.org", "bob"] },
-          rooms: {
+          groupAllowFrom: ["@dana:example.org"],
+          groups: {
             "!room1:example.org": { users: ["@carol:example.org"] },
             "#alias:example.org": { users: [] },
           },
@@ -40,6 +40,7 @@ describe("matrix directory", () => {
         { kind: "user", id: "user:@alice:example.org" },
         { kind: "user", id: "bob", name: "incomplete id; expected @user:server" },
         { kind: "user", id: "user:@carol:example.org" },
+        { kind: "user", id: "user:@dana:example.org" },
       ]),
     );
 

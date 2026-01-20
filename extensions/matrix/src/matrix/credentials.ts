@@ -8,6 +8,7 @@ export type MatrixStoredCredentials = {
   homeserver: string;
   userId: string;
   accessToken: string;
+  deviceId?: string;
   createdAt: string;
   lastUsedAt?: string;
 };
@@ -94,5 +95,9 @@ export function credentialsMatchConfig(
   stored: MatrixStoredCredentials,
   config: { homeserver: string; userId: string },
 ): boolean {
+  // If userId is empty (token-based auth), only match homeserver
+  if (!config.userId) {
+    return stored.homeserver === config.homeserver;
+  }
   return stored.homeserver === config.homeserver && stored.userId === config.userId;
 }
