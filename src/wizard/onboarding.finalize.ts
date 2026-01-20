@@ -17,6 +17,7 @@ import {
   waitForGatewayReachable,
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -396,7 +397,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           "Clawdbot uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
           "",
           "Set it up interactively:",
-          "- Run: clawdbot configure --section web",
+          `- Run: ${formatCliCommand("clawdbot configure --section web")}`,
           "- Enable web_search and paste your Brave Search API key",
           "",
           "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",

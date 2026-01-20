@@ -8,6 +8,7 @@ import { formatAge } from "../../infra/channel-summary.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { theme } from "../../terminal/theme.js";
 import { type ChatChannel, formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -142,7 +143,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         `- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
       );
     }
-    lines.push(`- Run: clawdbot doctor`);
+    lines.push(`- Run: ${formatCliCommand("clawdbot doctor")}`);
     lines.push("");
   }
   lines.push(

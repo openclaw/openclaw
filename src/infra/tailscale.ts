@@ -4,6 +4,7 @@ import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js"
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { ensureBinary } from "./binaries.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
@@ -268,7 +269,7 @@ export async function ensureFunnel(
     runtime.error("Failed to enable Tailscale Funnel. Is it allowed on your tailnet?");
     runtime.error(
       info(
-        "Tip: Funnel is optional for CLAWDBOT. You can keep running the web gateway without it: `pnpm clawdbot gateway`",
+        `Tip: Funnel is optional for CLAWDBOT. You can keep running the web gateway without it: \`${formatCliCommand("clawdbot gateway")}\``,
       ),
     );
     if (shouldLogVerbose()) {

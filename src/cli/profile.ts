@@ -1,6 +1,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { isValidProfileName } from "./profile-utils.js";
+
 export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
@@ -19,12 +21,6 @@ function takeValue(
   }
   const trimmed = (next ?? "").trim();
   return { value: trimmed || null, consumedNext: Boolean(next) };
-}
-
-function isValidProfileName(value: string): boolean {
-  if (!value) return false;
-  // Keep it path-safe + shell-friendly.
-  return /^[a-z0-9][a-z0-9_-]{0,63}$/i.test(value);
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {

@@ -1,4 +1,5 @@
 import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { type ClawdbotConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -15,7 +16,7 @@ export async function requireValidConfig(
         ? snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n")
         : "Unknown validation issue.";
     runtime.error(`Config invalid:\n${issues}`);
-    runtime.error("Fix the config or run clawdbot doctor.");
+    runtime.error(`Fix the config or run ${formatCliCommand("clawdbot doctor")}.`);
     runtime.exit(1);
     return null;
   }

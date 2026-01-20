@@ -4,6 +4,7 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 import { registerBrowserActionInputCommands } from "./browser-cli-actions-input.js";
 import { registerBrowserActionObserveCommands } from "./browser-cli-actions-observe.js";
 import { registerBrowserDebugCommands } from "./browser-cli-debug.js";
@@ -32,7 +33,9 @@ export function registerBrowserCli(program: Command) {
     )
     .action(() => {
       browser.outputHelp();
-      defaultRuntime.error(danger('Missing subcommand. Try: "clawdbot browser status"'));
+      defaultRuntime.error(
+        danger(`Missing subcommand. Try: "${formatCliCommand("clawdbot browser status")}"`),
+      );
       defaultRuntime.exit(1);
     });
 

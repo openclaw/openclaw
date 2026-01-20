@@ -7,6 +7,7 @@ import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { formatDocsLink } from "../../../terminal/links.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import { normalizeE164 } from "../../../utils.js";
 import {
   listWhatsAppAccountIds,
@@ -321,7 +322,10 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
         await prompter.note(`Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`, "WhatsApp help");
       }
     } else if (!linked) {
-      await prompter.note("Run `clawdbot channels login` later to link WhatsApp.", "WhatsApp");
+      await prompter.note(
+        `Run \`${formatCliCommand("clawdbot channels login")}\` later to link WhatsApp.`,
+        "WhatsApp",
+      );
     }
 
     next = await promptWhatsAppAllowFrom(next, runtime, prompter, {

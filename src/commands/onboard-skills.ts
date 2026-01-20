@@ -1,5 +1,6 @@
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -152,7 +153,9 @@ export async function setupSkills(
         spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
         if (result.stderr) runtime.log(result.stderr.trim());
         else if (result.stdout) runtime.log(result.stdout.trim());
-        runtime.log("Tip: run `clawdbot doctor` to review skills + requirements.");
+        runtime.log(
+          `Tip: run \`${formatCliCommand("clawdbot doctor")}\` to review skills + requirements.`,
+        );
         runtime.log("Docs: https://docs.clawd.bot/skills");
       }
     }

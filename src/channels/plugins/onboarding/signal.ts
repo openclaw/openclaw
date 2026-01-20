@@ -9,6 +9,7 @@ import {
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
@@ -283,7 +284,7 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
       [
         'Link device with: signal-cli link -n "Clawdbot"',
         "Scan QR in Signal → Linked Devices",
-        "Then run: clawdbot gateway call channels.status --params '{\"probe\":true}'",
+        `Then run: ${formatCliCommand("clawdbot gateway call channels.status --params '{\"probe\":true}'")}`,
         `Docs: ${formatDocsLink("/signal", "signal")}`,
       ].join("\n"),
       "Signal next steps",

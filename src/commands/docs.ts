@@ -3,6 +3,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
+import { formatCliCommand } from "../cli/command-format.js";
 
 const SEARCH_TOOL = "https://docs.clawd.bot/mcp.SearchClawdbot";
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -150,10 +151,10 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     const docs = formatDocsLink("/", "docs.clawd.bot");
     if (isRich()) {
       runtime.log(`${theme.muted("Docs:")} ${docs}`);
-      runtime.log(`${theme.muted("Search:")} clawdbot docs "your query"`);
+      runtime.log(`${theme.muted("Search:")} ${formatCliCommand('clawdbot docs "your query"')}`);
     } else {
       runtime.log("Docs: https://docs.clawd.bot/");
-      runtime.log('Search: clawdbot docs "your query"');
+      runtime.log(`Search: ${formatCliCommand('clawdbot docs "your query"')}`);
     }
     return;
   }

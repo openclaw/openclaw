@@ -5,6 +5,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { formatCliCommand } from "../command-format.js";
 
 export function parsePort(raw: unknown): number | null {
   if (raw === undefined || raw === null) return null;
@@ -122,7 +123,7 @@ export function renderRuntimeHints(
     }
   })();
   if (runtime.missingUnit) {
-    hints.push("Service not installed. Run: clawdbot daemon install");
+    hints.push(`Service not installed. Run: ${formatCliCommand("clawdbot daemon install", env)}`);
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     return hints;
   }
@@ -144,7 +145,10 @@ export function renderRuntimeHints(
 }
 
 export function renderGatewayServiceStartHints(env: NodeJS.ProcessEnv = process.env): string[] {
-  const base = ["clawdbot daemon install", "clawdbot gateway"];
+  const base = [
+    formatCliCommand("clawdbot daemon install", env),
+    formatCliCommand("clawdbot gateway", env),
+  ];
   const profile = env.CLAWDBOT_PROFILE;
   switch (process.platform) {
     case "darwin": {

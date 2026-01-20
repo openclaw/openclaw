@@ -378,7 +378,7 @@ clawdbot channels login
 ### Build errors on `main` — what’s the standard fix path?
 
 1) `git pull origin main && pnpm install`
-2) `pnpm clawdbot doctor`
+2) `clawdbot doctor`
 3) Check GitHub issues or Discord
 4) Temporary workaround: check out an older commit
 
@@ -392,7 +392,7 @@ Typical recovery:
 git status   # ensure you’re in the repo root
 pnpm install
 pnpm build
-pnpm clawdbot doctor
+clawdbot doctor
 clawdbot daemon restart
 ```
 

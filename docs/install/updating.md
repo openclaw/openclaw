@@ -119,12 +119,13 @@ git pull
 pnpm install
 pnpm build
 pnpm ui:build # auto-installs UI deps on first run
-pnpm clawdbot doctor
-pnpm clawdbot health
+clawdbot doctor
+clawdbot health
 ```
 
 Notes:
 - `pnpm build` matters when you run the packaged `clawdbot` binary ([`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
+- If you run from a repo checkout without a global install, use `pnpm clawdbot ...` for CLI commands.
 - If you run directly from TypeScript (`pnpm clawdbot ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
 - Switching between global and git installs is easy: install the other flavor, then run `clawdbot doctor` so the gateway service entrypoint is rewritten to the current install.
 

@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { ChannelPlugin } from "./types.js";
@@ -13,5 +14,7 @@ export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
 }
 
 export function formatPairingApproveHint(channelId: string): string {
-  return `Approve via: clawdbot pairing list ${channelId} / clawdbot pairing approve ${channelId} <code>`;
+  const listCmd = formatCliCommand(`clawdbot pairing list ${channelId}`);
+  const approveCmd = formatCliCommand(`clawdbot pairing approve ${channelId} <code>`);
+  return `Approve via: ${listCmd} / ${approveCmd}`;
 }

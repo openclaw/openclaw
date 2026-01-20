@@ -6,6 +6,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveClawdbotPackageRoot } from "./clawdbot-root.js";
 import { compareSemverStrings, fetchNpmTagVersion, checkUpdateStatus } from "./update-check.js";
 import { VERSION } from "../version.js";
+import { formatCliCommand } from "../cli/command-format.js";
 
 type UpdateCheckState = {
   lastCheckedAt?: string;
@@ -102,7 +103,7 @@ export async function runGatewayUpdateCheck(params: {
       state.lastNotifiedVersion !== tagStatus.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
       params.log.info(
-        `update available (${tag}): v${tagStatus.version} (current v${VERSION}). Run: clawdbot update`,
+        `update available (${tag}): v${tagStatus.version} (current v${VERSION}). Run: ${formatCliCommand("clawdbot update")}`,
       );
       nextState.lastNotifiedVersion = tagStatus.version;
       nextState.lastNotifiedTag = tag;

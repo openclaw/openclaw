@@ -1,4 +1,5 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -109,7 +110,7 @@ export function resolveOutboundTarget(params: {
     return {
       ok: false,
       error: new Error(
-        "Delivering to WebChat is not supported via `clawdbot agent`; use WhatsApp/Telegram or run with --deliver=false.",
+        `Delivering to WebChat is not supported via \`${formatCliCommand("clawdbot agent")}\`; use WhatsApp/Telegram or run with --deliver=false.`,
       ),
     };
   }

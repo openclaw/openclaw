@@ -22,6 +22,7 @@ import {
 } from "../../infra/provider-usage.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { colorize, theme } from "../../terminal/theme.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
@@ -395,8 +396,8 @@ export async function modelsStatusCommand(
     for (const provider of missingProvidersInUse) {
       const hint =
         provider === "anthropic"
-          ? "Run `claude setup-token` or `clawdbot configure`."
-          : "Run `clawdbot configure` or set an API key env var.";
+          ? `Run \`claude setup-token\` or \`${formatCliCommand("clawdbot configure")}\`.`
+          : `Run \`${formatCliCommand("clawdbot configure")}\` or set an API key env var.`;
       runtime.log(`- ${theme.heading(provider)} ${hint}`);
     }
   }

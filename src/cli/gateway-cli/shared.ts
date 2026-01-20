@@ -5,6 +5,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 
 export function parsePort(raw: unknown): number | null {
   if (raw === undefined || raw === null) return null;
@@ -67,21 +68,21 @@ export function renderGatewayServiceStopHints(env: NodeJS.ProcessEnv = process.e
   switch (process.platform) {
     case "darwin":
       return [
-        "Tip: clawdbot daemon stop",
+        `Tip: ${formatCliCommand("clawdbot daemon stop")}`,
         `Or: launchctl bootout gui/$UID/${resolveGatewayLaunchAgentLabel(profile)}`,
       ];
     case "linux":
       return [
-        "Tip: clawdbot daemon stop",
+        `Tip: ${formatCliCommand("clawdbot daemon stop")}`,
         `Or: systemctl --user stop ${resolveGatewaySystemdServiceName(profile)}.service`,
       ];
     case "win32":
       return [
-        "Tip: clawdbot daemon stop",
+        `Tip: ${formatCliCommand("clawdbot daemon stop")}`,
         `Or: schtasks /End /TN "${resolveGatewayWindowsTaskName(profile)}"`,
       ];
     default:
-      return ["Tip: clawdbot daemon stop"];
+      return [`Tip: ${formatCliCommand("clawdbot daemon stop")}`];
   }
 }
 

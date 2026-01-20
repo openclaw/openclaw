@@ -4,6 +4,7 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
 import type { AgentElevatedAllowFromConfig, ClawdbotConfig } from "../../config/config.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { MsgContext } from "../templating.js";
 
 function normalizeAllowToken(value?: string) {
@@ -187,7 +188,9 @@ export function formatElevatedUnavailableMessage(params: {
   lines.push("- agents.list[].tools.elevated.enabled");
   lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
   if (params.sessionKey) {
-    lines.push(`See: clawdbot sandbox explain --session ${params.sessionKey}`);
+    lines.push(
+      `See: ${formatCliCommand(`clawdbot sandbox explain --session ${params.sessionKey}`)}`,
+    );
   }
   return lines.join("\n");
 }

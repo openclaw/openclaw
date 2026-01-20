@@ -9,6 +9,7 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDBOT, readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -258,7 +259,7 @@ export async function doctorCommand(
       runtime.log(`Backup: ${backupPath}`);
     }
   } else {
-    runtime.log('Run "clawdbot doctor --fix" to apply changes.');
+    runtime.log(`Run "${formatCliCommand("clawdbot doctor --fix")}" to apply changes.`);
   }
 
   if (options.workspaceSuggestions !== false) {

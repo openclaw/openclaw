@@ -14,6 +14,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import type { ChannelChoice } from "./onboard-types.js";
@@ -186,7 +187,7 @@ async function noteChannelPrimer(
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
-      "Approve with: clawdbot pairing approve <channel> <code>",
+      `Approve with: ${formatCliCommand("clawdbot pairing approve <channel> <code>")}`,
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       'Multi-user DMs: set session.dmScope="per-channel-peer" to isolate sessions.',
       `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
@@ -233,7 +234,7 @@ async function maybeConfigureDmPolicies(params: {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: clawdbot pairing approve ${policy.channel} <code>`,
+        `Approve: ${formatCliCommand(`clawdbot pairing approve ${policy.channel} <code>`)}`,
         `Allowlist DMs: ${policy.policyKey}="allowlist" + ${policy.allowFromKey} entries.`,
         `Public DMs: ${policy.policyKey}="open" + ${policy.allowFromKey} includes "*".`,
         'Multi-user DMs: set session.dmScope="per-channel-peer" to isolate sessions.',
@@ -581,7 +582,7 @@ export async function setupChannels(
         {
           value: "__skip__",
           label: "Skip for now",
-          hint: "You can add channels later via `clawdbot channels add`",
+          hint: `You can add channels later via \`${formatCliCommand("clawdbot channels add")}\``,
         },
       ],
       initialValue: quickstartDefault,

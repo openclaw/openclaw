@@ -1,5 +1,6 @@
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { loadConfig } from "../config/config.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveBrowserConfig } from "./config.js";
 
 let cachedConfigToken: string | null | undefined = undefined;
@@ -30,8 +31,7 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const cause = unwrapCause(err);
   const code = extractErrorCode(cause) ?? extractErrorCode(err) ?? "";
 
-  const hint =
-    "Start (or restart) the Clawdbot gateway (Clawdbot.app menubar, or `clawdbot gateway`) and try again.";
+  const hint = `Start (or restart) the Clawdbot gateway (Clawdbot.app menubar, or \`${formatCliCommand("clawdbot gateway")}\`) and try again.`;
 
   if (code === "ECONNREFUSED") {
     return new Error(

@@ -2,6 +2,7 @@ import type { AgentBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { describeBinding } from "./agents.bindings.js";
 import { requireValidConfig } from "./agents.command-shared.js";
 import type { AgentSummary } from "./agents.config.js";
@@ -116,7 +117,7 @@ export async function agentsListCommand(
   const lines = ["Agents:", ...summaries.map(formatSummary)];
   lines.push("Routing rules map channel/account/peer to an agent. Use --bindings for full rules.");
   lines.push(
-    "Channel status reflects local config/creds. For live health: clawdbot channels status --probe.",
+    `Channel status reflects local config/creds. For live health: ${formatCliCommand("clawdbot channels status --probe")}.`,
   );
   runtime.log(lines.join("\n"));
 }

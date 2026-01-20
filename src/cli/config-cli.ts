@@ -5,6 +5,7 @@ import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { formatCliCommand } from "./command-format.js";
 import { theme } from "../terminal/theme.js";
 
 type PathSegment = string;
@@ -171,7 +172,7 @@ async function loadValidConfig() {
   for (const issue of snapshot.issues) {
     defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
   }
-  defaultRuntime.error("Run `clawdbot doctor` to repair, then retry.");
+  defaultRuntime.error(`Run \`${formatCliCommand("clawdbot doctor")}\` to repair, then retry.`);
   defaultRuntime.exit(1);
   return snapshot;
 }

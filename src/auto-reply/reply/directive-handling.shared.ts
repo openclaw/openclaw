@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const SYSTEM_MARK = "⚙️";
@@ -44,7 +45,9 @@ export function formatElevatedUnavailableText(params: {
     );
   }
   if (params.sessionKey) {
-    lines.push(`See: clawdbot sandbox explain --session ${params.sessionKey}`);
+    lines.push(
+      `See: ${formatCliCommand(`clawdbot sandbox explain --session ${params.sessionKey}`)}`,
+    );
   }
   return lines.join("\n");
 }

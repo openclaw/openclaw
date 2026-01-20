@@ -12,6 +12,7 @@ import {
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../auto-reply/reply/mentions.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -234,7 +235,7 @@ export const buildTelegramMessageContext = async ({
                   `Pairing code: ${code}`,
                   "",
                   "Ask the bot owner to approve with:",
-                  "clawdbot pairing approve telegram <code>",
+                  formatCliCommand("clawdbot pairing approve telegram <code>"),
                 ].join("\n"),
               );
             }

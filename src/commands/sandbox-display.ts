@@ -3,6 +3,7 @@
  */
 
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   formatAge,
@@ -88,7 +89,9 @@ export function displaySummary(
 
   if (mismatchCount > 0) {
     runtime.log(`\n⚠️  ${mismatchCount} container(s) with image mismatch detected.`);
-    runtime.log(`   Run 'clawdbot sandbox recreate --all' to update all containers.`);
+    runtime.log(
+      `   Run '${formatCliCommand("clawdbot sandbox recreate --all")}' to update all containers.`,
+    );
   }
 }
 

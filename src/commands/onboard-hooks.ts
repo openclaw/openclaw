@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { formatCliCommand } from "../cli/command-format.js";
 
 export async function setupInternalHooks(
   cfg: ClawdbotConfig,
@@ -73,9 +74,9 @@ export async function setupInternalHooks(
       `Enabled ${selected.length} hook${selected.length > 1 ? "s" : ""}: ${selected.join(", ")}`,
       "",
       "You can manage hooks later with:",
-      "  clawdbot hooks list",
-      "  clawdbot hooks enable <name>",
-      "  clawdbot hooks disable <name>",
+      `  ${formatCliCommand("clawdbot hooks list")}`,
+      `  ${formatCliCommand("clawdbot hooks enable <name>")}`,
+      `  ${formatCliCommand("clawdbot hooks disable <name>")}`,
     ].join("\n"),
     "Hooks Configured",
   );

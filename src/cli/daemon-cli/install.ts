@@ -7,6 +7,7 @@ import { loadConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatCliCommand } from "../command-format.js";
 import { buildDaemonServiceSnapshot, createNullWriter, emitDaemonActionJson } from "./response.js";
 import { parsePort } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
@@ -82,7 +83,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       });
       if (!json) {
         defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-        defaultRuntime.log("Reinstall with: clawdbot daemon install --force");
+        defaultRuntime.log(
+          `Reinstall with: ${formatCliCommand("clawdbot daemon install --force")}`,
+        );
       }
       return;
     }

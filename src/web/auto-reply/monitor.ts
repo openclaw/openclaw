@@ -11,6 +11,7 @@ import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejecti
 import { getChildLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveWhatsAppAccount } from "../accounts.js";
 import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
@@ -374,7 +375,7 @@ export async function monitorWebChannel(
 
     if (loggedOut) {
       runtime.error(
-        "WhatsApp session logged out. Run `clawdbot channels login --channel web` to relink.",
+        `WhatsApp session logged out. Run \`${formatCliCommand("clawdbot channels login --channel web")}\` to relink.`,
       );
       await closeListener();
       break;

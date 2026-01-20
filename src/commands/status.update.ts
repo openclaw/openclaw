@@ -4,6 +4,7 @@ import {
   compareSemverStrings,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { VERSION } from "../version.js";
 
 export async function getUpdateCheckResult(params: {
@@ -63,7 +64,7 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
     details.push(`npm ${availability.latestVersion}`);
   }
   const suffix = details.length > 0 ? ` (${details.join(" · ")})` : "";
-  return `Update available${suffix}. Run: clawdbot update`;
+  return `Update available${suffix}. Run: ${formatCliCommand("clawdbot update")}`;
 }
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {

@@ -13,6 +13,7 @@ import { isWSLEnv } from "../../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
+import { formatCliCommand } from "../command-format.js";
 import { formatRuntimeStatus, renderRuntimeHints, safeDaemonEnv } from "./shared.js";
 import {
   type DaemonStatus,
@@ -70,7 +71,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       defaultRuntime.error(`${warnText("Service config issue:")} ${issue.message}${detail}`);
     }
     defaultRuntime.error(
-      warnText('Recommendation: run "clawdbot doctor" (or "clawdbot doctor --repair").'),
+      warnText(
+        `Recommendation: run "${formatCliCommand("clawdbot doctor")}" (or "${formatCliCommand("clawdbot doctor --repair")}").`,
+      ),
     );
   }
 
@@ -103,7 +106,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       );
       defaultRuntime.error(
         errorText(
-          "Fix: rerun `clawdbot daemon install --force` from the same --profile / CLAWDBOT_STATE_DIR you expect.",
+          `Fix: rerun \`${formatCliCommand("clawdbot daemon install --force")}\` from the same --profile / CLAWDBOT_STATE_DIR you expect.`,
         ),
       );
     }
@@ -205,7 +208,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${labelValue}`,
       ),
     );
-    defaultRuntime.error(errorText("Then reinstall: clawdbot daemon install"));
+    defaultRuntime.error(
+      errorText(`Then reinstall: ${formatCliCommand("clawdbot daemon install")}`),
+    );
     spacer();
   }
 
@@ -259,7 +264,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const svc of legacyServices) {
       defaultRuntime.error(`- ${errorText(svc.label)} (${svc.detail})`);
     }
-    defaultRuntime.error(errorText("Cleanup: clawdbot doctor"));
+    defaultRuntime.error(errorText(`Cleanup: ${formatCliCommand("clawdbot doctor")}`));
     spacer();
   }
 
@@ -288,6 +293,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
-  defaultRuntime.log(`${label("Troubles:")} run clawdbot status`);
+  defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("clawdbot status")}`);
   defaultRuntime.log(`${label("Troubleshooting:")} https://docs.clawd.bot/troubleshooting`);
 }

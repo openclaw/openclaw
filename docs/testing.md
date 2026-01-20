@@ -150,8 +150,8 @@ Live tests are split into two layers so we can isolate failures:
 Tip: to see what you can test on your machine (and the exact `provider/model` ids), run:
 
 ```bash
-pnpm clawdbot models list
-pnpm clawdbot models list --json
+clawdbot models list
+clawdbot models list --json
 ```
 
 ## Live: Anthropic setup-token smoke
