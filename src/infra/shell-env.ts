@@ -5,10 +5,26 @@ import { isTruthyEnvValue } from "./env.js";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 let lastAppliedKeys: string[] = [];
+let cachedShellPath: string | null | undefined;
 
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
   return shell && shell.length > 0 ? shell : "/bin/sh";
+}
+
+function parseShellEnv(stdout: Buffer): Map<string, string> {
+  const shellEnv = new Map<string, string>();
+  const parts = stdout.toString("utf8").split("\0");
+  for (const part of parts) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq <= 0) continue;
+    const key = part.slice(0, eq);
+    const value = part.slice(eq + 1);
+    if (!key) continue;
+    shellEnv.set(key, value);
+  }
+  return shellEnv;
 }
 
 export type ShellEnvFallbackResult =
@@ -63,17 +79,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: false, error: msg, applied: [] };
   }
 
-  const shellEnv = new Map<string, string>();
-  const parts = stdout.toString("utf8").split("\0");
-  for (const part of parts) {
-    if (!part) continue;
-    const eq = part.indexOf("=");
-    if (eq <= 0) continue;
-    const key = part.slice(0, eq);
-    const value = part.slice(eq + 1);
-    if (!key) continue;
-    shellEnv.set(key, value);
-  }
+  const shellEnv = parseShellEnv(stdout);
 
   const applied: string[] = [];
   for (const key of opts.expectedKeys) {
@@ -102,6 +108,48 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
   return Math.max(0, parsed);
+}
+
+export function getShellPathFromLoginShell(opts: {
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  exec?: typeof execFileSync;
+}): string | null {
+  if (cachedShellPath !== undefined) return cachedShellPath;
+  if (process.platform === "win32") {
+    cachedShellPath = null;
+    return cachedShellPath;
+  }
+
+  const exec = opts.exec ?? execFileSync;
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(0, opts.timeoutMs)
+      : DEFAULT_TIMEOUT_MS;
+  const shell = resolveShell(opts.env);
+
+  let stdout: Buffer;
+  try {
+    stdout = exec(shell, ["-l", "-c", "env -0"], {
+      encoding: "buffer",
+      timeout: timeoutMs,
+      maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
+      env: opts.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    cachedShellPath = null;
+    return cachedShellPath;
+  }
+
+  const shellEnv = parseShellEnv(stdout);
+  const shellPath = shellEnv.get("PATH")?.trim();
+  cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
+  return cachedShellPath;
+}
+
+export function resetShellPathCacheForTests(): void {
+  cachedShellPath = undefined;
 }
 
 export function getShellEnvAppliedKeys(): string[] {
