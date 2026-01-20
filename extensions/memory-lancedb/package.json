@@ -4,9 +4,9 @@
   "type": "module",
   "description": "Clawdbot LanceDB-backed long-term memory plugin with auto-recall/capture",
   "dependencies": {
-    "@lancedb/lancedb": "^0.15.0",
+    "@lancedb/lancedb": "^0.23.0",
     "@sinclair/typebox": "0.34.47",
-    "openai": "^4.104.0"
+    "openai": "^6.16.0"
   },
   "clawdbot": {
     "extensions": [
