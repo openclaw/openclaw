@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Command } from "commander";
 
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
@@ -231,6 +233,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_result_persist"
   | "session_start"
   | "session_end"
   | "gateway_start"
@@ -338,6 +341,30 @@ export type PluginHookAfterToolCallEvent = {
   durationMs?: number;
 };
 
+// tool_result_persist hook
+export type PluginHookToolResultPersistContext = {
+  agentId?: string;
+  sessionKey?: string;
+  toolName?: string;
+  toolCallId?: string;
+};
+
+export type PluginHookToolResultPersistEvent = {
+  toolName?: string;
+  toolCallId?: string;
+  /**
+   * The toolResult message about to be written to the session transcript.
+   * Handlers may return a modified message (e.g. drop non-essential fields).
+   */
+  message: AgentMessage;
+  /** True when the tool result was synthesized by a guard/repair step. */
+  isSynthetic?: boolean;
+};
+
+export type PluginHookToolResultPersistResult = {
+  message?: AgentMessage;
+};
+
 // Session context
 export type PluginHookSessionContext = {
   agentId?: string;
@@ -407,6 +434,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  tool_result_persist: (
+    event: PluginHookToolResultPersistEvent,
+    ctx: PluginHookToolResultPersistContext,
+  ) => PluginHookToolResultPersistResult | void;
   session_start: (
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,

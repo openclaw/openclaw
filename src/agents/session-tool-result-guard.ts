@@ -68,17 +68,44 @@ function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>)
   return null;
 }
 
-export function installSessionToolResultGuard(sessionManager: SessionManager): {
+export function installSessionToolResultGuard(
+  sessionManager: SessionManager,
+  opts?: {
+    /**
+     * Optional, synchronous transform applied to toolResult messages *before* they are
+     * persisted to the session transcript.
+     */
+    transformToolResultForPersistence?: (
+      message: AgentMessage,
+      meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
+    ) => AgentMessage;
+  },
+): {
   flushPendingToolResults: () => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pending = new Map<string, string | undefined>();
 
+  const persistToolResult = (
+    message: AgentMessage,
+    meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
+  ) => {
+    const transformer = opts?.transformToolResultForPersistence;
+    return transformer ? transformer(message, meta) : message;
+  };
+
   const flushPendingToolResults = () => {
     if (pending.size === 0) return;
     for (const [id, name] of pending.entries()) {
-      originalAppend(makeMissingToolResult({ toolCallId: id, toolName: name }));
+      const synthetic = makeMissingToolResult({ toolCallId: id, toolName: name });
+      originalAppend(
+        persistToolResult(synthetic, {
+          toolCallId: id,
+          toolName: name,
+          isSynthetic: true,
+        }) as never,
+      );
     }
     pending.clear();
   };
@@ -88,8 +115,15 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
 
     if (role === "toolResult") {
       const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
+      const toolName = id ? pending.get(id) : undefined;
       if (id) pending.delete(id);
-      return originalAppend(message as never);
+      return originalAppend(
+        persistToolResult(message, {
+          toolCallId: id ?? undefined,
+          toolName,
+          isSynthetic: false,
+        }) as never,
+      );
     }
 
     const sanitized =

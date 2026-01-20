@@ -178,6 +178,7 @@ export async function getReplyFromConfig(
     sessionCtx,
     cfg,
     agentId,
+    agentDir,
     sessionEntry,
     previousSessionEntry,
     sessionStore,
