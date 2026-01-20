@@ -148,12 +148,18 @@ export function isDiagnosticsEnabled(config?: ClawdbotConfig): boolean {
   return config?.diagnostics?.enabled === true;
 }
 
-export function emitDiagnosticEvent(event: Omit<DiagnosticEventPayload, "seq" | "ts">) {
+type DiagnosticEventInput = DiagnosticEventPayload extends infer T
+  ? T extends DiagnosticEventPayload
+    ? Omit<T, "seq" | "ts">
+    : never
+  : never;
+
+export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   const enriched: DiagnosticEventPayload = {
     ...event,
     seq: (seq += 1),
     ts: Date.now(),
-  };
+  } as DiagnosticEventPayload;
   for (const listener of listeners) {
     try {
       listener(enriched);
