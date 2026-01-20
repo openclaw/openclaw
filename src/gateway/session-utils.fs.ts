@@ -91,8 +91,10 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
   if (typeof content === "string") return content.trim() || null;
   if (!Array.isArray(content)) return null;
   for (const part of content) {
-    if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
-      return part.text.trim();
+    if (!part || typeof part.text !== "string") continue;
+    if (part.type === "text" || part.type === "output_text" || part.type === "input_text") {
+      const trimmed = part.text.trim();
+      if (trimmed) return trimmed;
     }
   }
   return null;
