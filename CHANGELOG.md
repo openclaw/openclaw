@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - Docs: refresh bird skill install metadata and usage notes. (#1302) — thanks @odysseus0.
 - Matrix: migrate to matrix-bot-sdk with E2EE support, location handling, and group allowlist upgrades. (#1298) — thanks @sibbl.
 - Plugins/UI: let channel plugin metadata drive UI labels/icons and cron channel options. (#1306) — thanks @steipete.
+- Zalouser: add channel dock metadata, config schema, setup wiring, probe, and status issues. (#1219) — thanks @suminhthanh.
 ### Fixes
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
