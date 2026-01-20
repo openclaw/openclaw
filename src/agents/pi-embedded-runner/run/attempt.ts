@@ -43,6 +43,7 @@ import {
   resolveSkillsPromptForRun,
 } from "../../skills.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { resolveDefaultModelForAgent } from "../../model-selection.js";
 
 import { isAbortError } from "../abort.js";
 import { buildEmbeddedExtensionPaths } from "../extensions.js";
@@ -212,6 +213,11 @@ export async function runEmbeddedAttempt(
         })
       : undefined;
 
+    const defaultModelRef = resolveDefaultModelForAgent({
+      cfg: params.config ?? {},
+      agentId: sessionAgentId,
+    });
+    const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
@@ -221,6 +227,7 @@ export async function runEmbeddedAttempt(
         arch: os.arch(),
         node: process.version,
         model: `${params.provider}/${params.modelId}`,
+        defaultModel: defaultModelLabel,
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,

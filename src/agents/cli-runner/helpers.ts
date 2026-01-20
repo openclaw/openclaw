@@ -11,6 +11,7 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { runExec } from "../../process/exec.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
@@ -174,6 +175,11 @@ export function buildSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const defaultModelRef = resolveDefaultModelForAgent({
+    cfg: params.config ?? {},
+    agentId: params.agentId,
+  });
+  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -183,6 +189,7 @@ export function buildSystemPrompt(params: {
       arch: os.arch(),
       node: process.version,
       model: params.modelDisplay,
+      defaultModel: defaultModelLabel,
     },
   });
   return buildAgentSystemPrompt({
