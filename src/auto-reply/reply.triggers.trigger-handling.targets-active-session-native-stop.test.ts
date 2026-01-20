@@ -242,4 +242,44 @@ describe("trigger handling", () => {
       );
     });
   });
+
+  it("uses the target agent model for native /status", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+          list: [{ id: "coding", model: "minimax/MiniMax-M2.1" }],
+        },
+        channels: {
+          telegram: {
+            allowFrom: ["*"],
+          },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "group",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+          CommandSource: "native",
+          CommandTargetSessionKey: "agent:coding:telegram:group:123",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("minimax/MiniMax-M2.1");
+    });
+  });
 });
