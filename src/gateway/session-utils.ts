@@ -84,7 +84,8 @@ export function deriveSessionTitle(
   }
 
   if (firstUserMessage?.trim()) {
-    return truncateTitle(firstUserMessage.trim(), DERIVED_TITLE_MAX_LEN);
+    const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
+    return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
   }
 
   if (entry.sessionId) {
