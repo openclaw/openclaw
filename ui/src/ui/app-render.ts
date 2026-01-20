@@ -382,6 +382,7 @@ export function renderApp(state: AppViewState) {
                 void loadChatHistory(state);
               },
               thinkingLevel: state.chatThinkingLevel,
+              showThinking: state.settings.chatShowThinking,
               loading: state.chatLoading,
               sending: state.chatSending,
               messages: state.chatMessages,

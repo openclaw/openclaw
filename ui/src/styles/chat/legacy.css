@@ -12,8 +12,14 @@
 }
 
 .chat-line.assistant,
-.chat-line.other {
+.chat-line.other,
+.chat-line.tool {
   justify-content: flex-start;
+}
+
+.chat-line.tool .chat-bubble {
+  border-style: dashed;
+  opacity: 0.95;
 }
 
 .chat-msg {

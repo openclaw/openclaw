@@ -106,8 +106,22 @@ export function renderMessageGroup(
 
 function renderAvatar(role: string) {
   const normalized = normalizeRoleForGrouping(role);
-  const initial = normalized === "user" ? "U" : normalized === "assistant" ? "A" : "?";
-  const className = normalized === "user" ? "user" : normalized === "assistant" ? "assistant" : "other";
+  const initial =
+    normalized === "user"
+      ? "U"
+      : normalized === "assistant"
+        ? "A"
+        : normalized === "tool"
+          ? "⚙"
+          : "?";
+  const className =
+    normalized === "user"
+      ? "user"
+      : normalized === "assistant"
+        ? "assistant"
+        : normalized === "tool"
+          ? "tool"
+          : "other";
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
 }
 
@@ -132,11 +146,10 @@ function renderGroupedMessage(
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinking(message) : null;
   const markdownBase = extractedText?.trim() ? extractedText : null;
-  const markdown = extractedThinking
-    ? [formatReasoningMarkdown(extractedThinking), markdownBase]
-        .filter(Boolean)
-        .join("\n\n")
-    : markdownBase;
+  const reasoningMarkdown = extractedThinking
+    ? formatReasoningMarkdown(extractedThinking)
+    : null;
+  const markdown = markdownBase;
 
   const bubbleClasses = [
     "chat-bubble",
@@ -156,6 +169,11 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
+      ${reasoningMarkdown
+        ? html`<div class="chat-thinking">${unsafeHTML(
+            toSanitizedMarkdownHtml(reasoningMarkdown),
+          )}</div>`
+        : nothing}
       ${markdown
         ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
         : nothing}

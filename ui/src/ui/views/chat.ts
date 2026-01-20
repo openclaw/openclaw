@@ -21,6 +21,7 @@ export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
   thinkingLevel: string | null;
+  showThinking: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -69,7 +70,7 @@ export function renderChat(props: ChatProps) {
     (row) => row.key === props.sessionKey,
   );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
-  const showReasoning = reasoningLevel !== "off";
+  const showReasoning = props.showThinking && reasoningLevel !== "off";
 
   const composePlaceholder = props.connected
     ? "Message (↩ to send, Shift+↩ for line breaks)"
@@ -310,18 +311,27 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     });
   }
   for (let i = historyStart; i < history.length; i++) {
+    const msg = history[i];
+    const normalized = normalizeMessage(msg);
+
+    if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
+      continue;
+    }
+
     items.push({
       kind: "message",
-      key: messageKey(history[i], i),
-      message: history[i],
+      key: messageKey(msg, i),
+      message: msg,
     });
   }
-  for (let i = 0; i < tools.length; i++) {
-    items.push({
-      kind: "message",
-      key: messageKey(tools[i], i + history.length),
-      message: tools[i],
-    });
+  if (props.showThinking) {
+    for (let i = 0; i < tools.length; i++) {
+      items.push({
+        kind: "message",
+        key: messageKey(tools[i], i + history.length),
+        message: tools[i],
+      });
+    }
   }
 
   if (props.stream !== null) {

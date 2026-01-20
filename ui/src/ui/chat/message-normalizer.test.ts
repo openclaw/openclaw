@@ -103,25 +103,25 @@ describe("message-normalizer", () => {
   });
 
   describe("normalizeRoleForGrouping", () => {
-    it("returns assistant for toolresult", () => {
-      expect(normalizeRoleForGrouping("toolresult")).toBe("assistant");
-      expect(normalizeRoleForGrouping("toolResult")).toBe("assistant");
-      expect(normalizeRoleForGrouping("TOOLRESULT")).toBe("assistant");
+    it("returns tool for toolresult", () => {
+      expect(normalizeRoleForGrouping("toolresult")).toBe("tool");
+      expect(normalizeRoleForGrouping("toolResult")).toBe("tool");
+      expect(normalizeRoleForGrouping("TOOLRESULT")).toBe("tool");
     });
 
-    it("returns assistant for tool_result", () => {
-      expect(normalizeRoleForGrouping("tool_result")).toBe("assistant");
-      expect(normalizeRoleForGrouping("TOOL_RESULT")).toBe("assistant");
+    it("returns tool for tool_result", () => {
+      expect(normalizeRoleForGrouping("tool_result")).toBe("tool");
+      expect(normalizeRoleForGrouping("TOOL_RESULT")).toBe("tool");
     });
 
-    it("returns assistant for tool", () => {
-      expect(normalizeRoleForGrouping("tool")).toBe("assistant");
-      expect(normalizeRoleForGrouping("Tool")).toBe("assistant");
+    it("returns tool for tool", () => {
+      expect(normalizeRoleForGrouping("tool")).toBe("tool");
+      expect(normalizeRoleForGrouping("Tool")).toBe("tool");
     });
 
-    it("returns assistant for function", () => {
-      expect(normalizeRoleForGrouping("function")).toBe("assistant");
-      expect(normalizeRoleForGrouping("Function")).toBe("assistant");
+    it("returns tool for function", () => {
+      expect(normalizeRoleForGrouping("function")).toBe("tool");
+      expect(normalizeRoleForGrouping("Function")).toBe("tool");
     });
 
     it("preserves user role", () => {
