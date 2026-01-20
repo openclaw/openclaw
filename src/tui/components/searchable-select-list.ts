@@ -10,6 +10,7 @@ import {
 	truncateToWidth,
 } from "@mariozechner/pi-tui";
 import { visibleWidth } from "../../terminal/ansi.js";
+import { findWordBoundaryIndex } from "./fuzzy-filter.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
 	searchPrompt: (text: string) => string;
@@ -81,7 +82,7 @@ export class SearchableSelectList implements Component {
 				continue;
 			}
 			// Tier 2: Word-boundary prefix in label (score 100-199)
-			const wordBoundaryIndex = this.findWordBoundaryIndex(label, q);
+			const wordBoundaryIndex = findWordBoundaryIndex(label, q);
 			if (wordBoundaryIndex !== null) {
 				wordBoundary.push({ item, score: wordBoundaryIndex });
 				continue;
@@ -110,20 +111,6 @@ export class SearchableSelectList implements Component {
 			...descriptionMatches.map((s) => s.item),
 			...fuzzyMatches,
 		];
-	}
-
-	private findWordBoundaryIndex(text: string, query: string): number | null {
-		if (!query) return null;
-		const maxIndex = text.length - query.length;
-		if (maxIndex < 0) return null;
-		for (let i = 0; i <= maxIndex; i++) {
-			if (text.startsWith(query, i)) {
-				if (i === 0 || /[\s\-_./:]/.test(text[i - 1] ?? "")) {
-					return i;
-				}
-			}
-		}
-		return null;
 	}
 
 	private escapeRegex(str: string): string {
