@@ -19,7 +19,7 @@ boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD*
 High‑level steps:
 
 1) Run a DNS server on the gateway host (reachable over Tailnet).
-2) Publish DNS‑SD records for `_clawdbot-bridge._tcp` under a dedicated zone
+2) Publish DNS‑SD records for `_clawdbot-gw._tcp` under a dedicated zone
    (example: `clawdbot.internal.`).
 3) Configure Tailscale **split DNS** so `clawdbot.internal` resolves via that
    DNS server for clients (including iOS).
@@ -49,8 +49,8 @@ This installs CoreDNS and configures it to:
 Validate from a tailnet‑connected machine:
 
 ```bash
-dns-sd -B _clawdbot-bridge._tcp clawdbot.internal.
-dig @<TAILNET_IPV4> -p 53 _clawdbot-bridge._tcp.clawdbot.internal PTR +short
+dns-sd -B _clawdbot-gw._tcp clawdbot.internal.
+dig @<TAILNET_IPV4> -p 53 _clawdbot-gw._tcp.clawdbot.internal PTR +short
 ```
 
 ### Tailscale DNS settings
@@ -61,7 +61,7 @@ In the Tailscale admin console:
 - Add split DNS so the domain `clawdbot.internal` uses that nameserver.
 
 Once clients accept tailnet DNS, iOS nodes can browse
-`_clawdbot-bridge._tcp` in `clawdbot.internal.` without multicast.
+`_clawdbot-gw._tcp` in `clawdbot.internal.` without multicast.
 
 ### Bridge listener security (recommended)
 
@@ -74,11 +74,11 @@ For tailnet‑only setups:
 
 ## What advertises
 
-Only the Gateway (when the **bridge is enabled**) advertises `_clawdbot-bridge._tcp`.
+Only the Gateway advertises `_clawdbot-gw._tcp`.
 
 ## Service types
 
-- `_clawdbot-bridge._tcp` — bridge transport beacon (used by macOS/iOS/Android nodes).
+- `_clawdbot-gw._tcp` — gateway transport beacon (used by macOS/iOS/Android nodes).
 
 ## TXT keys (non‑secret hints)
 
@@ -101,11 +101,11 @@ Useful built‑in tools:
 
 - Browse instances:
   ```bash
-  dns-sd -B _clawdbot-bridge._tcp local.
+  dns-sd -B _clawdbot-gw._tcp local.
   ```
 - Resolve one instance (replace `<instance>`):
   ```bash
-  dns-sd -L "<instance>" _clawdbot-bridge._tcp local.
+  dns-sd -L "<instance>" _clawdbot-gw._tcp local.
   ```
 
 If browsing works but resolving fails, you’re usually hitting a LAN policy or
@@ -122,7 +122,7 @@ The Gateway writes a rolling log file (printed on startup as
 
 ## Debugging on iOS node
 
-The iOS node uses `NWBrowser` to discover `_clawdbot-bridge._tcp`.
+The iOS node uses `NWBrowser` to discover `_clawdbot-gw._tcp`.
 
 To capture logs:
 - Settings → Bridge → Advanced → **Discovery Debug Logs**

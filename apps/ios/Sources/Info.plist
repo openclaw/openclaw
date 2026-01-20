@@ -29,7 +29,7 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_clawdbot-gateway._tcp</string>
+		<string>_clawdbot-gw._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Clawdbot can capture photos or short video clips when requested via the gateway.</string>

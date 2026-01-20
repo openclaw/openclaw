@@ -52,7 +52,7 @@ For tailnet-only setups (recommended for Vienna ⇄ London), bind the gateway to
 From the gateway machine:
 
 ```bash
-dns-sd -B _clawdbot-gateway._tcp local.
+dns-sd -B _clawdbot-gw._tcp local.
 ```
 
 More debugging notes: [Bonjour](/gateway/bonjour).
@@ -61,7 +61,7 @@ More debugging notes: [Bonjour](/gateway/bonjour).
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
 
-1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot-gateway._tcp` records.
+1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot-gw._tcp` records.
 2) Configure Tailscale split DNS for `clawdbot.internal` pointing at that DNS server.
 
 Details and example CoreDNS config: [Bonjour](/gateway/bonjour).

@@ -116,7 +116,7 @@ clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 
 ## Discover gateways (Bonjour)
 
-`gateway discover` scans for Gateway beacons (`_clawdbot-gateway._tcp`).
+`gateway discover` scans for Gateway beacons (`_clawdbot-gw._tcp`).
 
 - Multicast DNS-SD: `local.`
 - Unicast DNS-SD (Wide-Area Bonjour): `clawdbot.internal.` (requires split DNS + DNS server; see [/gateway/bonjour](/gateway/bonjour))

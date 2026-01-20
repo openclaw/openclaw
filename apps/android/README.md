@@ -1,6 +1,6 @@
 ## Clawdbot Node (Android) (internal)
 
-Modern Android node app: connects to the **Gateway WebSocket** (`_clawdbot-gateway._tcp`) and exposes **Canvas + Chat + Camera**.
+Modern Android node app: connects to the **Gateway WebSocket** (`_clawdbot-gw._tcp`) and exposes **Canvas + Chat + Camera**.
 
 Notes:
 - The node keeps the connection alive via a **foreground service** (persistent notification with a Disconnect action).
