@@ -43,19 +43,15 @@ export function renderNode(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
-  searchQuery?: string;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult | typeof nothing {
-  const { schema, value, path, hints, unsupported, disabled, onPatch, searchQuery } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
   const key = pathKey(path);
-  const hasDefault = schema.default !== undefined;
-  const isDefault = hasDefault && JSON.stringify(value) === JSON.stringify(schema.default);
-  const isEmpty = value === undefined || value === null || value === "";
 
   if (unsupported.has(key)) {
     return html`<div class="cfg-field cfg-field--error">
@@ -109,7 +105,7 @@ export function renderNode(params: {
 
     if (allLiterals && literals.length > 5) {
       // Use dropdown for larger sets
-      return renderSelect({ ...params, options: literals.map(String), value: String(value ?? schema.default ?? "") });
+      return renderSelect({ ...params, options: literals, value: value ?? schema.default });
     }
 
     // Handle mixed primitive types
@@ -123,7 +119,15 @@ export function renderNode(params: {
     if ([...normalizedTypes].every((v) => ["string", "number", "boolean"].includes(v as string))) {
       const hasString = normalizedTypes.has("string");
       const hasNumber = normalizedTypes.has("number");
+      const hasBoolean = normalizedTypes.has("boolean");
       
+      if (hasBoolean && normalizedTypes.size === 1) {
+        return renderNode({
+          ...params,
+          schema: { ...schema, type: "boolean", anyOf: undefined, oneOf: undefined },
+        });
+      }
+
       if (hasString || hasNumber) {
         return renderTextInput({
           ...params,
@@ -157,7 +161,7 @@ export function renderNode(params: {
         </div>
       `;
     }
-    return renderSelect({ ...params, options: options.map(String), value: String(value ?? schema.default ?? "") });
+    return renderSelect({ ...params, options, value: value ?? schema.default });
   }
 
   // Object type - collapsible section
@@ -227,7 +231,9 @@ function renderTextInput(params: {
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
   const isSensitive = hint?.sensitive ?? isSensitivePath(path);
-  const placeholder = hint?.placeholder ?? (schema.default !== undefined ? `Default: ${schema.default}` : "");
+  const placeholder =
+    hint?.placeholder ??
+    (isSensitive ? "••••" : schema.default !== undefined ? `Default: ${schema.default}` : "");
   const displayValue = value ?? "";
 
   return html`
@@ -243,12 +249,16 @@ function renderTextInput(params: {
           ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
-            if (inputType === "number" && raw.trim() !== "") {
+            if (inputType === "number") {
+              if (raw.trim() === "") {
+                onPatch(path, undefined);
+                return;
+              }
               const parsed = Number(raw);
               onPatch(path, Number.isNaN(parsed) ? raw : parsed);
-            } else {
-              onPatch(path, raw === "" ? undefined : raw);
+              return;
             }
+            onPatch(path, raw);
           }}
         />
         ${schema.default !== undefined ? html`
@@ -317,12 +327,12 @@ function renderNumberInput(params: {
 
 function renderSelect(params: {
   schema: JsonSchema;
-  value: string;
+  value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
-  options: string[];
+  options: unknown[];
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
@@ -330,6 +340,11 @@ function renderSelect(params: {
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
+  const resolvedValue = value ?? schema.default;
+  const currentIndex = options.findIndex(
+    (opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
+  );
+  const unset = "__unset__";
 
   return html`
     <div class="cfg-field">
@@ -338,14 +353,15 @@ function renderSelect(params: {
       <select
         class="cfg-select"
         ?disabled=${disabled}
+        .value=${currentIndex >= 0 ? String(currentIndex) : unset}
         @change=${(e: Event) => {
           const val = (e.target as HTMLSelectElement).value;
-          onPatch(path, val === "" ? undefined : val);
+          onPatch(path, val === unset ? undefined : options[Number(val)]);
         }}
       >
-        <option value="" ?selected=${!value}>Select...</option>
-        ${options.map(opt => html`
-          <option value=${opt} ?selected=${opt === value}>${opt}</option>
+        <option value=${unset}>Select...</option>
+        ${options.map((opt, idx) => html`
+          <option value=${String(idx)}>${String(opt)}</option>
         `)}
       </select>
     </div>
@@ -360,10 +376,9 @@ function renderObject(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
-  searchQuery?: string;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch, searchQuery } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
@@ -401,7 +416,6 @@ function renderObject(params: {
             unsupported,
             disabled,
             onPatch,
-            searchQuery,
           })
         )}
         ${allowExtra ? renderMapField({
@@ -436,7 +450,6 @@ function renderObject(params: {
             unsupported,
             disabled,
             onPatch,
-            searchQuery,
           })
         )}
         ${allowExtra ? renderMapField({
@@ -462,10 +475,9 @@ function renderArray(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
-  searchQuery?: string;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch, searchQuery } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
@@ -537,7 +549,6 @@ function renderArray(params: {
                   disabled,
                   showLabel: false,
                   onPatch,
-                  searchQuery,
                 })}
               </div>
             </div>

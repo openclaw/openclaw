@@ -97,19 +97,39 @@ function matchesSearch(key: string, schema: JsonSchema, query: string): boolean 
     if (meta.description.toLowerCase().includes(q)) return true;
   }
   
-  // Check schema title/description
-  if (schema.title?.toLowerCase().includes(q)) return true;
-  if (schema.description?.toLowerCase().includes(q)) return true;
-  
-  // Deep search in properties
+  return schemaMatches(schema, q);
+}
+
+function schemaMatches(schema: JsonSchema, query: string): boolean {
+  if (schema.title?.toLowerCase().includes(query)) return true;
+  if (schema.description?.toLowerCase().includes(query)) return true;
+  if (schema.enum?.some((value) => String(value).toLowerCase().includes(query))) return true;
+
   if (schema.properties) {
     for (const [propKey, propSchema] of Object.entries(schema.properties)) {
-      if (propKey.toLowerCase().includes(q)) return true;
-      if (propSchema.title?.toLowerCase().includes(q)) return true;
-      if (propSchema.description?.toLowerCase().includes(q)) return true;
+      if (propKey.toLowerCase().includes(query)) return true;
+      if (schemaMatches(propSchema, query)) return true;
     }
   }
-  
+
+  if (schema.items) {
+    const items = Array.isArray(schema.items) ? schema.items : [schema.items];
+    for (const item of items) {
+      if (item && schemaMatches(item, query)) return true;
+    }
+  }
+
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    if (schemaMatches(schema.additionalProperties, query)) return true;
+  }
+
+  const unions = schema.anyOf ?? schema.oneOf ?? schema.allOf;
+  if (unions) {
+    for (const entry of unions) {
+      if (entry && schemaMatches(entry, query)) return true;
+    }
+  }
+
   return false;
 }
 
@@ -190,7 +210,6 @@ export function renderConfigForm(props: ConfigFormProps) {
                 disabled: props.disabled ?? false,
                 showLabel: false,
                 onPatch: props.onPatch,
-                searchQuery,
               })}
             </div>
           </section>

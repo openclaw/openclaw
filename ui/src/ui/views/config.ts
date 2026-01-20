@@ -122,7 +122,13 @@ function computeDiff(
 }
 
 function truncateValue(value: unknown, maxLen = 40): string {
-  const str = JSON.stringify(value);
+  let str: string;
+  try {
+    const json = JSON.stringify(value);
+    str = json ?? String(value);
+  } catch {
+    str = String(value);
+  }
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen - 3) + "...";
 }
