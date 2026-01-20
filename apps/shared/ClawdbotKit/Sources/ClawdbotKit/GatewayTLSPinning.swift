@@ -36,7 +36,7 @@ public enum GatewayTLSStore {
     }
 }
 
-public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate {
+public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLSessionDelegate, @unchecked Sendable {
     private let params: GatewayTLSParams
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -96,10 +96,12 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 }
 
 private func certificateFingerprint(_ trust: SecTrust) -> String? {
-    let count = SecTrustGetCertificateCount(trust)
-    guard count > 0, let cert = SecTrustGetCertificateAtIndex(trust, 0) else { return nil }
-    let data = SecCertificateCopyData(cert) as Data
-    return sha256Hex(data)
+    guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+          let cert = chain.first
+    else {
+        return nil
+    }
+    return sha256Hex(SecCertificateCopyData(cert) as Data)
 }
 
 private func sha256Hex(_ data: Data) -> String {
