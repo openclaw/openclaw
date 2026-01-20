@@ -89,6 +89,7 @@ export type SessionEntry = {
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
 };

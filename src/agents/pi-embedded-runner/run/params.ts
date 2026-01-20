@@ -23,6 +23,10 @@ export type RunEmbeddedPiAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
+  messageTo?: string;
+  /** Thread/topic identifier for routing replies to the originating thread. */
+  messageThreadId?: string | number;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */

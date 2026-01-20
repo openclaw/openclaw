@@ -14,5 +14,14 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
   const normalizedAccountId = normalizeAccountId(merged.accountId ?? opts.accountId);
   if (normalizedAccountId) merged.accountId = normalizedAccountId;
 
+  if (
+    merged.currentThreadTs == null &&
+    opts.threadId != null &&
+    opts.threadId !== "" &&
+    opts.threadId !== null
+  ) {
+    merged.currentThreadTs = String(opts.threadId);
+  }
+
   return merged;
 }

@@ -221,16 +221,20 @@ export async function initSessionState(params: {
   const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
   const lastToRaw = (ctx.OriginatingTo as string | undefined) || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = (ctx.AccountId as string | undefined) || baseEntry?.lastAccountId;
+  const lastThreadIdRaw =
+    (ctx.MessageThreadId as string | number | undefined) || baseEntry?.lastThreadId;
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
       to: lastToRaw,
       accountId: lastAccountIdRaw,
+      threadId: lastThreadIdRaw,
     },
   });
   const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
+  const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -261,6 +265,7 @@ export async function initSessionState(params: {
     lastChannel,
     lastTo,
     lastAccountId,
+    lastThreadId,
   };
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,

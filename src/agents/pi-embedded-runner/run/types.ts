@@ -21,6 +21,8 @@ export type EmbeddedRunAttemptParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";

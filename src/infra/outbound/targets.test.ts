@@ -124,10 +124,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "whatsapp",
       to: "+1555",
       accountId: "acct-1",
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: "acct-1",
+      lastThreadId: undefined,
     });
   });
 
@@ -146,10 +148,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "telegram",
       to: undefined,
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 
@@ -169,10 +173,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "telegram",
       to: "+1555",
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 
@@ -192,10 +198,12 @@ describe("resolveSessionDeliveryTarget", () => {
       channel: "slack",
       to: undefined,
       accountId: undefined,
+      threadId: undefined,
       mode: "implicit",
       lastChannel: "whatsapp",
       lastTo: "+1555",
       lastAccountId: undefined,
+      lastThreadId: undefined,
     });
   });
 });

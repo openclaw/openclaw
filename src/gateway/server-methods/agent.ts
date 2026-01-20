@@ -71,6 +71,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       replyChannel?: string;
       accountId?: string;
       replyAccountId?: string;
+      threadId?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -257,10 +258,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         : typeof request.to === "string" && request.to.trim()
           ? request.to.trim()
           : undefined;
+    const explicitThreadId =
+      typeof request.threadId === "string" && request.threadId.trim()
+        ? request.threadId.trim()
+        : undefined;
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
       requestedChannel: request.replyChannel ?? request.channel,
       explicitTo,
+      explicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
       wantsDelivery,
     });
@@ -298,6 +304,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
     respond(true, accepted, undefined, { runId });
 
+    const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+
     void agentCommand(
       {
         message,
@@ -310,9 +318,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         deliveryTargetMode,
         channel: resolvedChannel,
         accountId: resolvedAccountId,
+        threadId: resolvedThreadId,
         runContext: {
           messageChannel: resolvedChannel,
           accountId: resolvedAccountId,
+          currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
         },
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
