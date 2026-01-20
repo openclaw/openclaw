@@ -28,9 +28,11 @@ export AWS_REGION="us-east-1"
 # Optional:
 export AWS_SESSION_TOKEN="..."
 export AWS_PROFILE="your-profile"
+# Optional (Bedrock API key/bearer token):
+export AWS_BEARER_TOKEN_BEDROCK="..."
 ```
 
-2) Add a Bedrock provider and model to your config:
+2) Add a Bedrock provider and model to your config (no `apiKey` required):
 
 ```json5
 {

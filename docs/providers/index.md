@@ -31,6 +31,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/etc.)? See [Chann
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
+- [Amazon Bedrock](/bedrock)
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
