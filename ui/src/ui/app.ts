@@ -28,6 +28,7 @@ import type {
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
 } from "./controllers/exec-approvals";
+import type { DevicePairingList } from "./controllers/devices";
 import {
   resetToolStream as resetToolStreamInternal,
   toggleToolOutput as toggleToolOutputInternal,
@@ -108,6 +109,9 @@ export class ClawdbotApp extends LitElement {
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
+  @state() devicesLoading = false;
+  @state() devicesError: string | null = null;
+  @state() devicesList: DevicePairingList | null = null;
   @state() execApprovalsLoading = false;
   @state() execApprovalsSaving = false;
   @state() execApprovalsDirty = false;

@@ -261,6 +261,8 @@ public actor GatewayChannelActor {
         let clientDisplayName = options.clientDisplayName ?? InstanceIdentity.displayName
         let clientId = options.clientId
         let clientMode = options.clientMode
+        let role = options.role
+        let scopes = options.scopes
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
@@ -283,8 +285,8 @@ public actor GatewayChannelActor {
             "caps": ProtoAnyCodable(options.caps),
             "locale": ProtoAnyCodable(primaryLocale),
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
-            "role": ProtoAnyCodable(options.role),
-            "scopes": ProtoAnyCodable(options.scopes),
+            "role": ProtoAnyCodable(role),
+            "scopes": ProtoAnyCodable(scopes),
         ]
         if !options.commands.isEmpty {
             params["commands"] = ProtoAnyCodable(options.commands)
@@ -292,24 +294,27 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        if let token = self.token {
-            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let storedToken = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
+        let authToken = storedToken ?? self.token
+        let canFallbackToShared = storedToken != nil && self.token != nil
+        if let authToken {
+            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
-        let scopes = options.scopes.joined(separator: ",")
+        let scopesValue = scopes.joined(separator: ",")
         var payloadParts = [
             connectNonce == nil ? "v1" : "v2",
             identity.deviceId,
             clientId,
             clientMode,
-            options.role,
-            scopes,
+            role,
+            scopesValue,
             String(signedAtMs),
-            self.token ?? "",
+            authToken ?? "",
         ]
         if let connectNonce {
             payloadParts.append(connectNonce)
@@ -336,11 +341,22 @@ public actor GatewayChannelActor {
             params: ProtoAnyCodable(params))
         let data = try self.encoder.encode(frame)
         try await self.task?.send(.data(data))
-        let response = try await self.waitForConnectResponse(reqId: reqId)
-        try await self.handleConnectResponse(response)
+        do {
+            let response = try await self.waitForConnectResponse(reqId: reqId)
+            try await self.handleConnectResponse(response, identity: identity, role: role)
+        } catch {
+            if canFallbackToShared {
+                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+            }
+            throw error
+        }
     }
 
-    private func handleConnectResponse(_ res: ResponseFrame) async throws {
+    private func handleConnectResponse(
+        _ res: ResponseFrame,
+        identity: DeviceIdentity,
+        role: String
+    ) async throws {
         if res.ok == false {
             let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
             throw NSError(domain: "Gateway", code: 1008, userInfo: [NSLocalizedDescriptionKey: msg])
@@ -357,6 +373,17 @@ public actor GatewayChannelActor {
             self.tickIntervalMs = tick
         } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
             self.tickIntervalMs = Double(tick)
+        }
+        if let auth = ok.auth,
+           let deviceToken = auth["deviceToken"]?.value as? String {
+            let authRole = auth["role"]?.value as? String ?? role
+            let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
+                .compactMap { $0.value as? String } ?? []
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: authRole,
+                token: deviceToken,
+                scopes: scopes)
         }
         self.lastTick = Date()
         self.tickTask?.cancel()

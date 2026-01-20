@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity";
+import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth";
 
 export type GatewayEventFrame = {
   type: "event";
@@ -29,6 +30,12 @@ export type GatewayHelloOk = {
   protocol: number;
   features?: { methods?: string[]; events?: string[] };
   snapshot?: unknown;
+  auth?: {
+    deviceToken?: string;
+    role?: string;
+    scopes?: string[];
+    issuedAtMs?: number;
+  };
   policy?: { tickIntervalMs?: number };
 };
 
@@ -120,15 +127,21 @@ export class GatewayBrowserClient {
       this.connectTimer = null;
     }
     const deviceIdentity = await loadOrCreateDeviceIdentity();
+    const scopes = ["operator.admin"];
+    const role = "operator";
+    const storedToken = loadDeviceAuthToken({
+      deviceId: deviceIdentity.deviceId,
+      role,
+    })?.token;
+    const authToken = storedToken ?? this.opts.token;
+    const canFallbackToShared = Boolean(storedToken && this.opts.token);
     const auth =
-      this.opts.token || this.opts.password
+      authToken || this.opts.password
         ? {
-            token: this.opts.token,
+            token: authToken,
             password: this.opts.password,
           }
         : undefined;
-    const scopes = ["operator.admin"];
-    const role = "operator";
     const signedAtMs = Date.now();
     const nonce = this.connectNonce ?? undefined;
     const payload = buildDeviceAuthPayload({
@@ -138,7 +151,7 @@ export class GatewayBrowserClient {
       role,
       scopes,
       signedAtMs,
-      token: this.opts.token ?? null,
+      token: authToken ?? null,
       nonce,
     });
     const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
@@ -169,10 +182,21 @@ export class GatewayBrowserClient {
 
     void this.request<GatewayHelloOk>("connect", params)
       .then((hello) => {
+        if (hello?.auth?.deviceToken) {
+          storeDeviceAuthToken({
+            deviceId: deviceIdentity.deviceId,
+            role: hello.auth.role ?? role,
+            token: hello.auth.deviceToken,
+            scopes: hello.auth.scopes ?? [],
+          });
+        }
         this.backoffMs = 800;
         this.opts.onHello?.(hello);
       })
       .catch(() => {
+        if (canFallbackToShared) {
+          clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
+        }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       });
   }

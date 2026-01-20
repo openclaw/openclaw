@@ -8,6 +8,9 @@ import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { createSubsystemLogger } from "../../logging/subsystem.js";
+
+type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 export type GatewayClient = {
   connect: ConnectParams;
@@ -28,7 +31,7 @@ export type GatewayRequestContext = {
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
-  logGateway: { warn: (message: string) => void };
+  logGateway: SubsystemLogger;
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   broadcast: (
