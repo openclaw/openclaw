@@ -24,7 +24,7 @@ vi.mock("./embeddings.js", () => {
       provider: {
         id: "mock",
         model: "mock-embed",
-        embedQuery: async () => [0.1, 0.2, 0.3],
+        embedQuery: async () => [1, 0, 0],
         embedBatch: async (texts: string[]) => {
           if (shouldFail) {
             throw new Error("embedding failure");
