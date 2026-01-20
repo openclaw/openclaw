@@ -309,9 +309,7 @@ describe("config identity defaults", () => {
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
       expect(cfg.agents?.list).toBeUndefined();
       expect(cfg.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
-      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(
-        DEFAULT_SUBAGENT_MAX_CONCURRENT,
-      );
+      expect(cfg.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
       expect(cfg.session).toBeUndefined();
     });
   });

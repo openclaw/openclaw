@@ -27,8 +27,7 @@ declare module "pdfjs-dist/legacy/build/pdf.mjs" {
     getPage(pageNumber: number): Promise<PDFPageProxy>;
   };
 
-  export function getDocument(params: {
-    data: Uint8Array;
-    disableWorker?: boolean;
-  }): { promise: Promise<PDFDocumentProxy> };
+  export function getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
+    promise: Promise<PDFDocumentProxy>;
+  };
 }
