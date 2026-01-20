@@ -7,6 +7,7 @@ Docs: https://docs.clawd.bot
 ### Changes
 - Android: remove legacy bridge transport code now that nodes use the gateway protocol.
 - Android: send structured payloads in node events/invokes and include user-agent metadata in gateway connects.
+- Docs: surface Amazon Bedrock in provider lists and clarify Bedrock auth env vars. (#1289) — thanks @steipete.
 
 ### Fixes
 - Gateway: strip inbound envelope headers from chat history messages to keep clients clean.
