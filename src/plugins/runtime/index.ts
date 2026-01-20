@@ -106,6 +106,7 @@ import { loginWeb } from "../../web/login.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import { registerMemoryCli } from "../../cli/memory-cli.js";
+import { formatNativeDependencyHint } from "./native-deps.js";
 
 import type { PluginRuntime } from "./types.js";
 
@@ -134,6 +135,7 @@ export function createPluginRuntime(): PluginRuntime {
     system: {
       enqueueSystemEvent,
       runCommandWithTimeout,
+      formatNativeDependencyHint,
     },
     media: {
       loadWebMedia,

@@ -55,8 +55,7 @@ struct CronJobEditor: View {
     @State var postPrefix: String = "Cron"
 
     var channelOptions: [String] {
-        let snapshot = self.channelsStore.snapshot
-        let ordered = snapshot?.channelOrder ?? []
+        let ordered = self.channelsStore.orderedChannelIds()
         var options = ["last"] + ordered
         let trimmed = self.channel.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, !options.contains(trimmed) {
@@ -68,7 +67,7 @@ struct CronJobEditor: View {
 
     func channelLabel(for id: String) -> String {
         if id == "last" { return "last" }
-        return self.channelsStore.snapshot?.channelLabels[id] ?? id
+        return self.channelsStore.resolveChannelLabel(id)
     }
 
     var body: some View {

@@ -5,6 +5,22 @@ import type { PluginOrigin } from "../../plugins/types.js";
 import type { ClawdbotPackageManifest } from "../../plugins/manifest.js";
 import type { ChannelMeta } from "./types.js";
 
+export type ChannelUiMetaEntry = {
+  id: string;
+  label: string;
+  detailLabel: string;
+  systemImage?: string;
+};
+
+export type ChannelUiCatalog = {
+  entries: ChannelUiMetaEntry[];
+  order: string[];
+  labels: Record<string, string>;
+  detailLabels: Record<string, string>;
+  systemImages: Record<string, string>;
+  byId: Record<string, ChannelUiMetaEntry>;
+};
+
 export type ChannelPluginCatalogEntry = {
   id: string;
   meta: ChannelMeta;
@@ -114,6 +130,34 @@ function buildCatalogEntry(candidate: {
   });
   if (!install) return null;
   return { id, meta, install };
+}
+
+export function buildChannelUiCatalog(
+  plugins: Array<{ id: string; meta: ChannelMeta }>,
+): ChannelUiCatalog {
+  const entries: ChannelUiMetaEntry[] = plugins.map((plugin) => {
+    const detailLabel = plugin.meta.detailLabel ?? plugin.meta.selectionLabel ?? plugin.meta.label;
+    return {
+      id: plugin.id,
+      label: plugin.meta.label,
+      detailLabel,
+      ...(plugin.meta.systemImage ? { systemImage: plugin.meta.systemImage } : {}),
+    };
+  });
+  const order = entries.map((entry) => entry.id);
+  const labels: Record<string, string> = {};
+  const detailLabels: Record<string, string> = {};
+  const systemImages: Record<string, string> = {};
+  const byId: Record<string, ChannelUiMetaEntry> = {};
+  for (const entry of entries) {
+    labels[entry.id] = entry.label;
+    detailLabels[entry.id] = entry.detailLabel;
+    if (entry.systemImage) {
+      systemImages[entry.id] = entry.systemImage;
+    }
+    byId[entry.id] = entry;
+  }
+  return { entries, order, labels, detailLabels, systemImages, byId };
 }
 
 export function listChannelPluginCatalogEntries(
