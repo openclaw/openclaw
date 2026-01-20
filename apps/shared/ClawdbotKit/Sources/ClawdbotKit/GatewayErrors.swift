@@ -29,5 +29,10 @@ public struct GatewayDecodingError: LocalizedError, Sendable {
     public let method: String
     public let message: String
 
+    public init(method: String, message: String) {
+        self.method = method
+        self.message = message
+    }
+
     public var errorDescription: String? { "\(self.method): \(self.message)" }
 }
