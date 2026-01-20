@@ -64,8 +64,11 @@ If both `PERPLEXITY_API_KEY` and `OPENROUTER_API_KEY` are set, set
 `tools.web.search.perplexity.baseUrl` (or `tools.web.search.perplexity.apiKey`)
 to disambiguate.
 
-If `PERPLEXITY_API_KEY` is used from the environment and no base URL is set,
-Clawdbot defaults to the direct Perplexity endpoint. Set `baseUrl` to override.
+If no base URL is set, Clawdbot chooses a default based on the API key source:
+
+- `PERPLEXITY_API_KEY` or `pplx-...` → direct Perplexity (`https://api.perplexity.ai`)
+- `OPENROUTER_API_KEY` or `sk-or-...` → OpenRouter (`https://openrouter.ai/api/v1`)
+- Unknown key formats → OpenRouter (safe fallback)
 
 ## Models
 

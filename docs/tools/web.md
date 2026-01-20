@@ -10,7 +10,7 @@ read_when:
 
 Clawdbot ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (via OpenRouter).
+- `web_search` — Search the web via Brave Search API (default) or Perplexity Sonar (direct or via OpenRouter).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -31,7 +31,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | Provider | Pros | Cons | API Key |
 |----------|------|------|---------|
 | **Brave** (default) | Fast, structured results, free tier | Traditional search results | `BRAVE_API_KEY` |
-| **Perplexity** | AI-synthesized answers, citations, real-time | Requires OpenRouter credits | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
+| **Perplexity** | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
 
@@ -110,7 +110,7 @@ crypto/prepaid).
         perplexity: {
           // API key (optional if OPENROUTER_API_KEY or PERPLEXITY_API_KEY is set)
           apiKey: "sk-or-v1-...",
-          // Base URL (defaults to OpenRouter)
+          // Base URL (key-aware default if omitted)
           baseUrl: "https://openrouter.ai/api/v1",
           // Model (defaults to perplexity/sonar-pro)
           model: "perplexity/sonar-pro"
@@ -124,8 +124,11 @@ crypto/prepaid).
 **Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
 environment. For a daemon install, put it in `~/.clawdbot/.env`.
 
-If `PERPLEXITY_API_KEY` is used from the environment and no base URL is set,
-Clawdbot defaults to the direct Perplexity endpoint (`https://api.perplexity.ai`).
+If no base URL is set, Clawdbot chooses a default based on the API key source:
+
+- `PERPLEXITY_API_KEY` or `pplx-...` → `https://api.perplexity.ai`
+- `OPENROUTER_API_KEY` or `sk-or-...` → `https://openrouter.ai/api/v1`
+- Unknown key formats → OpenRouter (safe fallback)
 
 ### Available Perplexity models
 

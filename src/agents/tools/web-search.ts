@@ -24,6 +24,8 @@ const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
+const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
+const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
@@ -90,6 +92,8 @@ type PerplexitySearchResponse = {
   citations?: string[];
 };
 
+type PerplexityBaseUrlHint = "direct" | "openrouter";
+
 function resolveSearchConfig(cfg?: ClawdbotConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") return undefined;
@@ -147,20 +151,17 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: PerplexityApiKeySource;
 } {
-  const fromConfig =
-    perplexity && "apiKey" in perplexity && typeof perplexity.apiKey === "string"
-      ? perplexity.apiKey.trim()
-      : "";
+  const fromConfig = normalizeApiKey(perplexity?.apiKey);
   if (fromConfig) {
     return { apiKey: fromConfig, source: "config" };
   }
 
-  const fromEnvPerplexity = (process.env.PERPLEXITY_API_KEY ?? "").trim();
+  const fromEnvPerplexity = normalizeApiKey(process.env.PERPLEXITY_API_KEY);
   if (fromEnvPerplexity) {
     return { apiKey: fromEnvPerplexity, source: "perplexity_env" };
   }
 
-  const fromEnvOpenRouter = (process.env.OPENROUTER_API_KEY ?? "").trim();
+  const fromEnvOpenRouter = normalizeApiKey(process.env.OPENROUTER_API_KEY);
   if (fromEnvOpenRouter) {
     return { apiKey: fromEnvOpenRouter, source: "openrouter_env" };
   }
@@ -168,9 +169,26 @@ function resolvePerplexityApiKey(perplexity?: PerplexityConfig): {
   return { apiKey: undefined, source: "none" };
 }
 
+function normalizeApiKey(key: unknown): string {
+  return typeof key === "string" ? key.trim() : "";
+}
+
+function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
+  if (!apiKey) return undefined;
+  const normalized = apiKey.toLowerCase();
+  if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return "direct";
+  }
+  if (OPENROUTER_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
+    return "openrouter";
+  }
+  return undefined;
+}
+
 function resolvePerplexityBaseUrl(
   perplexity?: PerplexityConfig,
   apiKeySource: PerplexityApiKeySource = "none",
+  apiKey?: string,
 ): string {
   const fromConfig =
     perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
@@ -178,6 +196,12 @@ function resolvePerplexityBaseUrl(
       : "";
   if (fromConfig) return fromConfig;
   if (apiKeySource === "perplexity_env") return PERPLEXITY_DIRECT_BASE_URL;
+  if (apiKeySource === "openrouter_env") return DEFAULT_PERPLEXITY_BASE_URL;
+  if (apiKeySource === "config") {
+    const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
+    if (inferred === "direct") return PERPLEXITY_DIRECT_BASE_URL;
+    if (inferred === "openrouter") return DEFAULT_PERPLEXITY_BASE_URL;
+  }
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
 
@@ -385,10 +409,19 @@ export function createWebSearchTool(options?: {
         country,
         search_lang,
         ui_lang,
-        perplexityBaseUrl: resolvePerplexityBaseUrl(perplexityConfig, perplexityAuth?.source),
+        perplexityBaseUrl: resolvePerplexityBaseUrl(
+          perplexityConfig,
+          perplexityAuth?.source,
+          perplexityAuth?.apiKey,
+        ),
         perplexityModel: resolvePerplexityModel(perplexityConfig),
       });
       return jsonResult(result);
     },
   };
 }
+
+export const __testing = {
+  inferPerplexityBaseUrlFromApiKey,
+  resolvePerplexityBaseUrl,
+} as const;

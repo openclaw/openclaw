@@ -2,6 +2,11 @@
 
 Docs: https://docs.clawd.bot
 
+## 2026.1.20-1
+
+### Fixes
+- Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
+
 ## 2026.1.19-3
 
 ### Changes
