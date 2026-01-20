@@ -104,7 +104,7 @@ export function renderMessageGroup(
   `;
 }
 
-function renderAvatar(role: string) {
+function renderAvatar(role: string, avatarUrl?: string) {
   const normalized = normalizeRoleForGrouping(role);
   const initial =
     normalized === "user"
@@ -122,6 +122,12 @@ function renderAvatar(role: string) {
         : normalized === "tool"
           ? "tool"
           : "other";
+  
+  // If avatar URL is provided for assistant, show image
+  if (avatarUrl && normalized === "assistant") {
+    return html`<img class="chat-avatar ${className}" src="${avatarUrl}" alt="Assistant" />`;
+  }
+  
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
 }
 
