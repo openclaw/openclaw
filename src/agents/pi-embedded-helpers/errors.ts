@@ -18,6 +18,17 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   );
 }
 
+const CONTEXT_WINDOW_TOO_SMALL_RE = /context window.*(too small|minimum is)/i;
+const CONTEXT_OVERFLOW_HINT_RE =
+  /context.*overflow|context window.*(too (?:large|long)|exceed|over|limit|max(?:imum)?|requested|sent|tokens)|(?:prompt|request|input).*(too (?:large|long)|exceed|over|limit|max(?:imum)?)/i;
+
+export function isLikelyContextOverflowError(errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) return false;
+  if (isContextOverflowError(errorMessage)) return true;
+  return CONTEXT_OVERFLOW_HINT_RE.test(errorMessage);
+}
+
 export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!errorMessage) return false;
   if (!isContextOverflowError(errorMessage)) return false;
