@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 
 export function getShellConfig(): { shell: string; args: string[] } {
   if (process.platform === "win32") {
@@ -13,7 +14,13 @@ export function getShellConfig(): { shell: string; args: string[] } {
     };
   }
 
-  const shell = process.env.SHELL?.trim() || "sh";
+  const envShell = process.env.SHELL?.trim();
+  const shellName = envShell ? path.basename(envShell) : "";
+  // Fish rejects common bashisms used by tools, so prefer bash when detected.
+  if (shellName === "fish") {
+    return { shell: "/bin/bash", args: ["-c"] };
+  }
+  const shell = envShell || "sh";
   return { shell, args: ["-c"] };
 }
 
