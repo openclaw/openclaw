@@ -39,14 +39,16 @@ export const ConnectParamsSchema = Type.Object(
     permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
     role: Type.Optional(NonEmptyString),
     scopes: Type.Optional(Type.Array(NonEmptyString)),
-    device: Type.Object(
-      {
-        id: NonEmptyString,
-        publicKey: NonEmptyString,
-        signature: NonEmptyString,
-        signedAt: Type.Integer({ minimum: 0 }),
-      },
-      { additionalProperties: false },
+    device: Type.Optional(
+      Type.Object(
+        {
+          id: NonEmptyString,
+          publicKey: NonEmptyString,
+          signature: NonEmptyString,
+          signedAt: Type.Integer({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
     ),
     auth: Type.Optional(
       Type.Object(

@@ -185,6 +185,7 @@ describe("gateway server cron", () => {
   test("accepts jobId for cron.update", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    testState.cronEnabled = false;
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
     await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
 
@@ -218,6 +219,7 @@ describe("gateway server cron", () => {
     await server.close();
     await rmTempDir(dir);
     testState.cronStorePath = undefined;
+    testState.cronEnabled = undefined;
   });
 
   test("disables cron jobs via enabled:false patches", async () => {

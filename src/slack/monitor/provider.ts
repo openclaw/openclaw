@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-import SlackBolt from "@slack/bolt";
+import SlackBoltDefault, * as SlackBoltModule from "@slack/bolt";
 
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
@@ -26,12 +26,24 @@ import { normalizeAllowList } from "./allow-list.js";
 
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
-};
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-const slackBolt = slackBoltModule.default ?? slackBoltModule;
-const { App, HTTPReceiver } = slackBolt;
+type SlackBoltNamespace = typeof import("@slack/bolt");
+type SlackBoltDefault = SlackBoltNamespace | SlackBoltNamespace["App"];
+
+const slackBoltDefaultImport = SlackBoltDefault as SlackBoltDefault | undefined;
+const slackBoltModuleDefault = (SlackBoltModule as { default?: SlackBoltDefault }).default;
+const slackBoltDefault = slackBoltDefaultImport ?? slackBoltModuleDefault;
+const slackBoltNamespace =
+  typeof slackBoltDefault === "object" && slackBoltDefault
+    ? (slackBoltDefault as SlackBoltNamespace)
+    : typeof slackBoltModuleDefault === "object" && slackBoltModuleDefault
+      ? (slackBoltModuleDefault as SlackBoltNamespace)
+      : undefined;
+// Bun allows named imports from CJS; Node ESM doesn't. Resolve default/module shapes for compatibility.
+const App = ((typeof slackBoltDefault === "function" ? slackBoltDefault : undefined) ??
+  slackBoltNamespace?.App ??
+  SlackBoltModule.App) as SlackBoltNamespace["App"];
+const HTTPReceiver = (slackBoltNamespace?.HTTPReceiver ??
+  SlackBoltModule.HTTPReceiver) as SlackBoltNamespace["HTTPReceiver"];
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
   if (!token) return undefined;
@@ -120,6 +132,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+
+  if (!App) {
+    throw new Error("Slack Bolt App export missing; check @slack/bolt installation.");
+  }
+  if (slackMode === "http" && !HTTPReceiver) {
+    throw new Error("Slack Bolt HTTPReceiver export missing; check @slack/bolt installation.");
+  }
 
   const receiver =
     slackMode === "http"
