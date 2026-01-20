@@ -1,4 +1,4 @@
-import * as ed25519 from "@noble/ed25519";
+import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 
 type StoredIdentity = {
   version: 1;
@@ -43,8 +43,8 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
-  const privateKey = ed25519.utils.randomSecretKey();
-  const publicKey = await ed25519.getPublicKeyAsync(privateKey);
+  const privateKey = utils.randomSecretKey();
+  const publicKey = await getPublicKeyAsync(privateKey);
   const deviceId = await fingerprintPublicKey(publicKey);
   return {
     deviceId,
@@ -103,6 +103,6 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
 export async function signDevicePayload(privateKeyBase64Url: string, payload: string) {
   const key = base64UrlDecode(privateKeyBase64Url);
   const data = new TextEncoder().encode(payload);
-  const sig = await ed25519.signAsync(data, key);
+  const sig = await signAsync(data, key);
   return base64UrlEncode(sig);
 }
