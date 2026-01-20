@@ -1,5 +1,6 @@
-import fs from "node:fs";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 function resolvePowerShellPath(): string {
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
