@@ -33,10 +33,9 @@ function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   if (isFailoverError(err)) return false;
   const name = "name" in err ? String(err.name) : "";
-  if (name === "AbortError") return true;
-  const message =
-    "message" in err && typeof err.message === "string" ? err.message.toLowerCase() : "";
-  return message.includes("aborted");
+  // Only treat explicit AbortError names as user aborts.
+  // Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
+  return name === "AbortError";
 }
 
 function shouldRethrowAbort(err: unknown): boolean {
