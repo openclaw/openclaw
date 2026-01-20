@@ -2,17 +2,17 @@
 name: bird
 description: X/Twitter CLI for reading, searching, posting, and engagement via cookies.
 homepage: https://bird.fast
-metadata: {"clawdbot":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"},{"id":"npm","kind":"npm","package":"@steipete/bird","bins":["bird"],"label":"Install bird (npm)"}]}}
+metadata: {"clawdbot":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"},{"id":"npm","kind":"node","package":"@steipete/bird","bins":["bird"],"label":"Install bird (npm)"}]}}
 ---
 
 # bird 🐦
 
-Fast X/Twitter CLI using GraphQL + cookie auth. No API keys needed.
+Fast X/Twitter CLI using GraphQL + cookie auth.
 
 ## Install
 
 ```bash
-# npm/pnpm/bun (Node ≥ 20)
+# npm/pnpm/bun
 npm install -g @steipete/bird
 
 # Homebrew (macOS, prebuilt binary)
@@ -24,14 +24,11 @@ bunx @steipete/bird whoami
 
 ## Authentication
 
-`bird` uses your existing browser session (cookie auth). No password prompt.
+`bird` uses cookie-based auth.
 
-Resolution order:
-1. CLI flags: `--auth-token`, `--ct0`
-2. Environment: `AUTH_TOKEN`, `CT0`
-3. Browser cookies via `--cookie-source` (default: Safari → Chrome → Firefox)
+Use `--auth-token` / `--ct0` to pass cookies directly, or `--cookie-source` for browser cookies.
 
-For Chromium variants (Arc/Brave), use `--chrome-profile-dir <path>`.
+Run `bird check` to see which source is active. For Arc/Brave, use `--chrome-profile-dir <path>`.
 
 ## Commands
 
@@ -115,8 +112,6 @@ bird follow @handle            # Follow a user
 bird unfollow @handle          # Unfollow a user
 ```
 
-The library also exposes like/unlike/retweet/unretweet/bookmark mutations.
-
 ### Posting
 
 ```bash
@@ -125,7 +120,7 @@ bird reply <url-or-id> "nice thread!"
 bird tweet "check this out" --media image.png --alt "description"
 ```
 
-**⚠️ Posting risks**: Twitter may flag automated posting (error 226). `bird` falls back to legacy endpoints, but for high-volume or sensitive posting, consider using the browser tool instead.
+**⚠️ Posting risks**: Posting is more likely to be rate limited; if blocked, use the browser tool instead.
 
 ## Media Uploads
 
@@ -134,8 +129,6 @@ bird tweet "hi" --media img.png --alt "description"
 bird tweet "pics" --media a.jpg --media b.jpg  # Up to 4 images
 bird tweet "video" --media clip.mp4            # Or 1 video
 ```
-
-Supported: jpg, jpeg, png, webp, gif, mp4, mov.
 
 ## Pagination
 
@@ -164,9 +157,9 @@ bird replies <id> --all --delay 1000    # Delay between pages (ms)
 ```bash
 --auth-token <token>       # Set auth_token cookie
 --ct0 <token>              # Set ct0 cookie
---cookie-source <browser>  # safari|chrome|firefox (repeatable)
+--cookie-source <source>   # Cookie source for browser cookies (repeatable)
 --chrome-profile <name>    # Chrome profile name
---chrome-profile-dir <path> # Chromium profile dir (Arc/Brave)
+--chrome-profile-dir <path> # Chrome/Chromium profile dir or cookie DB path
 --firefox-profile <name>   # Firefox profile
 --timeout <ms>             # Request timeout
 --cookie-timeout <ms>      # Cookie extraction timeout
@@ -178,7 +171,7 @@ bird replies <id> --all --delay 1000    # Delay between pages (ms)
 
 ```json5
 {
-  cookieSource: ["safari", "chrome"],
+  cookieSource: ["chrome"],
   chromeProfileDir: "/path/to/Arc/Profile",
   timeoutMs: 20000,
   quoteDepth: 1
@@ -186,18 +179,6 @@ bird replies <id> --all --delay 1000    # Delay between pages (ms)
 ```
 
 Environment variables: `BIRD_TIMEOUT_MS`, `BIRD_COOKIE_TIMEOUT_MS`, `BIRD_QUOTE_DEPTH`
-
-## Library Usage
-
-```typescript
-import { TwitterClient, resolveCredentials } from '@steipete/bird';
-
-const { cookies } = await resolveCredentials({ cookieSource: 'safari' });
-const client = new TwitterClient({ cookies });
-
-const searchResult = await client.search('from:steipete', 50);
-const newsResult = await client.getNews(10, { aiOnly: true });
-```
 
 ## Troubleshooting
 
@@ -210,13 +191,6 @@ bird query-ids --fresh
 - Check browser is logged into X
 - Try different `--cookie-source`
 - For Arc/Brave: use `--chrome-profile-dir`
-
-### Rate limited (429)
-- Space out requests
-- Reading is generous; posting/engagement is watched more closely
-
-### Error 226 on posting
-Twitter flagged as automated. `bird` auto-retries with legacy endpoint, but may still fail. Use browser for reliable posting.
 
 ---
 
