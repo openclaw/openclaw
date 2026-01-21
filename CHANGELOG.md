@@ -21,6 +21,7 @@ Docs: https://docs.clawd.bot
 - Configure: restrict the model allowlist picker to OAuth-compatible Anthropic models and preselect Opus 4.5.
 - Configure: seed model fallbacks from the allowlist selection when multiple models are chosen.
 - Model picker: list the full catalog when no model allowlist is configured.
+- Discord: honor wildcard channel configs via shared match helpers. (#1334) Thanks @pvoo.
 - BlueBubbles: resolve short message IDs safely and expose full IDs in templates. (#1387) Thanks @tyler6204.
 - Infra: preserve fetch helper methods when wrapping abort signals. (#1387)
 
