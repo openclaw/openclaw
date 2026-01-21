@@ -1,6 +1,11 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
-import { hintForPath, schemaType, type JsonSchema } from "./config-form.shared";
+import {
+  hintForPath,
+  humanize,
+  schemaType,
+  type JsonSchema,
+} from "./config-form.shared";
 import { renderNode } from "./config-form.node";
 
 export type ConfigFormProps = {
@@ -11,6 +16,7 @@ export type ConfigFormProps = {
   unsupportedPaths?: string[];
   searchQuery?: string;
   activeSection?: string | null;
+  activeSubsection?: string | null;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
 
@@ -146,6 +152,7 @@ export function renderConfigForm(props: ConfigFormProps) {
   const properties = schema.properties;
   const searchQuery = props.searchQuery ?? "";
   const activeSection = props.activeSection;
+  const activeSubsection = props.activeSubsection ?? null;
 
   // Filter and sort entries
   let entries = Object.entries(properties);
@@ -168,6 +175,25 @@ export function renderConfigForm(props: ConfigFormProps) {
     return a[0].localeCompare(b[0]);
   });
 
+  let subsectionContext:
+    | { sectionKey: string; subsectionKey: string; schema: JsonSchema }
+    | null = null;
+  if (activeSection && activeSubsection && entries.length === 1) {
+    const sectionSchema = entries[0]?.[1];
+    if (
+      sectionSchema &&
+      schemaType(sectionSchema) === "object" &&
+      sectionSchema.properties &&
+      sectionSchema.properties[activeSubsection]
+    ) {
+      subsectionContext = {
+        sectionKey: activeSection,
+        subsectionKey: activeSubsection,
+        schema: sectionSchema.properties[activeSubsection],
+      };
+    }
+  }
+
   if (entries.length === 0) {
     return html`
       <div class="config-empty">
@@ -183,38 +209,76 @@ export function renderConfigForm(props: ConfigFormProps) {
 
   return html`
     <div class="config-form config-form--modern">
-      ${entries.map(([key, node]) => {
-        const meta = SECTION_META[key] ?? { 
-          label: key.charAt(0).toUpperCase() + key.slice(1), 
-          description: node.description ?? ""
-        };
-        
-        return html`
-          <section class="config-section-card" id="config-section-${key}">
-            <div class="config-section-card__header">
-              <span class="config-section-card__icon">${getSectionIcon(key)}</span>
-              <div class="config-section-card__titles">
-                <h3 class="config-section-card__title">${meta.label}</h3>
-                ${meta.description ? html`
-                  <p class="config-section-card__desc">${meta.description}</p>
-                ` : nothing}
-              </div>
-            </div>
-            <div class="config-section-card__content">
-              ${renderNode({
-                schema: node,
-                value: (value as Record<string, unknown>)[key],
-                path: [key],
-                hints: props.uiHints,
-                unsupported,
-                disabled: props.disabled ?? false,
-                showLabel: false,
-                onPatch: props.onPatch,
-              })}
-            </div>
-          </section>
-        `;
-      })}
+      ${subsectionContext
+        ? (() => {
+            const { sectionKey, subsectionKey, schema: node } = subsectionContext;
+            const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
+            const label = hint?.label ?? node.title ?? humanize(subsectionKey);
+            const description = hint?.help ?? node.description ?? "";
+            const sectionValue = (value as Record<string, unknown>)[sectionKey];
+            const scopedValue =
+              sectionValue && typeof sectionValue === "object"
+                ? (sectionValue as Record<string, unknown>)[subsectionKey]
+                : undefined;
+            const id = `config-section-${sectionKey}-${subsectionKey}`;
+            return html`
+              <section class="config-section-card" id=${id}>
+                <div class="config-section-card__header">
+                  <span class="config-section-card__icon">${getSectionIcon(sectionKey)}</span>
+                  <div class="config-section-card__titles">
+                    <h3 class="config-section-card__title">${label}</h3>
+                    ${description
+                      ? html`<p class="config-section-card__desc">${description}</p>`
+                      : nothing}
+                  </div>
+                </div>
+                <div class="config-section-card__content">
+                  ${renderNode({
+                    schema: node,
+                    value: scopedValue,
+                    path: [sectionKey, subsectionKey],
+                    hints: props.uiHints,
+                    unsupported,
+                    disabled: props.disabled ?? false,
+                    showLabel: false,
+                    onPatch: props.onPatch,
+                  })}
+                </div>
+              </section>
+            `;
+          })()
+        : entries.map(([key, node]) => {
+            const meta = SECTION_META[key] ?? {
+              label: key.charAt(0).toUpperCase() + key.slice(1),
+              description: node.description ?? "",
+            };
+
+            return html`
+              <section class="config-section-card" id="config-section-${key}">
+                <div class="config-section-card__header">
+                  <span class="config-section-card__icon">${getSectionIcon(key)}</span>
+                  <div class="config-section-card__titles">
+                    <h3 class="config-section-card__title">${meta.label}</h3>
+                    ${meta.description
+                      ? html`<p class="config-section-card__desc">${meta.description}</p>`
+                      : nothing}
+                  </div>
+                </div>
+                <div class="config-section-card__content">
+                  ${renderNode({
+                    schema: node,
+                    value: (value as Record<string, unknown>)[key],
+                    path: [key],
+                    hints: props.uiHints,
+                    unsupported,
+                    disabled: props.disabled ?? false,
+                    showLabel: false,
+                    onPatch: props.onPatch,
+                  })}
+                </div>
+              </section>
+            `;
+          })}
     </div>
   `;
 }

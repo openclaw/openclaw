@@ -485,11 +485,16 @@ export function renderApp(state: AppViewState) {
               originalValue: state.configFormOriginal,
               searchQuery: state.configSearchQuery,
               activeSection: state.configActiveSection,
+              activeSubsection: state.configActiveSubsection,
               onRawChange: (next) => (state.configRaw = next),
               onFormModeChange: (mode) => (state.configFormMode = mode),
               onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
               onSearchChange: (query) => (state.configSearchQuery = query),
-              onSectionChange: (section) => (state.configActiveSection = section),
+              onSectionChange: (section) => {
+                state.configActiveSection = section;
+                state.configActiveSubsection = null;
+              },
+              onSubsectionChange: (section) => (state.configActiveSubsection = section),
               onReload: () => loadConfig(state),
               onSave: () => saveConfig(state),
               onApply: () => applyConfig(state),
