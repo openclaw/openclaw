@@ -96,6 +96,33 @@ describe("send", () => {
       expect(result).toBe("iMessage;-;chat123");
     });
 
+    it("matches chat_identifier against the 3rd component of chat GUID", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                guid: "iMessage;+;chat660250192681427962",
+                participants: [],
+              },
+            ],
+          }),
+      });
+
+      const target: BlueBubblesSendTarget = {
+        kind: "chat_identifier",
+        chatIdentifier: "chat660250192681427962",
+      };
+      const result = await resolveChatGuidForTarget({
+        baseUrl: "http://localhost:1234",
+        password: "test",
+        target,
+      });
+
+      expect(result).toBe("iMessage;+;chat660250192681427962");
+    });
+
     it("resolves handle target by matching participant", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

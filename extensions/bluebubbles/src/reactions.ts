@@ -20,32 +20,101 @@ const REACTION_TYPES = new Set([
 ]);
 
 const REACTION_ALIASES = new Map<string, string>([
+  // General
   ["heart", "love"],
+  ["love", "love"],
+  ["❤", "love"],
+  ["❤️", "love"],
+  ["red_heart", "love"],
   ["thumbs_up", "like"],
-  ["thumbs-down", "dislike"],
+  ["thumbsup", "like"],
+  ["thumbs-up", "like"],
+  ["thumbsup", "like"],
+  ["like", "like"],
+  ["thumb", "like"],
+  ["ok", "like"],
   ["thumbs_down", "dislike"],
+  ["thumbsdown", "dislike"],
+  ["thumbs-down", "dislike"],
+  ["dislike", "dislike"],
+  ["boo", "dislike"],
+  ["no", "dislike"],
+  // Laugh
   ["haha", "laugh"],
   ["lol", "laugh"],
+  ["lmao", "laugh"],
+  ["rofl", "laugh"],
+  ["😂", "laugh"],
+  ["🤣", "laugh"],
+  ["xd", "laugh"],
+  ["laugh", "laugh"],
+  // Emphasize / exclaim
   ["emphasis", "emphasize"],
+  ["emphasize", "emphasize"],
   ["exclaim", "emphasize"],
+  ["!!", "emphasize"],
+  ["‼", "emphasize"],
+  ["‼️", "emphasize"],
+  ["❗", "emphasize"],
+  ["important", "emphasize"],
+  ["bang", "emphasize"],
+  // Question
   ["question", "question"],
+  ["?", "question"],
+  ["❓", "question"],
+  ["❔", "question"],
+  ["ask", "question"],
+  // Apple/Messages names
+  ["loved", "love"],
+  ["liked", "like"],
+  ["disliked", "dislike"],
+  ["laughed", "laugh"],
+  ["emphasized", "emphasize"],
+  ["questioned", "question"],
+  // Colloquial / informal
+  ["fire", "love"],
+  ["🔥", "love"],
+  ["wow", "emphasize"],
+  ["!", "emphasize"],
+  // Edge: generic emoji name forms
+  ["heart_eyes", "love"],
+  ["smile", "laugh"],
+  ["smiley", "laugh"],
+  ["happy", "laugh"],
+  ["joy", "laugh"],
 ]);
 
 const REACTION_EMOJIS = new Map<string, string>([
+  // Love
   ["❤️", "love"],
   ["❤", "love"],
   ["♥️", "love"],
+  ["♥", "love"],
   ["😍", "love"],
+  ["💕", "love"],
+  // Like
   ["👍", "like"],
+  ["👌", "like"],
+  // Dislike
   ["👎", "dislike"],
+  ["🙅", "dislike"],
+  // Laugh
   ["😂", "laugh"],
   ["🤣", "laugh"],
   ["😆", "laugh"],
+  ["😁", "laugh"],
+  ["😹", "laugh"],
+  // Emphasize
   ["‼️", "emphasize"],
   ["‼", "emphasize"],
+  ["!!", "emphasize"],
   ["❗", "emphasize"],
+  ["❕", "emphasize"],
+  ["!", "emphasize"],
+  // Question
   ["❓", "question"],
   ["❔", "question"],
+  ["?", "question"],
 ]);
 
 function resolveAccount(params: BlueBubblesReactionOpts) {

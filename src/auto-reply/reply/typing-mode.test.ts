@@ -140,7 +140,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
-  it("does not start typing on tool start before text", async () => {
+  it("starts typing on tool start before text", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -150,8 +150,9 @@ describe("createTypingSignaler", () => {
 
     await signaler.signalToolStart();
 
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
   it("refreshes ttl on tool start when active after text", async () => {

@@ -133,6 +133,13 @@ function extractChatId(chat: BlueBubblesChatRecord): number | null {
   return null;
 }
 
+function extractChatIdentifierFromChatGuid(chatGuid: string): string | null {
+  const parts = chatGuid.split(";");
+  if (parts.length < 3) return null;
+  const identifier = parts[2]?.trim();
+  return identifier ? identifier : null;
+}
+
 function extractParticipantAddresses(chat: BlueBubblesChatRecord): string[] {
   const raw =
     (Array.isArray(chat.participants) ? chat.participants : null) ??
@@ -223,7 +230,16 @@ export async function resolveChatGuidForTarget(params: {
       }
       if (targetChatIdentifier) {
         const guid = extractChatGuid(chat);
-        if (guid && guid === targetChatIdentifier) return guid;
+        if (guid) {
+          // Back-compat: some callers might pass a full chat GUID.
+          if (guid === targetChatIdentifier) return guid;
+
+          // Primary match: BlueBubbles `chat_identifier:*` targets correspond to the
+          // third component of the chat GUID: `service;(+|-) ;identifier`.
+          const guidIdentifier = extractChatIdentifierFromChatGuid(guid);
+          if (guidIdentifier && guidIdentifier === targetChatIdentifier) return guid;
+        }
+
         const identifier =
           typeof chat.identifier === "string"
             ? chat.identifier
@@ -232,7 +248,7 @@ export async function resolveChatGuidForTarget(params: {
               : typeof chat.chat_identifier === "string"
                 ? chat.chat_identifier
                 : "";
-        if (identifier && identifier === targetChatIdentifier) return extractChatGuid(chat);
+        if (identifier && identifier === targetChatIdentifier) return guid ?? extractChatGuid(chat);
       }
       if (normalizedHandle) {
         const guid = extractChatGuid(chat);
