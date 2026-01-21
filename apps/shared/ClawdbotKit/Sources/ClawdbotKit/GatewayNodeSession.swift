@@ -180,8 +180,10 @@ public actor GatewayNodeSession {
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
             "ok": AnyCodable(response.ok),
-            "payloadJSON": AnyCodable(response.payloadJSON ?? NSNull()),
         ]
+        if let payloadJSON = response.payloadJSON {
+            params["payloadJSON"] = AnyCodable(payloadJSON)
+        }
         if let error = response.error {
             params["error"] = AnyCodable([
                 "code": AnyCodable(error.code.rawValue),
