@@ -72,7 +72,6 @@ final class RemotePortTunnel {
         }
         var args: [String] = [
             "-o", "BatchMode=yes",
-            "-o", "IdentitiesOnly=yes",
             "-o", "ExitOnForwardFailure=yes",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "UpdateHostKeys=yes",
@@ -84,7 +83,12 @@ final class RemotePortTunnel {
         ]
         if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !identity.isEmpty { args.append(contentsOf: ["-i", identity]) }
+        if !identity.isEmpty {
+            // Only use IdentitiesOnly when an explicit identity file is provided.
+            // This allows 1Password SSH agent and other SSH agents to provide keys.
+            args.append(contentsOf: ["-o", "IdentitiesOnly=yes"])
+            args.append(contentsOf: ["-i", identity])
+        }
         let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
         args.append(userHost)
 
