@@ -77,6 +77,50 @@ import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { detectAndLoadPromptImages } from "./images.js";
 
+export function injectHistoryImagesIntoMessages(
+  messages: AgentMessage[],
+  historyImagesByIndex: Map<number, ImageContent[]>,
+): boolean {
+  if (historyImagesByIndex.size === 0) return false;
+  let didMutate = false;
+
+  for (const [msgIndex, images] of historyImagesByIndex) {
+    // Bounds check: ensure index is valid before accessing
+    if (msgIndex < 0 || msgIndex >= messages.length) continue;
+    const msg = messages[msgIndex];
+    if (msg && msg.role === "user") {
+      // Convert string content to array format if needed
+      if (typeof msg.content === "string") {
+        msg.content = [{ type: "text", text: msg.content }];
+        didMutate = true;
+      }
+      if (Array.isArray(msg.content)) {
+        // Check for existing image content to avoid duplicates across turns
+        const existingImageData = new Set(
+          msg.content
+            .filter(
+              (c): c is ImageContent =>
+                c != null &&
+                typeof c === "object" &&
+                c.type === "image" &&
+                typeof c.data === "string",
+            )
+            .map((c) => c.data),
+        );
+        for (const img of images) {
+          // Only add if this image isn't already in the message
+          if (!existingImageData.has(img.data)) {
+            msg.content.push(img);
+            didMutate = true;
+          }
+        }
+      }
+    }
+  }
+
+  return didMutate;
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -626,45 +670,13 @@ export async function runEmbeddedAttempt(
 
           // Inject history images into their original message positions.
           // This ensures the model sees images in context (e.g., "compare to the first image").
-          if (imageResult.historyImagesByIndex.size > 0) {
-            let didMutate = false;
-            for (const [msgIndex, images] of imageResult.historyImagesByIndex) {
-              // Bounds check: ensure index is valid before accessing
-              if (msgIndex < 0 || msgIndex >= activeSession.messages.length) continue;
-              const msg = activeSession.messages[msgIndex];
-              if (msg && msg.role === "user") {
-                // Convert string content to array format if needed
-                if (typeof msg.content === "string") {
-                  msg.content = [{ type: "text", text: msg.content }];
-                  didMutate = true;
-                }
-                if (Array.isArray(msg.content)) {
-                  // Check for existing image content to avoid duplicates across turns
-                  const existingImageData = new Set(
-                    msg.content
-                      .filter(
-                        (c): c is ImageContent =>
-                          c != null &&
-                          typeof c === "object" &&
-                          c.type === "image" &&
-                          typeof c.data === "string",
-                      )
-                      .map((c) => c.data),
-                  );
-                  for (const img of images) {
-                    // Only add if this image isn't already in the message
-                    if (!existingImageData.has(img.data)) {
-                      msg.content.push(img);
-                      didMutate = true;
-                    }
-                  }
-                }
-              }
-            }
-            if (didMutate) {
-              // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
-              activeSession.agent.replaceMessages(activeSession.messages);
-            }
+          const didMutate = injectHistoryImagesIntoMessages(
+            activeSession.messages,
+            imageResult.historyImagesByIndex,
+          );
+          if (didMutate) {
+            // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
+            activeSession.agent.replaceMessages(activeSession.messages);
           }
 
           cacheTrace?.recordStage("prompt:images", {
