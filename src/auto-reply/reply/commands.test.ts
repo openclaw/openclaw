@@ -215,6 +215,20 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagents: none");
   });
 
+  it("omits subagent status line when none exist", async () => {
+    resetSubagentRegistryForTests();
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as ClawdbotConfig;
+    const params = buildParams("/status", cfg);
+    params.resolvedVerboseLevel = "on";
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).not.toContain("Subagents:");
+  });
+
   it("returns help for unknown subagents action", async () => {
     resetSubagentRegistryForTests();
     const cfg = {
