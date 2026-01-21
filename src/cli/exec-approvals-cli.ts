@@ -13,6 +13,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
+import { describeUnknownError } from "./gateway-cli/shared.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 
@@ -96,7 +97,7 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }
 
 function formatCliError(err: unknown): string {
-  const msg = String(err ?? "unknown error");
+  const msg = describeUnknownError(err);
   return msg.includes("\n") ? msg.split("\n")[0] : msg;
 }
 

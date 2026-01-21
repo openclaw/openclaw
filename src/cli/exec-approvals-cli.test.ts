@@ -115,6 +115,10 @@ describe("exec approvals CLI", () => {
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
 
+    const execApprovals = await import("../infra/exec-approvals.js");
+    const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+    saveExecApprovals.mockClear();
+
     const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
     const program = new Command();
     program.exitOverride();
@@ -122,9 +126,17 @@ describe("exec approvals CLI", () => {
 
     await program.parseAsync(["approvals", "allowlist", "add", "/usr/bin/uname"], { from: "user" });
 
-    const setCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "exec.approvals.set");
-    expect(setCall).toBeTruthy();
-    const params = setCall?.[2] as { file: { agents?: Record<string, unknown> } };
-    expect(params.file.agents?.["*"]).toBeTruthy();
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "exec.approvals.set",
+      expect.anything(),
+      {},
+    );
+    expect(saveExecApprovals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          "*": expect.anything(),
+        }),
+      }),
+    );
   });
 });
