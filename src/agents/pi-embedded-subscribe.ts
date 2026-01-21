@@ -48,6 +48,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastStreamedAssistant: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
+    assistantMessageIndex: 0,
+    lastAssistantTextMessageIndex: -1,
+    lastAssistantTextNormalized: undefined,
+    lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
@@ -84,7 +88,34 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
     state.suppressBlockChunks = false;
+    state.assistantMessageIndex += 1;
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+  };
+
+  const rememberAssistantText = (text: string) => {
+    state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
+    state.lastAssistantTextTrimmed = text.trimEnd();
+    const normalized = normalizeTextForComparison(text);
+    state.lastAssistantTextNormalized = normalized.length > 0 ? normalized : undefined;
+  };
+
+  const shouldSkipAssistantText = (text: string) => {
+    if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) return false;
+    const trimmed = text.trimEnd();
+    if (trimmed && trimmed === state.lastAssistantTextTrimmed) return true;
+    const normalized = normalizeTextForComparison(text);
+    if (normalized.length > 0 && normalized === state.lastAssistantTextNormalized) return true;
+    return false;
+  };
+
+  const pushAssistantText = (text: string) => {
+    if (!text) return;
+    if (shouldSkipAssistantText(text)) return;
+    assistantTexts.push(text);
+    rememberAssistantText(text);
   };
 
   const finalizeAssistantTexts = (args: {
@@ -103,16 +134,15 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           assistantTexts.length - state.assistantTextBaseline,
           text,
         );
+        rememberAssistantText(text);
       } else {
-        const last = assistantTexts.at(-1);
-        if (!last || last !== text) assistantTexts.push(text);
+        pushAssistantText(text);
       }
       state.suppressBlockChunks = true;
     } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
       // text when the chunker has nothing buffered to drain.
-      const last = assistantTexts.at(-1);
-      if (!last || last !== text) assistantTexts.push(text);
+      pushAssistantText(text);
     }
 
     state.assistantTextBaseline = assistantTexts.length;
@@ -338,8 +368,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
+    if (shouldSkipAssistantText(chunk)) return;
+
     state.lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
+    rememberAssistantText(chunk);
     if (!params.onBlockReply) return;
     const splitResult = parseReplyDirectives(chunk);
     const {
