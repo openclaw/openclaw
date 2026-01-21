@@ -25,7 +25,7 @@ Example config:
       heartbeat: {
         every: "30m",
         target: "last",
-        // activeHours: { start: "08:00", end: "24:00", timezone: "user" },
+        // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       }
     }
