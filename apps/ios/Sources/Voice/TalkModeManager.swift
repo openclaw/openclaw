@@ -132,6 +132,12 @@ final class TalkModeManager: NSObject {
     }
 
     private func startRecognition() throws {
+        #if targetEnvironment(simulator)
+            throw NSError(domain: "TalkMode", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Talk mode is not supported on the iOS simulator",
+            ])
+        #endif
+
         self.stopRecognition()
         self.speechRecognizer = SFSpeechRecognizer()
         guard let recognizer = self.speechRecognizer else {
@@ -146,6 +152,11 @@ final class TalkModeManager: NSObject {
 
         let input = self.audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "TalkMode", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid audio input format",
+            ])
+        }
         input.removeTap(onBus: 0)
         let tapBlock = Self.makeAudioTapAppendCallback(request: request)
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
