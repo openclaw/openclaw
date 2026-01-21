@@ -158,6 +158,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       textAlias: "/status",
     }),
     defineChatCommand({
+      key: "allowlist",
+      description: "List/add/remove allowlist entries.",
+      textAlias: "/allowlist",
+      acceptsArgs: true,
+      scope: "text",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

@@ -13,6 +13,7 @@ Docs: https://docs.clawd.bot
 - Memory: add native Gemini embeddings provider for memory search. (#1151) https://docs.clawd.bot/concepts/memory
 
 ### Changes
+- Commands: add `/allowlist` slash command for listing and editing channel allowlists.
 - Control UI: add copy-as-markdown with error feedback. (#1345) https://docs.clawd.bot/web/control-ui
 - Control UI: drop the legacy list view. (#1345) https://docs.clawd.bot/web/control-ui
 - TUI: add syntax highlighting for code blocks. (#1200) https://docs.clawd.bot/tui
