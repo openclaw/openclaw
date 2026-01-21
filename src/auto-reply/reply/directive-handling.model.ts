@@ -36,6 +36,56 @@ function buildModelPickerCatalog(params: {
     defaultModel: params.defaultModel,
   });
 
+  const buildConfiguredCatalog = (): ModelPickerCatalogEntry[] => {
+    const out: ModelPickerCatalogEntry[] = [];
+    const keys = new Set<string>();
+
+    const pushRef = (ref: { provider: string; model: string }, name?: string) => {
+      const provider = normalizeProviderId(ref.provider);
+      const id = String(ref.model ?? "").trim();
+      if (!provider || !id) return;
+      const key = modelKey(provider, id);
+      if (keys.has(key)) return;
+      keys.add(key);
+      out.push({ provider, id, name: name ?? id });
+    };
+
+    const pushRaw = (raw?: string) => {
+      const value = String(raw ?? "").trim();
+      if (!value) return;
+      const resolved = resolveModelRefFromString({
+        raw: value,
+        defaultProvider: params.defaultProvider,
+        aliasIndex: params.aliasIndex,
+      });
+      if (!resolved) return;
+      pushRef(resolved.ref);
+    };
+
+    pushRef(resolvedDefault);
+
+    const modelConfig = params.cfg.agents?.defaults?.model;
+    const modelFallbacks =
+      modelConfig && typeof modelConfig === "object" ? (modelConfig.fallbacks ?? []) : [];
+    for (const fallback of modelFallbacks) {
+      pushRaw(String(fallback ?? ""));
+    }
+
+    const imageConfig = params.cfg.agents?.defaults?.imageModel;
+    if (imageConfig && typeof imageConfig === "object") {
+      pushRaw(imageConfig.primary);
+      for (const fallback of imageConfig.fallbacks ?? []) {
+        pushRaw(String(fallback ?? ""));
+      }
+    }
+
+    for (const raw of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+      pushRaw(raw);
+    }
+
+    return out;
+  };
+
   const keys = new Set<string>();
   const out: ModelPickerCatalogEntry[] = [];
 
@@ -48,6 +98,14 @@ function buildModelPickerCatalog(params: {
     keys.add(key);
     out.push({ provider, id, name: entry.name });
   };
+
+  const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
+  if (!hasAllowlist) {
+    for (const entry of buildConfiguredCatalog()) {
+      push(entry);
+    }
+    return out;
+  }
 
   // Prefer catalog entries (when available), but always merge in config-only
   // allowlist entries. This keeps custom providers/models visible in /model.

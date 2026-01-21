@@ -98,6 +98,7 @@ Docs: https://docs.clawd.bot
 - **BREAKING:** Reject invalid/unknown config entries and refuse to start the gateway for safety. Run `clawdbot doctor --fix` to repair, then update plugins (`clawdbot plugins update`) if you use any.
 
 ### Fixes
+- Models: limit `/model list` chat output to configured models when no allowlist is set.
 - Discovery: shorten Bonjour DNS-SD service type to `_clawdbot-gw._tcp` and update discovery clients/docs.
 - Diagnostics: export OTLP logs, correct queue depth tracking, and document message-flow telemetry.
 - Diagnostics: emit message-flow diagnostics across channels via shared dispatch. (#1244)

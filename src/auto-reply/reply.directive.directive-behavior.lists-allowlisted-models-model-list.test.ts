@@ -121,6 +121,42 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("uses configured models when no allowlist is set", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "grok-4", name: "Grok 4", provider: "xai" },
+      ]);
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model list", From: "+1222", To: "+1222", CommandAuthorized: true },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-5",
+                fallbacks: ["openai/gpt-4.1-mini"],
+              },
+              imageModel: { primary: "minimax/MiniMax-M2.1" },
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("anthropic/claude-opus-4-5");
+      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).toContain("minimax/MiniMax-M2.1");
+      expect(text).not.toContain("xai/grok-4");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("merges config allowlist models even when catalog is present", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
