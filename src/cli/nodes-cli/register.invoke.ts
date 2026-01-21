@@ -84,7 +84,7 @@ function applyPathPrepend(
 }
 
 function resolveExecDefaults(
-  cfg: ReturnType<typeof loadConfig> | undefined,
+  cfg: ReturnType<typeof loadConfig>,
   agentId: string | undefined,
 ): ExecDefaults | undefined {
   const globalExec = cfg?.tools?.exec;
