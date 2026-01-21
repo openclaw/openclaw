@@ -5,9 +5,13 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  analyzeArgvCommand,
+  analyzeShellCommand,
+  isSafeBinUsage,
   matchAllowlist,
   maxAsk,
   minSecurity,
+  normalizeSafeBins,
   resolveCommandResolution,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -18,7 +22,7 @@ function makeTempDir() {
 }
 
 describe("exec approvals allowlist matching", () => {
-  it("matches by executable name (case-insensitive)", () => {
+  it("ignores basename-only patterns", () => {
     const resolution = {
       rawExecutable: "rg",
       resolvedPath: "/opt/homebrew/bin/rg",
@@ -26,7 +30,7 @@ describe("exec approvals allowlist matching", () => {
     };
     const entries: ExecAllowlistEntry[] = [{ pattern: "RG" }];
     const match = matchAllowlist(entries, resolution);
-    expect(match?.pattern).toBe("RG");
+    expect(match).toBeNull();
   });
 
   it("matches by resolved path with **", () => {
@@ -51,7 +55,7 @@ describe("exec approvals allowlist matching", () => {
     expect(match).toBeNull();
   });
 
-  it("falls back to raw executable when no resolved path", () => {
+  it("requires a resolved path", () => {
     const resolution = {
       rawExecutable: "bin/rg",
       resolvedPath: undefined,
@@ -59,7 +63,7 @@ describe("exec approvals allowlist matching", () => {
     };
     const entries: ExecAllowlistEntry[] = [{ pattern: "bin/rg" }];
     const match = matchAllowlist(entries, resolution);
-    expect(match?.pattern).toBe("bin/rg");
+    expect(match).toBeNull();
   });
 });
 
@@ -70,6 +74,7 @@ describe("exec approvals command resolution", () => {
     fs.mkdirSync(binDir, { recursive: true });
     const exe = path.join(binDir, "rg");
     fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
     const res = resolveCommandResolution("rg -n foo", undefined, { PATH: binDir });
     expect(res?.resolvedPath).toBe(exe);
     expect(res?.executableName).toBe("rg");
@@ -81,6 +86,7 @@ describe("exec approvals command resolution", () => {
     const script = path.join(cwd, "scripts", "run.sh");
     fs.mkdirSync(path.dirname(script), { recursive: true });
     fs.writeFileSync(script, "");
+    fs.chmodSync(script, 0o755);
     const res = resolveCommandResolution("./scripts/run.sh --flag", cwd, undefined);
     expect(res?.resolvedPath).toBe(script);
   });
@@ -91,8 +97,78 @@ describe("exec approvals command resolution", () => {
     const script = path.join(cwd, "bin", "tool");
     fs.mkdirSync(path.dirname(script), { recursive: true });
     fs.writeFileSync(script, "");
+    fs.chmodSync(script, 0o755);
     const res = resolveCommandResolution('"./bin/tool" --version', cwd, undefined);
     expect(res?.resolvedPath).toBe(script);
+  });
+});
+
+describe("exec approvals shell parsing", () => {
+  it("parses simple pipelines", () => {
+    const res = analyzeShellCommand({ command: "echo ok | jq .foo" });
+    expect(res.ok).toBe(true);
+    expect(res.segments.map((seg) => seg.argv[0])).toEqual(["echo", "jq"]);
+  });
+
+  it("rejects chained commands", () => {
+    const res = analyzeShellCommand({ command: "ls && rm -rf /" });
+    expect(res.ok).toBe(false);
+  });
+
+  it("parses argv commands", () => {
+    const res = analyzeArgvCommand({ argv: ["/bin/echo", "ok"] });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv).toEqual(["/bin/echo", "ok"]);
+  });
+});
+
+describe("exec approvals safe bins", () => {
+  it("allows safe bins with non-path args", () => {
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exe = path.join(binDir, "jq");
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+    const res = analyzeShellCommand({
+      command: "jq .foo",
+      cwd: dir,
+      env: { PATH: binDir },
+    });
+    expect(res.ok).toBe(true);
+    const segment = res.segments[0];
+    const ok = isSafeBinUsage({
+      argv: segment.argv,
+      resolution: segment.resolution,
+      safeBins: normalizeSafeBins(["jq"]),
+      cwd: dir,
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("blocks safe bins with file args", () => {
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exe = path.join(binDir, "jq");
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+    const file = path.join(dir, "secret.json");
+    fs.writeFileSync(file, "{}");
+    const res = analyzeShellCommand({
+      command: "jq .foo secret.json",
+      cwd: dir,
+      env: { PATH: binDir },
+    });
+    expect(res.ok).toBe(true);
+    const segment = res.segments[0];
+    const ok = isSafeBinUsage({
+      argv: segment.argv,
+      resolution: segment.resolution,
+      safeBins: normalizeSafeBins(["jq"]),
+      cwd: dir,
+    });
+    expect(ok).toBe(false);
   });
 });
 

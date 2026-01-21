@@ -38,6 +38,7 @@ type ExecDefaults = {
   ask?: ExecAsk;
   node?: string;
   pathPrepend?: string[];
+  safeBins?: string[];
 };
 
 function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
@@ -95,6 +96,7 @@ function resolveExecDefaults(
           ask: globalExec.ask,
           node: globalExec.node,
           pathPrepend: globalExec.pathPrepend,
+          safeBins: globalExec.safeBins,
         }
       : undefined;
   }
@@ -104,6 +106,7 @@ function resolveExecDefaults(
     ask: agentExec?.ask ?? globalExec?.ask,
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
+    safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
   };
 }
 
@@ -230,7 +233,9 @@ export function registerNodesInvokeCommands(nodes: Command) {
           const security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
           const ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
 
-          const approvalsSnapshot = (await callGatewayCli("exec.approvals.get", opts, {})) as {
+          const approvalsSnapshot = (await callGatewayCli("exec.approvals.node.get", opts, {
+            nodeId,
+          })) as {
             file?: unknown;
           } | null;
           const approvalsFile =

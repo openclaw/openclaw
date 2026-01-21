@@ -27,7 +27,7 @@ const callGateway = vi.fn(async (opts: { method?: string }) => {
       },
     };
   }
-  if (opts.method === "exec.approvals.get") {
+  if (opts.method === "exec.approvals.node.get") {
     return {
       path: "/tmp/exec-approvals.json",
       exists: true,

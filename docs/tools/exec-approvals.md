@@ -87,6 +87,7 @@ If a prompt is required but no UI is reachable, fallback decides:
 
 Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
+Patterns should resolve to **binary paths** (basename-only entries are ignored).
 
 Examples:
 - `~/Projects/**/bin/bird`
@@ -103,6 +104,15 @@ Each allowlist entry tracks:
 When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
 are treated as allowlisted on nodes (macOS node or headless node host). This uses the Bridge RPC to ask the
 gateway for the skill bin list. Disable this if you want strict manual allowlists.
+
+## Safe bins (stdin-only)
+
+`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
+that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
+positional file args and path-like tokens, so they can only operate on the incoming stream.
+Shell chaining and redirections are not auto-allowed in allowlist mode.
+
+Default safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 ## Control UI editing
 

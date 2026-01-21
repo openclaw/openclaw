@@ -8,12 +8,15 @@ import {
   type ExecAsk,
   type ExecHost,
   type ExecSecurity,
+  type ExecAllowlistEntry,
   addAllowlistEntry,
+  analyzeShellCommand,
+  isSafeBinUsage,
   matchAllowlist,
   maxAsk,
   minSecurity,
+  resolveSafeBins,
   recordAllowlistUse,
-  resolveCommandResolution,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
@@ -94,6 +97,7 @@ export type ExecToolDefaults = {
   ask?: ExecAsk;
   node?: string;
   pathPrepend?: string[];
+  safeBins?: string[];
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
@@ -298,6 +302,7 @@ export function createExecTool(
       ? defaults.timeoutSec
       : 1800;
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
+  const safeBins = resolveSafeBins(defaults?.safeBins);
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
 
@@ -593,13 +598,27 @@ export function createExecTool(
         if (hostSecurity === "deny") {
           throw new Error("exec denied: host=gateway security=deny");
         }
-
-        const resolution = resolveCommandResolution(params.command, workdir, env);
-        const allowlistMatch =
-          hostSecurity === "allowlist" ? matchAllowlist(approvals.allowlist, resolution) : null;
+        const analysis = analyzeShellCommand({ command: params.command, cwd: workdir, env });
+        const allowlistMatches: ExecAllowlistEntry[] = [];
+        let allowlistSatisfied = false;
+        if (hostSecurity === "allowlist" && analysis.ok && analysis.segments.length > 0) {
+          allowlistSatisfied = analysis.segments.every((segment) => {
+            const match = matchAllowlist(approvals.allowlist, segment.resolution);
+            if (match) allowlistMatches.push(match);
+            const safe = isSafeBinUsage({
+              argv: segment.argv,
+              resolution: segment.resolution,
+              safeBins,
+              cwd: workdir,
+            });
+            return Boolean(match || safe);
+          });
+        }
         const requiresAsk =
           hostAsk === "always" ||
-          (hostAsk === "on-miss" && hostSecurity === "allowlist" && !allowlistMatch);
+          (hostAsk === "on-miss" &&
+            hostSecurity === "allowlist" &&
+            (!analysis.ok || !allowlistSatisfied));
 
         let approvedByAsk = false;
         if (requiresAsk) {
@@ -613,7 +632,7 @@ export function createExecTool(
               security: hostSecurity,
               ask: hostAsk,
               agentId: defaults?.agentId,
-              resolvedPath: resolution?.resolvedPath ?? null,
+              resolvedPath: analysis.segments[0]?.resolution?.resolvedPath ?? null,
               sessionKey: defaults?.sessionKey ?? null,
               timeoutMs: 120_000,
             },
@@ -630,7 +649,7 @@ export function createExecTool(
             if (askFallback === "full") {
               approvedByAsk = true;
             } else if (askFallback === "allowlist") {
-              if (!allowlistMatch) {
+              if (!analysis.ok || !allowlistSatisfied) {
                 throw new Error("exec denied: approval required (approval UI not available)");
               }
               approvedByAsk = true;
@@ -644,30 +663,37 @@ export function createExecTool(
           if (decision === "allow-always") {
             approvedByAsk = true;
             if (hostSecurity === "allowlist") {
-              const pattern =
-                resolution?.resolvedPath ??
-                resolution?.rawExecutable ??
-                params.command.split(/\s+/).shift() ??
-                "";
-              if (pattern) {
-                addAllowlistEntry(approvals.file, defaults?.agentId, pattern);
+              for (const segment of analysis.segments) {
+                const pattern = segment.resolution?.resolvedPath ?? "";
+                if (pattern) {
+                  addAllowlistEntry(approvals.file, defaults?.agentId, pattern);
+                }
               }
             }
           }
         }
 
-        if (hostSecurity === "allowlist" && !allowlistMatch && !approvedByAsk) {
+        if (
+          hostSecurity === "allowlist" &&
+          (!analysis.ok || !allowlistSatisfied) &&
+          !approvedByAsk
+        ) {
           throw new Error("exec denied: allowlist miss");
         }
 
-        if (allowlistMatch) {
-          recordAllowlistUse(
-            approvals.file,
-            defaults?.agentId,
-            allowlistMatch,
-            params.command,
-            resolution?.resolvedPath,
-          );
+        if (allowlistMatches.length > 0) {
+          const seen = new Set<string>();
+          for (const match of allowlistMatches) {
+            if (seen.has(match.pattern)) continue;
+            seen.add(match.pattern);
+            recordAllowlistUse(
+              approvals.file,
+              defaults?.agentId,
+              match,
+              params.command,
+              analysis.segments[0]?.resolution?.resolvedPath,
+            );
+          }
         }
       }
 
