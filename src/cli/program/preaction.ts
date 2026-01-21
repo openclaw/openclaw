@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { emitCliBanner } from "../banner.js";
-import { getCommandPath, hasHelpOrVersion } from "../argv.js";
+import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { ensureConfigReady } from "./config-guard.js";
 import { ensurePluginRegistryLoaded } from "../plugin-registry.js";
+import { setVerbose } from "../../globals.js";
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -24,6 +25,11 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     emitCliBanner(programVersion);
     const argv = process.argv;
     if (hasHelpOrVersion(argv)) return;
+    const verbose = getVerboseFlag(argv, { includeDebug: true });
+    setVerbose(verbose);
+    if (!verbose) {
+      process.env.NODE_NO_WARNINGS ??= "1";
+    }
     const commandPath = getCommandPath(argv, 2);
     if (commandPath[0] === "doctor") return;
     await ensureConfigReady({ runtime: defaultRuntime, commandPath });
