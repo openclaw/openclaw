@@ -190,11 +190,17 @@ export function createBrowserTool(opts?: {
           return jsonResult({ ok: true });
         }
         case "snapshot": {
+          const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
           const format =
             params.snapshotFormat === "ai" || params.snapshotFormat === "aria"
               ? (params.snapshotFormat as "ai" | "aria")
               : "ai";
-          const mode = params.mode === "efficient" ? "efficient" : undefined;
+          const mode =
+            params.mode === "efficient"
+              ? "efficient"
+              : format === "ai" && snapshotDefaults?.mode === "efficient"
+                ? "efficient"
+                : undefined;
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const refs = params.refs === "aria" || params.refs === "role" ? params.refs : undefined;
           const hasMaxChars = Object.hasOwn(params, "maxChars");

@@ -6,6 +6,13 @@ import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-
 import { ChannelsSchema } from "./zod-schema.providers.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
+const BrowserSnapshotDefaultsSchema = z
+  .object({
+    mode: z.literal("efficient").optional(),
+  })
+  .strict()
+  .optional();
+
 export const ClawdbotSchema = z
   .object({
     meta: z
@@ -113,6 +120,7 @@ export const ClawdbotSchema = z
         noSandbox: z.boolean().optional(),
         attachOnly: z.boolean().optional(),
         defaultProfile: z.string().optional(),
+        snapshotDefaults: BrowserSnapshotDefaultsSchema,
         profiles: z
           .record(
             z

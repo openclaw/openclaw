@@ -2615,9 +2615,12 @@ Defaults:
     // noSandbox: false,
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
     // attachOnly: false, // set true when tunneling a remote CDP to localhost
+    // snapshotDefaults: { mode: "efficient" }, // tool/CLI default snapshot preset
   }
 }
 ```
+
+Note: `browser.snapshotDefaults` only affects Clawdbot's browser tool + CLI. Direct HTTP clients must pass `mode` explicitly.
 
 ### `ui` (Appearance)
 

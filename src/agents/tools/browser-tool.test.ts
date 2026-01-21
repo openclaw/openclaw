@@ -49,9 +49,10 @@ const browserConfigMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../browser/config.js", () => browserConfigMocks);
 
-vi.mock("../../config/config.js", () => ({
+const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
+vi.mock("../../config/config.js", () => configMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
   imageResultFromFile: vi.fn(),
@@ -70,11 +71,12 @@ import { createBrowserTool } from "./browser-tool.js";
 describe("browser tool snapshot maxChars", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
 
   it("applies the default ai snapshot limit", async () => {
     const tool = createBrowserTool();
-    await tool.execute?.(null, { action: "snapshot", format: "ai" });
+    await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       "http://127.0.0.1:18791",
@@ -90,7 +92,7 @@ describe("browser tool snapshot maxChars", () => {
     const override = 2_000;
     await tool.execute?.(null, {
       action: "snapshot",
-      format: "ai",
+      snapshotFormat: "ai",
       maxChars: override,
     });
 
@@ -106,7 +108,7 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.(null, {
       action: "snapshot",
-      format: "ai",
+      snapshotFormat: "ai",
       maxChars: 0,
     });
 
@@ -124,7 +126,7 @@ describe("browser tool snapshot maxChars", () => {
 
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
-    await tool.execute?.(null, { action: "snapshot", format: "ai", refs: "aria" });
+    await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       "http://127.0.0.1:18791",
@@ -135,9 +137,36 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("uses config snapshot defaults when mode is not provided", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { snapshotDefaults: { mode: "efficient" } },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "snapshot", snapshotFormat: "ai" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      "http://127.0.0.1:18791",
+      expect.objectContaining({
+        mode: "efficient",
+      }),
+    );
+  });
+
+  it("does not apply config snapshot defaults to aria snapshots", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { snapshotDefaults: { mode: "efficient" } },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.(null, { action: "snapshot", snapshotFormat: "aria" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalled();
+    const [, opts] = browserClientMocks.browserSnapshot.mock.calls.at(-1) ?? [];
+    expect(opts?.mode).toBeUndefined();
+  });
+
   it("defaults to host when using profile=chrome (even in sandboxed sessions)", async () => {
     const tool = createBrowserTool({ defaultControlUrl: "http://127.0.0.1:9999" });
-    await tool.execute?.(null, { action: "snapshot", profile: "chrome", format: "ai" });
+    await tool.execute?.(null, { action: "snapshot", profile: "chrome", snapshotFormat: "ai" });
 
     expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
       "http://127.0.0.1:18791",
@@ -151,6 +180,7 @@ describe("browser tool snapshot maxChars", () => {
 describe("browser tool snapshot labels", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
   });
 
   it("returns image + text when labels are requested", async () => {
@@ -175,7 +205,7 @@ describe("browser tool snapshot labels", () => {
 
     const result = await tool.execute?.(null, {
       action: "snapshot",
-      format: "ai",
+      snapshotFormat: "ai",
       labels: true,
     });
 

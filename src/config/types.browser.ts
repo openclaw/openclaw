@@ -8,6 +8,10 @@ export type BrowserProfileConfig = {
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
 };
+export type BrowserSnapshotDefaults = {
+  /** Default snapshot mode (applies when mode is not provided). */
+  mode?: "efficient";
+};
 export type BrowserConfig = {
   enabled?: boolean;
   /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18791 */
@@ -39,4 +43,6 @@ export type BrowserConfig = {
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;
+  /** Default snapshot options (applied by the browser tool/CLI when unset). */
+  snapshotDefaults?: BrowserSnapshotDefaults;
 };

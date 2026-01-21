@@ -2,6 +2,7 @@ import type { Command } from "commander";
 
 import { browserSnapshot, resolveBrowserControlUrl } from "../browser/client.js";
 import { browserScreenshotAction } from "../browser/client-actions.js";
+import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
@@ -62,7 +63,11 @@ export function registerBrowserInspectCommands(
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
-      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : undefined;
+      const configMode =
+        format === "ai" && loadConfig().browser?.snapshotDefaults?.mode === "efficient"
+          ? "efficient"
+          : undefined;
+      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
       try {
         const result = await browserSnapshot(baseUrl, {
           format,
