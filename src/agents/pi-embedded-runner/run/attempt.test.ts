@@ -36,11 +36,11 @@ describe("injectHistoryImagesIntoMessages", () => {
     const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
 
     expect(didMutate).toBe(false);
-    const content = messages[0]?.content;
-    if (!Array.isArray(content)) {
+    const first = messages[0];
+    if (!first || !Array.isArray(first.content)) {
       throw new Error("expected array content");
     }
-    expect(content).toHaveLength(2);
+    expect(first.content).toHaveLength(2);
   });
 
   it("ignores non-user messages and out-of-range indices", () => {
