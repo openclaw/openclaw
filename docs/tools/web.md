@@ -215,6 +215,7 @@ Fetch a URL and extract readable content.
         maxChars: 50000,
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
+        maxRedirects: 3,
         userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         readability: true,
         firecrawl: {
@@ -241,6 +242,7 @@ Notes:
 - `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
 - Firecrawl requests use bot-circumvention mode and cache results by default.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
+- `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.

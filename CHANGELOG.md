@@ -38,6 +38,7 @@ Docs: https://docs.clawd.bot
 - UI: preserve ordered list numbering in chat markdown. (#1341) — thanks @bradleypriest.
 - UI: allow Control UI to read gatewayUrl from URL params for remote WebSocket targets. (#1342) — thanks @ameno-.
 - Web search: infer Perplexity base URL from API key source (direct vs OpenRouter).
+- Web fetch: harden SSRF protection with shared hostname checks and redirect limits. (#1346) — thanks @fogboots.
 - TUI: keep thinking blocks ordered before content during streaming and isolate per-run assembly. (#1202) — thanks @aaronveklabs.
 - TUI: align custom editor initialization with the latest pi-tui API. (#1298) — thanks @sibbl.
 - CLI: avoid duplicating --profile/--dev flags when formatting commands.

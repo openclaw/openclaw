@@ -147,6 +147,7 @@ export const ToolsWebFetchSchema = z
     maxChars: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
+    maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
   })
   .strict()

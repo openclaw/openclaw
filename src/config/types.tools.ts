@@ -309,6 +309,8 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
       cacheTtlMinutes?: number;
+      /** Maximum number of redirects to follow (default: 3). */
+      maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */

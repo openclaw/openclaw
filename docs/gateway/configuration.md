@@ -1774,6 +1774,7 @@ Note: `applyPatch` is only under `tools.exec`.
 - `tools.web.fetch.maxChars` (default 50000)
 - `tools.web.fetch.timeoutSeconds` (default 30)
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
+- `tools.web.fetch.maxRedirects` (default 3)
 - `tools.web.fetch.userAgent` (optional override)
 - `tools.web.fetch.readability` (default true; disable to use basic HTML cleanup only)
 - `tools.web.fetch.firecrawl.enabled` (default true when an API key is set)

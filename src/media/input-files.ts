@@ -1,5 +1,5 @@
-import { lookup } from "node:dns/promises";
 import { logWarn } from "../logger.js";
+import { assertPublicHostname } from "../infra/net/ssrf.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -106,50 +106,6 @@ export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
 export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
-
-const PRIVATE_IPV4_PATTERNS = [
-  /^127\./,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-  /^0\./,
-];
-const PRIVATE_IPV6_PREFIXES = ["::1", "fe80:", "fec0:", "fc", "fd"];
-
-function isPrivateIpAddress(address: string): boolean {
-  if (address.includes(":")) {
-    const lower = address.toLowerCase();
-    if (lower === "::1") return true;
-    return PRIVATE_IPV6_PREFIXES.some((prefix) => lower.startsWith(prefix));
-  }
-  return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(address));
-}
-
-function isBlockedHostname(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  return (
-    lower === "localhost" ||
-    lower.endsWith(".localhost") ||
-    lower.endsWith(".local") ||
-    lower.endsWith(".internal")
-  );
-}
-
-async function assertPublicHostname(hostname: string): Promise<void> {
-  if (isBlockedHostname(hostname)) {
-    throw new Error(`Blocked hostname: ${hostname}`);
-  }
-
-  const results = await lookup(hostname, { all: true });
-  if (results.length === 0) {
-    throw new Error(`Unable to resolve hostname: ${hostname}`);
-  }
-  for (const entry of results) {
-    if (isPrivateIpAddress(entry.address)) {
-      throw new Error(`Private IP addresses are not allowed: ${entry.address}`);
-    }
-  }
-}
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
