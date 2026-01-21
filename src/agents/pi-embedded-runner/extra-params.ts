@@ -21,7 +21,7 @@ export function resolveExtraParams(params: {
   return modelConfig?.params ? { ...modelConfig.params } : undefined;
 }
 
-type CacheControlTtl = "5m";
+type CacheControlTtl = "5m" | "1h";
 
 function resolveCacheControlTtl(
   extraParams: Record<string, unknown> | undefined,
@@ -29,7 +29,7 @@ function resolveCacheControlTtl(
   modelId: string,
 ): CacheControlTtl | undefined {
   const raw = extraParams?.cacheControlTtl;
-  if (raw !== "5m") return undefined;
+  if (raw !== "5m" && raw !== "1h") return undefined;
   if (provider === "anthropic") return raw;
   if (provider === "openrouter" && modelId.startsWith("anthropic/")) return raw;
   return undefined;

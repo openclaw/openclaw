@@ -47,7 +47,7 @@ To set the TTL per model, use `cacheControlTtl` in the model `params`:
     defaults: {
       models: {
         "anthropic/claude-opus-4-5": {
-          params: { cacheControlTtl: "5m" }
+          params: { cacheControlTtl: "5m" } // or "1h"
         }
       }
     }
