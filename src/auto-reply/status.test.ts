@@ -143,6 +143,22 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)");
   });
 
+  it("omits media line when all decisions are none", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: { sessionId: "media-none", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        { capability: "image", outcome: "no-attachment", attachments: [] },
+        { capability: "audio", outcome: "no-attachment", attachments: [] },
+        { capability: "video", outcome: "no-attachment", attachments: [] },
+      ],
+    });
+
+    expect(normalizeTestText(text)).not.toContain("Media:");
+  });
+
   it("does not show elevated label when session explicitly disables it", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5", elevatedDefault: "on" },

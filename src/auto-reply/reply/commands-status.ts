@@ -184,9 +184,7 @@ export async function buildStatusReply(params: {
     const requesterKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
     const runs = listSubagentRunsForRequester(requesterKey);
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
-    if (runs.length === 0) {
-      if (verboseEnabled) subagentsLine = "🤖 Subagents: none";
-    } else {
+    if (runs.length > 0) {
       const active = runs.filter((entry) => !entry.endedAt);
       const done = runs.length - active.length;
       if (verboseEnabled) {
