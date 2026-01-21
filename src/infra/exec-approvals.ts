@@ -213,6 +213,7 @@ export function resolveExecApprovals(
   const defaults = file.defaults ?? {};
   const agentKey = agentId ?? "default";
   const agent = file.agents?.[agentKey] ?? {};
+  const wildcard = file.agents?.["*"] ?? {};
   const fallbackSecurity = overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = overrides?.ask ?? DEFAULT_ASK;
   const fallbackAskFallback = overrides?.askFallback ?? DEFAULT_ASK_FALLBACK;
@@ -228,17 +229,22 @@ export function resolveExecApprovals(
   };
   const resolvedAgent: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(
-      agent.security ?? resolvedDefaults.security,
+      agent.security ?? wildcard.security ?? resolvedDefaults.security,
       resolvedDefaults.security,
     ),
-    ask: normalizeAsk(agent.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
+    ask: normalizeAsk(agent.ask ?? wildcard.ask ?? resolvedDefaults.ask, resolvedDefaults.ask),
     askFallback: normalizeSecurity(
-      agent.askFallback ?? resolvedDefaults.askFallback,
+      agent.askFallback ?? wildcard.askFallback ?? resolvedDefaults.askFallback,
       resolvedDefaults.askFallback,
     ),
-    autoAllowSkills: Boolean(agent.autoAllowSkills ?? resolvedDefaults.autoAllowSkills),
+    autoAllowSkills: Boolean(
+      agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
+    ),
   };
-  const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
+  const allowlist = [
+    ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
+    ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
+  ];
   return {
     path: resolveExecApprovalsPath(),
     socketPath: expandHome(file.socket?.path ?? resolveExecApprovalsSocketPath()),

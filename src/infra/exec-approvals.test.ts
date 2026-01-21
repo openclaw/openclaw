@@ -9,6 +9,7 @@ import {
   maxAsk,
   minSecurity,
   resolveCommandResolution,
+  resolveExecApprovals,
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
@@ -104,5 +105,38 @@ describe("exec approvals policy helpers", () => {
   it("maxAsk returns the more aggressive ask mode", () => {
     expect(maxAsk("off", "always")).toBe("always");
     expect(maxAsk("on-miss", "off")).toBe("on-miss");
+  });
+});
+
+describe("exec approvals wildcard agent", () => {
+  it("merges wildcard allowlist entries with agent entries", () => {
+    const dir = makeTempDir();
+    const oldHome = process.env.HOME;
+    process.env.HOME = dir;
+
+    const approvalsPath = path.join(dir, ".clawdbot", "exec-approvals.json");
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify(
+        {
+          version: 1,
+          agents: {
+            "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+            main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const resolved = resolveExecApprovals("main");
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/bin/hostname",
+      "/usr/bin/uname",
+    ]);
+
+    process.env.HOME = oldHome;
   });
 });

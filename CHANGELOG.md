@@ -4,6 +4,10 @@ Docs: https://docs.clawd.bot
 
 ## 2026.1.21
 
+### Changes
+- CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
+- Exec approvals: support wildcard agent allowlists (`*`) across all agents.
+
 ### Fixes
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 
