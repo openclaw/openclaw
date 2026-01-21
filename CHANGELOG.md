@@ -8,6 +8,7 @@ Docs: https://docs.clawd.bot
 - CLI: default exec approvals to the local host, add gateway/node targeting flags, and show target details in allowlist output.
 - CLI: exec approvals mutations render tables instead of raw JSON.
 - Exec approvals: support wildcard agent allowlists (`*`) across all agents.
+- Exec approvals: allowlist matches resolved binary paths only, add safe stdin-only bins, and tighten allowlist shell parsing.
 - Nodes: expose node PATH in status/describe and bootstrap PATH for node-host execution.
 - CLI: flatten node service commands under `clawdbot node` and remove `service node` docs.
 - CLI: move gateway service commands under `clawdbot gateway` and add `gateway probe` for reachability.

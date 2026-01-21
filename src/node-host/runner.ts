@@ -4,12 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  type ExecAllowlistEntry,
   addAllowlistEntry,
+  analyzeArgvCommand,
+  analyzeShellCommand,
+  isSafeBinUsage,
   matchAllowlist,
   normalizeExecApprovals,
   recordAllowlistUse,
-  resolveCommandResolution,
   resolveExecApprovals,
+  resolveSafeBins,
   ensureExecApprovals,
   readExecApprovalsSnapshot,
   resolveExecApprovalsSocketPath,
@@ -25,6 +29,7 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadConfig } from "../config/config.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { VERSION } from "../version.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -110,7 +115,6 @@ const execHostFallbackAllowed =
   process.env.CLAWDBOT_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
 
 const blockedEnvKeys = new Set([
-  "PATH",
   "NODE_OPTIONS",
   "PYTHONHOME",
   "PYTHONPATH",
@@ -156,10 +160,24 @@ function sanitizeEnv(
 ): Record<string, string> | undefined {
   if (!overrides) return undefined;
   const merged = { ...process.env } as Record<string, string>;
+  const basePath = process.env.PATH ?? DEFAULT_NODE_PATH;
   for (const [rawKey, value] of Object.entries(overrides)) {
     const key = rawKey.trim();
     if (!key) continue;
     const upper = key.toUpperCase();
+    if (upper === "PATH") {
+      const trimmed = value.trim();
+      if (!trimmed) continue;
+      if (!basePath || trimmed === basePath) {
+        merged[key] = trimmed;
+        continue;
+      }
+      const suffix = `${path.delimiter}${basePath}`;
+      if (trimmed.endsWith(suffix)) {
+        merged[key] = trimmed;
+      }
+      continue;
+    }
     if (blockedEnvKeys.has(upper)) continue;
     if (blockedEnvPrefixes.some((prefix) => upper.startsWith(prefix))) continue;
     merged[key] = value;
@@ -567,12 +585,32 @@ async function handleInvoke(
   const sessionKey = params.sessionKey?.trim() || "node";
   const runId = crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
-  const resolution = resolveCommandResolution(cmdText, params.cwd ?? undefined, env);
-  const allowlistMatch =
-    security === "allowlist" ? matchAllowlist(approvals.allowlist, resolution) : null;
+  const analysis = rawCommand
+    ? analyzeShellCommand({ command: rawCommand, cwd: params.cwd ?? undefined, env })
+    : analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
+  const cfg = loadConfig();
+  const agentExec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
+  const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
+  const allowlistMatches: ExecAllowlistEntry[] = [];
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
-  const skillAllow =
-    autoAllowSkills && resolution?.executableName ? bins.has(resolution.executableName) : false;
+  const allowlistSatisfied =
+    security === "allowlist" && analysis.ok && analysis.segments.length > 0
+      ? analysis.segments.every((segment) => {
+          const match = matchAllowlist(approvals.allowlist, segment.resolution);
+          if (match) allowlistMatches.push(match);
+          const safe = isSafeBinUsage({
+            argv: segment.argv,
+            resolution: segment.resolution,
+            safeBins,
+            cwd: params.cwd ?? undefined,
+          });
+          const skillAllow =
+            autoAllowSkills && segment.resolution?.executableName
+              ? bins.has(segment.resolution.executableName)
+              : false;
+          return Boolean(match || safe || skillAllow);
+        })
+      : false;
 
   const useMacAppExec = process.platform === "darwin";
   if (useMacAppExec) {
@@ -678,7 +716,7 @@ async function handleInvoke(
 
   const requiresAsk =
     ask === "always" ||
-    (ask === "on-miss" && security === "allowlist" && !allowlistMatch && !skillAllow);
+    (ask === "on-miss" && security === "allowlist" && (!analysis.ok || !allowlistSatisfied));
 
   const approvalDecision =
     params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
@@ -704,11 +742,15 @@ async function handleInvoke(
     return;
   }
   if (approvalDecision === "allow-always" && security === "allowlist") {
-    const pattern = resolution?.resolvedPath ?? resolution?.rawExecutable ?? argv[0] ?? "";
-    if (pattern) addAllowlistEntry(approvals.file, agentId, pattern);
+    if (analysis.ok) {
+      for (const segment of analysis.segments) {
+        const pattern = segment.resolution?.resolvedPath ?? "";
+        if (pattern) addAllowlistEntry(approvals.file, agentId, pattern);
+      }
+    }
   }
 
-  if (security === "allowlist" && !allowlistMatch && !skillAllow && !approvedByAsk) {
+  if (security === "allowlist" && (!analysis.ok || !allowlistSatisfied) && !approvedByAsk) {
     await sendNodeEvent(
       client,
       "exec.denied",
@@ -727,8 +769,19 @@ async function handleInvoke(
     return;
   }
 
-  if (allowlistMatch) {
-    recordAllowlistUse(approvals.file, agentId, allowlistMatch, cmdText, resolution?.resolvedPath);
+  if (allowlistMatches.length > 0) {
+    const seen = new Set<string>();
+    for (const match of allowlistMatches) {
+      if (!match?.pattern || seen.has(match.pattern)) continue;
+      seen.add(match.pattern);
+      recordAllowlistUse(
+        approvals.file,
+        agentId,
+        match,
+        cmdText,
+        analysis.segments[0]?.resolution?.resolvedPath,
+      );
+    }
   }
 
   if (params.needsScreenRecording === true) {

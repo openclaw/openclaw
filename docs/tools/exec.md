@@ -43,6 +43,7 @@ Notes:
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs.
+- `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
 
 Example:
 ```json5
@@ -64,7 +65,8 @@ Example:
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
   Clawdbot prepends `env.PATH` after profile sourcing; `tools.exec.pathPrepend` applies here too.
 - `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
-  if the exec call already sets `env.PATH`.
+  if the exec call already sets `env.PATH`. Node PATH overrides are accepted only when they prepend
+  the node host PATH (no replacement).
 
 Per-agent node binding (use the agent list index in config):
 
@@ -89,6 +91,13 @@ Example:
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
 See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
+
+## Allowlist + safe bins
+
+Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
+`security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
+allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
+allowlist mode.
 
 ## Examples
 

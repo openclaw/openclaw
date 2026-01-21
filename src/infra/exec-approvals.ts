@@ -60,6 +60,7 @@ const DEFAULT_ASK_FALLBACK: ExecSecurity = "deny";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.clawdbot/exec-approvals.sock";
 const DEFAULT_FILE = "~/.clawdbot/exec-approvals.json";
+export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -283,6 +284,19 @@ type CommandResolution = {
   executableName: string;
 };
 
+function isExecutableFile(filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return false;
+    if (process.platform !== "win32") {
+      fs.accessSync(filePath, fs.constants.X_OK);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
   if (!trimmed) return null;
@@ -299,15 +313,26 @@ function parseFirstToken(command: string): string | null {
 function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
   const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
-    if (path.isAbsolute(expanded)) return expanded;
+    if (path.isAbsolute(expanded)) {
+      return isExecutableFile(expanded) ? expanded : undefined;
+    }
     const base = cwd && cwd.trim() ? cwd.trim() : process.cwd();
-    return path.resolve(base, expanded);
+    const candidate = path.resolve(base, expanded);
+    return isExecutableFile(candidate) ? candidate : undefined;
   }
   const envPath = env?.PATH ?? process.env.PATH ?? "";
   const entries = envPath.split(path.delimiter).filter(Boolean);
+  const extensions =
+    process.platform === "win32"
+      ? (env?.PATHEXT ?? process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .map((ext) => ext.toLowerCase())
+      : [""];
   for (const entry of entries) {
-    const candidate = path.join(entry, expanded);
-    if (fs.existsSync(candidate)) return candidate;
+    for (const ext of extensions) {
+      const candidate = path.join(entry, expanded + ext);
+      if (isExecutableFile(candidate)) return candidate;
+    }
   }
   return undefined;
 }
@@ -318,6 +343,18 @@ export function resolveCommandResolution(
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
   const rawExecutable = parseFirstToken(command);
+  if (!rawExecutable) return null;
+  const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
+  const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
+  return { rawExecutable, resolvedPath, executableName };
+}
+
+export function resolveCommandResolutionFromArgv(
+  argv: string[],
+  cwd?: string,
+  env?: NodeJS.ProcessEnv,
+): CommandResolution | null {
+  const rawExecutable = argv[0]?.trim();
   if (!rawExecutable) return null;
   const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
@@ -370,22 +407,282 @@ export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
 ): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution) return null;
-  const rawExecutable = resolution.rawExecutable;
+  if (!entries.length || !resolution?.resolvedPath) return null;
   const resolvedPath = resolution.resolvedPath;
-  const executableName = resolution.executableName;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) continue;
     const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (hasPath) {
-      const target = resolvedPath ?? rawExecutable;
-      if (target && matchesPattern(pattern, target)) return entry;
-      continue;
-    }
-    if (executableName && matchesPattern(pattern, executableName)) return entry;
+    if (!hasPath) continue;
+    if (matchesPattern(pattern, resolvedPath)) return entry;
   }
   return null;
+}
+
+export type ExecCommandSegment = {
+  raw: string;
+  argv: string[];
+  resolution: CommandResolution | null;
+};
+
+export type ExecCommandAnalysis = {
+  ok: boolean;
+  reason?: string;
+  segments: ExecCommandSegment[];
+};
+
+const DISALLOWED_TOKENS = new Set([";", "&", ">", "<", "`", "\n", "\r", "(", ")"]);
+
+function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
+  const segments: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  const pushSegment = () => {
+    const trimmed = buf.trim();
+    if (!trimmed) {
+      return false;
+    }
+    segments.push(trimmed);
+    buf = "";
+    return true;
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (escaped) {
+      buf += ch;
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && ch === "\\") {
+      escaped = true;
+      buf += ch;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      buf += ch;
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '"') inDouble = false;
+      buf += ch;
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      buf += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      buf += ch;
+      continue;
+    }
+    if (ch === "|" && command[i + 1] === "|") {
+      return { ok: false, reason: "unsupported shell token: ||", segments: [] };
+    }
+    if (ch === "|" && command[i + 1] === "&") {
+      return { ok: false, reason: "unsupported shell token: |&", segments: [] };
+    }
+    if (ch === "|") {
+      if (!pushSegment()) {
+        return { ok: false, reason: "empty pipeline segment", segments: [] };
+      }
+      continue;
+    }
+    if (DISALLOWED_TOKENS.has(ch)) {
+      return { ok: false, reason: `unsupported shell token: ${ch}`, segments: [] };
+    }
+    if (ch === "$" && command[i + 1] === "(") {
+      return { ok: false, reason: "unsupported shell token: $()", segments: [] };
+    }
+    buf += ch;
+  }
+
+  if (escaped || inSingle || inDouble) {
+    return { ok: false, reason: "unterminated shell quote/escape", segments: [] };
+  }
+  if (!pushSegment()) {
+    return { ok: false, reason: "empty command", segments: [] };
+  }
+  return { ok: true, segments };
+}
+
+function tokenizeShellSegment(segment: string): string[] | null {
+  const tokens: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  const pushToken = () => {
+    if (buf.length > 0) {
+      tokens.push(buf);
+      buf = "";
+    }
+  };
+
+  for (let i = 0; i < segment.length; i += 1) {
+    const ch = segment[i];
+    if (escaped) {
+      buf += ch;
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        buf += ch;
+      }
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '"') {
+        inDouble = false;
+      } else {
+        buf += ch;
+      }
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      pushToken();
+      continue;
+    }
+    buf += ch;
+  }
+
+  if (escaped || inSingle || inDouble) {
+    return null;
+  }
+  pushToken();
+  return tokens;
+}
+
+export function analyzeShellCommand(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): ExecCommandAnalysis {
+  const split = splitShellPipeline(params.command);
+  if (!split.ok) {
+    return { ok: false, reason: split.reason, segments: [] };
+  }
+  const segments: ExecCommandSegment[] = [];
+  for (const raw of split.segments) {
+    const argv = tokenizeShellSegment(raw);
+    if (!argv || argv.length === 0) {
+      return { ok: false, reason: "unable to parse shell segment", segments: [] };
+    }
+    segments.push({
+      raw,
+      argv,
+      resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+    });
+  }
+  return { ok: true, segments };
+}
+
+export function analyzeArgvCommand(params: {
+  argv: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): ExecCommandAnalysis {
+  const argv = params.argv.filter((entry) => entry.trim().length > 0);
+  if (argv.length === 0) {
+    return { ok: false, reason: "empty argv", segments: [] };
+  }
+  return {
+    ok: true,
+    segments: [
+      {
+        raw: argv.join(" "),
+        argv,
+        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+      },
+    ],
+  };
+}
+
+function isPathLikeToken(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed === "-") return false;
+  if (trimmed.startsWith("./") || trimmed.startsWith("../") || trimmed.startsWith("~")) return true;
+  if (trimmed.startsWith("/")) return true;
+  return /^[A-Za-z]:[\\/]/.test(trimmed);
+}
+
+function defaultFileExists(filePath: string): boolean {
+  try {
+    return fs.existsSync(filePath);
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeSafeBins(entries?: string[]): Set<string> {
+  if (!Array.isArray(entries)) return new Set();
+  const normalized = entries
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0);
+  return new Set(normalized);
+}
+
+export function resolveSafeBins(entries?: string[] | null): Set<string> {
+  if (entries === undefined) return normalizeSafeBins(DEFAULT_SAFE_BINS);
+  return normalizeSafeBins(entries ?? []);
+}
+
+export function isSafeBinUsage(params: {
+  argv: string[];
+  resolution: CommandResolution | null;
+  safeBins: Set<string>;
+  cwd?: string;
+  fileExists?: (filePath: string) => boolean;
+}): boolean {
+  if (params.safeBins.size === 0) return false;
+  const resolution = params.resolution;
+  const execName = resolution?.executableName?.toLowerCase();
+  if (!execName || !params.safeBins.has(execName)) return false;
+  if (!resolution?.resolvedPath) return false;
+  const cwd = params.cwd ?? process.cwd();
+  const exists = params.fileExists ?? defaultFileExists;
+  const argv = params.argv.slice(1);
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (!token) continue;
+    if (token === "-") continue;
+    if (token.startsWith("-")) {
+      const eqIndex = token.indexOf("=");
+      if (eqIndex > 0) {
+        const value = token.slice(eqIndex + 1);
+        if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
+          return false;
+        }
+      }
+      continue;
+    }
+    if (isPathLikeToken(token)) return false;
+    if (exists(path.resolve(cwd, token))) return false;
+  }
+  return true;
 }
 
 export function recordAllowlistUse(
