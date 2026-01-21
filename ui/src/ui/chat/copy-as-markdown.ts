@@ -1,4 +1,5 @@
 import { html, type TemplateResult } from "lit";
+import { renderEmojiIcon, setEmojiIcon } from "../icons";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
@@ -8,6 +9,11 @@ const ERROR_LABEL = "Copy failed";
 const COPY_ICON = "📋";
 const COPIED_ICON = "✓";
 const ERROR_ICON = "!";
+
+type CopyButtonOptions = {
+  text: () => string;
+  label?: string;
+};
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   if (!text) return false;
@@ -20,13 +26,19 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
+function setButtonLabel(button: HTMLButtonElement, label: string) {
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+function createCopyButton(options: CopyButtonOptions): TemplateResult {
+  const idleLabel = options.label ?? COPY_LABEL;
   return html`
     <button
       class="chat-copy-btn"
       type="button"
-      title=${COPY_LABEL}
-      aria-label=${COPY_LABEL}
+      title=${idleLabel}
+      aria-label=${idleLabel}
       @click=${async (e: Event) => {
         const btn = e.currentTarget as HTMLButtonElement | null;
         const icon = btn?.querySelector(
@@ -39,7 +51,7 @@ export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
         btn.setAttribute("aria-busy", "true");
         btn.disabled = true;
 
-        const copied = await copyTextToClipboard(markdown);
+        const copied = await copyTextToClipboard(options.text());
         if (!btn.isConnected) return;
 
         delete btn.dataset.copying;
@@ -48,35 +60,35 @@ export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
 
         if (!copied) {
           btn.dataset.error = "1";
-          btn.title = ERROR_LABEL;
-          btn.setAttribute("aria-label", ERROR_LABEL);
-          if (icon) icon.textContent = ERROR_ICON;
+          setButtonLabel(btn, ERROR_LABEL);
+          setEmojiIcon(icon, ERROR_ICON);
 
           window.setTimeout(() => {
             if (!btn.isConnected) return;
             delete btn.dataset.error;
-            btn.title = COPY_LABEL;
-            btn.setAttribute("aria-label", COPY_LABEL);
-            if (icon) icon.textContent = COPY_ICON;
+            setButtonLabel(btn, idleLabel);
+            setEmojiIcon(icon, COPY_ICON);
           }, ERROR_FOR_MS);
           return;
         }
 
         btn.dataset.copied = "1";
-        btn.title = COPIED_LABEL;
-        btn.setAttribute("aria-label", COPIED_LABEL);
-        if (icon) icon.textContent = COPIED_ICON;
+        setButtonLabel(btn, COPIED_LABEL);
+        setEmojiIcon(icon, COPIED_ICON);
 
         window.setTimeout(() => {
           if (!btn.isConnected) return;
           delete btn.dataset.copied;
-          btn.title = COPY_LABEL;
-          btn.setAttribute("aria-label", COPY_LABEL);
-          if (icon) icon.textContent = COPY_ICON;
+          setButtonLabel(btn, idleLabel);
+          setEmojiIcon(icon, COPY_ICON);
         }, COPIED_FOR_MS);
       }}
     >
-      <span class="chat-copy-btn__icon" aria-hidden="true">${COPY_ICON}</span>
+      ${renderEmojiIcon(COPY_ICON, "chat-copy-btn__icon")}
     </button>
   `;
+}
+
+export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
+  return createCopyButton({ text: () => markdown, label: COPY_LABEL });
 }
