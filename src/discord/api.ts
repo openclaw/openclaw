@@ -1,3 +1,5 @@
+import { resolveFetch } from "../infra/fetch.js";
+
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 type DiscordApiErrorPayload = {
@@ -48,7 +50,11 @@ export async function fetchDiscord<T>(
   token: string,
   fetcher: typeof fetch = fetch,
 ): Promise<T> {
-  const res = await fetcher(`${DISCORD_API_BASE}${path}`, {
+  const fetchImpl = resolveFetch(fetcher);
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
+  }
+  const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
     headers: { Authorization: `Bot ${token}` },
   });
   if (!res.ok) {

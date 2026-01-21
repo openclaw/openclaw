@@ -19,6 +19,7 @@ import type {
   UsageProviderId,
   UsageSummary,
 } from "./provider-usage.types.js";
+import { resolveFetch } from "./fetch.js";
 
 type UsageSummaryOptions = {
   now?: number;
@@ -34,7 +35,10 @@ export async function loadProviderUsageSummary(
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const fetchFn = opts.fetch ?? fetch;
+  const fetchFn = resolveFetch(opts.fetch);
+  if (!fetchFn) {
+    throw new Error("fetch is not available");
+  }
 
   const auths = await resolveProviderAuths({
     providers: opts.providers ?? usageProviders,

@@ -28,3 +28,9 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   }) as typeof fetch;
   return Object.assign(wrapped, fetchImpl);
 }
+
+export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
+  const resolved = fetchImpl ?? globalThis.fetch;
+  if (!resolved) return undefined;
+  return wrapFetchWithAbortSignal(resolved);
+}
