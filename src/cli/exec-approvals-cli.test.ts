@@ -23,6 +23,14 @@ const defaultRuntime = {
   },
 };
 
+const localSnapshot = {
+  path: "/tmp/local-exec-approvals.json",
+  exists: true,
+  raw: "{}",
+  hash: "hash-local",
+  file: { version: 1, agents: {} },
+};
+
 vi.mock("./gateway-rpc.js", () => ({
   callGatewayFromCli: (method: string, opts: unknown, params?: unknown) =>
     callGatewayFromCli(method, opts, params),
@@ -40,8 +48,19 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
+vi.mock("../infra/exec-approvals.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
+    "../infra/exec-approvals.js",
+  );
+  return {
+    ...actual,
+    readExecApprovalsSnapshot: () => localSnapshot,
+    saveExecApprovals: vi.fn(),
+  };
+});
+
 describe("exec approvals CLI", () => {
-  it("loads gateway approvals by default", async () => {
+  it("loads local approvals by default", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
@@ -52,6 +71,22 @@ describe("exec approvals CLI", () => {
     registerExecApprovalsCli(program);
 
     await program.parseAsync(["approvals", "get"], { from: "user" });
+
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("loads gateway approvals when --gateway is set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGatewayFromCli.mockClear();
+
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerExecApprovalsCli(program);
+
+    await program.parseAsync(["approvals", "get", "--gateway"], { from: "user" });
 
     expect(callGatewayFromCli).toHaveBeenCalledWith("exec.approvals.get", expect.anything(), {});
     expect(runtimeErrors).toHaveLength(0);
@@ -73,5 +108,23 @@ describe("exec approvals CLI", () => {
       nodeId: "node-1",
     });
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("defaults allowlist add to wildcard agent", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGatewayFromCli.mockClear();
+
+    const { registerExecApprovalsCli } = await import("./exec-approvals-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerExecApprovalsCli(program);
+
+    await program.parseAsync(["approvals", "allowlist", "add", "/usr/bin/uname"], { from: "user" });
+
+    const setCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "exec.approvals.set");
+    expect(setCall).toBeTruthy();
+    const params = setCall?.[2] as { file: { agents?: Record<string, unknown> } };
+    expect(params.file.agents?.["*"]).toBeTruthy();
   });
 });
