@@ -15,10 +15,6 @@ struct GeneralSettings: View {
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
-    @State private var isInstallingCLI = false
-    @State private var cliStatus: String?
-    @State private var cliInstalled = false
-    @State private var cliInstallLocation: String?
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
@@ -109,7 +105,6 @@ struct GeneralSettings: View {
         }
         .onAppear {
             guard !self.isPreview else { return }
-            self.refreshCLIStatus()
             self.refreshGatewayStatus()
             self.lastLocationModeRaw = self.locationModeRaw
         }
@@ -197,7 +192,6 @@ struct GeneralSettings: View {
                 self.remoteCard
             }
 
-            self.cliInstaller
         }
     }
 
@@ -326,59 +320,6 @@ struct GeneralSettings: View {
         return message == self.controlStatusLine
     }
 
-    private var cliInstaller: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    Task { await self.installCLI() }
-                } label: {
-                    let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
-                    ZStack {
-                        Text(title)
-                            .opacity(self.isInstallingCLI ? 0 : 1)
-                        if self.isInstallingCLI {
-                            ProgressView()
-                                .controlSize(.mini)
-                        }
-                    }
-                    .frame(minWidth: 150)
-                }
-                .disabled(self.isInstallingCLI)
-
-                if self.isInstallingCLI {
-                    Text("Working...")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else if self.cliInstalled {
-                    Label("Installed", systemImage: "checkmark.circle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Not installed")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let status = cliStatus {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else if let installLocation = self.cliInstallLocation {
-                Text("Found at \(installLocation)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            } else {
-                Text("Installs a user-space Node 22+ runtime and the CLI (no Homebrew).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-        }
-    }
-
     private var gatewayInstallerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
@@ -432,22 +373,6 @@ struct GeneralSettings: View {
         .padding(12)
         .background(Color.gray.opacity(0.08))
         .cornerRadius(10)
-    }
-
-    private func installCLI() async {
-        guard !self.isInstallingCLI else { return }
-        self.isInstallingCLI = true
-        defer { isInstallingCLI = false }
-        await CLIInstaller.install { status in
-            self.cliStatus = status
-            self.refreshCLIStatus()
-        }
-    }
-
-    private func refreshCLIStatus() {
-        let installLocation = CLIInstaller.installedLocation()
-        self.cliInstallLocation = installLocation
-        self.cliInstalled = installLocation != nil
     }
 
     private func refreshGatewayStatus() {
@@ -743,9 +668,6 @@ extension GeneralSettings {
             message: "Gateway ready")
         view.remoteStatus = .failed("SSH failed")
         view.showRemoteAdvanced = true
-        view.cliInstalled = true
-        view.cliInstallLocation = "/usr/local/bin/clawdbot"
-        view.cliStatus = "Installed"
         _ = view.body
 
         state.connectionMode = .unconfigured
