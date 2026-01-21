@@ -64,7 +64,7 @@ async function resolveGraphToken(cfg: unknown): Promise<string> {
   if (!creds) throw new Error("MS Teams credentials missing");
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = new sdk.MsalTokenProvider(authConfig);
-  const token = await tokenProvider.getAccessToken("https://graph.microsoft.com/.default");
+  const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(token);
   if (!accessToken) throw new Error("MS Teams graph token unavailable");
   return accessToken;

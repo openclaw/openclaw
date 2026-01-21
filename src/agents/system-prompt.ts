@@ -84,6 +84,7 @@ function buildMessagingSection(params: {
   availableTools: Set<string>;
   messageChannelOptions: string;
   inlineButtonsEnabled: boolean;
+  adaptiveCardsEnabled: boolean;
   runtimeChannel?: string;
 }) {
   if (params.isMinimal) return [];
@@ -105,6 +106,12 @@ function buildMessagingSection(params: {
             : params.runtimeChannel
               ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
               : "",
+          params.adaptiveCardsEnabled
+            ? "- Adaptive Cards supported (MSTeams). Use `action=send` with `card={type,version,body}` to send rich cards."
+            : "",
+          params.runtimeChannel === "msteams"
+            ? "- MSTeams targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:ID` or `user:Display Name` (requires Graph API) for DMs, `conversation:19:...@thread.tacv2` for groups/channels. Prefer IDs over display names for speed."
+            : "",
         ]
           .filter(Boolean)
           .join("\n")
@@ -309,6 +316,8 @@ export function buildAgentSystemPrompt(params: {
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
+  const adaptiveCardsEnabled =
+    runtimeChannel === "msteams" || runtimeCapabilitiesLower.has("adaptivecards");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
@@ -467,6 +476,7 @@ export function buildAgentSystemPrompt(params: {
       availableTools,
       messageChannelOptions,
       inlineButtonsEnabled,
+      adaptiveCardsEnabled,
       runtimeChannel,
     }),
   ];

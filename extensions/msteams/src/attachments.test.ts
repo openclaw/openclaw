@@ -101,9 +101,9 @@ describe("msteams attachments", () => {
     });
   });
 
-  describe("downloadMSTeamsImageAttachments", () => {
+  describe("downloadMSTeamsAttachments", () => {
     it("downloads and stores image contentUrl attachments", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn(async () => {
         return new Response(Buffer.from("png"), {
           status: 200,
@@ -111,7 +111,7 @@ describe("msteams attachments", () => {
         });
       });
 
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [{ contentType: "image/png", contentUrl: "https://x/img" }],
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
@@ -125,7 +125,7 @@ describe("msteams attachments", () => {
     });
 
     it("supports Teams file.download.info downloadUrl attachments", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn(async () => {
         return new Response(Buffer.from("png"), {
           status: 200,
@@ -133,7 +133,7 @@ describe("msteams attachments", () => {
         });
       });
 
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [
           {
             contentType: "application/vnd.microsoft.teams.file.download.info",
@@ -149,8 +149,35 @@ describe("msteams attachments", () => {
       expect(media).toHaveLength(1);
     });
 
+    it("downloads non-image file attachments (PDF)", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const fetchMock = vi.fn(async () => {
+        return new Response(Buffer.from("pdf"), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        });
+      });
+      detectMimeMock.mockResolvedValueOnce("application/pdf");
+      saveMediaBufferMock.mockResolvedValueOnce({
+        path: "/tmp/saved.pdf",
+        contentType: "application/pdf",
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [{ contentType: "application/pdf", contentUrl: "https://x/doc.pdf" }],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf");
+      expect(media).toHaveLength(1);
+      expect(media[0]?.path).toBe("/tmp/saved.pdf");
+      expect(media[0]?.placeholder).toBe("<media:document>");
+    });
+
     it("downloads inline image URLs from html attachments", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn(async () => {
         return new Response(Buffer.from("png"), {
           status: 200,
@@ -158,7 +185,7 @@ describe("msteams attachments", () => {
         });
       });
 
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [
           {
             contentType: "text/html",
@@ -175,9 +202,9 @@ describe("msteams attachments", () => {
     });
 
     it("stores inline data:image base64 payloads", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const base64 = Buffer.from("png").toString("base64");
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [
           {
             contentType: "text/html",
@@ -193,7 +220,7 @@ describe("msteams attachments", () => {
     });
 
     it("retries with auth when the first request is unauthorized", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
         const hasAuth = Boolean(
           opts &&
@@ -210,7 +237,7 @@ describe("msteams attachments", () => {
         });
       });
 
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [{ contentType: "image/png", contentUrl: "https://x/img" }],
         maxBytes: 1024 * 1024,
         tokenProvider: { getAccessToken: vi.fn(async () => "token") },
@@ -224,26 +251,12 @@ describe("msteams attachments", () => {
     });
 
     it("skips urls outside the allowlist", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
+      const { downloadMSTeamsAttachments } = await load();
       const fetchMock = vi.fn();
-      const media = await downloadMSTeamsImageAttachments({
+      const media = await downloadMSTeamsAttachments({
         attachments: [{ contentType: "image/png", contentUrl: "https://evil.test/img" }],
         maxBytes: 1024 * 1024,
         allowHosts: ["graph.microsoft.com"],
-        fetchFn: fetchMock as unknown as typeof fetch,
-      });
-
-      expect(media).toHaveLength(0);
-      expect(fetchMock).not.toHaveBeenCalled();
-    });
-
-    it("ignores non-image attachments", async () => {
-      const { downloadMSTeamsImageAttachments } = await load();
-      const fetchMock = vi.fn();
-      const media = await downloadMSTeamsImageAttachments({
-        attachments: [{ contentType: "application/pdf", contentUrl: "https://x/x.pdf" }],
-        maxBytes: 1024 * 1024,
-        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
