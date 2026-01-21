@@ -136,6 +136,23 @@ describe("memory search config", () => {
     });
   });
 
+  it("defaults session delta thresholds", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.sync.sessions).toEqual({
+      deltaBytes: 100000,
+      deltaMessages: 50,
+    });
+  });
+
   it("merges remote defaults with agent overrides", () => {
     const cfg = {
       agents: {

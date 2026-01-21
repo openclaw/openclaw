@@ -244,6 +244,12 @@ export type MemorySearchConfig = {
     watch?: boolean;
     watchDebounceMs?: number;
     intervalMinutes?: number;
+    sessions?: {
+      /** Minimum appended bytes before session transcripts are reindexed. */
+      deltaBytes?: number;
+      /** Minimum appended JSONL lines before session transcripts are reindexed. */
+      deltaMessages?: number;
+    };
   };
   /** Query behavior. */
   query?: {
