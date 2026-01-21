@@ -117,9 +117,18 @@ export type DiagnosticsOtelConfig = {
   flushIntervalMs?: number;
 };
 
+export type DiagnosticsCacheTraceConfig = {
+  enabled?: boolean;
+  filePath?: string;
+  includeMessages?: boolean;
+  includePrompt?: boolean;
+  includeSystem?: boolean;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   otel?: DiagnosticsOtelConfig;
+  cacheTrace?: DiagnosticsCacheTraceConfig;
 };
 
 export type WebReconnectConfig = {

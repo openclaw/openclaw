@@ -114,6 +114,11 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.otel.logs": "OpenTelemetry Logs Enabled",
   "diagnostics.otel.sampleRate": "OpenTelemetry Trace Sample Rate",
   "diagnostics.otel.flushIntervalMs": "OpenTelemetry Flush Interval (ms)",
+  "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
+  "diagnostics.cacheTrace.filePath": "Cache Trace File Path",
+  "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
+  "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
+  "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -345,6 +350,14 @@ const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
+  "diagnostics.cacheTrace.enabled":
+    "Log cache trace snapshots for embedded agent runs (default: false).",
+  "diagnostics.cacheTrace.filePath":
+    "JSONL output path for cache trace logs (default: $CLAWDBOT_STATE_DIR/logs/cache-trace.jsonl).",
+  "diagnostics.cacheTrace.includeMessages":
+    "Include full message payloads in trace output (default: true).",
+  "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
+  "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
     "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
   "tools.exec.applyPatch.allowModels":
