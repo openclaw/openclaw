@@ -7,6 +7,8 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
+const compiler = env.CLAWDBOT_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
+const projectArgs = ["--project", "tsconfig.json"];
 
 const distRoot = path.join(cwd, "dist");
 const distEntry = path.join(distRoot, "entry.js");
@@ -113,7 +115,7 @@ if (!shouldBuild()) {
   runNode();
 } else {
   logRunner("Building TypeScript (dist is stale).");
-  const build = spawn("pnpm", ["exec", "tsc", "-p", "tsconfig.json"], {
+  const build = spawn("pnpm", ["exec", compiler, ...projectArgs], {
     cwd,
     env,
     stdio: "inherit",

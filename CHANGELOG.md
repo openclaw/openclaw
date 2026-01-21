@@ -6,6 +6,7 @@ Docs: https://docs.clawd.bot
 
 ### Changes
 - Deps: update workspace + memory-lancedb dependencies.
+- Dev: use tsgo for dev/watch builds by default; set `CLAWDBOT_TS_COMPILER=tsc` to opt out.
 - Repo: remove the Peekaboo git submodule now that the SPM release is used.
 - Update: sync plugin sources on channel switches and update npm-installed plugins during `clawdbot update`.
 - Plugins: share npm plugin update logic between `clawdbot update` and `clawdbot plugins update`.

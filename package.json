@@ -210,6 +210,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
+    "@typescript/native-preview": "7.0.0-dev.20260120.1",
     "@vitest/coverage-v8": "^4.0.17",
     "docx-preview": "^0.3.7",
     "lit": "^3.3.2",
