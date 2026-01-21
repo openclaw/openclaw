@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
 
 describe("sanitizeSessionHistory (google thinking)", () => {
-  it("downgrades thinking blocks without signatures for Google models", async () => {
+  it("keeps thinking blocks without signatures for Google models", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -25,10 +25,10 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     });
 
     const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; text?: string }>;
+      content?: Array<{ type?: string; thinking?: string }>;
     };
-    expect(assistant.content?.map((block) => block.type)).toEqual(["text"]);
-    expect(assistant.content?.[0]?.text).toBe("reasoning");
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
+    expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
   it("keeps thinking blocks with signatures for Google models", async () => {
@@ -59,7 +59,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinkingSignature).toBe("sig");
   });
 
-  it("downgrades thinking blocks with Anthropic-style signatures for Google models", async () => {
+  it("keeps thinking blocks with Anthropic-style signatures for Google models", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -80,10 +80,10 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     });
 
     const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; text?: string }>;
+      content?: Array<{ type?: string; thinking?: string }>;
     };
-    expect(assistant.content?.map((block) => block.type)).toEqual(["text"]);
-    expect(assistant.content?.[0]?.text).toBe("reasoning");
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking"]);
+    expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
   it("keeps unsigned thinking blocks for Antigravity Claude", async () => {
@@ -114,7 +114,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
-  it("preserves order when downgrading mixed assistant content", async () => {
+  it("preserves order for mixed assistant content", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -139,10 +139,10 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     });
 
     const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; text?: string }>;
+      content?: Array<{ type?: string; text?: string; thinking?: string }>;
     };
-    expect(assistant.content?.map((block) => block.type)).toEqual(["text", "text", "text"]);
-    expect(assistant.content?.[1]?.text).toBe("internal note");
+    expect(assistant.content?.map((block) => block.type)).toEqual(["text", "thinking", "text"]);
+    expect(assistant.content?.[1]?.thinking).toBe("internal note");
   });
 
   it("strips non-base64 thought signatures for OpenRouter Gemini", async () => {
@@ -185,11 +185,22 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     });
 
     const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; thought_signature?: string; thoughtSignature?: string }>;
+      content?: Array<{
+        type?: string;
+        thought_signature?: string;
+        thoughtSignature?: string;
+        thinking?: string;
+      }>;
     };
     expect(assistant.content).toEqual([
       { type: "text", text: "hello" },
-      { type: "text", text: "ok" },
+      { type: "thinking", thinking: "ok", thought_signature: "c2ln" },
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "read",
+        arguments: { path: "/tmp/foo" },
+      },
       {
         type: "toolCall",
         id: "call_2",
@@ -200,7 +211,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     ]);
   });
 
-  it("downgrades only unsigned thinking blocks when mixed with signed ones", async () => {
+  it("keeps mixed signed/unsigned thinking blocks for Google models", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -224,14 +235,14 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     });
 
     const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
-      content?: Array<{ type?: string; thinking?: string; text?: string }>;
+      content?: Array<{ type?: string; thinking?: string }>;
     };
-    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking", "text"]);
+    expect(assistant.content?.map((block) => block.type)).toEqual(["thinking", "thinking"]);
     expect(assistant.content?.[0]?.thinking).toBe("signed");
-    expect(assistant.content?.[1]?.text).toBe("unsigned");
+    expect(assistant.content?.[1]?.thinking).toBe("unsigned");
   });
 
-  it("drops empty unsigned thinking blocks for Google models", async () => {
+  it("keeps empty thinking blocks for Google models", async () => {
     const sessionManager = SessionManager.inMemory();
     const input = [
       {
@@ -251,8 +262,10 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       sessionId: "session:google-empty",
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant");
-    expect(assistant).toBeUndefined();
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; thinking?: string }>;
+    };
+    expect(assistant?.content?.map((block) => block.type)).toEqual(["thinking"]);
   });
 
   it("keeps thinking blocks for non-Google models", async () => {

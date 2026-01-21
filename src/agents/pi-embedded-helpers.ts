@@ -30,12 +30,7 @@ export {
   isTimeoutErrorMessage,
   parseImageDimensionError,
 } from "./pi-embedded-helpers/errors.js";
-export {
-  downgradeGeminiHistory,
-  downgradeGeminiThinkingBlocks,
-  isGoogleModelApi,
-  sanitizeGoogleTurnOrdering,
-} from "./pi-embedded-helpers/google.js";
+export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 export {
   isEmptyAssistantMessageContent,
   sanitizeSessionMessagesImages,

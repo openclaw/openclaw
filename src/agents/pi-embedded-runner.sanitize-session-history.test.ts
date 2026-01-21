@@ -13,7 +13,6 @@ vi.mock("./pi-embedded-helpers.js", async () => {
   return {
     ...actual,
     isGoogleModelApi: vi.fn(),
-    downgradeGeminiHistory: vi.fn(),
     sanitizeSessionMessagesImages: vi.fn().mockImplementation(async (msgs) => msgs),
   };
 });
@@ -32,19 +31,14 @@ describe("sanitizeSessionHistory", () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.mocked(helpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
-    // Default mock implementation
-    vi.mocked(helpers.downgradeGeminiHistory).mockImplementation((msgs) => {
-      if (!msgs) return [];
-      return [...msgs, { role: "system", content: "downgraded" }];
-    });
     vi.resetModules();
     ({ sanitizeSessionHistory } = await import("./pi-embedded-runner/google.js"));
   });
 
-  it("should downgrade history for Google models if provider is not google-antigravity", async () => {
+  it("sanitizes tool call ids for Google model APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
 
-    const result = await sanitizeSessionHistory({
+    await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "google-gemini",
       provider: "google-vertex",
@@ -53,35 +47,17 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("google-gemini");
-    expect(helpers.downgradeGeminiHistory).toHaveBeenCalled();
-    // Check if the result contains the downgraded message
-    expect(result).toContainEqual({ role: "system", content: "downgraded" });
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeToolCallIds: true }),
+    );
   });
 
-  it("should NOT downgrade history for google-antigravity provider", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
-
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "google-gemini",
-      provider: "google-antigravity",
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("google-gemini");
-    expect(helpers.downgradeGeminiHistory).not.toHaveBeenCalled();
-    // Result should not contain the downgraded message
-    expect(result).not.toContainEqual({
-      role: "system",
-      content: "downgraded",
-    });
-  });
-
-  it("should NOT downgrade history for non-Google models", async () => {
+  it("does not sanitize tool call ids for non-Google, non-OpenAI APIs", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
-    const _result = await sanitizeSessionHistory({
+    await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
@@ -90,25 +66,14 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("anthropic-messages");
-    expect(helpers.downgradeGeminiHistory).not.toHaveBeenCalled();
+    expect(helpers.sanitizeSessionMessagesImages).toHaveBeenCalledWith(
+      mockMessages,
+      "session:history",
+      expect.objectContaining({ sanitizeToolCallIds: false }),
+    );
   });
 
-  it("should downgrade history if provider is undefined but model is Google", async () => {
-    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(true);
-
-    const _result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "google-gemini",
-      provider: undefined,
-      sessionManager: mockSessionManager,
-      sessionId: "test-session",
-    });
-
-    expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("google-gemini");
-    expect(helpers.downgradeGeminiHistory).toHaveBeenCalled();
-  });
-
-  it("drops reasoning-only assistant messages for openai-responses", async () => {
+  it("keeps reasoning-only assistant messages for openai-responses", async () => {
     vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
 
     const messages: AgentMessage[] = [
@@ -135,7 +100,7 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(helpers.isGoogleModelApi).toHaveBeenCalledWith("openai-responses");
-    expect(result).toHaveLength(1);
-    expect(result[0]?.role).toBe("user");
+    expect(result).toHaveLength(2);
+    expect(result[1]?.role).toBe("assistant");
   });
 });
