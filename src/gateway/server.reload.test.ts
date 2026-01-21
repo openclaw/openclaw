@@ -21,7 +21,11 @@ const hoisted = vi.hoisted(() => {
   }));
 
   const heartbeatStop = vi.fn();
-  const startHeartbeatRunner = vi.fn(() => ({ stop: heartbeatStop }));
+  const heartbeatUpdateConfig = vi.fn();
+  const startHeartbeatRunner = vi.fn(() => ({
+    stop: heartbeatStop,
+    updateConfig: heartbeatUpdateConfig,
+  }));
 
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
@@ -116,6 +120,7 @@ const hoisted = vi.hoisted(() => {
     browserStop,
     startBrowserControlServerIfEnabled,
     heartbeatStop,
+    heartbeatUpdateConfig,
     startHeartbeatRunner,
     startGmailWatcher,
     stopGmailWatcher,
@@ -237,8 +242,9 @@ describe("gateway hot reload", () => {
     expect(hoisted.browserStop).toHaveBeenCalledTimes(1);
     expect(hoisted.startBrowserControlServerIfEnabled).toHaveBeenCalledTimes(2);
 
-    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(2);
-    expect(hoisted.heartbeatStop).toHaveBeenCalledTimes(1);
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
+    expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(nextConfig);
 
     expect(hoisted.cronInstances.length).toBe(2);
     expect(hoisted.cronInstances[0].stop).toHaveBeenCalledTimes(1);

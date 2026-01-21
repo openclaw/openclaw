@@ -1,7 +1,7 @@
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
-import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   authorizeGatewaySigusr1Restart,
@@ -18,7 +18,7 @@ import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js
 
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
-  heartbeatRunner: { stop: () => void };
+  heartbeatRunner: HeartbeatRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
@@ -57,8 +57,7 @@ export function createGatewayReloadHandlers(params: {
     }
 
     if (plan.restartHeartbeat) {
-      state.heartbeatRunner.stop();
-      nextState.heartbeatRunner = startHeartbeatRunner({ cfg: nextConfig });
+      nextState.heartbeatRunner.updateConfig(nextConfig);
     }
 
     resetDirectoryCache();
