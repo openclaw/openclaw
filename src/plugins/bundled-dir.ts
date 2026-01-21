@@ -5,9 +5,6 @@ import { fileURLToPath } from "node:url";
 export function resolveBundledPluginsDir(): string | undefined {
   const override = process.env.CLAWDBOT_BUNDLED_PLUGINS_DIR?.trim();
   if (override) return override;
-  if ((process.env.VITEST || process.env.NODE_ENV === "test") && !override) {
-    return undefined;
-  }
 
   // bun --compile: ship a sibling `extensions/` next to the executable.
   try {
