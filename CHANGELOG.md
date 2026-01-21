@@ -15,9 +15,11 @@ Docs: https://docs.clawd.bot
 - Sessions: add per-channel reset overrides via `session.resetByChannel`. (#1353) Thanks @cash-echo-bot.
 
 ### Fixes
+- Embedded runner: drop obsolete pi-mono transcript workarounds now handled upstream.
 - Embedded runner: persist injected history images so attachments aren’t reloaded each turn. (#1374) Thanks @Nicell.
 - Nodes tool: include agent/node/gateway context in tool failure logs to speed approval debugging.
 - macOS: exec approvals now respect wildcard agent allowlists (`*`).
+- macOS: bundle and cache the model catalog instead of reading from a local pi-mono checkout.
 - macOS: allow SSH agent auth when no identity file is set. (#1384) Thanks @ameno-.
 - UI: remove the chat stop button and keep the composer aligned to the bottom edge.
 - Typing: start instant typing indicators at run start so DMs and mentions show immediately.
