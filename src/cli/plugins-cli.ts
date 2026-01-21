@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import chalk from "chalk";
 import type { Command } from "commander";
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
@@ -14,6 +13,7 @@ import { buildPluginStatusReport } from "../plugins/status.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -35,19 +35,19 @@ export type PluginUpdateOptions = {
 function formatPluginLine(plugin: PluginRecord, verbose = false): string {
   const status =
     plugin.status === "loaded"
-      ? chalk.green("✓")
+      ? theme.success("loaded")
       : plugin.status === "disabled"
-        ? chalk.yellow("disabled")
-        : chalk.red("error");
-  const name = plugin.name ? chalk.white(plugin.name) : chalk.white(plugin.id);
-  const idSuffix = plugin.name !== plugin.id ? chalk.gray(` (${plugin.id})`) : "";
+        ? theme.warn("disabled")
+        : theme.error("error");
+  const name = theme.command(plugin.name || plugin.id);
+  const idSuffix = plugin.name && plugin.name !== plugin.id ? theme.muted(` (${plugin.id})`) : "";
   const desc = plugin.description
-    ? chalk.gray(
+    ? theme.muted(
         plugin.description.length > 60
           ? `${plugin.description.slice(0, 57)}...`
           : plugin.description,
       )
-    : chalk.gray("(no description)");
+    : theme.muted("(no description)");
 
   if (!verbose) {
     return `${name}${idSuffix} ${status} - ${desc}`;
@@ -55,14 +55,14 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
 
   const parts = [
     `${name}${idSuffix} ${status}`,
-    `  source: ${chalk.gray(plugin.source)}`,
+    `  source: ${theme.muted(plugin.source)}`,
     `  origin: ${plugin.origin}`,
   ];
   if (plugin.version) parts.push(`  version: ${plugin.version}`);
   if (plugin.providerIds.length > 0) {
     parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
   }
-  if (plugin.error) parts.push(chalk.red(`  error: ${plugin.error}`));
+  if (plugin.error) parts.push(theme.error(`  error: ${plugin.error}`));
   return parts.join("\n");
 }
 
@@ -87,7 +87,7 @@ function applySlotSelectionForPlugin(
 function logSlotWarnings(warnings: string[]) {
   if (warnings.length === 0) return;
   for (const warning of warnings) {
-    defaultRuntime.log(chalk.yellow(warning));
+    defaultRuntime.log(theme.warn(warning));
   }
 }
 
@@ -124,19 +124,51 @@ export function registerPluginsCli(program: Command) {
       }
 
       if (list.length === 0) {
-        defaultRuntime.log("No plugins found.");
+        defaultRuntime.log(theme.muted("No plugins found."));
+        return;
+      }
+
+      const loaded = list.filter((p) => p.status === "loaded").length;
+      defaultRuntime.log(
+        `${theme.heading("Plugins")} ${theme.muted(`(${loaded}/${list.length} loaded)`)}`,
+      );
+
+      if (!opts.verbose) {
+        const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+        const rows = list.map((plugin) => ({
+          Name: plugin.name || plugin.id,
+          ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
+          Status:
+            plugin.status === "loaded"
+              ? theme.success("loaded")
+              : plugin.status === "disabled"
+                ? theme.warn("disabled")
+                : theme.error("error"),
+          Source: plugin.source,
+          Version: plugin.version ?? "",
+          Description: plugin.description ?? "",
+        }));
+        defaultRuntime.log(
+          renderTable({
+            width: tableWidth,
+            columns: [
+              { key: "Name", header: "Name", minWidth: 14, flex: true },
+              { key: "ID", header: "ID", minWidth: 10, flex: true },
+              { key: "Status", header: "Status", minWidth: 10 },
+              { key: "Source", header: "Source", minWidth: 10 },
+              { key: "Version", header: "Version", minWidth: 8 },
+              { key: "Description", header: "Description", minWidth: 18, flex: true },
+            ],
+            rows,
+          }).trimEnd(),
+        );
         return;
       }
 
       const lines: string[] = [];
-      const loaded = list.filter((p) => p.status === "loaded").length;
-      lines.push(
-        `${chalk.bold.cyan("Plugins")} ${chalk.gray(`(${loaded}/${list.length} loaded)`)}`,
-      );
-      lines.push("");
       for (const plugin of list) {
-        lines.push(formatPluginLine(plugin, opts.verbose));
-        if (opts.verbose) lines.push("");
+        lines.push(formatPluginLine(plugin, true));
+        lines.push("");
       }
       defaultRuntime.log(lines.join("\n").trim());
     });
@@ -162,43 +194,45 @@ export function registerPluginsCli(program: Command) {
       }
 
       const lines: string[] = [];
-      lines.push(chalk.bold.cyan(plugin.name || plugin.id));
+      lines.push(theme.heading(plugin.name || plugin.id));
       if (plugin.name && plugin.name !== plugin.id) {
-        lines.push(chalk.gray(`id: ${plugin.id}`));
+        lines.push(theme.muted(`id: ${plugin.id}`));
       }
       if (plugin.description) lines.push(plugin.description);
       lines.push("");
-      lines.push(`Status: ${plugin.status}`);
-      lines.push(`Source: ${plugin.source}`);
-      lines.push(`Origin: ${plugin.origin}`);
-      if (plugin.version) lines.push(`Version: ${plugin.version}`);
+      lines.push(`${theme.muted("Status:")} ${plugin.status}`);
+      lines.push(`${theme.muted("Source:")} ${plugin.source}`);
+      lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
+      if (plugin.version) lines.push(`${theme.muted("Version:")} ${plugin.version}`);
       if (plugin.toolNames.length > 0) {
-        lines.push(`Tools: ${plugin.toolNames.join(", ")}`);
+        lines.push(`${theme.muted("Tools:")} ${plugin.toolNames.join(", ")}`);
       }
       if (plugin.hookNames.length > 0) {
-        lines.push(`Hooks: ${plugin.hookNames.join(", ")}`);
+        lines.push(`${theme.muted("Hooks:")} ${plugin.hookNames.join(", ")}`);
       }
       if (plugin.gatewayMethods.length > 0) {
-        lines.push(`Gateway methods: ${plugin.gatewayMethods.join(", ")}`);
+        lines.push(`${theme.muted("Gateway methods:")} ${plugin.gatewayMethods.join(", ")}`);
       }
       if (plugin.providerIds.length > 0) {
-        lines.push(`Providers: ${plugin.providerIds.join(", ")}`);
+        lines.push(`${theme.muted("Providers:")} ${plugin.providerIds.join(", ")}`);
       }
       if (plugin.cliCommands.length > 0) {
-        lines.push(`CLI commands: ${plugin.cliCommands.join(", ")}`);
+        lines.push(`${theme.muted("CLI commands:")} ${plugin.cliCommands.join(", ")}`);
       }
       if (plugin.services.length > 0) {
-        lines.push(`Services: ${plugin.services.join(", ")}`);
+        lines.push(`${theme.muted("Services:")} ${plugin.services.join(", ")}`);
       }
-      if (plugin.error) lines.push(chalk.red(`Error: ${plugin.error}`));
+      if (plugin.error) lines.push(`${theme.error("Error:")} ${plugin.error}`);
       if (install) {
         lines.push("");
-        lines.push(`Install: ${install.source}`);
-        if (install.spec) lines.push(`Spec: ${install.spec}`);
-        if (install.sourcePath) lines.push(`Source path: ${install.sourcePath}`);
-        if (install.installPath) lines.push(`Install path: ${install.installPath}`);
-        if (install.version) lines.push(`Recorded version: ${install.version}`);
-        if (install.installedAt) lines.push(`Installed at: ${install.installedAt}`);
+        lines.push(`${theme.muted("Install:")} ${install.source}`);
+        if (install.spec) lines.push(`${theme.muted("Spec:")} ${install.spec}`);
+        if (install.sourcePath) lines.push(`${theme.muted("Source path:")} ${install.sourcePath}`);
+        if (install.installPath)
+          lines.push(`${theme.muted("Install path:")} ${install.installPath}`);
+        if (install.version) lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
+        if (install.installedAt)
+          lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
       }
       defaultRuntime.log(lines.join("\n"));
     });
@@ -308,7 +342,7 @@ export function registerPluginsCli(program: Command) {
           path: resolved,
           logger: {
             info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
           },
         });
         if (!result.ok) {
@@ -372,7 +406,7 @@ export function registerPluginsCli(program: Command) {
         spec: raw,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
         },
       });
       if (!result.ok) {
@@ -430,17 +464,17 @@ export function registerPluginsCli(program: Command) {
         dryRun: opts.dryRun,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
         },
       });
 
       for (const outcome of result.outcomes) {
         if (outcome.status === "error") {
-          defaultRuntime.log(chalk.red(outcome.message));
+          defaultRuntime.log(theme.error(outcome.message));
           continue;
         }
         if (outcome.status === "skipped") {
-          defaultRuntime.log(chalk.yellow(outcome.message));
+          defaultRuntime.log(theme.warn(outcome.message));
           continue;
         }
         defaultRuntime.log(outcome.message);
@@ -467,14 +501,14 @@ export function registerPluginsCli(program: Command) {
 
       const lines: string[] = [];
       if (errors.length > 0) {
-        lines.push(chalk.bold.red("Plugin errors:"));
+        lines.push(theme.error("Plugin errors:"));
         for (const entry of errors) {
           lines.push(`- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`);
         }
       }
       if (diags.length > 0) {
         if (lines.length > 0) lines.push("");
-        lines.push(chalk.bold.yellow("Diagnostics:"));
+        lines.push(theme.warn("Diagnostics:"));
         for (const diag of diags) {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
           lines.push(`- ${target}${diag.message}`);

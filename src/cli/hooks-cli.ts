@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import chalk from "chalk";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -23,6 +22,7 @@ import { recordHookInstall } from "../hooks/installs.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveUserPath } from "../utils.js";
@@ -66,50 +66,40 @@ function buildHooksReport(config: ClawdbotConfig): HookStatusReport {
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
 }
 
-/**
- * Format a single hook for display in the list
- */
-function formatHookLine(hook: HookStatusEntry, verbose = false): string {
+function formatHookStatus(hook: HookStatusEntry): string {
+  if (hook.eligible) return theme.success("✓ ready");
+  if (hook.disabled) return theme.warn("⏸ disabled");
+  return theme.error("✗ missing");
+}
+
+function formatHookName(hook: HookStatusEntry): string {
   const emoji = hook.emoji ?? "🔗";
-  const status = hook.eligible
-    ? chalk.green("✓")
-    : hook.disabled
-      ? chalk.yellow("disabled")
-      : chalk.red("missing reqs");
+  return `${emoji} ${theme.command(hook.name)}`;
+}
 
-  const name = hook.eligible ? chalk.white(hook.name) : chalk.gray(hook.name);
+function formatHookSource(hook: HookStatusEntry): string {
+  if (!hook.managedByPlugin) return hook.source;
+  return `plugin:${hook.pluginId ?? "unknown"}`;
+}
 
-  const desc = chalk.gray(
-    hook.description.length > 50 ? `${hook.description.slice(0, 47)}...` : hook.description,
-  );
-  const sourceLabel = hook.managedByPlugin
-    ? chalk.magenta(`plugin:${hook.pluginId ?? "unknown"}`)
-    : "";
-
-  if (verbose) {
-    const missing: string[] = [];
-    if (hook.missing.bins.length > 0) {
-      missing.push(`bins: ${hook.missing.bins.join(", ")}`);
-    }
-    if (hook.missing.anyBins.length > 0) {
-      missing.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
-    }
-    if (hook.missing.env.length > 0) {
-      missing.push(`env: ${hook.missing.env.join(", ")}`);
-    }
-    if (hook.missing.config.length > 0) {
-      missing.push(`config: ${hook.missing.config.join(", ")}`);
-    }
-    if (hook.missing.os.length > 0) {
-      missing.push(`os: ${hook.missing.os.join(", ")}`);
-    }
-    const missingStr = missing.length > 0 ? chalk.red(` [${missing.join("; ")}]`) : "";
-    const sourceSuffix = sourceLabel ? ` ${sourceLabel}` : "";
-    return `${emoji} ${name} ${status}${missingStr}\n   ${desc}${sourceSuffix}`;
+function formatHookMissingSummary(hook: HookStatusEntry): string {
+  const missing: string[] = [];
+  if (hook.missing.bins.length > 0) {
+    missing.push(`bins: ${hook.missing.bins.join(", ")}`);
   }
-
-  const sourceSuffix = sourceLabel ? ` ${sourceLabel}` : "";
-  return `${emoji} ${name} ${status} - ${desc}${sourceSuffix}`;
+  if (hook.missing.anyBins.length > 0) {
+    missing.push(`anyBins: ${hook.missing.anyBins.join(", ")}`);
+  }
+  if (hook.missing.env.length > 0) {
+    missing.push(`env: ${hook.missing.env.join(", ")}`);
+  }
+  if (hook.missing.config.length > 0) {
+    missing.push(`config: ${hook.missing.config.join(", ")}`);
+  }
+  if (hook.missing.os.length > 0) {
+    missing.push(`os: ${hook.missing.os.join(", ")}`);
+  }
+  return missing.join("; ");
 }
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -157,27 +147,39 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
   }
 
   const eligible = hooks.filter((h) => h.eligible);
-  const notEligible = hooks.filter((h) => !h.eligible);
+  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const rows = hooks.map((hook) => {
+    const missing = formatHookMissingSummary(hook);
+    return {
+      Status: formatHookStatus(hook),
+      Hook: formatHookName(hook),
+      Description: theme.muted(hook.description),
+      Source: formatHookSource(hook),
+      Missing: missing ? theme.warn(missing) : "",
+    };
+  });
+
+  const columns = [
+    { key: "Status", header: "Status", minWidth: 10 },
+    { key: "Hook", header: "Hook", minWidth: 18, flex: true },
+    { key: "Description", header: "Description", minWidth: 24, flex: true },
+    { key: "Source", header: "Source", minWidth: 12, flex: true },
+  ];
+  if (opts.verbose) {
+    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
+  }
 
   const lines: string[] = [];
-  lines.push(chalk.bold.cyan("Hooks") + chalk.gray(` (${eligible.length}/${hooks.length} ready)`));
-  lines.push("");
-
-  if (eligible.length > 0) {
-    lines.push(chalk.bold.green("Ready:"));
-    for (const hook of eligible) {
-      lines.push(`  ${formatHookLine(hook, opts.verbose)}`);
-    }
-  }
-
-  if (notEligible.length > 0 && !opts.eligible) {
-    if (eligible.length > 0) lines.push("");
-    lines.push(chalk.bold.yellow("Not ready:"));
-    for (const hook of notEligible) {
-      lines.push(`  ${formatHookLine(hook, opts.verbose)}`);
-    }
-  }
-
+  lines.push(
+    `${theme.heading("Hooks")} ${theme.muted(`(${eligible.length}/${hooks.length} ready)`)}`,
+  );
+  lines.push(
+    renderTable({
+      width: tableWidth,
+      columns,
+      rows,
+    }).trimEnd(),
+  );
   return lines.join("\n");
 }
 
@@ -205,33 +207,33 @@ export function formatHookInfo(
   const lines: string[] = [];
   const emoji = hook.emoji ?? "🔗";
   const status = hook.eligible
-    ? chalk.green("✓ Ready")
+    ? theme.success("✓ Ready")
     : hook.disabled
-      ? chalk.yellow("⏸ Disabled")
-      : chalk.red("✗ Missing requirements");
+      ? theme.warn("⏸ Disabled")
+      : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji} ${chalk.bold.cyan(hook.name)} ${status}`);
+  lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
   lines.push("");
-  lines.push(chalk.white(hook.description));
+  lines.push(hook.description);
   lines.push("");
 
   // Details
-  lines.push(chalk.bold("Details:"));
+  lines.push(theme.heading("Details:"));
   if (hook.managedByPlugin) {
-    lines.push(`  Source: ${hook.source} (${hook.pluginId ?? "unknown"})`);
+    lines.push(`${theme.muted("  Source:")} ${hook.source} (${hook.pluginId ?? "unknown"})`);
   } else {
-    lines.push(`  Source: ${hook.source}`);
+    lines.push(`${theme.muted("  Source:")} ${hook.source}`);
   }
-  lines.push(`  Path: ${chalk.gray(hook.filePath)}`);
-  lines.push(`  Handler: ${chalk.gray(hook.handlerPath)}`);
+  lines.push(`${theme.muted("  Path:")} ${hook.filePath}`);
+  lines.push(`${theme.muted("  Handler:")} ${hook.handlerPath}`);
   if (hook.homepage) {
-    lines.push(`  Homepage: ${chalk.blue(hook.homepage)}`);
+    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
   }
   if (hook.events.length > 0) {
-    lines.push(`  Events: ${hook.events.join(", ")}`);
+    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
   }
   if (hook.managedByPlugin) {
-    lines.push(`  Managed by plugin; enable/disable via hooks CLI not available.`);
+    lines.push(theme.muted("  Managed by plugin; enable/disable via hooks CLI not available."));
   }
 
   // Requirements
@@ -244,40 +246,40 @@ export function formatHookInfo(
 
   if (hasRequirements) {
     lines.push("");
-    lines.push(chalk.bold("Requirements:"));
+    lines.push(theme.heading("Requirements:"));
     if (hook.requirements.bins.length > 0) {
       const binsStatus = hook.requirements.bins.map((bin) => {
         const missing = hook.missing.bins.includes(bin);
-        return missing ? chalk.red(`✗ ${bin}`) : chalk.green(`✓ ${bin}`);
+        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
       });
-      lines.push(`  Binaries: ${binsStatus.join(", ")}`);
+      lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
     }
     if (hook.requirements.anyBins.length > 0) {
       const anyBinsStatus =
         hook.missing.anyBins.length > 0
-          ? chalk.red(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
-          : chalk.green(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
-      lines.push(`  Any binary: ${anyBinsStatus}`);
+          ? theme.error(`✗ (any of: ${hook.requirements.anyBins.join(", ")})`)
+          : theme.success(`✓ (any of: ${hook.requirements.anyBins.join(", ")})`);
+      lines.push(`${theme.muted("  Any binary:")} ${anyBinsStatus}`);
     }
     if (hook.requirements.env.length > 0) {
       const envStatus = hook.requirements.env.map((env) => {
         const missing = hook.missing.env.includes(env);
-        return missing ? chalk.red(`✗ ${env}`) : chalk.green(`✓ ${env}`);
+        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
       });
-      lines.push(`  Environment: ${envStatus.join(", ")}`);
+      lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
     }
     if (hook.requirements.config.length > 0) {
       const configStatus = hook.configChecks.map((check) => {
-        return check.satisfied ? chalk.green(`✓ ${check.path}`) : chalk.red(`✗ ${check.path}`);
+        return check.satisfied ? theme.success(`✓ ${check.path}`) : theme.error(`✗ ${check.path}`);
       });
-      lines.push(`  Config: ${configStatus.join(", ")}`);
+      lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
     }
     if (hook.requirements.os.length > 0) {
       const osStatus =
         hook.missing.os.length > 0
-          ? chalk.red(`✗ (${hook.requirements.os.join(", ")})`)
-          : chalk.green(`✓ (${hook.requirements.os.join(", ")})`);
-      lines.push(`  OS: ${osStatus}`);
+          ? theme.error(`✗ (${hook.requirements.os.join(", ")})`)
+          : theme.success(`✓ (${hook.requirements.os.join(", ")})`);
+      lines.push(`${theme.muted("  OS:")} ${osStatus}`);
     }
   }
 
@@ -313,15 +315,15 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
   const notEligible = report.hooks.filter((h) => !h.eligible);
 
   const lines: string[] = [];
-  lines.push(chalk.bold.cyan("Hooks Status"));
+  lines.push(theme.heading("Hooks Status"));
   lines.push("");
-  lines.push(`Total hooks: ${report.hooks.length}`);
-  lines.push(chalk.green(`Ready: ${eligible.length}`));
-  lines.push(chalk.yellow(`Not ready: ${notEligible.length}`));
+  lines.push(`${theme.muted("Total hooks:")} ${report.hooks.length}`);
+  lines.push(`${theme.success("Ready:")} ${eligible.length}`);
+  lines.push(`${theme.warn("Not ready:")} ${notEligible.length}`);
 
   if (notEligible.length > 0) {
     lines.push("");
-    lines.push(chalk.bold.yellow("Hooks not ready:"));
+    lines.push(theme.heading("Hooks not ready:"));
     for (const hook of notEligible) {
       const reasons = [];
       if (hook.disabled) reasons.push("disabled");
@@ -374,7 +376,9 @@ export async function enableHook(hookName: string): Promise<void> {
   };
 
   await writeConfigFile(nextConfig);
-  console.log(`${chalk.green("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${hookName}`);
+  defaultRuntime.log(
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+  );
 }
 
 export async function disableHook(hookName: string): Promise<void> {
@@ -408,7 +412,9 @@ export async function disableHook(hookName: string): Promise<void> {
   };
 
   await writeConfigFile(nextConfig);
-  console.log(`${chalk.yellow("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${hookName}`);
+  defaultRuntime.log(
+    `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+  );
 }
 
 export function registerHooksCli(program: Command): void {
@@ -431,9 +437,11 @@ export function registerHooksCli(program: Command): void {
       try {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        console.log(formatHooksList(report, opts));
+        defaultRuntime.log(formatHooksList(report, opts));
       } catch (err) {
-        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
@@ -446,9 +454,11 @@ export function registerHooksCli(program: Command): void {
       try {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        console.log(formatHookInfo(report, name, opts));
+        defaultRuntime.log(formatHookInfo(report, name, opts));
       } catch (err) {
-        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
@@ -461,9 +471,11 @@ export function registerHooksCli(program: Command): void {
       try {
         const config = loadConfig();
         const report = buildHooksReport(config);
-        console.log(formatHooksCheck(report, opts));
+        defaultRuntime.log(formatHooksCheck(report, opts));
       } catch (err) {
-        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
@@ -475,7 +487,9 @@ export function registerHooksCli(program: Command): void {
       try {
         await enableHook(name);
       } catch (err) {
-        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
@@ -487,7 +501,9 @@ export function registerHooksCli(program: Command): void {
       try {
         await disableHook(name);
       } catch (err) {
-        console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+        defaultRuntime.error(
+          `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+        );
         process.exit(1);
       }
     });
@@ -570,7 +586,7 @@ export function registerHooksCli(program: Command): void {
           path: resolved,
           logger: {
             info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
           },
         });
         if (!result.ok) {
@@ -650,7 +666,7 @@ export function registerHooksCli(program: Command): void {
         spec: raw,
         logger: {
           info: (msg) => defaultRuntime.log(msg),
-          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+          warn: (msg) => defaultRuntime.log(theme.warn(msg)),
         },
       });
       if (!result.ok) {
@@ -726,15 +742,15 @@ export function registerHooksCli(program: Command): void {
       for (const hookId of targets) {
         const record = installs[hookId];
         if (!record) {
-          defaultRuntime.log(chalk.yellow(`No install record for "${hookId}".`));
+          defaultRuntime.log(theme.warn(`No install record for "${hookId}".`));
           continue;
         }
         if (record.source !== "npm") {
-          defaultRuntime.log(chalk.yellow(`Skipping "${hookId}" (source: ${record.source}).`));
+          defaultRuntime.log(theme.warn(`Skipping "${hookId}" (source: ${record.source}).`));
           continue;
         }
         if (!record.spec) {
-          defaultRuntime.log(chalk.yellow(`Skipping "${hookId}" (missing npm spec).`));
+          defaultRuntime.log(theme.warn(`Skipping "${hookId}" (missing npm spec).`));
           continue;
         }
 
@@ -749,11 +765,11 @@ export function registerHooksCli(program: Command): void {
             expectedHookPackId: hookId,
             logger: {
               info: (msg) => defaultRuntime.log(msg),
-              warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+              warn: (msg) => defaultRuntime.log(theme.warn(msg)),
             },
           });
           if (!probe.ok) {
-            defaultRuntime.log(chalk.red(`Failed to check ${hookId}: ${probe.error}`));
+            defaultRuntime.log(theme.error(`Failed to check ${hookId}: ${probe.error}`));
             continue;
           }
 
@@ -773,11 +789,11 @@ export function registerHooksCli(program: Command): void {
           expectedHookPackId: hookId,
           logger: {
             info: (msg) => defaultRuntime.log(msg),
-            warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+            warn: (msg) => defaultRuntime.log(theme.warn(msg)),
           },
         });
         if (!result.ok) {
-          defaultRuntime.log(chalk.red(`Failed to update ${hookId}: ${result.error}`));
+          defaultRuntime.log(theme.error(`Failed to update ${hookId}: ${result.error}`));
           continue;
         }
 
@@ -811,9 +827,11 @@ export function registerHooksCli(program: Command): void {
     try {
       const config = loadConfig();
       const report = buildHooksReport(config);
-      console.log(formatHooksList(report, {}));
+      defaultRuntime.log(formatHooksList(report, {}));
     } catch (err) {
-      console.error(chalk.red("Error:"), err instanceof Error ? err.message : String(err));
+      defaultRuntime.error(
+        `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
+      );
       process.exit(1);
     }
   });

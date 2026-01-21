@@ -1,4 +1,3 @@
-import chalk from "chalk";
 import type { Command } from "commander";
 
 import { loadConfig } from "../config/config.js";
@@ -121,7 +120,7 @@ export function registerSecurityCli(program: Command) {
         lines.push("");
         lines.push(heading(label));
         for (const f of list) {
-          lines.push(`${chalk.gray(f.checkId)} ${f.title}`);
+          lines.push(`${theme.muted(f.checkId)} ${f.title}`);
           lines.push(`  ${f.detail}`);
           if (f.remediation?.trim()) lines.push(`  ${muted(`Fix: ${f.remediation.trim()}`)}`);
         }
