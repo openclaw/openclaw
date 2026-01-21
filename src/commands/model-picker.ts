@@ -446,3 +446,44 @@ export function applyModelAllowlist(cfg: ClawdbotConfig, models: string[]): Claw
     },
   };
 }
+
+export function applyModelFallbacksFromSelection(
+  cfg: ClawdbotConfig,
+  selection: string[],
+): ClawdbotConfig {
+  const normalized = normalizeModelKeys(selection);
+  if (normalized.length <= 1) return cfg;
+
+  const resolved = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const resolvedKey = modelKey(resolved.provider, resolved.model);
+  if (!normalized.includes(resolvedKey)) return cfg;
+
+  const defaults = cfg.agents?.defaults;
+  const existingModel = defaults?.model;
+  const existingPrimary =
+    typeof existingModel === "string"
+      ? existingModel
+      : existingModel && typeof existingModel === "object"
+        ? existingModel.primary
+        : undefined;
+
+  const fallbacks = normalized.filter((key) => key !== resolvedKey);
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        model: {
+          ...(typeof existingModel === "object" ? existingModel : undefined),
+          primary: existingPrimary ?? resolvedKey,
+          fallbacks,
+        },
+      },
+    },
+  };
+}

@@ -101,6 +101,13 @@ function buildModelPickerCatalog(params: {
 
   const hasAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {}).length > 0;
   if (!hasAllowlist) {
+    for (const entry of params.allowedModelCatalog) {
+      push({
+        provider: entry.provider,
+        id: entry.id ?? "",
+        name: entry.name,
+      });
+    }
     for (const entry of buildConfiguredCatalog()) {
       push(entry);
     }
